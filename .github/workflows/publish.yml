@@ -1,5 +1,9 @@
 name: Publish to PyPI
 
+concurrency:
+  group: pypi-publish
+  cancel-in-progress: false
+
 on:
   push:
     branches:
@@ -33,9 +37,22 @@ jobs:
     permissions:
       id-token: write
     steps:
+      - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
         with:
           name: dist
           path: dist
+      - name: Verify PyPI project exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT="$(python -c 'import tomllib, pathlib; print(tomllib.loads(pathlib.Path(\"pyproject.toml\").read_bytes())[\"project\"][\"name\"])')"
+          CODE="$(curl -sS -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/${PROJECT}/json" || true)"
+          if [ "${CODE}" != "200" ]; then
+            echo "::error::PyPI project '${PROJECT}' does not exist yet (HTTP ${CODE})."
+            echo "::error::You must do the first upload manually (user identity) before Trusted Publishing can work."
+            echo "::error::Run scripts/first_pypi_upload.ps1 (Windows) or scripts/first_pypi_upload.sh (macOS/Linux)."
+            exit 1
+          fi
       - name: Publish to PyPI (Trusted Publishing)
         uses: pypa/gh-action-pypi-publish@release/v1

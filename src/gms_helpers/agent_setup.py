@@ -145,7 +145,7 @@ def main():
         print("  gms maintenance auto")
     else:
         print("\n[ERROR] Setup failed. Please run manually:")
-        print("  pipx install gms-mcp-tools")
+        print("  pipx install gms-mcp")
     
     return success
 

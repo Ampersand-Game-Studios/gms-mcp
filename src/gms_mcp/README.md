@@ -23,7 +23,7 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
 
 ### Install
 
-Install the packaged tool once (recommended: `pipx install gms-mcp-tools`), then generate per-workspace config(s) with `gms-mcp-init`.
+Install the packaged tool once (recommended: `pipx install gms-mcp`), then generate per-workspace config(s) with `gms-mcp-init`.
 
 ### Configure (generate configs)
 

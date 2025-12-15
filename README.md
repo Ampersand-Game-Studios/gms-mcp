@@ -8,8 +8,13 @@ This repo provides:
 ## Install (recommended: pipx)
 
 ```powershell
-pipx install gms-mcp-tools
+pipx install gms-mcp
 ```
+
+## Publishing (maintainers)
+
+Publishing is automated via GitHub Actions (PyPI Trusted Publishing) on every push to `main` and on tags `v*`.
+See `RELEASING.md` for the one-time PyPI setup and the first manual upload helper scripts.
 
 ## Use with a GameMaker project (multi-project friendly)
 

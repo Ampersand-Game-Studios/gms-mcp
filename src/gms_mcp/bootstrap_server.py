@@ -21,9 +21,9 @@ def main() -> int:
         sys.stderr.write(
             "Missing dependency while starting the GameMaker MCP server.\n"
             "If you installed via pipx/pip, reinstall/upgrade:\n"
-            "  pipx install gms-mcp-tools --force\n"
+            "  pipx install gms-mcp --force\n"
             "  # or\n"
-            f"  {sys.executable} -m pip install -U gms-mcp-tools\n"
+            f"  {sys.executable} -m pip install -U gms-mcp\n"
             f"\nDetails: {e}\n"
         )
         return 1

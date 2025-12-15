@@ -2408,7 +2408,7 @@ def main() -> int:
         sys.stderr.write(
             "MCP dependency is missing.\n"
             "Install it with:\n"
-            f"  {sys.executable} -m pip install -U gms-mcp-tools\n"
+            f"  {sys.executable} -m pip install -U gms-mcp\n"
         )
         sys.stderr.write(f"\nDetails: {e}\n")
         return 1

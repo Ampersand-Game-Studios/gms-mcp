@@ -3,7 +3,7 @@
 Generate MCP client configuration files for the GameMaker MCP server.
 
 Multi-project model:
-- Install the tool once (recommended: `pipx install gms-mcp-tools`)
+- Install the tool once (recommended: `pipx install gms-mcp`)
 - Run this per-project/workspace to generate that workspace's MCP config (Cursor primary)
 """
 
@@ -305,7 +305,7 @@ def main(argv: list[str] | None = None) -> int:
         if shutil.which(command) is None:
             print(
                 "[WARN] 'gms-mcp' not found on PATH. Config will still be written, but the client may fail to start it.\n"
-                "       Recommended: `pipx install gms-mcp-tools` (or use --mode=python-module)."
+                "       Recommended: `pipx install gms-mcp` (or use --mode=python-module)."
             )
 
     written: list[Path] = []
