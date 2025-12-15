@@ -11,11 +11,47 @@ on:
   push:
     branches:
       - "main"
+      - "dev"
+      - "prerelease"
     tags:
       - "v*"
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Publish a packaging-only post-release (example: 0.1.0.post1)"
+        required: false
+        type: string
 
 jobs:
+  compute:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      should_publish: ${{ steps.ver.outputs.should_publish }}
+      reason: ${{ steps.ver.outputs.reason }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install version tooling
+        run: python -m pip install -U packaging
+      - name: Compute version
+        id: ver
+        env:
+          VERSION_OVERRIDE: ${{ inputs.version }}
+        run: python scripts/ci_version.py
+      - name: Summary
+        run: |
+          echo "version=${{ steps.ver.outputs.version }}"
+          echo "should_publish=${{ steps.ver.outputs.should_publish }}"
+          echo "reason=${{ steps.ver.outputs.reason }}"
+
   build:
+    needs: compute
+    if: needs.compute.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -27,6 +63,8 @@ jobs:
       - name: Install build tooling
         run: python -m pip install -U build
       - name: Build
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ needs.compute.outputs.version }}
         run: python -m build
       - name: Upload build artifacts
         uses: actions/upload-artifact@v4
@@ -35,7 +73,8 @@ jobs:
           path: dist/*
 
   publish:
-    needs: build
+    needs: [compute, build]
+    if: needs.compute.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     permissions:
       id-token: write
