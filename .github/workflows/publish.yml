@@ -50,7 +50,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PROJECT="$(python3 -c 'import tomllib, pathlib; print(tomllib.loads(pathlib.Path(\"pyproject.toml\").read_bytes())[\"project\"][\"name\"])')"
+          PROJECT="$(python3 -c 'import tomllib, pathlib; print(tomllib.loads(pathlib.Path("pyproject.toml").read_bytes())["project"]["name"])')"
           CODE="$(curl -sS -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/${PROJECT}/json" || true)"
           if [ "${CODE}" != "200" ]; then
             echo "::error::PyPI project '${PROJECT}' does not exist yet (HTTP ${CODE})."
