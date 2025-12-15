@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=77", "setuptools-scm>=8", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gms-mcp-tools"
+dynamic = ["version"]
+description = "GameMaker CLI + MCP server toolset"
+readme = "README.md"
+requires-python = ">=3.9"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [
+  {name = "Callum Lory"},
+  {name = "Ampersand Game Studios"},
+]
+keywords = ["gamemaker", "mcp", "cursor", "cli", "tools"]
+classifiers = [
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.9",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+]
+dependencies = [
+  "mcp>=1.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Ampersand-Game-Studios/gms-mcp"
+Repository = "https://github.com/Ampersand-Game-Studios/gms-mcp"
+Issues = "https://github.com/Ampersand-Game-Studios/gms-mcp/issues"
+
+[project.scripts]
+gms = "gms_helpers.cli:main"
+gms-mcp = "gms_mcp.cli:server"
+gms-mcp-init = "gms_mcp.cli:init"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+include-package-data = true
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+gms_helpers = [
+  "templates/**/*.gml",
+  "test_invalid.json",
+]
+
+[tool.setuptools_scm]
+fallback_version = "0.1.0"
+version_scheme = "post-release"
+local_scheme = "no-local-version"
