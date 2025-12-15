@@ -17,14 +17,13 @@ python cli/gms_helpers/asset_helper.py shader sh_blur --parent-path "folders/Sha
 python cli/gms_helpers/room_layer_helper.py add-layer r_game "lyr_enemies" --type instance --depth 100
 ```
 
-## 🧩 Cursor MCP integration (recommended)
+## MCP integration (Cursor example)
 
-If you use Cursor, this repo also includes an **MCP server** that exposes GameMaker operations as tools (asset creation, maintenance, compile/run).
+This repo includes an **MCP server** (`gms-mcp`) that exposes GameMaker operations as tools (asset creation, maintenance, compile/run).
 
-- Server: `gms-mcp` (installed command)
-- Setup/notes: `README.md`
-- Generate workspace config: `gms-mcp-init --cursor`
-- After changing `~/.cursor/mcp.json`, **Reload Window** in Cursor
+- Cursor (workspace): `gms-mcp-init --cursor` (writes `.cursor/mcp.json`)
+- Cursor (global, multi-project): `gms-mcp-init --cursor-global` (writes `~/.cursor/mcp.json`)
+- Other clients (examples): `gms-mcp-init --vscode --windsurf --antigravity` (writes `mcp-configs/*.mcp.json`)
 
 ## 📖 Core Documentation
 

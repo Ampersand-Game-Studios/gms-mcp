@@ -32,6 +32,18 @@ For a one-time setup that works across many projects, write Cursor's global conf
 gms-mcp-init --cursor-global
 ```
 
+Generate example configs for other MCP-capable clients:
+
+```powershell
+gms-mcp-init --vscode --windsurf --antigravity
+```
+
+Or generate everything at once:
+
+```powershell
+gms-mcp-init --all
+```
+
 ## Monorepos / multiple `.yyp`
 
 If multiple `.yyp` projects are detected in a workspace:

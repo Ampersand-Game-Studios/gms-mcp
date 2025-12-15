@@ -2,9 +2,9 @@
 
 This document covers the unified `gms` command-line tool that provides all GameMaker development functionality. The `gms` command replaces all individual Python scripts with a single, organized interface.
 
-## Cursor MCP integration (preferred for Cursor agents)
+## MCP integration (Cursor example)
 
-This repo includes a Cursor MCP server that mirrors the `gms` CLI as tools (direct import first, CLI fallback):
+This repo includes an MCP server (`gms-mcp`) that mirrors the `gms` CLI as tools (direct import first, CLI fallback):
 
 - **Assets**: create all supported asset types + delete
 - **Events**: add/remove/duplicate/list/validate/fix
@@ -14,7 +14,7 @@ This repo includes a Cursor MCP server that mirrors the `gms` CLI as tools (dire
 - **Runner**: compile/run + stop/status
 - **Escape hatch**: `gm_cli` (shell-out to `gms.py` with arbitrary args)
 
-MCP setup/notes: `README.md` (generate Cursor config: `gms-mcp-init --cursor`)
+MCP setup/notes: `README.md` (generate Cursor config: `gms-mcp-init --cursor`; other client examples: `gms-mcp-init --vscode --windsurf --antigravity`)
 
 ## 🚨 **CRITICAL PREREQUISITE: Python Installation**
 

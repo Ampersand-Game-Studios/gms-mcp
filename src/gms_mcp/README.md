@@ -30,7 +30,9 @@ Install the packaged tool once (recommended: `pipx install gms-mcp`), then gener
 This repo includes a small installer that generates **shareable, user-agnostic** MCP config(s) for your workspace.
 
 - Generate Cursor config (primary example): `gms-mcp-init --cursor`
+- Generate Cursor global config (multi-project): `gms-mcp-init --cursor-global`
 - Generate other client examples (written to `mcp-configs/*.mcp.json`): `gms-mcp-init --vscode --windsurf --antigravity`
+- Generate everything: `gms-mcp-init --all`
 
 The Cursor config is written to `.cursor/mcp.json` and:
 

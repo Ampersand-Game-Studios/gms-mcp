@@ -4,6 +4,9 @@ concurrency:
   group: pypi-publish
   cancel-in-progress: false
 
+permissions:
+  contents: read
+
 on:
   push:
     branches:
@@ -36,6 +39,7 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       id-token: write
+      contents: read
     steps:
       - uses: actions/checkout@v4
       - uses: actions/download-artifact@v4
@@ -46,7 +50,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          PROJECT="$(python -c 'import tomllib, pathlib; print(tomllib.loads(pathlib.Path(\"pyproject.toml\").read_bytes())[\"project\"][\"name\"])')"
+          PROJECT="$(python3 -c 'import tomllib, pathlib; print(tomllib.loads(pathlib.Path(\"pyproject.toml\").read_bytes())[\"project\"][\"name\"])')"
           CODE="$(curl -sS -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/${PROJECT}/json" || true)"
           if [ "${CODE}" != "200" ]; then
             echo "::error::PyPI project '${PROJECT}' does not exist yet (HTTP ${CODE})."
