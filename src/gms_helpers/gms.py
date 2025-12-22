@@ -85,7 +85,11 @@ def setup_script_parser(subparsers):
     """Set up script creation parser."""
     parser = subparsers.add_parser('script', help='Create a script asset')
     parser.add_argument('name', help='Script name (snake_case or PascalCase with --constructor)')
-    parser.add_argument('--parent-path', required=True, help='Parent folder path')
+    parser.add_argument(
+        '--parent-path',
+        default="",
+        help='Optional parent folder path (e.g. "folders/Scripts.yy"). If omitted, asset is created at project root.',
+    )
     parser.add_argument('--constructor', action='store_true', help='Create a constructor script (allows PascalCase naming)')
     parser.add_argument('--skip-maintenance', action='store_true', help='Skip pre/post validation')
     parser.add_argument('--no-auto-fix', action='store_true', help='Do not automatically fix issues')
@@ -96,7 +100,11 @@ def setup_object_parser(subparsers):
     """Set up object creation parser."""
     parser = subparsers.add_parser('object', help='Create an object asset')
     parser.add_argument('name', help='Object name (o_ prefix)')
-    parser.add_argument('--parent-path', required=True, help='Parent folder path')
+    parser.add_argument(
+        '--parent-path',
+        default="",
+        help='Optional parent folder path (e.g. "folders/Objects.yy"). If omitted, asset is created at project root.',
+    )
     parser.add_argument('--sprite-id', help='Sprite resource ID')
     parser.add_argument('--parent-object', help='Parent object name (for inheritance)')
     parser.add_argument('--skip-maintenance', action='store_true', help='Skip pre/post validation')
@@ -108,7 +116,11 @@ def setup_sprite_parser(subparsers):
     """Set up sprite creation parser."""
     parser = subparsers.add_parser('sprite', help='Create a sprite asset')
     parser.add_argument('name', help='Sprite name (spr_ prefix)')
-    parser.add_argument('--parent-path', required=True, help='Parent folder path')
+    parser.add_argument(
+        '--parent-path',
+        default="",
+        help='Optional parent folder path (e.g. "folders/Sprites.yy"). If omitted, asset is created at project root.',
+    )
     parser.add_argument('--skip-maintenance', action='store_true', help='Skip pre/post validation')
     parser.add_argument('--no-auto-fix', action='store_true', help='Do not automatically fix issues')
     parser.add_argument('--maintenance-verbose', action=argparse.BooleanOptionalAction, default=True, help='Show verbose maintenance output')
@@ -118,7 +130,11 @@ def setup_room_parser(subparsers):
     """Set up room creation parser."""
     parser = subparsers.add_parser('room', help='Create a room asset')
     parser.add_argument('name', help='Room name (r_ prefix)')
-    parser.add_argument('--parent-path', required=True, help='Parent folder path')
+    parser.add_argument(
+        '--parent-path',
+        default="",
+        help='Optional parent folder path (e.g. "folders/Rooms.yy"). If omitted, asset is created at project root.',
+    )
     parser.add_argument('--width', type=int, default=1024, help='Room width (default: 1024)')
     parser.add_argument('--height', type=int, default=768, help='Room height (default: 768)')
     parser.add_argument('--skip-maintenance', action='store_true', help='Skip pre/post validation')
@@ -140,7 +156,11 @@ def setup_font_parser(subparsers):
     """Set up font creation parser."""
     parser = subparsers.add_parser('font', help='Create a font asset')
     parser.add_argument('name', help='Font name (fnt_ prefix)')
-    parser.add_argument('--parent-path', required=True, help='Parent folder path')
+    parser.add_argument(
+        '--parent-path',
+        default="",
+        help='Optional parent folder path (e.g. "folders/Fonts.yy"). If omitted, asset is created at project root.',
+    )
     parser.add_argument('--font-name', default='Arial', help='Font family name (default: Arial)')
     parser.add_argument('--size', type=int, default=12, help='Font size (default: 12)')
     parser.add_argument('--bold', action='store_true', help='Make font bold')
@@ -156,7 +176,11 @@ def setup_shader_parser(subparsers):
     """Set up shader creation parser."""
     parser = subparsers.add_parser('shader', help='Create a shader asset')
     parser.add_argument('name', help='Shader name (sh_ or shader_ prefix)')
-    parser.add_argument('--parent-path', required=True, help='Parent folder path')
+    parser.add_argument(
+        '--parent-path',
+        default="",
+        help='Optional parent folder path (e.g. "folders/Shaders.yy"). If omitted, asset is created at project root.',
+    )
     parser.add_argument('--shader-type', type=int, default=1, choices=[1, 2, 3, 4], 
                               help='Shader type: 1=GLSL ES, 2=GLSL, 3=HLSL 9, 4=HLSL 11 (default: 1)')
     parser.add_argument('--skip-maintenance', action='store_true', help='Skip pre/post validation')
@@ -168,7 +192,11 @@ def setup_animcurve_parser(subparsers):
     """Set up animation curve creation parser."""
     parser = subparsers.add_parser('animcurve', help='Create an animation curve asset')
     parser.add_argument('name', help='Animation curve name (curve_ or ac_ prefix)')
-    parser.add_argument('--parent-path', required=True, help='Parent folder path')
+    parser.add_argument(
+        '--parent-path',
+        default="",
+        help='Optional parent folder path. If omitted, asset is created at project root.',
+    )
     parser.add_argument('--curve-type', default='linear', 
                                   choices=['linear', 'smooth', 'ease_in', 'ease_out'],
                                   help='Curve type (default: linear)')
@@ -182,7 +210,11 @@ def setup_sound_parser(subparsers):
     """Set up sound creation parser."""
     parser = subparsers.add_parser('sound', help='Create a sound asset')
     parser.add_argument('name', help='Sound name (snd_ or sfx_ prefix)')
-    parser.add_argument('--parent-path', required=True, help='Parent folder path')
+    parser.add_argument(
+        '--parent-path',
+        default="",
+        help='Optional parent folder path. If omitted, asset is created at project root.',
+    )
     parser.add_argument('--volume', type=float, default=1.0, help='Volume (0.0-1.0, default: 1.0)')
     parser.add_argument('--pitch', type=float, default=1.0, help='Pitch (default: 1.0)')
     parser.add_argument('--sound-type', type=int, default=0, choices=[0, 1, 2], 
@@ -200,7 +232,11 @@ def setup_path_parser(subparsers):
     """Set up path creation parser."""
     parser = subparsers.add_parser('path', help='Create a path asset')
     parser.add_argument('name', help='Path name (pth_ or path_ prefix)')
-    parser.add_argument('--parent-path', required=True, help='Parent folder path')
+    parser.add_argument(
+        '--parent-path',
+        default="",
+        help='Optional parent folder path. If omitted, asset is created at project root.',
+    )
     parser.add_argument('--closed', action='store_true', help='Make path closed (loops back to start)')
     parser.add_argument('--precision', type=int, default=4, help='Path precision (default: 4)')
     parser.add_argument('--path-type', default='straight', 
@@ -215,7 +251,11 @@ def setup_tileset_parser(subparsers):
     """Set up tileset creation parser."""
     parser = subparsers.add_parser('tileset', help='Create a tileset asset')
     parser.add_argument('name', help='Tileset name (ts_ or tile_ prefix)')
-    parser.add_argument('--parent-path', required=True, help='Parent folder path')
+    parser.add_argument(
+        '--parent-path',
+        default="",
+        help='Optional parent folder path. If omitted, asset is created at project root.',
+    )
     parser.add_argument('--sprite-id', help='Sprite resource ID to use for tiles')
     parser.add_argument('--tile-width', type=int, default=32, help='Tile width (default: 32)')
     parser.add_argument('--tile-height', type=int, default=32, help='Tile height (default: 32)')
@@ -232,7 +272,11 @@ def setup_timeline_parser(subparsers):
     """Set up timeline creation parser."""
     parser = subparsers.add_parser('timeline', help='Create a timeline asset')
     parser.add_argument('name', help='Timeline name (tl_ or timeline_ prefix)')
-    parser.add_argument('--parent-path', required=True, help='Parent folder path')
+    parser.add_argument(
+        '--parent-path',
+        default="",
+        help='Optional parent folder path. If omitted, asset is created at project root.',
+    )
     parser.add_argument('--skip-maintenance', action='store_true', help='Skip pre/post validation')
     parser.add_argument('--no-auto-fix', action='store_true', help='Do not automatically fix issues')
     parser.add_argument('--maintenance-verbose', action=argparse.BooleanOptionalAction, default=True, help='Show verbose maintenance output')
@@ -242,7 +286,11 @@ def setup_sequence_parser(subparsers):
     """Set up sequence creation parser."""
     parser = subparsers.add_parser('sequence', help='Create a sequence asset')
     parser.add_argument('name', help='Sequence name (seq_ or sequence_ prefix)')
-    parser.add_argument('--parent-path', required=True, help='Parent folder path')
+    parser.add_argument(
+        '--parent-path',
+        default="",
+        help='Optional parent folder path. If omitted, asset is created at project root.',
+    )
     parser.add_argument('--length', type=float, default=60.0, help='Sequence length in frames (default: 60.0)')
     parser.add_argument('--playback-speed', type=float, default=30.0, help='Playback speed in FPS (default: 30.0)')
     parser.add_argument('--skip-maintenance', action='store_true', help='Skip pre/post validation')
@@ -254,7 +302,11 @@ def setup_note_parser(subparsers):
     """Set up note creation parser."""
     parser = subparsers.add_parser('note', help='Create a note asset')
     parser.add_argument('name', help='Note name (letters, numbers, underscores, hyphens, spaces)')
-    parser.add_argument('--parent-path', required=True, help='Parent folder path')
+    parser.add_argument(
+        '--parent-path',
+        default="",
+        help='Optional parent folder path. If omitted, asset is created at project root.',
+    )
     parser.add_argument('--content', help='Initial note content')
     parser.add_argument('--skip-maintenance', action='store_true', help='Skip pre/post validation')
     parser.add_argument('--no-auto-fix', action='store_true', help='Do not automatically fix issues')

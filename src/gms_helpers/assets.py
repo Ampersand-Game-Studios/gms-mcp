@@ -358,6 +358,26 @@ class RoomAsset(BaseAsset):
     def create_yy_data(self, name: str, parent_path: str, **kwargs) -> Dict[str, Any]:
         width = kwargs.get("width", 1024)
         height = kwargs.get("height", 768)
+
+        # GameMaker expects 8 view entries, each with a complete schema (even when disabled).
+        # Using partial dicts (e.g. {"inherit": false, "visible": false}) causes IDE load failures.
+        _view_template = {
+            "hborder": 32,
+            "hport": height,
+            "hspeed": -1,
+            "hview": height,
+            "inherit": False,
+            "objectId": None,
+            "vborder": 32,
+            "visible": False,
+            "vspeed": -1,
+            "wport": width,
+            "wview": width,
+            "xport": 0,
+            "xview": 0,
+            "yport": 0,
+            "yview": 0,
+        }
         
         return {
             "$GMRoom": "v1",
@@ -447,31 +467,14 @@ class RoomAsset(BaseAsset):
                 "Width": width
             },
             "sequenceId": None,
-            "views": [
-                {
-                    "inherit": False,
-                    "visible": False,
-                    "xport": 0,
-                    "yport": 0,
-                    "wport": 1366,
-                    "hport": 768,
-                    "xview": 0,
-                    "yview": 0,
-                    "wview": 1366,
-                    "hview": 768,
-                    "follow": None,
-                    "hborder": 32,
-                    "vborder": 32,
-                    "hspeed": -1,
-                    "vspeed": -1
-                }
-            ] + [{"inherit": False, "visible": False} for _ in range(7)],
+            "views": [_view_template.copy() for _ in range(8)],
             "viewSettings": {
                 "clearDisplayBuffer": True,
                 "clearViewBackground": False,
                 "enableViews": False,
                 "inheritViewSettings": False
-            }
+            },
+            "volume": 1.0,
         }
     
     def create_stub_files(self, asset_folder: Path, name: str, **kwargs):

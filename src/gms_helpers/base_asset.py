@@ -47,6 +47,17 @@ class BaseAsset(ABC):
         Create all files for this asset type.
         Returns the relative path to the .yy file for .yyp insertion.
         """
+        # If no parent folder is provided, match GameMaker IDE behavior:
+        # root-level assets use the project itself as parent (e.g. "BLANK GAME.yyp"),
+        # not an empty parent path (which breaks linking).
+        if not parent_path:
+            try:
+                from .utils import find_yyp
+                parent_path = find_yyp(project_root).name
+            except Exception:
+                # Best-effort fallback: keep original (may be empty) if we can't resolve a .yyp.
+                pass
+
         # Create the asset folder
         asset_folder = self.get_folder_path(project_root, name)
         ensure_directory(asset_folder)
