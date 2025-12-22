@@ -11,14 +11,14 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
 
 ### What it provides
 
-- **Full `gms` parity** exposed as MCP tools (direct import first, CLI fallback):
+- **Full `gms` parity** exposed as MCP tools, with **safe execution safeguards** and **local diagnostic logging**:
   - **Assets**: create *all* supported asset types + delete
   - **Events**: add/remove/duplicate/list/validate/fix
   - **Workflow**: duplicate/rename/delete/swap-sprite
   - **Rooms**: ops (duplicate/rename/delete/list), layers (add/remove/list), instances (add/remove/list)
   - **Maintenance**: auto + lint/validate-json/list-orphans/prune-missing/validate-paths/dedupe-resources/sync-events/clean-old-files/clean-orphans/fix-issues
   - **Runner**: compile/run + stop/status
-  - **Escape hatch**: `gm_cli` (shell-out to `gms.py` with arbitrary args)
+  - **Escape hatch**: `gm_cli` (run arbitrary `gms` args)
   - **Project info**: `gm_project_info`
 
 ### Install
@@ -48,7 +48,17 @@ After changing `.cursor/mcp.json`, **Reload Window** in Cursor to pick up MCP co
 - **Project resolution**:
   - Tools accept an optional `project_root` parameter. You can pass `.` (default), a path to the repo root, or a path to `gamemaker/`.
   - You can also set `GM_PROJECT_ROOT` or `PROJECT_ROOT` environment variables (useful for agents / terminal sessions).
-- The server tries **direct Python imports first** for better structured behavior, and falls back to running `python -m gms_helpers.gms` if a direct call throws.
+- **Execution model / “no silent hangs”**:
+  - By default, tools use **direct in-process execution**. This is near-instant and avoids subprocess issues on Windows.
+  - Subprocess execution (`gm_cli` or via `prefer_cli=True`) isolates the child process from MCP stdin (setting it to `DEVNULL`).
+  - Streaming logs via `ctx.log()` is **disabled** during subprocess execution to prevent stdio deadlocks with MCP clients like Cursor.
+  - Every invocation writes a complete diagnostic log file under **`.gms_mcp/logs/`** in the resolved project directory.
+  - Tools apply **category-aware default max runtimes** (overrideable) to prevent indefinite blocking. Override globally with `GMS_MCP_DEFAULT_TIMEOUT_SECONDS`.
+  - If you want to force subprocess execution, set `GMS_MCP_ENABLE_DIRECT=0` (not recommended for general use).
+
+- **Picking the `gms` executable (Windows shims)**:
+  - The server prefers a “real” `gms` when multiple are present on Windows (avoids the WindowsApps shim when possible).
+  - To pin the executable, set `GMS_MCP_GMS_PATH` to a full path (e.g. `C:\\Python313\\Scripts\\gms.exe`).
 
 - **Output control (quiet / capture mode)**:
   - Most tools accept `output_mode`: `"full"` (default), `"tail"`, or `"none"`

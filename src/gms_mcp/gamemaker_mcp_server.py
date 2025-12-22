@@ -13,15 +13,42 @@ Design:
 from __future__ import annotations
 
 import argparse
+import asyncio
 import contextlib
+import datetime as _dt
 import io
+import json
 import os
+import shlex
+import shutil
+import signal
 import subprocess
 import sys
+import threading
+import time
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
+
+
+def _dbg(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    """Append a single NDJSON debug line to .cursor/debug.log (best-effort)."""
+    try:
+        log_path = Path(__file__).resolve().parents[2] / ".cursor" / "debug.log"
+        payload = {
+            "sessionId": "debug-session",
+            "runId": os.environ.get("GMS_MCP_DEBUG_RUN_ID", "cursor-repro"),
+            "hypothesisId": hypothesis_id,
+            "location": location,
+            "message": message,
+            "data": data,
+            "timestamp": int(time.time() * 1000),
+        }
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except Exception:
+        return
 
 
 def _list_yyp_files(directory: Path) -> List[Path]:
@@ -135,6 +162,13 @@ class ToolRunResult:
     exit_code: Optional[int] = None
     error: Optional[str] = None
     direct_error: Optional[str] = None
+    pid: Optional[int] = None
+    elapsed_seconds: Optional[float] = None
+    timed_out: bool = False
+    command: Optional[List[str]] = None
+    cwd: Optional[str] = None
+    log_file: Optional[str] = None
+    execution_mode: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -145,6 +179,13 @@ class ToolRunResult:
             "exit_code": self.exit_code,
             "error": self.error,
             "direct_error": self.direct_error,
+            "pid": self.pid,
+            "elapsed_seconds": self.elapsed_seconds,
+            "timed_out": self.timed_out,
+            "command": self.command,
+            "cwd": self.cwd,
+            "log_file": self.log_file,
+            "execution_mode": self.execution_mode,
         }
 
 
@@ -310,42 +351,252 @@ def _run_gms_inprocess(cli_args: List[str], project_root: str | None) -> ToolRun
 
 
 def _run_cli(cli_args: List[str], project_root: str | None, timeout_seconds: int | None = None) -> ToolRunResult:
-    project_root_value = project_root or "."
-    project_directory = _resolve_project_directory(project_root)
-    cmd = [sys.executable, "-m", "gms_helpers.gms", "--project-root", str(project_root_value), *cli_args]
+    raise RuntimeError("_run_cli is now async; call _run_cli_async")
 
-    try:
-        completed = subprocess.run(
-            cmd,
-            cwd=str(project_directory),
-            capture_output=True,
-            text=True,
-            timeout=timeout_seconds if (timeout_seconds is not None and timeout_seconds > 0) else None,
-        )
-        ok = completed.returncode == 0
-        return ToolRunResult(
-            ok=ok,
-            stdout=completed.stdout,
-            stderr=completed.stderr,
-            direct_used=False,
-            exit_code=completed.returncode,
-            error=None if ok else f"CLI exited with code {completed.returncode}",
-        )
-    except subprocess.TimeoutExpired as e:
-        stdout_text = ""
-        stderr_text = ""
+
+def _cmd_to_str(cmd: List[str]) -> str:
+    if os.name == "nt":
         try:
-            stdout_text = e.stdout or ""
-            stderr_text = e.stderr or ""
+            return subprocess.list2cmdline(cmd)
+        except Exception:
+            return " ".join(cmd)
+    return " ".join(shlex.quote(p) for p in cmd)
+
+
+def _resolve_gms_candidates_windows() -> List[str]:
+    """
+    On Windows, `shutil.which('gms')` can pick the WindowsApps shim first.
+    Prefer real executables when multiple exist.
+    """
+    try:
+        completed = subprocess.run(["where", "gms"], capture_output=True, text=True)
+        if completed.returncode != 0:
+            return []
+        lines = [l.strip() for l in (completed.stdout or "").splitlines() if l.strip()]
+        return lines
+    except Exception:
+        return []
+
+
+def _select_gms_executable() -> Tuple[Optional[str], List[str]]:
+    """
+    Returns (selected, candidates).
+    If `gms` isn't found, selected is None.
+    """
+    override = os.environ.get("GMS_MCP_GMS_PATH", "").strip()
+    if override:
+        try:
+            p = Path(override).expanduser()
+            if p.exists():
+                return str(p), [str(p)]
+        except Exception:
+            # Fall through to discovery
+            pass
+
+    candidates: List[str] = []
+    if os.name == "nt":
+        candidates = _resolve_gms_candidates_windows()
+        # Prefer non-WindowsApps shims
+        for c in candidates:
+            lc = c.lower()
+            if "windowsapps" not in lc:
+                return c, candidates
+        if candidates:
+            return candidates[0], candidates
+    selected = shutil.which("gms")
+    if selected:
+        candidates = [selected]
+    return selected, candidates
+
+
+def _default_timeout_seconds_for_cli_args(cli_args: List[str]) -> int:
+    # "Never hang forever" by default, but do not be aggressive.
+    # Can be overridden by `timeout_seconds` param or env var.
+    env = os.environ.get("GMS_MCP_DEFAULT_TIMEOUT_SECONDS", "").strip()
+    if env:
+        try:
+            v = int(env)
+            if v > 0:
+                return v
         except Exception:
             pass
-        return ToolRunResult(
-            ok=False,
-            stdout=stdout_text,
-            stderr=stderr_text,
-            direct_used=False,
-            exit_code=None,
-            error=f"CLI timed out after {timeout_seconds}s",
+
+    category = (cli_args[0] if cli_args else "").strip().lower()
+    if category == "maintenance":
+        return 60 * 30  # 30 min
+    if category == "run":
+        return 60 * 60 * 2  # 2 hours
+    # asset/event/workflow/room are typically quick
+    return 60 * 10  # 10 min
+
+
+def _ensure_log_dir(project_directory: Path) -> Path:
+    # Keep logs in-project so users can attach them to bug reports.
+    log_dir = project_directory / ".gms_mcp" / "logs"
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        # Best effort: fallback to CWD
+        log_dir = Path.cwd() / ".gms_mcp" / "logs"
+        log_dir.mkdir(parents=True, exist_ok=True)
+    return log_dir
+
+
+def _new_log_path(project_directory: Path, tool_name: str | None) -> Path:
+    ts = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    safe_tool = (tool_name or "tool").replace(" ", "_")
+    return _ensure_log_dir(project_directory) / f"{safe_tool}-{ts}-{os.getpid()}.log"
+
+
+def _spawn_kwargs() -> Dict[str, Any]:
+    return {}
+
+
+def _terminate_process_tree(proc: subprocess.Popen) -> None:
+    try:
+        if os.name == "nt":
+            # Best effort: terminate the whole tree.
+            subprocess.run(
+                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+            )
+            return
+        # POSIX: kill the process group if we created one
+        try:
+            os.killpg(proc.pid, signal.SIGTERM)
+        except Exception:
+            proc.terminate()
+    except Exception:
+        try:
+            proc.kill()
+        except Exception:
+            pass
+
+
+async def _run_cli_async(
+    cli_args: List[str],
+    project_root: str | None,
+    *,
+    timeout_seconds: int | None = None,
+    heartbeat_seconds: float = 5.0,
+    tool_name: str | None = None,
+    ctx: Any | None = None,
+) -> ToolRunResult:
+    """
+    Run the CLI in a subprocess with:
+    - stdout/stderr drained concurrently to prevent subprocess pipe deadlocks
+    - a generous, category-aware max runtime timeout (overrideable)
+    - always writes a local log file for post-mortems
+    """
+    project_root_value = project_root or "."
+    project_directory = _resolve_project_directory(project_root)
+
+    # NOTE (Windows/Cursor): running the `gms.exe` console-script wrapper under MCP stdio pipes has been
+    # observed to hang indefinitely (even for `--help`). The most robust invocation is via the Python
+    # module entrypoint, which avoids the wrapper entirely.
+    #
+    # You can opt back into `gms.exe` by setting:
+    #   GMS_MCP_PREFER_GMS_EXE=1
+    selected_gms, gms_candidates = _select_gms_executable()
+    prefer_exe = os.environ.get("GMS_MCP_PREFER_GMS_EXE", "").strip().lower() in ("1", "true", "yes", "on")
+    if prefer_exe and selected_gms:
+        cmd = [selected_gms, "--project-root", str(project_root_value), *cli_args]
+        execution_mode = "subprocess:gms-exe"
+    else:
+        # -u: unbuffered for more predictable output when stdout/stderr are pipes
+        cmd = [sys.executable, "-u", "-m", "gms_helpers.gms", "--project-root", str(project_root_value), *cli_args]
+        execution_mode = "subprocess:python-module"
+
+    effective_timeout = timeout_seconds
+    if effective_timeout is None:
+        effective_timeout = _default_timeout_seconds_for_cli_args(cli_args)
+    if effective_timeout <= 0:
+        effective_timeout = None
+
+    return await _run_subprocess_async(
+        cmd,
+        cwd=project_directory,
+        timeout_seconds=effective_timeout,
+        heartbeat_seconds=heartbeat_seconds,
+        tool_name=tool_name,
+        ctx=ctx,
+        execution_mode=execution_mode,
+        candidates=gms_candidates,
+    )
+
+
+async def _run_subprocess_async(
+    cmd: List[str],
+    *,
+    cwd: Path,
+    timeout_seconds: int | None = None,
+    heartbeat_seconds: float = 5.0,
+    tool_name: str | None = None,
+    ctx: Any | None = None,
+    execution_mode: str | None = None,
+    candidates: List[str] | None = None,
+) -> ToolRunResult:
+    """
+    Generic subprocess runner with safe stdout/stderr draining + timeout + cancellation.
+
+    IMPORTANT:
+    Do NOT call `ctx.log()` (or emit any MCP notifications) while a subprocess is running.
+    Cursor's MCP transport shares stdio; attempting to stream logs can deadlock the server
+    if the client applies backpressure or stops consuming notifications.
+    Instead, we write a complete local log file and return stdout/stderr when finished.
+    """
+    # region agent log
+    _dbg(
+        "H3",
+        "src/gms_mcp/gamemaker_mcp_server.py:_run_subprocess_async:entry",
+        "subprocess runner entry",
+        {
+            "tool_name": tool_name,
+            "cwd": str(cwd),
+            "timeout_seconds": timeout_seconds,
+            "heartbeat_seconds": heartbeat_seconds,
+            "execution_mode": execution_mode,
+            "cmd_head": cmd[:6],
+        },
+    )
+    # endregion
+    log_path = _new_log_path(cwd, tool_name)
+    start = time.monotonic()
+    loop = asyncio.get_running_loop()
+
+    stdout_chunks: List[str] = []
+    stderr_chunks: List[str] = []
+    last_output_lock = threading.Lock()
+    last_output_time = [time.monotonic()]
+    _ = ctx
+    _ = heartbeat_seconds
+
+    # Header logging (best-effort)
+    try:
+        with log_path.open("w", encoding="utf-8", errors="replace") as fh:
+            fh.write(f"[gms-mcp] tool={tool_name or ''}\n")
+            fh.write(f"[gms-mcp] cwd={cwd}\n")
+            fh.write(f"[gms-mcp] mode={execution_mode or ''}\n")
+            if candidates:
+                fh.write(f"[gms-mcp] candidates={candidates}\n")
+            fh.write(f"[gms-mcp] cmd={_cmd_to_str(cmd)}\n")
+            fh.write(f"[gms-mcp] timeout_seconds={timeout_seconds}\n\n")
+    except Exception:
+        pass
+
+    try:
+        proc = subprocess.Popen(
+            cmd,
+            cwd=str(cwd),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            text=True,
+            bufsize=1,
+            encoding="utf-8",
+            errors="replace",
+            **_spawn_kwargs(),
         )
     except Exception:
         return ToolRunResult(
@@ -355,10 +606,114 @@ def _run_cli(cli_args: List[str], project_root: str | None, timeout_seconds: int
             direct_used=False,
             exit_code=None,
             error=traceback.format_exc(),
+            pid=None,
+            elapsed_seconds=time.monotonic() - start,
+            timed_out=False,
+            command=cmd,
+            cwd=str(cwd),
+            log_file=str(log_path),
+            execution_mode=execution_mode,
         )
+    # region agent log
+    _dbg(
+        "H3",
+        "src/gms_mcp/gamemaker_mcp_server.py:_run_subprocess_async:popen_ok",
+        "subprocess Popen ok",
+        {"pid": getattr(proc, "pid", None), "tool_name": tool_name, "mode": execution_mode},
+    )
+    # endregion
+
+    def _append_and_log(stream: str, line: str) -> None:
+        now = time.monotonic()
+        with last_output_lock:
+            last_output_time[0] = now
+
+        if stream == "stdout":
+            stdout_chunks.append(line)
+        else:
+            stderr_chunks.append(line)
+
+        try:
+            with log_path.open("a", encoding="utf-8", errors="replace") as fh:
+                fh.write(f"[{stream}] {line}")
+                if not line.endswith("\n"):
+                    fh.write("\n")
+        except Exception:
+            pass
+
+    def _reader(pipe: Any, stream: str) -> None:
+        try:
+            for line in iter(pipe.readline, ""):
+                if not line:
+                    break
+                _append_and_log(stream, line)
+        except Exception:
+            pass
+        finally:
+            try:
+                pipe.close()
+            except Exception:
+                pass
+
+    t_out = threading.Thread(target=_reader, args=(proc.stdout, "stdout"), daemon=True)  # type: ignore[arg-type]
+    t_err = threading.Thread(target=_reader, args=(proc.stderr, "stderr"), daemon=True)  # type: ignore[arg-type]
+    t_out.start()
+    t_err.start()
+
+    timed_out = False
+    try:
+        while True:
+            rc = proc.poll()
+            if rc is not None:
+                break
+
+            elapsed = time.monotonic() - start
+            if timeout_seconds is not None and elapsed > float(timeout_seconds):
+                timed_out = True
+                _append_and_log("stderr", f"[gms-mcp] TIMEOUT after {timeout_seconds}s; terminating process tree (pid={proc.pid})\n")
+                _terminate_process_tree(proc)
+                break
+
+            await asyncio.sleep(0.2)
+    except asyncio.CancelledError:
+        _append_and_log("stderr", "[gms-mcp] CANCELLED by client; terminating process tree\n")
+        _terminate_process_tree(proc)
+        raise
+    finally:
+        try:
+            proc.wait(timeout=5)
+        except Exception:
+            try:
+                proc.kill()
+            except Exception:
+                pass
+
+        t_out.join(timeout=1)
+        t_err.join(timeout=1)
+
+    exit_code = proc.poll()
+    elapsed = time.monotonic() - start
+    stdout_text = "".join(stdout_chunks)
+    stderr_text = "".join(stderr_chunks)
+    ok = (exit_code == 0) and not timed_out
+    return ToolRunResult(
+        ok=ok,
+        stdout=stdout_text,
+        stderr=stderr_text,
+        direct_used=False,
+        exit_code=exit_code,
+        error=None if ok else ("CLI timed out" if timed_out else f"Process exited with code {exit_code}"),
+        pid=proc.pid,
+        elapsed_seconds=elapsed,
+        timed_out=timed_out,
+        command=cmd,
+        cwd=str(cwd),
+        log_file=str(log_path),
+        execution_mode=execution_mode,
+    )
 
 
-def _run_with_fallback(
+async def _run_with_fallback(
     *,
     direct_handler: Callable[[argparse.Namespace], Any],
     direct_args: argparse.Namespace,
@@ -370,15 +725,30 @@ def _run_with_fallback(
     max_chars: int = 40000,
     quiet: bool = False,
     timeout_seconds: int | None = None,
+    tool_name: str | None = None,
+    ctx: Any | None = None,
 ) -> Dict[str, Any]:
-    if prefer_cli:
+    derived_tool_name = tool_name
+    if not derived_tool_name:
+        head = [p for p in (cli_args[:3] if cli_args else []) if p]
+        derived_tool_name = "-".join(head) if head else "tool"
+
+    # Safety-first default:
+    # - In-process direct handler execution is faster and avoids subprocess issues on Windows.
+    # - We default to True now to ensure "it just works".
+    enable_direct = os.environ.get("GMS_MCP_ENABLE_DIRECT", "1").strip().lower() in ("1", "true", "yes", "on")
+
+    if prefer_cli or not enable_direct:
         return _apply_output_mode(
-            _run_cli(cli_args, project_root, timeout_seconds=timeout_seconds).as_dict(),
+            (await _run_cli_async(cli_args, project_root, timeout_seconds=timeout_seconds, tool_name=derived_tool_name, ctx=ctx)).as_dict(),
             output_mode=output_mode,
             tail_lines=tail_lines,
             max_chars=max_chars,
             quiet=quiet,
         )
+
+    # Optional legacy mode: direct in-process execution (fast, but not killable).
+    _ = ctx
 
     direct_result = _run_direct(direct_handler, direct_args, project_root)
     if direct_result.ok:
@@ -390,8 +760,8 @@ def _run_with_fallback(
             quiet=quiet,
         )
 
-    # If the direct call threw (or otherwise failed), fall back to CLI for resilience.
-    cli_result = _run_cli(cli_args, project_root, timeout_seconds=timeout_seconds)
+    # If the direct call threw (or otherwise failed), fall back to subprocess for resilience.
+    cli_result = await _run_cli_async(cli_args, project_root, timeout_seconds=timeout_seconds, tool_name=derived_tool_name, ctx=ctx)
     cli_result.direct_error = direct_result.error or "Direct call failed"
     return _apply_output_mode(
         cli_result.as_dict(),
@@ -407,15 +777,30 @@ def build_server():
     Create and return the MCP server instance.
     Kept in a function so importing this module doesn't require MCP installed.
     """
-    from mcp.server.fastmcp import FastMCP
+    from mcp.server.fastmcp import Context, FastMCP
+
+    # region agent log
+    _dbg(
+        "H2",
+        "src/gms_mcp/gamemaker_mcp_server.py:build_server:entry",
+        "build_server entry",
+        {"pid": os.getpid(), "exe": sys.executable, "cwd": os.getcwd(), "py_path_head": sys.path[:5]},
+    )
+    # endregion
+
+    # FastMCP evaluates type annotations at runtime (inspect.signature(..., eval_str=True)).
+    # Because we use `from __future__ import annotations`, annotations are strings and must be
+    # resolvable from the function's *globals* dict. Ensure `Context` is available there.
+    globals()["Context"] = Context
 
     mcp = FastMCP("GameMaker MCP")
 
     @mcp.tool()
-    def gm_project_info(project_root: str = ".") -> Dict[str, Any]:
+    async def gm_project_info(project_root: str = ".", ctx: Context | None = None) -> Dict[str, Any]:
         """
         Resolve GameMaker project directory (where the .yyp lives) and return basic info.
         """
+        _ = ctx
         project_directory = _resolve_project_directory_no_deps(project_root)
         return {
             "project_directory": str(project_directory),
@@ -424,7 +809,7 @@ def build_server():
         }
 
     @mcp.tool()
-    def gm_cli(
+    async def gm_cli(
         args: List[str],
         project_root: str = ".",
         prefer_cli: bool = True,
@@ -433,17 +818,26 @@ def build_server():
         tail_lines: int = 120,
         quiet: bool = True,
         fallback_to_subprocess: bool = True,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
         Run the existing `gms` CLI.
 
-        Default behavior is **in-process** (direct import) to avoid subprocess hangs.
-        If that fails and `fallback_to_subprocess=true`, it will shell out as a backup.
+        - If `prefer_cli=true` (default): run in a subprocess with streamed output + timeout.
+        - If `prefer_cli=false`: try in-process first, and (optionally) fall back to subprocess.
         Example args: ["maintenance", "auto", "--fix", "--verbose"]
         """
-        # prefer_cli is accepted to match the other tools' signature style.
-        _ = prefer_cli
-        # Prefer in-process execution first (root cause fix for hanging subprocess calls).
+        # If prefer_cli=True, run the subprocess path (streamed + cancellable).
+        if prefer_cli:
+            cli_dict = (await _run_cli_async(args, project_root, timeout_seconds=timeout_seconds, tool_name="gm_cli", ctx=ctx)).as_dict()
+            return _apply_output_mode(
+                cli_dict,
+                output_mode=output_mode,
+                tail_lines=tail_lines,
+                quiet=quiet,
+            )
+
+        # Otherwise, attempt in-process first (legacy behavior).
         inprocess_dict = _run_gms_inprocess(args, project_root).as_dict()
         shaped_inprocess = _apply_output_mode(
             inprocess_dict,
@@ -458,8 +852,8 @@ def build_server():
             shaped_inprocess["error"] = shaped_inprocess.get("error") or "In-process gms execution failed"
             return shaped_inprocess
 
-        # Backup: subprocess with timeout (damage control only).
-        cli_dict = _run_cli(args, project_root, timeout_seconds=timeout_seconds).as_dict()
+        # Backup: subprocess with timeout (streamed + cancellable).
+        cli_dict = (await _run_cli_async(args, project_root, timeout_seconds=timeout_seconds, tool_name="gm_cli", ctx=ctx)).as_dict()
         cli_dict["direct_error"] = shaped_inprocess.get("error") or "In-process gms execution failed"
         return _apply_output_mode(
             cli_dict,
@@ -472,20 +866,35 @@ def build_server():
     # Asset creation tools
     # -----------------------------
     @mcp.tool()
-    def gm_create_script(
+    async def gm_create_script(
         name: str,
-        parent_path: str,
-        constructor: bool = False,
-        skip_maintenance: bool = False,
+        parent_path: str = "",
+        is_constructor: bool = False,
+        skip_maintenance: bool = True,
         no_auto_fix: bool = False,
-        maintenance_verbose: bool = True,
+        maintenance_verbose: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a GameMaker script asset."""
+        # region agent log
+        _dbg(
+            "H2",
+            "src/gms_mcp/gamemaker_mcp_server.py:gm_create_script:entry",
+            "gm_create_script tool entry",
+            {
+                "name": name,
+                "parent_path": parent_path,
+                "project_root": project_root,
+                "prefer_cli": prefer_cli,
+                "skip_maintenance": skip_maintenance,
+            },
+        )
+        # endregion
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.asset_commands import handle_asset_create
@@ -494,7 +903,7 @@ def build_server():
             asset_type="script",
             name=name,
             parent_path=parent_path,
-            constructor=constructor,
+            constructor=is_constructor,
             skip_maintenance=skip_maintenance,
             no_auto_fix=no_auto_fix,
             maintenance_verbose=maintenance_verbose,
@@ -508,7 +917,7 @@ def build_server():
             "--parent-path",
             parent_path,
         ]
-        if constructor:
+        if is_constructor:
             cli_args.append("--constructor")
         if skip_maintenance:
             cli_args.append("--skip-maintenance")
@@ -516,7 +925,7 @@ def build_server():
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_asset_create,
             direct_args=args,
             cli_args=cli_args,
@@ -525,22 +934,24 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_create_object(
+    async def gm_create_object(
         name: str,
-        parent_path: str,
+        parent_path: str = "",
         sprite_id: str = "",
         parent_object: str = "",
-        skip_maintenance: bool = False,
+        skip_maintenance: bool = True,
         no_auto_fix: bool = False,
-        maintenance_verbose: bool = True,
+        maintenance_verbose: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a GameMaker object asset."""
         repo_root = _resolve_repo_root(project_root)
@@ -576,7 +987,7 @@ def build_server():
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_asset_create,
             direct_args=args,
             cli_args=cli_args,
@@ -585,20 +996,22 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_create_sprite(
+    async def gm_create_sprite(
         name: str,
-        parent_path: str,
-        skip_maintenance: bool = False,
+        parent_path: str = "",
+        skip_maintenance: bool = True,
         no_auto_fix: bool = False,
-        maintenance_verbose: bool = True,
+        maintenance_verbose: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a GameMaker sprite asset (includes required image structure via your helpers)."""
         repo_root = _resolve_repo_root(project_root)
@@ -628,7 +1041,7 @@ def build_server():
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_asset_create,
             direct_args=args,
             cli_args=cli_args,
@@ -637,22 +1050,24 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_create_room(
+    async def gm_create_room(
         name: str,
-        parent_path: str,
+        parent_path: str = "",
         width: int = 1024,
         height: int = 768,
-        skip_maintenance: bool = False,
+        skip_maintenance: bool = True,
         no_auto_fix: bool = False,
-        maintenance_verbose: bool = True,
+        maintenance_verbose: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a GameMaker room asset."""
         repo_root = _resolve_repo_root(project_root)
@@ -688,7 +1103,7 @@ def build_server():
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_asset_create,
             direct_args=args,
             cli_args=cli_args,
@@ -697,20 +1112,22 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_create_folder(
+    async def gm_create_folder(
         name: str,
         path: str,
-        skip_maintenance: bool = False,
+        skip_maintenance: bool = True,
         no_auto_fix: bool = False,
-        maintenance_verbose: bool = True,
+        maintenance_verbose: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a GameMaker folder asset (`folders/My Folder.yy`)."""
         repo_root = _resolve_repo_root(project_root)
@@ -740,7 +1157,7 @@ def build_server():
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_asset_create,
             direct_args=args,
             cli_args=cli_args,
@@ -749,26 +1166,28 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_create_font(
+    async def gm_create_font(
         name: str,
-        parent_path: str,
+        parent_path: str = "",
         font_name: str = "Arial",
         size: int = 12,
         bold: bool = False,
         italic: bool = False,
         aa_level: int = 1,
         uses_sdf: bool = True,
-        skip_maintenance: bool = False,
+        skip_maintenance: bool = True,
         no_auto_fix: bool = False,
-        maintenance_verbose: bool = True,
+        maintenance_verbose: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a GameMaker font asset."""
         repo_root = _resolve_repo_root(project_root)
@@ -803,7 +1222,7 @@ def build_server():
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_asset_create,
             direct_args=args,
             cli_args=cli_args,
@@ -812,21 +1231,23 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_create_shader(
+    async def gm_create_shader(
         name: str,
-        parent_path: str,
+        parent_path: str = "",
         shader_type: int = 1,
-        skip_maintenance: bool = False,
+        skip_maintenance: bool = True,
         no_auto_fix: bool = False,
-        maintenance_verbose: bool = True,
+        maintenance_verbose: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a GameMaker shader asset."""
         repo_root = _resolve_repo_root(project_root)
@@ -850,7 +1271,7 @@ def build_server():
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_asset_create,
             direct_args=args,
             cli_args=cli_args,
@@ -859,22 +1280,24 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_create_animcurve(
+    async def gm_create_animcurve(
         name: str,
-        parent_path: str,
+        parent_path: str = "",
         curve_type: str = "linear",
         channel_name: str = "curve",
-        skip_maintenance: bool = False,
+        skip_maintenance: bool = True,
         no_auto_fix: bool = False,
-        maintenance_verbose: bool = True,
+        maintenance_verbose: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create an animation curve asset."""
         repo_root = _resolve_repo_root(project_root)
@@ -899,7 +1322,7 @@ def build_server():
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_asset_create,
             direct_args=args,
             cli_args=cli_args,
@@ -908,26 +1331,28 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_create_sound(
+    async def gm_create_sound(
         name: str,
-        parent_path: str,
+        parent_path: str = "",
         volume: float = 1.0,
         pitch: float = 1.0,
         sound_type: int = 0,
         bitrate: int = 128,
         sample_rate: int = 44100,
         format: int = 0,
-        skip_maintenance: bool = False,
+        skip_maintenance: bool = True,
         no_auto_fix: bool = False,
-        maintenance_verbose: bool = True,
+        maintenance_verbose: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a sound asset."""
         repo_root = _resolve_repo_root(project_root)
@@ -975,7 +1400,7 @@ def build_server():
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_asset_create,
             direct_args=args,
             cli_args=cli_args,
@@ -984,23 +1409,25 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_create_path(
+    async def gm_create_path(
         name: str,
-        parent_path: str,
+        parent_path: str = "",
         closed: bool = False,
         precision: int = 4,
         path_type: str = "straight",
-        skip_maintenance: bool = False,
+        skip_maintenance: bool = True,
         no_auto_fix: bool = False,
-        maintenance_verbose: bool = True,
+        maintenance_verbose: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a path asset."""
         repo_root = _resolve_repo_root(project_root)
@@ -1028,7 +1455,7 @@ def build_server():
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_asset_create,
             direct_args=args,
             cli_args=cli_args,
@@ -1037,12 +1464,13 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_create_tileset(
+    async def gm_create_tileset(
         name: str,
-        parent_path: str,
+        parent_path: str = "",
         sprite_id: str = "",
         tile_width: int = 32,
         tile_height: int = 32,
@@ -1050,14 +1478,15 @@ def build_server():
         tile_ysep: int = 0,
         tile_xoff: int = 0,
         tile_yoff: int = 0,
-        skip_maintenance: bool = False,
+        skip_maintenance: bool = True,
         no_auto_fix: bool = False,
-        maintenance_verbose: bool = True,
+        maintenance_verbose: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a tileset asset."""
         repo_root = _resolve_repo_root(project_root)
@@ -1108,7 +1537,7 @@ def build_server():
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_asset_create,
             direct_args=args,
             cli_args=cli_args,
@@ -1117,20 +1546,22 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_create_timeline(
+    async def gm_create_timeline(
         name: str,
-        parent_path: str,
-        skip_maintenance: bool = False,
+        parent_path: str = "",
+        skip_maintenance: bool = True,
         no_auto_fix: bool = False,
-        maintenance_verbose: bool = True,
+        maintenance_verbose: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a timeline asset."""
         repo_root = _resolve_repo_root(project_root)
@@ -1146,14 +1577,16 @@ def build_server():
             maintenance_verbose=maintenance_verbose,
             project_root=project_root,
         )
-        cli_args = ["asset", "create", "timeline", name, "--parent-path", parent_path]
+        cli_args = ["asset", "create", "timeline", name]
+        if parent_path:
+            cli_args.extend(["--parent-path", parent_path])
         if skip_maintenance:
             cli_args.append("--skip-maintenance")
         if no_auto_fix:
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_asset_create,
             direct_args=args,
             cli_args=cli_args,
@@ -1162,22 +1595,24 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_create_sequence(
+    async def gm_create_sequence(
         name: str,
-        parent_path: str,
+        parent_path: str = "",
         length: float = 60.0,
         playback_speed: float = 30.0,
-        skip_maintenance: bool = False,
+        skip_maintenance: bool = True,
         no_auto_fix: bool = False,
-        maintenance_verbose: bool = True,
+        maintenance_verbose: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a sequence asset."""
         repo_root = _resolve_repo_root(project_root)
@@ -1195,14 +1630,17 @@ def build_server():
             maintenance_verbose=maintenance_verbose,
             project_root=project_root,
         )
-        cli_args = ["asset", "create", "sequence", name, "--parent-path", parent_path, "--length", str(length), "--playback-speed", str(playback_speed)]
+        cli_args = ["asset", "create", "sequence", name]
+        if parent_path:
+            cli_args.extend(["--parent-path", parent_path])
+        cli_args.extend(["--length", str(length), "--playback-speed", str(playback_speed)])
         if skip_maintenance:
             cli_args.append("--skip-maintenance")
         if no_auto_fix:
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_asset_create,
             direct_args=args,
             cli_args=cli_args,
@@ -1211,21 +1649,23 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_create_note(
+    async def gm_create_note(
         name: str,
-        parent_path: str,
+        parent_path: str = "",
         content: str = "",
-        skip_maintenance: bool = False,
+        skip_maintenance: bool = True,
         no_auto_fix: bool = False,
-        maintenance_verbose: bool = True,
+        maintenance_verbose: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a note asset."""
         repo_root = _resolve_repo_root(project_root)
@@ -1242,7 +1682,9 @@ def build_server():
             maintenance_verbose=maintenance_verbose,
             project_root=project_root,
         )
-        cli_args = ["asset", "create", "note", name, "--parent-path", parent_path]
+        cli_args = ["asset", "create", "note", name]
+        if parent_path:
+            cli_args.extend(["--parent-path", parent_path])
         if content:
             cli_args.extend(["--content", content])
         if skip_maintenance:
@@ -1251,7 +1693,7 @@ def build_server():
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_asset_create,
             direct_args=args,
             cli_args=cli_args,
@@ -1260,10 +1702,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_asset_delete(
+    async def gm_asset_delete(
         asset_type: str,
         name: str,
         dry_run: bool = False,
@@ -1272,6 +1715,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Delete an asset (supports dry-run)."""
         repo_root = _resolve_repo_root(project_root)
@@ -1288,7 +1732,7 @@ def build_server():
         if dry_run:
             cli_args.append("--dry-run")
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_asset_delete,
             direct_args=args,
             cli_args=cli_args,
@@ -1297,13 +1741,14 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     # -----------------------------
     # Maintenance tools
     # -----------------------------
     @mcp.tool()
-    def gm_maintenance_auto(
+    async def gm_maintenance_auto(
         fix: bool = False,
         verbose: bool = True,
         project_root: str = ".",
@@ -1311,6 +1756,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Run your auto-maintenance pipeline."""
         repo_root = _resolve_repo_root(project_root)
@@ -1327,7 +1773,7 @@ def build_server():
             cli_args.append("--fix")
         cli_args.append("--verbose" if verbose else "--no-verbose")
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_maintenance_auto,
             direct_args=args,
             cli_args=cli_args,
@@ -1336,16 +1782,18 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_maintenance_lint(
+    async def gm_maintenance_lint(
         fix: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Run maintenance lint (optionally with fixes)."""
         repo_root = _resolve_repo_root(project_root)
@@ -1357,7 +1805,7 @@ def build_server():
         if fix:
             cli_args.append("--fix")
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_maintenance_lint,
             direct_args=args,
             cli_args=cli_args,
@@ -1366,15 +1814,17 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_maintenance_validate_json(
+    async def gm_maintenance_validate_json(
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Validate JSON files in the project."""
         repo_root = _resolve_repo_root(project_root)
@@ -1384,7 +1834,7 @@ def build_server():
         args = argparse.Namespace(project_root=project_root)
         cli_args = ["maintenance", "validate-json"]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_maintenance_validate_json,
             direct_args=args,
             cli_args=cli_args,
@@ -1393,15 +1843,17 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_maintenance_list_orphans(
+    async def gm_maintenance_list_orphans(
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Find orphaned and missing assets."""
         repo_root = _resolve_repo_root(project_root)
@@ -1411,7 +1863,7 @@ def build_server():
         args = argparse.Namespace(project_root=project_root)
         cli_args = ["maintenance", "list-orphans"]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_maintenance_list_orphans,
             direct_args=args,
             cli_args=cli_args,
@@ -1420,16 +1872,18 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_maintenance_prune_missing(
+    async def gm_maintenance_prune_missing(
         dry_run: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Remove missing asset references from project file."""
         repo_root = _resolve_repo_root(project_root)
@@ -1441,7 +1895,7 @@ def build_server():
         if dry_run:
             cli_args.append("--dry-run")
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_maintenance_prune_missing,
             direct_args=args,
             cli_args=cli_args,
@@ -1450,10 +1904,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_maintenance_validate_paths(
+    async def gm_maintenance_validate_paths(
         strict_disk_check: bool = False,
         include_parent_folders: bool = False,
         project_root: str = ".",
@@ -1461,6 +1916,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Validate folder paths referenced in assets."""
         repo_root = _resolve_repo_root(project_root)
@@ -1478,7 +1934,7 @@ def build_server():
         if include_parent_folders:
             cli_args.append("--include-parent-folders")
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_maintenance_validate_paths,
             direct_args=args,
             cli_args=cli_args,
@@ -1487,17 +1943,19 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_maintenance_dedupe_resources(
-        auto: bool = False,
+    async def gm_maintenance_dedupe_resources(
+        auto: bool = True,
         dry_run: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Remove duplicate resource entries from .yyp."""
         repo_root = _resolve_repo_root(project_root)
@@ -1511,7 +1969,7 @@ def build_server():
         if dry_run:
             cli_args.append("--dry-run")
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_maintenance_dedupe_resources,
             direct_args=args,
             cli_args=cli_args,
@@ -1520,10 +1978,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_maintenance_sync_events(
+    async def gm_maintenance_sync_events(
         fix: bool = False,
         object: str = "",
         project_root: str = ".",
@@ -1531,6 +1990,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Synchronize object events (dry-run unless fix=true)."""
         repo_root = _resolve_repo_root(project_root)
@@ -1544,7 +2004,7 @@ def build_server():
         if object:
             cli_args.extend(["--object", object])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_maintenance_sync_events,
             direct_args=args,
             cli_args=cli_args,
@@ -1553,16 +2013,18 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_maintenance_clean_old_files(
+    async def gm_maintenance_clean_old_files(
         delete: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Remove .old.yy backup files (dry-run unless delete=true)."""
         repo_root = _resolve_repo_root(project_root)
@@ -1574,7 +2036,7 @@ def build_server():
         if delete:
             cli_args.append("--delete")
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_maintenance_clean_old_files,
             direct_args=args,
             cli_args=cli_args,
@@ -1583,10 +2045,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_maintenance_clean_orphans(
+    async def gm_maintenance_clean_orphans(
         delete: bool = False,
         skip_types: List[str] | None = None,
         project_root: str = ".",
@@ -1594,6 +2057,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Remove orphaned asset files (dry-run unless delete=true)."""
         repo_root = _resolve_repo_root(project_root)
@@ -1609,7 +2073,7 @@ def build_server():
             cli_args.append("--skip-types")
             cli_args.extend(skip_types_value)
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_maintenance_clean_orphans,
             direct_args=args,
             cli_args=cli_args,
@@ -1618,16 +2082,18 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_maintenance_fix_issues(
+    async def gm_maintenance_fix_issues(
         verbose: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Run comprehensive maintenance with fixes enabled."""
         repo_root = _resolve_repo_root(project_root)
@@ -1639,7 +2105,7 @@ def build_server():
         if verbose:
             cli_args.append("--verbose")
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_maintenance_fix_issues,
             direct_args=args,
             cli_args=cli_args,
@@ -1648,13 +2114,14 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     # -----------------------------
     # Runner tools
     # -----------------------------
     @mcp.tool()
-    def gm_compile(
+    async def gm_compile(
         platform: str = "Windows",
         runtime: str = "VM",
         project_root: str = ".",
@@ -1662,6 +2129,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Compile the project using Igor."""
         repo_root = _resolve_repo_root(project_root)
@@ -1675,7 +2143,7 @@ def build_server():
         )
         cli_args = ["run", "compile", "--platform", platform, "--runtime", runtime]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_runner_compile,
             direct_args=args,
             cli_args=cli_args,
@@ -1684,10 +2152,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_run(
+    async def gm_run(
         platform: str = "Windows",
         runtime: str = "VM",
         background: bool = False,
@@ -1697,6 +2166,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Run the project using Igor (stitch/classic approaches handled by your runner)."""
         repo_root = _resolve_repo_root(project_root)
@@ -1723,7 +2193,7 @@ def build_server():
         if background:
             cli_args.append("--background")
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_runner_run,
             direct_args=args,
             cli_args=cli_args,
@@ -1732,15 +2202,17 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_run_stop(
+    async def gm_run_stop(
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Stop the running game (if any)."""
         repo_root = _resolve_repo_root(project_root)
@@ -1750,7 +2222,7 @@ def build_server():
         args = argparse.Namespace(project_root=project_root)
         cli_args = ["run", "stop"]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_runner_stop,
             direct_args=args,
             cli_args=cli_args,
@@ -1759,15 +2231,17 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_run_status(
+    async def gm_run_status(
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Check whether the game is running."""
         repo_root = _resolve_repo_root(project_root)
@@ -1777,7 +2251,7 @@ def build_server():
         args = argparse.Namespace(project_root=project_root)
         cli_args = ["run", "status"]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_runner_status,
             direct_args=args,
             cli_args=cli_args,
@@ -1786,13 +2260,14 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     # -----------------------------
     # Event tools
     # -----------------------------
     @mcp.tool()
-    def gm_event_add(
+    async def gm_event_add(
         object: str,
         event: str,
         template: str = "",
@@ -1801,6 +2276,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Add an event to an object."""
         repo_root = _resolve_repo_root(project_root)
@@ -1812,7 +2288,7 @@ def build_server():
         if template:
             cli_args.extend(["--template", template])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_event_add,
             direct_args=args,
             cli_args=cli_args,
@@ -1821,10 +2297,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_event_remove(
+    async def gm_event_remove(
         object: str,
         event: str,
         keep_file: bool = False,
@@ -1833,6 +2310,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Remove an event from an object."""
         repo_root = _resolve_repo_root(project_root)
@@ -1845,7 +2323,7 @@ def build_server():
         if keep_file:
             cli_args.append("--keep-file")
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_event_remove,
             direct_args=args,
             cli_args=cli_args,
@@ -1854,10 +2332,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_event_duplicate(
+    async def gm_event_duplicate(
         object: str,
         source_event: str,
         target_num: int,
@@ -1866,6 +2345,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Duplicate an event within an object."""
         repo_root = _resolve_repo_root(project_root)
@@ -1875,7 +2355,7 @@ def build_server():
         args = argparse.Namespace(object=object, source_event=source_event, target_num=target_num, project_root=project_root)
         cli_args = ["event", "duplicate", object, source_event, str(target_num)]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_event_duplicate,
             direct_args=args,
             cli_args=cli_args,
@@ -1884,16 +2364,18 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_event_list(
+    async def gm_event_list(
         object: str,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """List all events for an object."""
         repo_root = _resolve_repo_root(project_root)
@@ -1903,7 +2385,7 @@ def build_server():
         args = argparse.Namespace(object=object, project_root=project_root)
         cli_args = ["event", "list", object]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_event_list,
             direct_args=args,
             cli_args=cli_args,
@@ -1912,16 +2394,18 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_event_validate(
+    async def gm_event_validate(
         object: str,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Validate object events."""
         repo_root = _resolve_repo_root(project_root)
@@ -1931,7 +2415,7 @@ def build_server():
         args = argparse.Namespace(object=object, project_root=project_root)
         cli_args = ["event", "validate", object]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_event_validate,
             direct_args=args,
             cli_args=cli_args,
@@ -1940,10 +2424,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_event_fix(
+    async def gm_event_fix(
         object: str,
         safe_mode: bool = True,
         project_root: str = ".",
@@ -1951,6 +2436,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Fix object event issues (safe_mode defaults true)."""
         repo_root = _resolve_repo_root(project_root)
@@ -1962,7 +2448,7 @@ def build_server():
         if not safe_mode:
             cli_args.append("--no-safe-mode")
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_event_fix,
             direct_args=args,
             cli_args=cli_args,
@@ -1971,13 +2457,14 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     # -----------------------------
     # Workflow tools
     # -----------------------------
     @mcp.tool()
-    def gm_workflow_duplicate(
+    async def gm_workflow_duplicate(
         asset_path: str,
         new_name: str,
         yes: bool = False,
@@ -1986,6 +2473,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Duplicate an asset (.yy path relative to project root)."""
         repo_root = _resolve_repo_root(project_root)
@@ -1997,7 +2485,7 @@ def build_server():
         if yes:
             cli_args.append("--yes")
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_workflow_duplicate,
             direct_args=args,
             cli_args=cli_args,
@@ -2006,10 +2494,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_workflow_rename(
+    async def gm_workflow_rename(
         asset_path: str,
         new_name: str,
         project_root: str = ".",
@@ -2017,6 +2506,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Rename an asset (.yy path relative to project root)."""
         repo_root = _resolve_repo_root(project_root)
@@ -2026,7 +2516,7 @@ def build_server():
         args = argparse.Namespace(asset_path=asset_path, new_name=new_name, project_root=project_root)
         cli_args = ["workflow", "rename", asset_path, new_name]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_workflow_rename,
             direct_args=args,
             cli_args=cli_args,
@@ -2035,10 +2525,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_workflow_delete(
+    async def gm_workflow_delete(
         asset_path: str,
         dry_run: bool = False,
         project_root: str = ".",
@@ -2046,6 +2537,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Delete an asset by .yy path (supports dry-run)."""
         repo_root = _resolve_repo_root(project_root)
@@ -2057,7 +2549,7 @@ def build_server():
         if dry_run:
             cli_args.append("--dry-run")
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_workflow_delete,
             direct_args=args,
             cli_args=cli_args,
@@ -2066,10 +2558,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_workflow_swap_sprite(
+    async def gm_workflow_swap_sprite(
         asset_path: str,
         png: str,
         project_root: str = ".",
@@ -2077,6 +2570,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Replace a sprite's PNG source."""
         repo_root = _resolve_repo_root(project_root)
@@ -2086,7 +2580,7 @@ def build_server():
         args = argparse.Namespace(asset_path=asset_path, png=png, project_root=project_root)
         cli_args = ["workflow", "swap-sprite", asset_path, png]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_workflow_swap_sprite,
             direct_args=args,
             cli_args=cli_args,
@@ -2095,13 +2589,14 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     # -----------------------------
     # Room tools
     # -----------------------------
     @mcp.tool()
-    def gm_room_ops_duplicate(
+    async def gm_room_ops_duplicate(
         source_room: str,
         new_name: str,
         project_root: str = ".",
@@ -2109,6 +2604,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Duplicate an existing room."""
         repo_root = _resolve_repo_root(project_root)
@@ -2118,7 +2614,7 @@ def build_server():
         args = argparse.Namespace(source_room=source_room, new_name=new_name, project_root=project_root)
         cli_args = ["room", "ops", "duplicate", source_room, new_name]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_room_duplicate,
             direct_args=args,
             cli_args=cli_args,
@@ -2127,10 +2623,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_room_ops_rename(
+    async def gm_room_ops_rename(
         room_name: str,
         new_name: str,
         project_root: str = ".",
@@ -2138,6 +2635,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Rename an existing room."""
         repo_root = _resolve_repo_root(project_root)
@@ -2147,7 +2645,7 @@ def build_server():
         args = argparse.Namespace(room_name=room_name, new_name=new_name, project_root=project_root)
         cli_args = ["room", "ops", "rename", room_name, new_name]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_room_rename,
             direct_args=args,
             cli_args=cli_args,
@@ -2156,10 +2654,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_room_ops_delete(
+    async def gm_room_ops_delete(
         room_name: str,
         dry_run: bool = False,
         project_root: str = ".",
@@ -2167,6 +2666,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Delete a room (supports dry-run)."""
         repo_root = _resolve_repo_root(project_root)
@@ -2178,7 +2678,7 @@ def build_server():
         if dry_run:
             cli_args.append("--dry-run")
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_room_delete,
             direct_args=args,
             cli_args=cli_args,
@@ -2187,16 +2687,18 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_room_ops_list(
+    async def gm_room_ops_list(
         verbose: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """List rooms."""
         repo_root = _resolve_repo_root(project_root)
@@ -2208,7 +2710,7 @@ def build_server():
         if verbose:
             cli_args.append("--verbose")
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_room_list,
             direct_args=args,
             cli_args=cli_args,
@@ -2217,10 +2719,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_room_layer_add(
+    async def gm_room_layer_add(
         room_name: str,
         layer_type: str,
         layer_name: str,
@@ -2230,6 +2733,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Add a layer to a room."""
         repo_root = _resolve_repo_root(project_root)
@@ -2239,7 +2743,7 @@ def build_server():
         args = argparse.Namespace(room_name=room_name, layer_type=layer_type, layer_name=layer_name, depth=depth, project_root=project_root)
         cli_args = ["room", "layer", "add", room_name, layer_type, layer_name]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_room_layer_add,
             direct_args=args,
             cli_args=cli_args,
@@ -2248,10 +2752,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_room_layer_remove(
+    async def gm_room_layer_remove(
         room_name: str,
         layer_name: str,
         project_root: str = ".",
@@ -2259,6 +2764,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Remove a layer from a room."""
         repo_root = _resolve_repo_root(project_root)
@@ -2268,7 +2774,7 @@ def build_server():
         args = argparse.Namespace(room_name=room_name, layer_name=layer_name, project_root=project_root)
         cli_args = ["room", "layer", "remove", room_name, layer_name]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_room_layer_remove,
             direct_args=args,
             cli_args=cli_args,
@@ -2277,16 +2783,18 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_room_layer_list(
+    async def gm_room_layer_list(
         room_name: str,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """List layers in a room."""
         repo_root = _resolve_repo_root(project_root)
@@ -2296,7 +2804,7 @@ def build_server():
         args = argparse.Namespace(room_name=room_name, project_root=project_root)
         cli_args = ["room", "layer", "list", room_name]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_room_layer_list,
             direct_args=args,
             cli_args=cli_args,
@@ -2305,10 +2813,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_room_instance_add(
+    async def gm_room_instance_add(
         room_name: str,
         object_name: str,
         x: float,
@@ -2319,6 +2828,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Add an object instance to a room."""
         repo_root = _resolve_repo_root(project_root)
@@ -2330,7 +2840,7 @@ def build_server():
         if layer:
             cli_args.extend(["--layer", layer])
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_room_instance_add,
             direct_args=args,
             cli_args=cli_args,
@@ -2339,10 +2849,11 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_room_instance_remove(
+    async def gm_room_instance_remove(
         room_name: str,
         instance_id: str,
         project_root: str = ".",
@@ -2350,6 +2861,7 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Remove an instance from a room by instance id."""
         repo_root = _resolve_repo_root(project_root)
@@ -2359,7 +2871,7 @@ def build_server():
         args = argparse.Namespace(room_name=room_name, instance_id=instance_id, project_root=project_root)
         cli_args = ["room", "instance", "remove", room_name, instance_id]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_room_instance_remove,
             direct_args=args,
             cli_args=cli_args,
@@ -2368,16 +2880,18 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
     @mcp.tool()
-    def gm_room_instance_list(
+    async def gm_room_instance_list(
         room_name: str,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """List instances in a room."""
         repo_root = _resolve_repo_root(project_root)
@@ -2387,7 +2901,7 @@ def build_server():
         args = argparse.Namespace(room_name=room_name, project_root=project_root)
         cli_args = ["room", "instance", "list", room_name]
 
-        return _run_with_fallback(
+        return await _run_with_fallback(
             direct_handler=handle_room_instance_list,
             direct_args=args,
             cli_args=cli_args,
@@ -2396,12 +2910,36 @@ def build_server():
             output_mode=output_mode,
             tail_lines=tail_lines,
             quiet=quiet,
+            ctx=ctx,
         )
 
+    # region agent log
+    _dbg(
+        "H2",
+        "src/gms_mcp/gamemaker_mcp_server.py:build_server:exit",
+        "build_server returning FastMCP instance",
+        {"pid": os.getpid()},
+    )
+    # endregion
     return mcp
 
 
 def main() -> int:
+    # region agent log
+    _dbg(
+        "H1",
+        "src/gms_mcp/gamemaker_mcp_server.py:main:entry",
+        "server main entry",
+        {
+            "pid": os.getpid(),
+            "exe": sys.executable,
+            "argv": sys.argv,
+            "cwd": os.getcwd(),
+            "stdin_isatty": bool(getattr(sys.stdin, "isatty", lambda: False)()),
+            "stdout_isatty": bool(getattr(sys.stdout, "isatty", lambda: False)()),
+        },
+    )
+    # endregion
     try:
         server = build_server()
     except ModuleNotFoundError as e:
@@ -2413,6 +2951,77 @@ def main() -> int:
         sys.stderr.write(f"\nDetails: {e}\n")
         return 1
 
+    # region agent log
+    # Instrument the MCP protocol boundary: log every incoming request type.
+    # This tells us whether Cursor is hanging during initialize/list-tools/call-tool,
+    # or whether the request never arrives.
+    try:
+        import mcp.server.lowlevel.server as _lls
+
+        if not getattr(_lls.Server, "_gms_mcp_patched", False):
+            _orig_handle_request = _lls.Server._handle_request
+
+            async def _patched_handle_request(self, message, req, session, lifespan_context, raise_exceptions):
+                t0 = time.monotonic()
+                req_type = type(req).__name__
+                req_id = getattr(message, "request_id", None)
+                # Best-effort extraction of tool name for CallToolRequest (helps confirm if Cursor ever sends it)
+                tool_name = None
+                try:
+                    tool_name = getattr(req, "params", None) and getattr(req.params, "name", None)
+                except Exception:
+                    tool_name = None
+                _dbg(
+                    "H4",
+                    "src/gms_mcp/gamemaker_mcp_server.py:lowlevel:_handle_request:entry",
+                    "received request",
+                    {"pid": os.getpid(), "req_type": req_type, "request_id": req_id, "tool_name": tool_name},
+                )
+                try:
+                    result = await _orig_handle_request(self, message, req, session, lifespan_context, raise_exceptions)
+                    dt_ms = int((time.monotonic() - t0) * 1000)
+                    _dbg(
+                        "H4",
+                        "src/gms_mcp/gamemaker_mcp_server.py:lowlevel:_handle_request:exit",
+                        "request handled",
+                        {"pid": os.getpid(), "req_type": req_type, "request_id": req_id, "elapsed_ms": dt_ms},
+                    )
+                    return result
+                except Exception as e:
+                    dt_ms = int((time.monotonic() - t0) * 1000)
+                    _dbg(
+                        "H4",
+                        "src/gms_mcp/gamemaker_mcp_server.py:lowlevel:_handle_request:error",
+                        "request handler raised",
+                        {"pid": os.getpid(), "req_type": req_type, "request_id": req_id, "elapsed_ms": dt_ms, "error": str(e)},
+                    )
+                    raise
+
+            _lls.Server._handle_request = _patched_handle_request  # type: ignore[assignment]
+            _lls.Server._gms_mcp_patched = True  # type: ignore[attr-defined]
+            _dbg(
+                "H4",
+                "src/gms_mcp/gamemaker_mcp_server.py:main:patch_ok",
+                "patched lowlevel Server._handle_request",
+                {"pid": os.getpid()},
+            )
+    except Exception as e:
+        _dbg(
+            "H4",
+            "src/gms_mcp/gamemaker_mcp_server.py:main:patch_failed",
+            "failed to patch lowlevel request handler",
+            {"pid": os.getpid(), "error": str(e)},
+        )
+    # endregion
+
+    # region agent log
+    _dbg(
+        "H1",
+        "src/gms_mcp/gamemaker_mcp_server.py:main:before_run",
+        "calling server.run()",
+        {"pid": os.getpid()},
+    )
+    # endregion
     server.run()
     return 0
 
