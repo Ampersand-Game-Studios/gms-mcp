@@ -15,4 +15,4 @@ All notable changes to this project will be documented in this file.
 - MCP tools now default to `skip_maintenance=True` and `maintenance_verbose=False` for faster feedback loops.
 - `gm_maintenance_dedupe_resources` now defaults to `auto=True` to prevent interactive prompt hangs.
 - Removed legacy `test_mcp_streaming_runner.py` in favor of the more stable direct/non-streaming architecture.
-
+- CLI test suite now imports `gms_helpers` directly from `src` and uses module invocation, removing legacy shim modules.

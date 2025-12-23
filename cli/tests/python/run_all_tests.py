@@ -18,10 +18,10 @@ if sys.platform == "win32":
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
     if hasattr(sys.stderr, 'buffer'):
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
-    
+
     # Set console output encoding to UTF-8 for subprocess calls
     os.environ["PYTHONIOENCODING"] = "utf-8"
-    
+
     # Try to set console codepage to UTF-8 (Windows 10+)
     try:
         import ctypes
@@ -30,15 +30,14 @@ if sys.platform == "win32":
     except:
         pass  # Ignore if this fails on older Windows versions
 
-# Ensure the project root + CLI directory are on PYTHONPATH for all child processes so that
+# Ensure the src directory is on PYTHONPATH for all child processes so that
 # imports like `gms_helpers` are resolved regardless of the working directory.
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 current_pythonpath = os.environ.get("PYTHONPATH", "")
-cli_dir = PROJECT_ROOT / "cli"
-cli_gms_helpers_dir = cli_dir / "gms_helpers"
+src_dir = PROJECT_ROOT / "src"
 pythonpath_parts = [p for p in current_pythonpath.split(os.pathsep) if p]
 to_add = []
-for p in (PROJECT_ROOT, cli_dir, cli_gms_helpers_dir):
+for p in (PROJECT_ROOT, src_dir):
     if str(p) not in pythonpath_parts:
         to_add.append(str(p))
 if to_add:
@@ -53,7 +52,7 @@ def find_python_executable():
         "python3",       # Linux/Mac standard
         "py",           # Windows launcher
     ]
-    
+
     # Add common Windows system installs if on Windows
     if os.name == 'nt':
         candidates.extend([
@@ -62,23 +61,23 @@ def find_python_executable():
             r"C:\Python313\python.exe",  # Newer version
             r"C:\Program Files\Python313\python.exe",  # Newer system install
         ])
-    
+
     # Check for environment override
     if 'PYTHON_EXEC_OVERRIDE' in os.environ:
         candidates.insert(1, os.environ['PYTHON_EXEC_OVERRIDE'])
-    
+
     for candidate in candidates:
         if candidate == sys.executable:
             return candidate  # Always trust sys.executable
-        
+
         # Check if command exists in PATH
         if shutil.which(candidate):
             return candidate
-        
+
         # Check if it's a direct path that exists
         if os.path.exists(candidate):
             return candidate
-    
+
     # Fallback to sys.executable
     return sys.executable
 
@@ -87,9 +86,9 @@ def run_test_file(test_file_path):
     print(f"\n{'='*60}")
     print(f"🧪 Running {test_file_path.name}")
     print(f"{'='*60}")
-    
+
     python_exe = find_python_executable()
-    
+
     try:
         # Run the test from gamemaker directory so CLI tools find the .yyp file
         # Use absolute path for the test file since we're changing working directory
@@ -99,7 +98,7 @@ def run_test_file(test_file_path):
         ], cwd=str(gamemaker_dir),
         capture_output=False, text=True,
         env=os.environ.copy())
-        
+
         return result.returncode == 0, result.returncode
     except Exception as e:
         print(f"❌ Error running {test_file_path.name}: {e}")
@@ -109,57 +108,57 @@ def main():
     """Main test runner function"""
     print("🚀 GameMaker Project Test Suite Runner")
     print("=" * 60)
-    
+
     # Show which Python we're using
     python_exe = find_python_executable()
     print(f"🐍 Using Python: {python_exe}")
-    
+
     try:
-        version_result = subprocess.run([python_exe, "--version"], 
+        version_result = subprocess.run([python_exe, "--version"],
                                       capture_output=True, text=True)
         if version_result.returncode == 0:
             print(f"📦 Version: {version_result.stdout.strip()}")
     except:
         pass
-    
+
     print("=" * 60)
-    
-    # Find all test files
-    current_dir = Path(".")
-    test_files = list(current_dir.glob("test_*.py"))
+
+    # Find all test files (relative to this script, not the caller's CWD)
+    test_dir = Path(__file__).resolve().parent
+    test_files = list(test_dir.glob("test_*.py"))
 
     if not test_files:
         print("❌ No test files found in current directory")
         return 1
-    
+
     print(f"Found {len(test_files)} test files:")
     for test_file in test_files:
         print(f"  • {test_file.name}")
-    
+
     # Run all tests
     results = []
     total_tests = 0
-    
+
     for test_file in sorted(test_files):
         success, exit_code = run_test_file(test_file)
         results.append((test_file.name, success, exit_code))
-    
+
     # Print summary
     print(f"\n{'='*60}")
     print("📊 TEST SUMMARY")
     print(f"{'='*60}")
-    
+
     passed = sum(1 for _, success, _ in results if success)
     failed = len(results) - passed
-    
+
     for test_name, success, exit_code in results:
         status = "✅ PASS" if success else f"❌ FAIL (exit code: {exit_code})"
         print(f"{test_name:<30} {status}")
-    
+
     print(f"\n📈 OVERALL RESULTS:")
     print(f"   Passed: {passed}/{len(results)}")
     print(f"   Failed: {failed}/{len(results)}")
-    
+
     if failed == 0:
         print(f"\n🎉 ALL TESTS PASSED! 🎉")
         return 0
@@ -168,4 +167,4 @@ def main():
         return 1
 
 if __name__ == "__main__":
-    sys.exit(main()) 
+    sys.exit(main())

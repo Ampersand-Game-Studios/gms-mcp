@@ -3,10 +3,11 @@
 import sys
 import os  # Retained for compatibility; can be removed later
 
-# Ensure project root is on Python path so 'tooling' package is importable
+# Ensure src is on Python path so gms_helpers is importable
 from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(PROJECT_ROOT))
+SRC_ROOT = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
 
 from gms_helpers.event_helper import (
     cmd_add, cmd_remove, cmd_duplicate, cmd_list, cmd_validate, cmd_fix
@@ -34,4 +35,4 @@ def handle_event_validate(args):
 
 def handle_event_fix(args):
     """Handle event fixing."""
-    return cmd_fix(args) 
+    return cmd_fix(args)

@@ -4,9 +4,10 @@ import sys
 import os  # Retained for compatibility
 from pathlib import Path
 
-# Ensure project root is on Python path so tooling package is importable
+# Ensure src is on Python path so gms_helpers is importable
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(PROJECT_ROOT))
+SRC_ROOT = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
 
 from gms_helpers.workflow import duplicate_asset, rename_asset, delete_asset, swap_sprite_png
 
@@ -28,4 +29,4 @@ def handle_workflow_delete(args):
 def handle_workflow_swap_sprite(args):
     """Handle sprite PNG swapping."""
     project_root = Path(args.project_root).resolve()
-    return swap_sprite_png(project_root, args.asset_path, Path(args.png)) 
+    return swap_sprite_png(project_root, args.asset_path, Path(args.png))

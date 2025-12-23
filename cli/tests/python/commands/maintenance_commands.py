@@ -4,10 +4,11 @@ import sys
 import os  # Retained for compatibility but unused
 
 # Import existing functionality
-# Ensure project root is on Python path for tooling.gms_helpers
+# Ensure src is on Python path for gms_helpers
 from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(PROJECT_ROOT))
+SRC_ROOT = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
 
 from gms_helpers.auto_maintenance import run_auto_maintenance
 from gms_helpers.asset_helper import (
@@ -64,4 +65,4 @@ def handle_maintenance_clean_orphans(args):
 
 def handle_maintenance_fix_issues(args):
     """Handle comprehensive issue fixing."""
-    return maint_fix_issues_command(args) 
+    return maint_fix_issues_command(args)

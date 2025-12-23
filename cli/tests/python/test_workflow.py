@@ -10,15 +10,15 @@ import unittest
 # Define PROJECT_ROOT before using it
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-# Add the tooling directory to the path
+# Add src directory to the path
 import sys
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / 'tooling' / 'gms_helpers'))
+SRC_ROOT = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
 
 # Import from the correct location
-from workflow import duplicate_asset, rename_asset, delete_asset, lint_project
-from utils import save_pretty_json
-from assets import ScriptAsset
+from gms_helpers.workflow import duplicate_asset, rename_asset, delete_asset, lint_project
+from gms_helpers.utils import save_pretty_json, load_json_loose
+from gms_helpers.assets import ScriptAsset
 
 class TempProject:
     """Context manager to build a tiny GM project for testing."""
@@ -43,13 +43,19 @@ class TestWorkflow(unittest.TestCase):
             script_asset = ScriptAsset()
             script_asset.create_files(proj, "original", "")
             original_path = "scripts/original/original.yy"
+            # Register the asset in the .yyp so maintenance doesn't treat it as orphaned.
+            yyp_path = proj / "test.yyp"
+            project_data = load_json_loose(yyp_path) or {}
+            resources = project_data.setdefault("resources", [])
+            resources.append({"id": {"name": "original", "path": original_path}})
+            save_pretty_json(yyp_path, project_data)
             # Duplicate
             duplicate_asset(proj, original_path, "copy")
             self.assertTrue((proj / "scripts" / "copy" / "copy.yy").exists())
             # Rename
             rename_asset(proj, original_path, "renamed")
             self.assertTrue((proj / "scripts" / "renamed" / "renamed.yy").exists())
-        
+
     def test_delete_and_lint(self):
         with TempProject() as proj:
             # Create a script asset to delete using ScriptAsset class
@@ -63,4 +69,4 @@ class TestWorkflow(unittest.TestCase):
             self.assertEqual(lint_project(proj), 0)
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2) 
+    unittest.main(verbosity=2)

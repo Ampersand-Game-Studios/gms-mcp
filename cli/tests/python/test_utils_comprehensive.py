@@ -10,31 +10,24 @@ import shutil
 import os
 import json
 import stat
+import sys
 from pathlib import Path
 from unittest.mock import patch, MagicMock, mock_open
 
+# Add src directory to Python path
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+SRC_ROOT = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
+
 # Import all functions to test
-try:
-    from utils import (
-        strip_trailing_commas, load_json_loose, save_pretty_json, save_pretty_json_gm,
-        save_json, find_yyp, ensure_directory, verify_parent_path_exists,
-        insert_into_resources, insert_into_folders, generate_uuid, create_dummy_png,
-        load_json, add_trailing_commas, validate_name, find_yyp_file,
-        check_resource_conflicts, find_duplicate_resources, dedupe_resources,
-        update_yyp_file, validate_parent_path, remove_folder_from_yyp, list_folders_in_yyp
-    )
-except ImportError:
-    import sys
-    from pathlib import Path
-    sys.path.insert(0, str(PROJECT_ROOT))
-    from utils import (
-        strip_trailing_commas, load_json_loose, save_pretty_json, save_pretty_json_gm,
-        save_json, find_yyp, ensure_directory, verify_parent_path_exists,
-        insert_into_resources, insert_into_folders, generate_uuid, create_dummy_png,
-        load_json, add_trailing_commas, validate_name, find_yyp_file,
-        check_resource_conflicts, find_duplicate_resources, dedupe_resources,
-        update_yyp_file, validate_parent_path, remove_folder_from_yyp, list_folders_in_yyp
-    )
+from gms_helpers.utils import (
+    strip_trailing_commas, load_json_loose, save_pretty_json, save_pretty_json_gm,
+    save_json, find_yyp, ensure_directory, verify_parent_path_exists,
+    insert_into_resources, insert_into_folders, generate_uuid, create_dummy_png,
+    load_json, add_trailing_commas, validate_name, find_yyp_file,
+    check_resource_conflicts, find_duplicate_resources, dedupe_resources,
+    update_yyp_file, validate_parent_path, remove_folder_from_yyp, list_folders_in_yyp
+)
 
 
 class TestUtilsComprehensive(unittest.TestCase):
@@ -888,7 +881,7 @@ class TestUtilsFullCoverage(unittest.TestCase):
     
     def test_validate_name_all_asset_types(self):
         """Test validate_name for all asset types with invalid names."""
-        from utils import validate_name
+        from gms_helpers.utils import validate_name
         
         # Test invalid font name
         with self.assertRaises(ValueError) as cm:
@@ -937,7 +930,7 @@ class TestUtilsFullCoverage(unittest.TestCase):
     
     def test_insert_into_resources_duplicate(self):
         """Test insert_into_resources when resource already exists."""
-        from utils import insert_into_resources
+        from gms_helpers.utils import insert_into_resources
         
         resources = [{"id": {"name": "test_asset", "path": "path/to/asset.yy"}}]
         
@@ -949,7 +942,7 @@ class TestUtilsFullCoverage(unittest.TestCase):
     
     def test_add_trailing_commas_continue_paths(self):
         """Test add_trailing_commas with lines that trigger continue statements."""
-        from utils import add_trailing_commas
+        from gms_helpers.utils import add_trailing_commas
         
         # Test JSON with complex structure to hit all continue cases
         test_json = '''{
@@ -975,7 +968,7 @@ class TestUtilsFullCoverage(unittest.TestCase):
     
     def test_load_json_loose_exceptions(self):
         """Test load_json_loose error handling - should return None for invalid JSON."""
-        from utils import load_json_loose
+        from gms_helpers.utils import load_json_loose
         from pathlib import Path
         
         # Create a file with invalid JSON that can't be fixed
@@ -992,7 +985,7 @@ class TestUtilsFullCoverage(unittest.TestCase):
     
     def test_update_yyp_file_save_error(self):
         """Test update_yyp_file when save fails."""
-        from utils import update_yyp_file, save_json
+        from gms_helpers.utils import update_yyp_file, save_json
         from unittest.mock import patch
         
         # Create valid project
@@ -1008,7 +1001,7 @@ class TestUtilsFullCoverage(unittest.TestCase):
     
     def test_dedupe_resources_with_no_name(self):
         """Test dedupe_resources with resource missing name field."""
-        from utils import dedupe_resources
+        from gms_helpers.utils import dedupe_resources
         
         # Test with resource that has no name (will be skipped)
         yyp_data = {

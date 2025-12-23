@@ -15,20 +15,19 @@ from unittest.mock import patch, MagicMock
 # Define PROJECT_ROOT before using it
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-# Add the tooling directory to the path
 import sys
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / 'tooling' / 'gms_helpers'))
+SRC_ROOT = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
 
 # Import all asset classes to test
 try:
-    from assets import (
+    from gms_helpers.assets import (
         ScriptAsset, ObjectAsset, SpriteAsset, RoomAsset, FolderAsset,
         FontAsset, ShaderAsset, AnimCurveAsset, SoundAsset, PathAsset,
         TileSetAsset, TimelineAsset, SequenceAsset, NoteAsset
     )
-    from base_asset import BaseAsset
-    from utils import generate_uuid, create_dummy_png, ensure_directory, load_json_loose
+    from gms_helpers.base_asset import BaseAsset
+    from gms_helpers.utils import generate_uuid, create_dummy_png, ensure_directory, load_json_loose
 except ImportError as e:
     print(f"Import error: {e}")
     raise
@@ -881,7 +880,7 @@ class TestErrorConditions(TestAssetsComprehensive):
         parent_path = self._create_test_folder_structure()
         
         # Mock the save_pretty_json_gm function to raise an exception
-        with patch('base_asset.save_pretty_json_gm', side_effect=PermissionError("Mocked permission error")):
+        with patch('gms_helpers.base_asset.save_pretty_json_gm', side_effect=PermissionError("Mocked permission error")):
             with self.assertRaises(PermissionError):
                 script_asset.create_files(self.project_root, "test_script", parent_path)
     

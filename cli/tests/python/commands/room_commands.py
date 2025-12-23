@@ -4,10 +4,11 @@ import sys
 import os  # Retained for compatibility
 
 # Import existing functionality
-# Ensure project root is on Python path for tooling package
+# Ensure src is on Python path for gms_helpers
 from pathlib import Path
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(PROJECT_ROOT))
+SRC_ROOT = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
 
 # Import from room helpers
 from gms_helpers.room_layer_helper import add_layer, remove_layer, list_layers
@@ -77,4 +78,4 @@ def handle_room_instance_remove(args):
 
 def handle_room_instance_list(args):
     """Handle room instance listing."""
-    return list_instances(args) 
+    return list_instances(args)

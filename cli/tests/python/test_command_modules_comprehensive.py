@@ -16,8 +16,9 @@ import json
 # Define PROJECT_ROOT
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
-# Add project root to path
-sys.path.insert(0, str(PROJECT_ROOT))
+# Add src directory to path
+SRC_ROOT = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
 
 # Import all command modules
 from gms_helpers.commands.asset_commands import handle_asset_create, handle_asset_delete
@@ -212,7 +213,8 @@ class TestAssetCommands(unittest.TestCase):
         result = handle_asset_create(self.test_args)
         
         self.assertFalse(result)
-        mock_print.assert_called_with('❌ Unknown asset type: unknown')
+        printed = mock_print.call_args[0][0]
+        self.assertIn("Unknown asset type: unknown", printed)
     
     @patch('gms_helpers.commands.asset_commands.delete_asset')
     def test_handle_asset_delete(self, mock_delete):

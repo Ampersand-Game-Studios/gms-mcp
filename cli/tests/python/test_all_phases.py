@@ -14,6 +14,9 @@ from pathlib import Path
 import time
 import shlex
 
+PROJECT_ROOT = Path(__file__).resolve().parents[3]
+SRC_ROOT = PROJECT_ROOT / "src"
+
 def find_python_executable():
     """Find the best Python executable to use"""
     # Try different Python executables in order of preference
@@ -95,11 +98,11 @@ class GameMakerCLITester:
     def __init__(self):
         self.result = AllPhasesTestResult()
         self.test_dir = None
-        self.asset_helper_path = None
-        self.event_helper_path = None
-        self.room_layer_helper_path = None
-        self.room_instance_helper_path = None
-        self.room_helper_path = None
+        self.asset_helper_module = "gms_helpers.asset_helper"
+        self.event_helper_module = "gms_helpers.event_helper"
+        self.room_layer_helper_module = "gms_helpers.room_layer_helper"
+        self.room_instance_helper_module = "gms_helpers.room_instance_helper"
+        self.room_helper_module = "gms_helpers.room_helper"
         self.python_exe = find_python_executable()
     
     def setup_test_environment(self):
@@ -108,14 +111,6 @@ class GameMakerCLITester:
             # Create temporary directory
             self.test_dir = Path(tempfile.mkdtemp(prefix="gm_cli_test_"))
             print(f"🔧 Created test environment: {self.test_dir}")
-            
-            # Set up paths to helper scripts
-            tools_dir = Path(__file__).parent
-            self.asset_helper_path = tools_dir / "asset_helper.py"
-            self.event_helper_path = tools_dir / "event_helper.py" 
-            self.room_layer_helper_path = tools_dir / "room_layer_helper.py"
-            self.room_instance_helper_path = tools_dir / "room_instance_helper.py"
-            self.room_helper_path = tools_dir / "room_helper.py"
             
             # Change to test directory
             os.chdir(self.test_dir)
@@ -195,6 +190,12 @@ class GameMakerCLITester:
             else:
                 cmd_args = cmd
 
+            env = os.environ.copy()
+            pythonpath = env.get("PYTHONPATH", "")
+            env["PYTHONPATH"] = (
+                f"{SRC_ROOT}{os.pathsep}{pythonpath}" if pythonpath else str(SRC_ROOT)
+            )
+
             result = subprocess.run(
                 cmd_args,
                 shell=False,
@@ -202,7 +203,8 @@ class GameMakerCLITester:
                 text=True,
                 cwd=self.test_dir,
                 encoding="utf-8",   # Force UTF-8 decoding
-                errors="replace"    # Replace decode errors with ?
+                errors="replace",   # Replace decode errors with ?
+                env=env
             )
             if expected_success:
                 return result.returncode == 0, result.stdout, result.stderr
@@ -214,11 +216,11 @@ class GameMakerCLITester:
     def test_help_commands(self):
         """Test that all help commands work."""
         commands = [
-            f'"{self.python_exe}" "{self.asset_helper_path}" --help',
-            f'"{self.python_exe}" "{self.event_helper_path}" --help',
-            f'"{self.python_exe}" "{self.room_layer_helper_path}" --help',
-            f'"{self.python_exe}" "{self.room_instance_helper_path}" --help',
-            f'"{self.python_exe}" "{self.room_helper_path}" --help'
+            f'"{self.python_exe}" -m {self.asset_helper_module} --help',
+            f'"{self.python_exe}" -m {self.event_helper_module} --help',
+            f'"{self.python_exe}" -m {self.room_layer_helper_module} --help',
+            f'"{self.python_exe}" -m {self.room_instance_helper_module} --help',
+            f'"{self.python_exe}" -m {self.room_helper_module} --help'
         ]
         
         for cmd in commands:
@@ -256,7 +258,7 @@ class GameMakerCLITester:
         ]
         
         for asset_type, asset_name, extra_args in test_cases:
-            cmd = f'"{self.python_exe}" "{self.asset_helper_path}" --skip-maintenance {asset_type} "{asset_name}" --parent-path "folders/Scripts.yy" {extra_args}'
+            cmd = f'"{self.python_exe}" -m {self.asset_helper_module} --skip-maintenance {asset_type} "{asset_name}" --parent-path "folders/Scripts.yy" {extra_args}'
             success, stdout, stderr = self.run_command(cmd)
             
             if success:
@@ -267,7 +269,7 @@ class GameMakerCLITester:
         
         # Test folder creation separately since it uses --path instead of --parent-path
         for asset_type, asset_name, extra_args in folder_test_cases:
-            cmd = f'"{self.python_exe}" "{self.asset_helper_path}" --skip-maintenance {asset_type} "{asset_name}" {extra_args}'
+            cmd = f'"{self.python_exe}" -m {self.asset_helper_module} --skip-maintenance {asset_type} "{asset_name}" {extra_args}'
             success, stdout, stderr = self.run_command(cmd)
             
             if success:
@@ -288,7 +290,7 @@ class GameMakerCLITester:
         ]
         
         for maint_cmd in maintenance_commands:
-            cmd = f'"{self.python_exe}" "{self.asset_helper_path}" maint {maint_cmd}'
+            cmd = f'"{self.python_exe}" -m {self.asset_helper_module} maint {maint_cmd}'
             success, stdout, stderr = self.run_command(cmd)
             
             if success:
@@ -300,7 +302,7 @@ class GameMakerCLITester:
     def test_room_management(self):
         """Test room management tools."""
         # First create a test room
-        cmd = f'"{self.python_exe}" "{self.asset_helper_path}" --skip-maintenance room r_test_room --parent-path "folders/Scripts.yy"'
+        cmd = f'"{self.python_exe}" -m {self.asset_helper_module} --skip-maintenance room r_test_room --parent-path "folders/Scripts.yy"'
         success, stdout, stderr = self.run_command(cmd)
         
         if not success:
@@ -309,9 +311,9 @@ class GameMakerCLITester:
         
         # Test room layer operations
         layer_commands = [
-            f'"{self.python_exe}" "{self.room_layer_helper_path}" list-layers r_test_room',
-            f'"{self.python_exe}" "{self.room_layer_helper_path}" add-layer r_test_room "test_layer" --type instance --depth 100',
-            f'"{self.python_exe}" "{self.room_layer_helper_path}" list-layers r_test_room'
+            f'"{self.python_exe}" -m {self.room_layer_helper_module} list-layers r_test_room',
+            f'"{self.python_exe}" -m {self.room_layer_helper_module} add-layer r_test_room "test_layer" --type instance --depth 100',
+            f'"{self.python_exe}" -m {self.room_layer_helper_module} list-layers r_test_room'
         ]
         
         for cmd in layer_commands:
@@ -325,7 +327,7 @@ class GameMakerCLITester:
     def test_event_management(self):
         """Test event helper functionality."""
         # First create a test object
-        cmd = f'"{self.python_exe}" "{self.asset_helper_path}" --skip-maintenance object o_test_events --parent-path "folders/Scripts.yy"'
+        cmd = f'"{self.python_exe}" -m {self.asset_helper_module} --skip-maintenance object o_test_events --parent-path "folders/Scripts.yy"'
         success, stdout, stderr = self.run_command(cmd)
         
         if not success:
@@ -334,10 +336,10 @@ class GameMakerCLITester:
         
         # Test event operations
         event_commands = [
-            f'"{self.python_exe}" "{self.event_helper_path}" list o_test_events',
-            f'"{self.python_exe}" "{self.event_helper_path}" add o_test_events create',
-            f'"{self.python_exe}" "{self.event_helper_path}" add o_test_events step',
-            f'"{self.python_exe}" "{self.event_helper_path}" list o_test_events'
+            f'"{self.python_exe}" -m {self.event_helper_module} list o_test_events',
+            f'"{self.python_exe}" -m {self.event_helper_module} add o_test_events create',
+            f'"{self.python_exe}" -m {self.event_helper_module} add o_test_events step',
+            f'"{self.python_exe}" -m {self.event_helper_module} list o_test_events'
         ]
         
         for cmd in event_commands:
@@ -357,8 +359,8 @@ class GameMakerCLITester:
             
             # Import the trailing-comma-aware JSON loader
             import sys
-            sys.path.insert(0, str(Path(__file__).resolve().parents[2] / 'tooling' / 'gms_helpers'))
-            from utils import load_json_loose
+            sys.path.insert(0, str(SRC_ROOT))
+            from gms_helpers.utils import load_json_loose
             
             # Load and validate project file using trailing-comma-aware loader
             project_data = load_json_loose(self.test_dir / "test_project.yyp")

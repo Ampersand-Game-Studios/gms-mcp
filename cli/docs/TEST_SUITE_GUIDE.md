@@ -2,19 +2,16 @@
 
 ## Overview
 
-The GameMaker CLI Tools come with a comprehensive test suite that validates all functionality across 20+ test files covering asset creation, maintenance operations, room management, and more.
+The GameMaker CLI Tools come with a comprehensive test suite that validates all functionality across 19 test files covering asset creation, maintenance operations, room management, and more.
 
 ## 🚀 Running Tests
 
 ### Basic Usage
-**CRITICAL**: Tests must be run from the `tests/python/` directory:
+Recommended: run the test runner from the repo root so paths are resolved consistently.
 
 ```powershell
-# Navigate to test directory
-cd tests/python
-
-# Run all tests
-python run_all_tests.py
+# Run all tests from repo root
+python cli/tests/python/run_all_tests.py
 ```
 
 ### Test Runner Features
@@ -30,8 +27,7 @@ python run_all_tests.py
 🐍 Using Python: C:\...\python.exe
 📦 Version: Python 3.13.5
 ============================================================
-Found 20 test files:
-  • test_agent_setup.py
+Found 19 test files:
   • test_all_phases.py
   • test_assets_comprehensive.py
   ...
@@ -44,8 +40,8 @@ test_event_helper.py                  ✅ PASS
 ...
 
 📈 OVERALL RESULTS:
-   Passed: 6/20
-   Failed: 14/20
+   Passed: 19/19
+   Failed: 0/19
 ```
 
 ## 🔒 TempProject Isolation System
@@ -67,7 +63,7 @@ class TempProject:
         save_pretty_json(self.dir / "test.yyp", {"resources": [], "Folders": []})
         os.chdir(self.dir)  # Change to temp directory
         return self.dir
-    
+
     def __exit__(self, exc_type, exc, tb):
         os.chdir(self.original_cwd)  # Restore original directory
         shutil.rmtree(self.dir)     # Clean up temp files
@@ -91,45 +87,44 @@ class TempProject:
 
 ### Run Individual Test Files
 ```powershell
-# Run specific test
-python test_asset_helper.py
+# Run specific test from repo root
+python cli/tests/python/test_asset_helper.py
 
 # Run with verbose output
-python test_asset_helper.py -v
+python cli/tests/python/test_asset_helper.py -v
 ```
 
 ### Run Test Categories
 
 **Core Functionality Tests**:
 ```powershell
-python test_command_modules_comprehensive.py  # All CLI commands
-python test_assets_comprehensive.py           # Asset creation
-python test_utils_comprehensive.py            # Utility functions
+python cli/tests/python/test_command_modules_comprehensive.py  # All CLI commands
+python cli/tests/python/test_assets_comprehensive.py           # Asset creation
+python cli/tests/python/test_utils_comprehensive.py            # Utility functions
 ```
 
 **Room Management Tests**:
 ```powershell
-python test_room_operations.py       # Room duplicate/rename/delete
-python test_room_layer_helper.py     # Room layer management
-python test_room_instance_helper.py  # Room instance management
+python cli/tests/python/test_room_operations.py       # Room duplicate/rename/delete
+python cli/tests/python/test_room_layer_helper.py     # Room layer management
+python cli/tests/python/test_room_instance_helper.py  # Room instance management
 ```
 
 **Maintenance Tests**:
 ```powershell
-python test_auto_maintenance_comprehensive.py  # Full maintenance suite
-python test_auto_maintenance_timeout.py        # Timeout protection
+python cli/tests/python/test_auto_maintenance_comprehensive.py  # Full maintenance suite
 ```
 
 **Integration Tests**:
 ```powershell
-python test_all_phases.py                # End-to-end workflow
-python test_directory_validation_fixed.py # Project location validation
+python cli/tests/python/test_all_phases.py                # End-to-end workflow
+python cli/tests/python/test_directory_validation_fixed.py # Project location validation
 ```
 
 ### Performance Testing
 ```powershell
-python test_auto_maintenance_timeout.py  # Timeout handling (3-4 seconds)
-python test_all_phases.py               # Full integration (10+ seconds)
+python cli/tests/python/test_auto_maintenance_comprehensive.py  # Maintenance suite (few seconds)
+python cli/tests/python/test_all_phases.py                      # Full integration (10+ seconds)
 ```
 
 ## 🐛 Troubleshooting
@@ -138,24 +133,24 @@ python test_all_phases.py               # Full integration (10+ seconds)
 
 **1. Import Errors (`ModuleNotFoundError`)**
 ```
-ModuleNotFoundError: No module named 'assets'
+ModuleNotFoundError: No module named 'gms_helpers'
 ```
-**Cause**: Test not run from correct directory or Python path issues  
-**Solution**: Always run from `tests/python/` directory
+**Cause**: Test not run from correct directory or Python path issues
+**Solution**: Use `python cli/tests/python/run_all_tests.py` or set `PYTHONPATH=src`
 
 **2. PROJECT_ROOT Not Defined**
 ```
 NameError: name 'PROJECT_ROOT' is not defined
 ```
-**Cause**: Path configuration issue  
-**Solution**: Ensure you're in `tests/python/` when running tests
+**Cause**: Path configuration issue
+**Solution**: Use the test runner or set `PYTHONPATH=src`
 
 **3. Relative Import Errors**
 ```
 ImportError: attempted relative import with no known parent package
 ```
-**Cause**: Running individual test files incorrectly  
-**Solution**: Use the test runner: `python run_all_tests.py`
+**Cause**: Running individual test files incorrectly
+**Solution**: Use the test runner: `python cli/tests/python/run_all_tests.py`
 
 **4. Test Failures Due to Environment**
 - Some tests expect specific project structure
@@ -164,13 +159,12 @@ ImportError: attempted relative import with no known parent package
 
 ### Expected Test Status
 As of current version:
-- **✅ Consistently Passing**: 6/20 test files
-- **⚠️ Environment-Dependent**: 14/20 test files may fail due to import/path issues
-- **🔧 Core Functionality**: All critical CLI features are tested by passing tests
+- **Consistently Passing**: 19/19 test files with the runner
+- **Core Functionality**: All critical CLI features are covered
 
 ### Test Environment Requirements
 1. **Python 3.8+** (detected automatically)
-2. **Run from tests/python/** (critical for imports)
+2. **Run via test runner** (`python cli/tests/python/run_all_tests.py`)
 3. **Project structure intact** (for validation tests)
 4. **No active GameMaker IDE** (file locking issues)
 
@@ -190,7 +184,7 @@ As of current version:
 | `test_command_modules_comprehensive.py` | All CLI commands | < 1 second |
 | `test_directory_validation_fixed.py` | Project location safety | < 1 second |
 | `test_event_helper.py` | Object event management | < 1 second |
-| `test_auto_maintenance_timeout.py` | Timeout protection | 3-4 seconds |
+| `test_auto_maintenance_comprehensive.py` | Full maintenance suite | few seconds |
 | `test_all_phases.py` | End-to-end integration | 10+ seconds |
 
 ## 🔧 Advanced Usage
@@ -198,24 +192,24 @@ As of current version:
 ### Running with Coverage (if pytest installed)
 ```powershell
 pip install pytest pytest-cov
-pytest --cov=tooling --cov-report=html
+pytest --cov=gms_helpers --cov-report=html
 ```
 
 ### Environment Variables
 ```powershell
 # Override Python executable
 $env:PYTHON_EXEC_OVERRIDE = "python3.11"
-python run_all_tests.py
+python cli/tests/python/run_all_tests.py
 ```
 
 ### Development Testing
 ```powershell
 # Quick smoke test (fastest tests only)
-python test_event_helper.py
-python test_command_modules_comprehensive.py
+python cli/tests/python/test_event_helper.py
+python cli/tests/python/test_command_modules_comprehensive.py
 
 # Full validation (all tests)
-python run_all_tests.py
+python cli/tests/python/run_all_tests.py
 ```
 
 ## 🎉 Success Indicators
@@ -228,11 +222,11 @@ python run_all_tests.py
 **Partial Success** (expected for environment-dependent tests):
 ```
 📈 OVERALL RESULTS:
-   Passed: 6/20
-   Failed: 14/20
+   Passed: 19/19
+   Failed: 0/19
 ```
 
-As long as the core functionality tests pass (`test_command_modules_comprehensive.py`, `test_directory_validation_fixed.py`, `test_event_helper.py`), the CLI tools are working correctly.
+If you see unexpected failures, re-run via the test runner and confirm `PYTHONPATH=src`.
 
 ---
 
@@ -240,4 +234,4 @@ As long as the core functionality tests pass (`test_command_modules_comprehensiv
 
 The test suite provides comprehensive validation of all CLI functionality while ensuring your real project files are never at risk. The TempProject isolation system is a critical safety feature that creates temporary test environments for each test, preventing accidental damage to your actual GameMaker project.
 
-**Remember**: Always run tests from `tests/python/` directory and trust the TempProject isolation to keep your real project safe! 
+**Remember**: Use the test runner (or set `PYTHONPATH=src`) and trust the TempProject isolation to keep your real project safe!

@@ -4,9 +4,10 @@ import sys
 from pathlib import Path
 
 # Import existing functionality
-# Ensure project root is on Python path so 'tooling' package can be imported
+# Ensure src is on Python path so gms_helpers can be imported
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(PROJECT_ROOT))
+SRC_ROOT = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
 
 # Import all the create_* functions from asset_helper.py
 from gms_helpers.asset_helper import (
@@ -19,7 +20,7 @@ from gms_helpers.asset_helper import (
 def handle_asset_create(args):
     """Route asset creation to appropriate function."""
     asset_type = args.asset_type
-    
+
     # Map asset types to functions
     creators = {
         'script': create_script,
@@ -37,13 +38,13 @@ def handle_asset_create(args):
         'sequence': create_sequence,
         'note': create_note
     }
-    
+
     if asset_type not in creators:
         print(f"❌ Unknown asset type: {asset_type}")
         return False
-    
+
     return creators[asset_type](args)
 
 def handle_asset_delete(args):
     """Handle asset deletion."""
-    return delete_asset(args) 
+    return delete_asset(args)

@@ -265,10 +265,14 @@ def _capture_output(callable_to_run: Callable[[], Any]) -> Tuple[bool, str, str,
     result_value: Any = None
     error_text: Optional[str] = None
 
+    system_exit_code: Any | None = None
     with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
         try:
             result_value = callable_to_run()
             ok = bool(result_value) if isinstance(result_value, bool) else True
+        except SystemExit as e:
+            system_exit_code = getattr(e, "code", None)
+            ok = system_exit_code in (0, None)
         except Exception:
             ok = False
             error_text = traceback.format_exc()
@@ -288,6 +292,14 @@ def _capture_output(callable_to_run: Callable[[], Any]) -> Tuple[bool, str, str,
         # Best-effort fallback
         stdout_text = ""
         stderr_text = ""
+
+    if system_exit_code is not None and not ok:
+        pieces = [f"SystemExit: {system_exit_code!r}"]
+        if stdout_text:
+            pieces.append("stdout:\n" + stdout_text)
+        if stderr_text:
+            pieces.append("stderr:\n" + stderr_text)
+        error_text = "\n".join(pieces)
 
     return ok, stdout_text, stderr_text, result_value, error_text
 

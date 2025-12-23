@@ -13,9 +13,10 @@ import unittest
 import sys
 import os
 
-# Add project root to path
+# Add src directory to path
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(PROJECT_ROOT))
+SRC_ROOT = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
 
 # Import the module we're testing
 from gms_helpers.event_helper import (

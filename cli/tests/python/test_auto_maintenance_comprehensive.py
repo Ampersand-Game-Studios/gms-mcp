@@ -16,14 +16,14 @@ import sys
 
 # Define PROJECT_ROOT and add paths
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
-sys.path.insert(0, str(PROJECT_ROOT))
-sys.path.insert(0, str(PROJECT_ROOT / 'tooling' / 'gms_helpers'))
+SRC_ROOT = PROJECT_ROOT / "src"
+sys.path.insert(0, str(SRC_ROOT))
 
 # Import the module for type checking
-import auto_maintenance
+import gms_helpers.auto_maintenance as auto_maintenance
 
 # Import the modules to test
-from auto_maintenance import (
+from gms_helpers.auto_maintenance import (
     run_auto_maintenance,
     MaintenanceResult,
     detect_multi_asset_directories,
@@ -35,9 +35,9 @@ from auto_maintenance import (
     handle_maintenance_failure
 )
 
-from event_helper import ValidationReport
-from maintenance.lint import LintIssue
-from maintenance.validate_paths import PathValidationIssue
+from gms_helpers.event_helper import ValidationReport
+from gms_helpers.maintenance.lint import LintIssue
+from gms_helpers.maintenance.validate_paths import PathValidationIssue
 
 
 class TestAutoMaintenanceComprehensive(unittest.TestCase):
@@ -575,7 +575,7 @@ class TestPrintFunctions(TestAutoMaintenanceComprehensive):
             
             # Verify clean project summary
             printed_output = '\n'.join(str(call.args[0]) for call in mock_print.call_args_list)
-            self.assertIn("📋 Maintenance Summary", printed_output, "Should show maintenance summary")
+            self.assertIn("[INFO] Maintenance Summary", printed_output, "Should show maintenance summary")
             self.assertIn("Errors: 0", printed_output, "Should show no errors")
             self.assertIn("Warnings: 0", printed_output, "Should show no warnings")
     
@@ -599,7 +599,7 @@ class TestPrintFunctions(TestAutoMaintenanceComprehensive):
             print_maintenance_summary(result, detailed=True)
             
             printed_output = '\n'.join(str(call.args[0]) for call in mock_print.call_args_list)
-            self.assertIn("❌", printed_output, "Should show error indicator")
+            self.assertIn("[ERROR]", printed_output, "Should show error indicator")
             self.assertIn("Critical error", printed_output, "Should show error message")
     
     def test_print_maintenance_summary_with_warnings_only(self):
@@ -673,7 +673,7 @@ class TestPrintFunctions(TestAutoMaintenanceComprehensive):
             print_event_sync_report(clean_stats)
             
             printed_output = '\n'.join(str(call.args[0]) for call in mock_print.call_args_list)
-            self.assertIn("✅", printed_output, "Should show success for clean sync")
+            self.assertIn("[OK] All object events are properly synchronized", printed_output, "Should show success for clean sync")
         
         # Test scenario 2: Issues found and fixed
         fixed_stats = {
@@ -718,7 +718,7 @@ class TestPrintFunctions(TestAutoMaintenanceComprehensive):
             print_orphan_cleanup_report(clean_stats)
             
             printed_output = '\n'.join(str(call.args[0]) for call in mock_print.call_args_list)
-            self.assertIn("✅", printed_output, "Should show success for clean project")
+            self.assertIn("[OK] No orphaned files found to clean up", printed_output, "Should show success for clean project")
         
         # Test scenario 2: Files deleted successfully
         deletion_stats = {
@@ -748,7 +748,7 @@ class TestPrintFunctions(TestAutoMaintenanceComprehensive):
             print_orphan_cleanup_report(error_stats)
             
             printed_output = '\n'.join(str(call.args[0]) for call in mock_print.call_args_list)
-            self.assertIn("❌", printed_output, "Should show error indicator")
+            self.assertIn("[ERROR]", printed_output, "Should show error indicator")
             self.assertIn("2", printed_output, "Should show error count")
 
 
@@ -773,7 +773,7 @@ class TestHandleMaintenanceFailure(TestAutoMaintenanceComprehensive):
             self.assertFalse(success, "Should return False for critical errors")
             
             printed_output = '\n'.join(str(call.args[0]) for call in mock_print.call_args_list)
-            self.assertIn("❌ Test Operation failed", printed_output)
+            self.assertIn("[ERROR] Test Operation failed maintenance validation!", printed_output)
             self.assertIn("Critical JSON error", printed_output)
             self.assertIn("Total critical issues: 1", printed_output)
     
@@ -950,12 +950,12 @@ class TestRunAutoMaintenanceIntegration(TestAutoMaintenanceComprehensive):
             printed_output = '\n'.join(str(call.args[0]) for call in mock_print.call_args_list)
             
             # Verify verbose output contains expected sections
-            self.assertIn("🔧 Running Auto-Maintenance", printed_output)
-            self.assertIn("1️⃣ Validating JSON syntax", printed_output)
-            self.assertIn("2️⃣ Running project linting", printed_output)
-            self.assertIn("3️⃣ Validating folder paths", printed_output)
-            self.assertIn("4️⃣ Checking for orphaned/missing assets", printed_output)
-            self.assertIn("5️⃣ Synchronizing object events", printed_output)
+            self.assertIn("[MAINT] Running Auto-Maintenance...", printed_output)
+            self.assertIn("[1] Validating JSON syntax", printed_output)
+            self.assertIn("[2] Running project linting", printed_output)
+            self.assertIn("[3] Validating folder paths", printed_output)
+            self.assertIn("[4] Checking for orphaned/missing assets", printed_output)
+            self.assertIn("[5] Synchronizing object events", printed_output)
     
     def test_run_auto_maintenance_fix_mode_vs_dry_run(self):
         """Test differences between fix mode and dry-run mode."""
@@ -1027,11 +1027,11 @@ class TestRunAutoMaintenanceIntegration(TestAutoMaintenanceComprehensive):
         
         # Mock all the individual maintenance functions to verify they're called
         # Need to mock where the functions are used (in auto_maintenance module), not where they're defined
-        with patch('auto_maintenance.validate_project_json') as mock_json_validation, \
-             patch('auto_maintenance.lint_project') as mock_lint, \
-             patch('auto_maintenance.validate_folder_paths') as mock_paths, \
-             patch('auto_maintenance.find_orphaned_assets') as mock_orphaned, \
-             patch('auto_maintenance.find_missing_assets') as mock_missing:
+        with patch('gms_helpers.auto_maintenance.validate_project_json') as mock_json_validation, \
+             patch('gms_helpers.auto_maintenance.lint_project') as mock_lint, \
+             patch('gms_helpers.auto_maintenance.validate_folder_paths') as mock_paths, \
+             patch('gms_helpers.auto_maintenance.find_orphaned_assets') as mock_orphaned, \
+             patch('gms_helpers.auto_maintenance.find_missing_assets') as mock_missing:
             
             # Set up mock returns
             mock_json_validation.return_value = []
@@ -1048,7 +1048,7 @@ class TestRunAutoMaintenanceIntegration(TestAutoMaintenanceComprehensive):
             self.assertIsNotNone(result)
             self.assertIsInstance(result, auto_maintenance.MaintenanceResult)
     
-    @patch('auto_maintenance.config')
+    @patch('gms_helpers.auto_maintenance.config')
     def test_run_auto_maintenance_default_config_usage(self, mock_config):
         """Test run_auto_maintenance uses config defaults when parameters are None."""
         # Set up mock config
@@ -1062,7 +1062,7 @@ class TestRunAutoMaintenanceIntegration(TestAutoMaintenanceComprehensive):
             
             # Should use config defaults and be verbose
             printed_output = '\n'.join(str(call.args[0]) for call in mock_print.call_args_list)
-            self.assertIn("🔧 Running Auto-Maintenance", printed_output,
+            self.assertIn("[MAINT] Running Auto-Maintenance...", printed_output,
                          "Should use verbose mode from config")
 
 
@@ -1364,7 +1364,7 @@ class TestAutoMaintenanceFullCoverage(unittest.TestCase):
     
     def test_detect_multi_asset_directories_missing_dir(self):
         """Test detect_multi_asset_directories with missing asset directories."""
-        from auto_maintenance import detect_multi_asset_directories
+        from gms_helpers.auto_maintenance import detect_multi_asset_directories
         
         # This will exercise the continue statement when scripts directory doesn't exist
         result = detect_multi_asset_directories(self.temp_dir)
@@ -1374,7 +1374,7 @@ class TestAutoMaintenanceFullCoverage(unittest.TestCase):
     
     def test_event_sync_critical_path(self):
         """Test the event sync critical error path in validate_asset_creation_safe."""
-        from auto_maintenance import MaintenanceResult, validate_asset_creation_safe
+        from gms_helpers.auto_maintenance import MaintenanceResult, validate_asset_creation_safe
         
         # Create a result with event sync issues
         result = MaintenanceResult()
@@ -1388,7 +1388,7 @@ class TestAutoMaintenanceFullCoverage(unittest.TestCase):
     
     def test_handle_maintenance_failure_event_sync(self):
         """Test handle_maintenance_failure with event sync stats."""
-        from auto_maintenance import MaintenanceResult, handle_maintenance_failure
+        from gms_helpers.auto_maintenance import MaintenanceResult, handle_maintenance_failure
         from io import StringIO
         import sys
         
@@ -1423,13 +1423,13 @@ class TestAutoMaintenanceFullCoverage(unittest.TestCase):
         # Save original modules
         original_modules = {}
         modules_to_mock = [
-            'auto_maintenance.config',
-            'auto_maintenance.maintenance.lint',
-            'auto_maintenance.maintenance.tidy_json',
-            'auto_maintenance.maintenance.validate_paths',
-            'auto_maintenance.maintenance.orphans',
-            'auto_maintenance.maintenance.orphan_cleanup',
-            'auto_maintenance.event_helper'
+            'gms_helpers.auto_maintenance.config',
+            'gms_helpers.auto_maintenance.maintenance.lint',
+            'gms_helpers.auto_maintenance.maintenance.tidy_json',
+            'gms_helpers.auto_maintenance.maintenance.validate_paths',
+            'gms_helpers.auto_maintenance.maintenance.orphans',
+            'gms_helpers.auto_maintenance.maintenance.orphan_cleanup',
+            'gms_helpers.auto_maintenance.event_helper'
         ]
         
         for module in modules_to_mock:
@@ -1440,11 +1440,11 @@ class TestAutoMaintenanceFullCoverage(unittest.TestCase):
             # Force the ImportError path by temporarily removing relative imports
             with patch.dict(sys.modules, {mod: None for mod in modules_to_mock if '.' in mod}):
                 # Force reimport to trigger the except ImportError block
-                if 'auto_maintenance' in sys.modules:
-                    del sys.modules['auto_maintenance']
+                if 'gms_helpers.auto_maintenance' in sys.modules:
+                    del sys.modules['gms_helpers.auto_maintenance']
                 
                 # This import should trigger the fallback imports
-                import auto_maintenance
+                import gms_helpers.auto_maintenance as auto_maintenance
                 
                 # Verify the module loaded correctly
                 self.assertTrue(hasattr(auto_maintenance, 'run_auto_maintenance'))
@@ -1457,7 +1457,7 @@ class TestAutoMaintenanceFullCoverage(unittest.TestCase):
     
     def test_run_auto_maintenance_missing_assets_directory(self):
         """Test run_auto_maintenance when asset directories are missing."""
-        from auto_maintenance import run_auto_maintenance
+        from gms_helpers.auto_maintenance import run_auto_maintenance
         
         # Run maintenance on directory with missing scripts folder
         result = run_auto_maintenance(self.temp_dir, fix_issues=False, verbose=True)
@@ -1474,8 +1474,6 @@ class TestAutoMaintenanceFullCoverage(unittest.TestCase):
         
         # Mock the modules to force ImportError on relative imports
         mock_modules = {
-            '.maintenance.event_sync': MagicMock(),
-            '.maintenance.clean_unused_assets': MagicMock(),
             'maintenance.event_sync': MagicMock(),
             'maintenance.clean_unused_assets': MagicMock()
         }
@@ -1498,8 +1496,8 @@ class TestAutoMaintenanceFullCoverage(unittest.TestCase):
         original_import = builtins.__import__
         
         def custom_import(name, *args, **kwargs):
-            # Force ImportError for relative imports to trigger fallback
-            if name.startswith('.maintenance'):
+            # Force ImportError for package imports to trigger fallback
+            if name.startswith('gms_helpers.maintenance.'):
                 raise ImportError(f"Forcing fallback for {name}")
             # Return our mocks for absolute imports
             if name in mock_modules:
@@ -1507,7 +1505,7 @@ class TestAutoMaintenanceFullCoverage(unittest.TestCase):
             return original_import(name, *args, **kwargs)
         
         with patch('builtins.__import__', side_effect=custom_import):
-            from auto_maintenance import run_auto_maintenance
+            from gms_helpers.auto_maintenance import run_auto_maintenance
             
             # Run maintenance which should use fallback imports
             result = run_auto_maintenance(self.temp_dir, fix_issues=False, verbose=False)
@@ -1522,7 +1520,7 @@ class TestAutoMaintenanceFullCoverage(unittest.TestCase):
     
     def test_detect_multi_asset_with_multiple_yy_files(self):
         """Test detect_multi_asset_directories when directories have multiple .yy files."""
-        from auto_maintenance import detect_multi_asset_directories
+        from gms_helpers.auto_maintenance import detect_multi_asset_directories
         import os
         
         # Create a directory with multiple .yy files

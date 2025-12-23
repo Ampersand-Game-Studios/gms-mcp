@@ -6,15 +6,22 @@ Welcome to the comprehensive documentation for the GameMaker Studio CLI helper t
 
 ## 🚀 Quick Start
 
+From the repo root, set `PYTHONPATH=src` so module invocations resolve:
+
+```powershell
+$Env:PYTHONPATH = "$PWD\src"
+```
+
+
 ```bash
 # Create a new script
-python cli/gms_helpers/asset_helper.py script player_move --parent-path "folders/Player/Scripts.yy"
+python -m gms_helpers.asset_helper script player_move --parent-path "folders/Player/Scripts.yy"
 
 # Create a new shader (Phase 2)
-python cli/gms_helpers/asset_helper.py shader sh_blur --parent-path "folders/Shaders.yy"
+python -m gms_helpers.asset_helper shader sh_blur --parent-path "folders/Shaders.yy"
 
 # Manage room layers (Phase 1)
-python cli/gms_helpers/room_layer_helper.py add-layer r_game "lyr_enemies" --type instance --depth 100
+python -m gms_helpers.room_layer_helper add-layer r_game "lyr_enemies" --type instance --depth 100
 ```
 
 ## MCP integration (Cursor example)
@@ -111,39 +118,39 @@ This repo includes an **MCP server** (`gms-mcp`) that exposes GameMaker operatio
 ### Creating a Complete UI System
 ```bash
 # 1. Create folder structure
-python cli/gms_helpers/asset_helper.py folder "UI" --path "folders/UI.yy"
-python cli/gms_helpers/asset_helper.py folder "Fonts" --path "folders/UI/Fonts.yy"
+python -m gms_helpers.asset_helper folder "UI" --path "folders/UI.yy"
+python -m gms_helpers.asset_helper folder "Fonts" --path "folders/UI/Fonts.yy"
 
 # 2. Create fonts (Phase 2)
-python cli/gms_helpers/asset_helper.py font fnt_ui_title --parent-path "folders/UI/Fonts.yy" --size 32 --bold
-python cli/gms_helpers/asset_helper.py font fnt_ui_body --parent-path "folders/UI/Fonts.yy" --size 16
+python -m gms_helpers.asset_helper font fnt_ui_title --parent-path "folders/UI/Fonts.yy" --size 32 --bold
+python -m gms_helpers.asset_helper font fnt_ui_body --parent-path "folders/UI/Fonts.yy" --size 16
 
 # 3. Create UI objects
-python cli/gms_helpers/asset_helper.py object o_button --parent-path "folders/UI.yy"
-python cli/gms_helpers/asset_helper.py object o_menu --parent-path "folders/UI.yy"
+python -m gms_helpers.asset_helper object o_button --parent-path "folders/UI.yy"
+python -m gms_helpers.asset_helper object o_menu --parent-path "folders/UI.yy"
 ```
 
 ### Setting Up Visual Effects
 ```bash
 # 1. Create shader effects (Phase 2)
-python tooling/gms_helpers/asset_helper.py shader sh_blur --parent-path "folders/VFX.yy"
-python tooling/gms_helpers/asset_helper.py shader sh_glow --parent-path "folders/VFX.yy"
+python -m gms_helpers.asset_helper shader sh_blur --parent-path "folders/VFX.yy"
+python -m gms_helpers.asset_helper shader sh_glow --parent-path "folders/VFX.yy"
 
 # 2. Create animation curves for effects (Phase 2)
-python tooling/gms_helpers/asset_helper.py animcurve curve_fade_in --parent-path "folders/VFX.yy" --curve-type ease_in
-python tooling/gms_helpers/asset_helper.py animcurve curve_pulse --parent-path "folders/VFX.yy" --curve-type smooth
+python -m gms_helpers.asset_helper animcurve curve_fade_in --parent-path "folders/VFX.yy" --curve-type ease_in
+python -m gms_helpers.asset_helper animcurve curve_pulse --parent-path "folders/VFX.yy" --curve-type smooth
 ```
 
 ### Managing Game Rooms
 ```bash
 # 1. Duplicate existing room (Phase 1)
-python tooling/gms_helpers/room_helper.py duplicate r_base_level r_level_01
+python -m gms_helpers.room_helper duplicate r_base_level r_level_01
 
 # 2. Add custom layers
-python tooling/gms_helpers/room_layer_helper.py add-layer r_level_01 "lyr_hazards" --type instance --depth 3500
+python -m gms_helpers.room_layer_helper add-layer r_level_01 "lyr_hazards" --type instance --depth 3500
 
 # 3. Place instances
-python tooling/gms_helpers/room_instance_helper.py add-instance r_level_01 o_spike \
+python -m gms_helpers.room_instance_helper add-instance r_level_01 o_spike \
   --layer "lyr_hazards" --x 200 --y 400
 ```
 
@@ -152,15 +159,15 @@ python tooling/gms_helpers/room_instance_helper.py add-instance r_level_01 o_spi
 ### Pre-flight Check
 ```bash
 # Check for any issues before starting work
-python tooling/gms_helpers/asset_helper.py maint lint
-python tooling/gms_helpers/asset_helper.py maint dedupe-resources --dry-run
+python -m gms_helpers.asset_helper maint lint
+python -m gms_helpers.asset_helper maint dedupe-resources --dry-run
 ```
 
 ### Post-creation Cleanup
 ```bash
 # After creating many assets, ensure project health
-python tooling/gms_helpers/asset_helper.py maint fix-commas
-python tooling/gms_helpers/asset_helper.py maint prune-missing
+python -m gms_helpers.asset_helper maint fix-commas
+python -m gms_helpers.asset_helper maint prune-missing
 ```
 
 ## 📋 Best Practices
@@ -185,7 +192,7 @@ python tooling/gms_helpers/asset_helper.py maint prune-missing
 - **Delete command**: New `delete` sub-command for safe asset removal with dry-run support
 
 ### Getting Help
-1. Check command help: `python tooling/gms_helpers/<tool>.py --help`
+1. Check command help: `python -m gms_helpers.<tool> --help`
 2. Review relevant documentation section
 3. Run maintenance commands to check project health
 4. Examine the generated files for issues
@@ -221,17 +228,17 @@ shader <name> --parent-path <path> [--shader-type <1-4>]
 animcurve <name> --parent-path <path> [--curve-type <type>]
 
 # Room Management
-room_layer_helper.py add-layer <room> <layer> --type <type> --depth <n>
-room_instance_helper.py add-instance <room> <object> --layer <layer> --x <x> --y <y>
-room_helper.py duplicate <source_room> <new_room>
-room_helper.py rename <old_room> <new_room>
-room_helper.py delete <room> [--dry-run]
-room_helper.py list [--verbose]
+python -m gms_helpers.room_layer_helper add-layer <room> <layer> --type <type> --depth <n>
+python -m gms_helpers.room_instance_helper add-instance <room> <object> --layer <layer> --x <x> --y <y>
+python -m gms_helpers.room_helper duplicate <source_room> <new_room>
+python -m gms_helpers.room_helper rename <old_room> <new_room>
+python -m gms_helpers.room_helper delete <room> [--dry-run]
+python -m gms_helpers.room_helper list [--verbose]
 
 # Maintenance
-asset_helper.py maint lint
-asset_helper.py maint dedupe-resources [--auto]
-asset_helper.py maint fix-commas
+python -m gms_helpers.asset_helper maint lint
+python -m gms_helpers.asset_helper maint dedupe-resources [--auto]
+python -m gms_helpers.asset_helper maint fix-commas
 ```
 
 ---
