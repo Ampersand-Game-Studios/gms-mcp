@@ -52,9 +52,11 @@ class TestWorkflow(unittest.TestCase):
             # Duplicate
             duplicate_asset(proj, original_path, "copy")
             self.assertTrue((proj / "scripts" / "copy" / "copy.yy").exists())
+            self.assertFalse((proj / "scripts" / "copy" / "original.yy").exists())
             # Rename
             rename_asset(proj, original_path, "renamed")
             self.assertTrue((proj / "scripts" / "renamed" / "renamed.yy").exists())
+            self.assertFalse((proj / "scripts" / "renamed" / "original.yy").exists())
 
     def test_delete_and_lint(self):
         with TempProject() as proj:

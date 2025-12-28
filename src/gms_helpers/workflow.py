@@ -107,7 +107,7 @@ def duplicate_asset(project_root: Path, asset_path: str, new_name: str, *, yes: 
     # Rename key files (yy + optional gml)
     old_yy = dst_folder / f"{old_name}.yy"
     new_yy = dst_folder / f"{new_name}.yy"
-    shutil.copy2(old_yy, new_yy)
+    old_yy.rename(new_yy)
 
     # Rename script gml stub if applicable
     if asset_type == "script":
@@ -178,7 +178,7 @@ def rename_asset(project_root: Path, asset_path: str, new_name: str):
     # Rename key files
     old_yy = dst_folder / f"{old_name}.yy"
     new_yy = dst_folder / f"{new_name}.yy"
-    shutil.copy2(old_yy, new_yy)
+    old_yy.rename(new_yy)
 
     if asset_type == "script":
         old_gml = dst_folder / f"{old_name}.gml"
