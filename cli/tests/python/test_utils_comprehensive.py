@@ -720,57 +720,20 @@ class TestErrorConditions(TestUtilsComprehensive):
         """Test loading JSON file with permission error."""
         json_file = self.project_root / "restricted.json"
         json_file.write_text('{"test": "data"}', encoding="utf-8")
-        
-        # Make file unreadable (if possible on this system)
-        try:
-            json_file.chmod(0o000)
-            
-            # Test if permissions actually changed by trying to read
-            try:
-                json_file.read_text()
-                # If we can still read, permissions didn't work
-                self.skipTest("Cannot modify file permissions on this system")
-            except PermissionError:
-                # Good, permissions worked, now test the function
-                with self.assertRaises(PermissionError):
-                    load_json_loose(json_file)
-                
-        except (OSError, PermissionError):
-            # Can't change permissions on this system
-            self.skipTest("Cannot modify file permissions on this system")
-        finally:
-            # Restore permissions for cleanup
-            try:
-                json_file.chmod(0o644)
-            except:
-                pass
+        with patch('pathlib.Path.read_text', side_effect=PermissionError("No permission")):
+            with self.assertRaises(PermissionError):
+                load_json_loose(json_file)
     
     def test_save_pretty_json_permission_error(self):
         """Test saving JSON to directory without write permissions."""
         test_data = {"test": "data"}
         
-        # Create read-only directory (if possible)
         readonly_dir = self.project_root / "readonly"
         readonly_dir.mkdir()
-        
-        try:
-            readonly_dir.chmod(stat.S_IRUSR | stat.S_IRGRP | stat.S_IROTH)
-            
-            # Test if permissions actually changed by trying to write
-            test_write = readonly_dir / "test_write.txt"
-            try:
-                test_write.write_text("test")
-                # If we can still write, permissions didn't work
-                self.skipTest("Cannot modify directory permissions on this system")
-            except (PermissionError, OSError):
-                # Good, permissions worked, now test the function
-                json_file = readonly_dir / "test.json"
-                with self.assertRaises((PermissionError, OSError)):
-                    save_pretty_json(json_file, test_data)
-                
-        except (OSError, PermissionError):
-            # Can't change permissions on this system
-            self.skipTest("Cannot modify directory permissions on this system")
+        json_file = readonly_dir / "test.json"
+        with patch('pathlib.Path.write_text', side_effect=PermissionError("No permission")):
+            with self.assertRaises(PermissionError):
+                save_pretty_json(json_file, test_data)
     
     def test_save_json_directory_creation(self):
         """Test save_json creating directories when they don't exist."""
