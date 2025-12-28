@@ -746,9 +746,9 @@ async def _run_with_fallback(
         derived_tool_name = "-".join(head) if head else "tool"
 
     # Safety-first default:
-    # - In-process direct handler execution is faster and avoids subprocess issues on Windows.
-    # - We default to True now to ensure "it just works".
-    enable_direct = os.environ.get("GMS_MCP_ENABLE_DIRECT", "1").strip().lower() in ("1", "true", "yes", "on")
+    # - Subprocess execution is cancellable and avoids blocking the MCP server.
+    # - Direct execution is opt-in via GMS_MCP_ENABLE_DIRECT=1.
+    enable_direct = os.environ.get("GMS_MCP_ENABLE_DIRECT", "0").strip().lower() in ("1", "true", "yes", "on")
 
     if prefer_cli or not enable_direct:
         return _apply_output_mode(

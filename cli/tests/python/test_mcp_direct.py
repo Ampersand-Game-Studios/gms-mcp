@@ -1,11 +1,16 @@
 #!/usr/bin/env python3
+import argparse
+import asyncio
+import os
 import sys
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
+from gms_mcp import gamemaker_mcp_server as server
 from gms_mcp.gamemaker_mcp_server import _capture_output
 
 
@@ -38,6 +43,60 @@ class TestCaptureOutputSystemExit(unittest.TestCase):
         self.assertIn("done", out)
         self.assertEqual(err, "")
         self.assertIsNone(error_text)
+
+
+class TestRunWithFallbackDefaults(unittest.TestCase):
+    def test_default_uses_cli_when_direct_disabled(self):
+        direct_result = server.ToolRunResult(ok=True, stdout="", stderr="", direct_used=True)
+        cli_result = server.ToolRunResult(ok=True, stdout="", stderr="", direct_used=False)
+
+        async def _fake_cli(*_args, **_kwargs):
+            return cli_result
+
+        with patch.dict(os.environ, {}, clear=True):
+            with patch("gms_mcp.gamemaker_mcp_server._run_direct", return_value=direct_result) as mock_direct:
+                with patch("gms_mcp.gamemaker_mcp_server._run_cli_async", side_effect=_fake_cli) as mock_cli:
+                    result = asyncio.run(
+                        server._run_with_fallback(
+                            direct_handler=lambda _args: True,
+                            direct_args=argparse.Namespace(),
+                            cli_args=["workflow", "duplicate"],
+                            project_root=".",
+                            prefer_cli=False,
+                            output_mode="full",
+                            quiet=True,
+                        )
+                    )
+
+        self.assertFalse(result["direct_used"])
+        self.assertTrue(mock_cli.called)
+        self.assertFalse(mock_direct.called)
+
+    def test_opt_in_direct_via_env(self):
+        direct_result = server.ToolRunResult(ok=True, stdout="", stderr="", direct_used=True)
+        cli_result = server.ToolRunResult(ok=True, stdout="", stderr="", direct_used=False)
+
+        async def _fake_cli(*_args, **_kwargs):
+            return cli_result
+
+        with patch.dict(os.environ, {"GMS_MCP_ENABLE_DIRECT": "1"}, clear=True):
+            with patch("gms_mcp.gamemaker_mcp_server._run_direct", return_value=direct_result) as mock_direct:
+                with patch("gms_mcp.gamemaker_mcp_server._run_cli_async", side_effect=_fake_cli) as mock_cli:
+                    result = asyncio.run(
+                        server._run_with_fallback(
+                            direct_handler=lambda _args: True,
+                            direct_args=argparse.Namespace(),
+                            cli_args=["workflow", "duplicate"],
+                            project_root=".",
+                            prefer_cli=False,
+                            output_mode="full",
+                            quiet=True,
+                        )
+                    )
+
+        self.assertTrue(result["direct_used"])
+        self.assertTrue(mock_direct.called)
+        self.assertFalse(mock_cli.called)
 
 
 if __name__ == "__main__":
