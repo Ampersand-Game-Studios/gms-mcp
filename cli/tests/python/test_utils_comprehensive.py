@@ -673,7 +673,12 @@ class TestFileUtilities(TestUtilsComprehensive):
         # Verify it's a valid PNG file (starts with PNG signature)
         with open(png_path, 'rb') as f:
             signature = f.read(8)
+            f.seek(16)
+            width = int.from_bytes(f.read(4), "big")
+            height = int.from_bytes(f.read(4), "big")
         self.assertEqual(signature, bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
+        self.assertEqual(width, 64)
+        self.assertEqual(height, 64)
     
     def test_create_dummy_png_custom_dimensions(self):
         """Test creating dummy PNG with custom dimensions."""
@@ -681,12 +686,17 @@ class TestFileUtilities(TestUtilsComprehensive):
         
         create_dummy_png(png_path, width=128, height=256)
         
-        # Verify PNG file was created (current implementation ignores dimensions)
+        # Verify PNG file was created
         self.assertTrue(png_path.exists())
         # Verify it's a valid PNG file
         with open(png_path, 'rb') as f:
             signature = f.read(8)
+            f.seek(16)
+            width = int.from_bytes(f.read(4), "big")
+            height = int.from_bytes(f.read(4), "big")
         self.assertEqual(signature, bytes([0x89, 0x50, 0x4E, 0x47, 0x0D, 0x0A, 0x1A, 0x0A]))
+        self.assertEqual(width, 128)
+        self.assertEqual(height, 256)
     
     def test_create_dummy_png_no_pil(self):
         """Test creating dummy PNG when PIL is not available (current implementation doesn't use PIL)."""
