@@ -1003,7 +1003,7 @@ class TestUtilsFullCoverage(unittest.TestCase):
             json.dump({"resources": []}, f)
         
         # Mock save_json to raise exception
-        with patch('utils.save_json', side_effect=Exception("Save failed")):
+        with patch('gms_helpers.utils.save_json', side_effect=Exception("Save failed")):
             resource_entry = {"id": {"name": "test", "path": "test.yy"}}
             result = update_yyp_file(resource_entry)
             

@@ -155,6 +155,7 @@ def duplicate_asset(project_root: Path, asset_path: str, new_name: str, *, yes: 
             pass
     else:
         print(_c("[OK] Asset duplicated successfully! (maintenance skipped in test)", "green"))
+    return True
 
 
 # ---------------------------------------------------------------------------
@@ -247,6 +248,7 @@ def rename_asset(project_root: Path, asset_path: str, new_name: str):
             pass
     else:
         print(_c("[OK] Asset renamed successfully! (maintenance skipped in test)", "green"))
+    return True
 
 # ---------------------------------------------------------------------------
 # C-3: Delete Asset
@@ -288,6 +290,7 @@ def delete_asset(project_root: Path, asset_path: str, *, dry_run: bool = False):
         except ImportError:
             # Fallback if auto_maintenance not available
             pass
+    return True
 
 # ---------------------------------------------------------------------------
 # C-4: Swap Sprite PNG
@@ -306,6 +309,7 @@ def swap_sprite_png(project_root: Path, sprite_asset_path: str, png_source: Path
 
     shutil.copy2(png_source, target_png)
     print(_c(f"[OK] Replaced sprite image for {sprite_name}", "green"))
+    return True
 
 # ---------------------------------------------------------------------------
 # C-5: Project Linter
