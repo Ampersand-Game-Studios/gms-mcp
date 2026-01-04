@@ -49,12 +49,12 @@ After changing `.cursor/mcp.json`, **Reload Window** in Cursor to pick up MCP co
   - Tools accept an optional `project_root` parameter. You can pass `.` (default), a path to the repo root, or a path to `gamemaker/`.
   - The server and underlying CLI tools check for both `GM_PROJECT_ROOT` and `PROJECT_ROOT` environment variables (useful for agents / terminal sessions).
 - **Execution model / “no silent hangs”**:
-  - By default, tools use **direct in-process execution**. This is near-instant and avoids subprocess issues on Windows.
-  - Subprocess execution (`gm_cli` or via `prefer_cli=True`) isolates the child process from MCP stdin (setting it to `DEVNULL`).
+  - By default, tools use **isolated subprocess execution**. This ensures they are cancellable, avoid blocking the MCP server, and prevent "silent hangs" on Windows.
+  - Subprocess execution (via `gm_cli` or default fallback) isolates the child process from MCP stdin (setting it to `DEVNULL`).
   - Streaming logs via `ctx.log()` is **disabled** during subprocess execution to prevent stdio deadlocks with MCP clients like Cursor.
   - Every invocation writes a complete diagnostic log file under **`.gms_mcp/logs/`** in the resolved project directory.
   - Tools apply **category-aware default max runtimes** (overrideable) to prevent indefinite blocking. Override globally with `GMS_MCP_DEFAULT_TIMEOUT_SECONDS`.
-  - If you want to force subprocess execution, set `GMS_MCP_ENABLE_DIRECT=0` (not recommended for general use).
+  - To bypass subprocess overhead and use faster **in-process execution**, set `GMS_MCP_ENABLE_DIRECT=1`. This is faster but less resilient to hangs in library code.
 
 - **Picking the `gms` executable (Windows shims)**:
   - The server prefers a “real” `gms` when multiple are present on Windows (avoids the WindowsApps shim when possible).

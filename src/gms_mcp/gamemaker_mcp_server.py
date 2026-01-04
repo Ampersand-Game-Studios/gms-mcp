@@ -32,10 +32,50 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 
-def _dbg(hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    """Append a single NDJSON debug line to .cursor/debug.log (best-effort)."""
+def _get_debug_log_path() -> Optional[Path]:
+    """Resolve the debug log path safely (best-effort)."""
     try:
-        log_path = Path(__file__).resolve().parents[2] / ".cursor" / "debug.log"
+        candidates: List[Path] = []
+        # 1. Environment overrides
+        for env_var in ["GM_PROJECT_ROOT", "PROJECT_ROOT"]:
+            val = os.environ.get(env_var)
+            if val:
+                candidates.append(Path(val))
+        
+        # 2. CWD
+        candidates.append(Path.cwd())
+
+        for raw in candidates:
+            try:
+                p = Path(raw).expanduser().resolve()
+                if p.is_file():
+                    p = p.parent
+                if not p.exists():
+                    continue
+                
+                # Check for .yyp or gamemaker/ folder
+                if list(p.glob("*.yyp")) or (p / "gamemaker").is_dir():
+                    log_dir = p / ".gms_mcp" / "logs"
+                    log_dir.mkdir(parents=True, exist_ok=True)
+                    return log_dir / "debug.log"
+            except Exception:
+                continue
+        
+        # Fallback to CWD
+        fallback_dir = Path.cwd() / ".gms_mcp" / "logs"
+        fallback_dir.mkdir(parents=True, exist_ok=True)
+        return fallback_dir / "debug.log"
+    except Exception:
+        return None
+
+
+def _dbg(hypothesis_id: str, location: str, message: str, data: dict) -> None:
+    """Append a single NDJSON debug line to .gms_mcp/logs/debug.log (best-effort)."""
+    try:
+        log_path = _get_debug_log_path()
+        if not log_path:
+            return
+            
         payload = {
             "sessionId": "debug-session",
             "runId": os.environ.get("GMS_MCP_DEBUG_RUN_ID", "cursor-repro"),
@@ -835,7 +875,7 @@ def build_server():
         """
         Run the existing `gms` CLI.
 
-        - If `prefer_cli=true` (default): run in a subprocess with streamed output + timeout.
+        - If `prefer_cli=true` (default): run in a subprocess with captured output + timeout.
         - If `prefer_cli=false`: try in-process first, and (optionally) fall back to subprocess.
         Example args: ["maintenance", "auto", "--fix", "--verbose"]
         """
