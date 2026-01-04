@@ -17,7 +17,7 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
   - **Workflow**: duplicate/rename/delete/swap-sprite
   - **Rooms**: ops (duplicate/rename/delete/list), layers (add/remove/list), instances (add/remove/list)
   - **Introspection** (complete support for all asset types including extensions and datafiles):
-    - `gm_list_assets`: List all assets by type (scripts, objects, sprites, rooms, sounds, fonts, shaders, paths, timelines, tilesets, animcurves, sequences, notes, folders, **extensions**, **includedfiles**)
+    - `gm_list_assets`: List all assets by type, name, or folder. Supports filtering by **`asset_type`**, **`name_contains`**, and **`folder_prefix`**. (Includes scripts, objects, sprites, rooms, sounds, fonts, shaders, paths, timelines, tilesets, animcurves, sequences, notes, folders, **extensions**, **includedfiles**)
     - `gm_read_asset`: Read complete .yy JSON metadata for any asset
     - `gm_search_references`: Search for patterns (string or regex) across the project with scoping options
     - `gm_get_asset_graph`: Build dependency graph with optional **deep mode** for GML code reference parsing

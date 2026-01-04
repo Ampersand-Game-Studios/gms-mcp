@@ -236,6 +236,52 @@ function scr_spawn_enemy() {
         
         self.assertNotIn("includedfile", assets)
 
+    def test_list_assets_name_contains(self):
+        """Test filtering assets by name fragment."""
+        # Find o_player
+        assets = list_assets_by_type(self.project_root, name_contains="player")
+        self.assertIn("object", assets)
+        self.assertIn("sprite", assets)
+        self.assertEqual(assets["object"][0]["name"], "o_player")
+        self.assertEqual(assets["sprite"][0]["name"], "spr_player")
+        
+        # Should not findscr_utils
+        self.assertNotIn("script", assets)
+
+    def test_list_assets_folder_prefix(self):
+        """Test filtering assets by folder path."""
+        # Filter by objects folder
+        assets = list_assets_by_type(self.project_root, folder_prefix="objects")
+        self.assertIn("object", assets)
+        self.assertNotIn("script", assets)
+        self.assertNotIn("sprite", assets)
+        
+        # Filter by scripts folder
+        assets = list_assets_by_type(self.project_root, folder_prefix="scripts")
+        self.assertIn("script", assets)
+        self.assertNotIn("object", assets)
+
+    def test_list_assets_combined_filters(self):
+        """Test combining multiple filters."""
+        # Type + Name
+        assets = list_assets_by_type(
+            self.project_root, 
+            asset_type_filter="object", 
+            name_contains="player"
+        )
+        self.assertEqual(len(assets.get("object", [])), 1)
+        self.assertNotIn("sprite", assets)
+        
+        # Type + Folder
+        assets = list_assets_by_type(
+            self.project_root, 
+            asset_type_filter="script", 
+            folder_prefix="scripts"
+        )
+        self.assertEqual(len(assets.get("script", [])), 1)
+        self.assertNotIn("object", assets)
+
+
     # -------------------------------------------------------------------------
     # read_asset_yy tests
     # -------------------------------------------------------------------------

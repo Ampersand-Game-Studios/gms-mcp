@@ -143,7 +143,9 @@ def _infer_asset_type(path: str) -> str:
 def list_assets_by_type(
     project_root: Path, 
     asset_type_filter: Optional[str] = None,
-    include_included_files: bool = True
+    include_included_files: bool = True,
+    name_contains: Optional[str] = None,
+    folder_prefix: Optional[str] = None
 ) -> Dict[str, List[Dict[str, Any]]]:
     """
     List all assets from the .yyp file, categorized by type.
@@ -152,6 +154,8 @@ def list_assets_by_type(
         project_root: Path to the GameMaker project root.
         asset_type_filter: Optional type to filter by (e.g., 'script', 'object', 'extension').
         include_included_files: Whether to include IncludedFiles (datafiles) in the listing.
+        name_contains: Optional string to filter asset names by (case-insensitive).
+        folder_prefix: Optional string to filter asset paths by (case-insensitive).
         
     Returns:
         Dict mapping asset types to lists of asset info dicts.
@@ -162,6 +166,10 @@ def list_assets_by_type(
         return {}
     
     assets: Dict[str, List[Dict[str, Any]]] = {}
+    
+    # Prep filters
+    name_filter = name_contains.lower() if name_contains else None
+    folder_filter = folder_prefix.lower() if folder_prefix else None
     
     # Process standard resources
     for res in yyp_data.get("resources", []):
@@ -176,6 +184,16 @@ def list_assets_by_type(
         
         if asset_type_filter and inferred_type != asset_type_filter:
             continue
+            
+        # Apply name filter
+        if name_filter and name_filter not in name.lower():
+            continue
+            
+        # Apply folder filter (on the path relative to project root)
+        if folder_filter and not path.lower().startswith(folder_filter):
+            # Also check if it's just inside a folder of that name
+            if folder_filter not in path.lower():
+                continue
         
         if inferred_type not in assets:
             assets[inferred_type] = []
@@ -198,14 +216,25 @@ def list_assets_by_type(
                 name = inc_file.get("name", inc_file.get("fileName", ""))
                 file_path = inc_file.get("filePath", "")
                 
-                if name:
-                    assets["includedfile"].append({
-                        "name": name,
-                        "path": file_path or f"datafiles/{name}",
-                        "type": "includedfile",
-                        "copy_to_mask": inc_file.get("CopyToMask", -1),
-                        "resource_type": inc_file.get("resourceType", "GMIncludedFile")
-                    })
+                if not name:
+                    continue
+                    
+                # Apply name filter
+                if name_filter and name_filter not in name.lower():
+                    continue
+                    
+                # Apply folder filter
+                full_path = file_path or f"datafiles/{name}"
+                if folder_filter and folder_filter not in full_path.lower():
+                    continue
+
+                assets["includedfile"].append({
+                    "name": name,
+                    "path": full_path,
+                    "type": "includedfile",
+                    "copy_to_mask": inc_file.get("CopyToMask", -1),
+                    "resource_type": inc_file.get("resourceType", "GMIncludedFile")
+                })
     
     # Sort each list by name
     for t in assets:

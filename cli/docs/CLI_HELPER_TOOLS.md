@@ -10,6 +10,12 @@ This repo includes an MCP server (`gms-mcp`) that mirrors the `gms` CLI as tools
 - **Events**: add/remove/duplicate/list/validate/fix
 - **Workflow**: duplicate/rename/delete/swap-sprite
 - **Rooms**: ops/layers/instances
+- **Introspection**: 
+  - `gm_list_assets`: List all project assets (scripts, objects, etc.) with advanced filtering support (**`asset_type`**, **`name_contains`**, **`folder_prefix`**).
+  - `gm_read_asset`: Read complete .yy JSON metadata.
+  - `gm_search_references`: Search for patterns (string or regex) across the project.
+  - `gm_get_asset_graph`: Build dependency graphs with deep GML code parsing.
+  - `gm_get_project_stats`: Quick project-wide statistics.
 - **Maintenance**: auto + all subcommands
 - **Runner**: compile/run + stop/status
 - **Escape hatch**: `gm_cli` (shell-out to `gms.py` with arbitrary args)

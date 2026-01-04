@@ -2979,27 +2979,45 @@ def build_server():
     @mcp.tool()
     async def gm_list_assets(
         asset_type: Optional[str] = None,
+        name_contains: Optional[str] = None,
+        folder_prefix: Optional[str] = None,
         include_included_files: bool = True,
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        List all assets in the project, optionally filtered by type.
+        List all assets in the project, optionally filtered by type, name, or folder.
         
-        Supports all GameMaker asset types including extensions and datafiles:
-        script, object, sprite, room, sound, font, shader, path, timeline,
-        tileset, animcurve, sequence, note, folder, extension, includedfile.
+        Args:
+            asset_type: Optional type filter (e.g., 'script', 'object').
+            name_contains: Filter assets by name (case-insensitive).
+            folder_prefix: Filter assets by their path/folder (case-insensitive).
+            include_included_files: Whether to include datafiles (default True).
+            project_root: Path to project root.
+        
+        Supports all GameMaker asset types including extensions and datafiles.
         """
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
         from gms_helpers.introspection import list_assets_by_type
         
-        assets = list_assets_by_type(project_directory, asset_type, include_included_files)
+        assets = list_assets_by_type(
+            project_directory, 
+            asset_type, 
+            include_included_files,
+            name_contains=name_contains,
+            folder_prefix=folder_prefix
+        )
         return {
             "project_directory": str(project_directory),
             "assets": assets,
             "count": sum(len(l) for l in assets.values()),
-            "types_found": list(assets.keys())
+            "types_found": list(assets.keys()),
+            "filters": {
+                "asset_type": asset_type,
+                "name_contains": name_contains,
+                "folder_prefix": folder_prefix
+            }
         }
 
     @mcp.tool()
