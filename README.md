@@ -5,7 +5,7 @@ This repo provides:
 - `gms-mcp`: an MCP server that exposes the same operations as MCP tools (Cursor is the primary example client).
 - **Introspection**: complete project inspection with support for all asset types (including extensions and datafiles).
 - **MCP Resources**: addressable project index and asset graph for high-performance agent context loading.
-- `gms-mcp-init`: generates shareable MCP config files for a workspace.
+- `gms-mcp-init`: generates shareable MCP config files for a workspace. Now auto-detects environment variables like `GMS_MCP_GMS_PATH` to include in the generated config.
 
 ## Install (recommended: pipx)
 

@@ -47,6 +47,11 @@ This repo includes a small installer that generates **shareable, user-agnostic**
 - Generate other client examples (written to `mcp-configs/*.mcp.json`): `gms-mcp-init --vscode --windsurf --antigravity`
 - Generate everything: `gms-mcp-init --all`
 
+**Environment Auto-detection**: `gms-mcp-init` now automatically detects and writes the following environment variables into the generated config if they are set in your current shell:
+- `GMS_MCP_GMS_PATH`
+- `GMS_MCP_DEFAULT_TIMEOUT_SECONDS`
+- `GMS_MCP_ENABLE_DIRECT`
+
 The Cursor config is written to `.cursor/mcp.json` and:
 
 - It uses `${workspaceFolder}` (no usernames / absolute paths)

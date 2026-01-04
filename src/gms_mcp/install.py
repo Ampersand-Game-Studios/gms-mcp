@@ -168,6 +168,13 @@ def _make_server_config(
     else:
         env["GM_PROJECT_ROOT"] = workspace_var
 
+    # Polish: Auto-detect and write relevant environment variables from current process
+    # This helps when running gms-mcp-init from a shell where these are already set.
+    for env_var in ["GMS_MCP_GMS_PATH", "GMS_MCP_DEFAULT_TIMEOUT_SECONDS", "GMS_MCP_ENABLE_DIRECT"]:
+        val = os.environ.get(env_var)
+        if val:
+            env[env_var] = val
+
     return {
         "mcpServers": {
             server_name: {
