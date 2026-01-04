@@ -11,6 +11,34 @@ This repo provides:
 pipx install gms-mcp
 ```
 
+## Local Development Setup
+
+If you are working on the `gms-mcp` codebase itself, follow these steps to set up a local development environment:
+
+1.  **Clone and install in editable mode**:
+    ```powershell
+    git checkout dev
+    pip install -e .
+    ```
+
+2.  **Initialize local and global MCP servers for testing**:
+    We recommend setting up two separate MCP server configurations in Cursor to test your changes:
+    
+    *   **Global (`gms-global`)**: For general use across all your GameMaker projects.
+    *   **Local (`gms-local`)**: Specifically for testing your current changes to the server.
+
+    Run these commands from the project root:
+    ```powershell
+    # Global setup (names it 'gms-global' in Cursor)
+    gms-mcp-init --cursor-global --server-name gms-global --mode python-module --python python --non-interactive
+
+    # Local setup (names it 'gms-local' in Cursor)
+    gms-mcp-init --cursor --server-name gms-local --mode python-module --python python --non-interactive
+    ```
+
+3.  **Verify in Cursor**:
+    Go to **Cursor Settings > Features > MCP** to see your new servers. You may need to click "Reload" or restart Cursor to see changes.
+
 ## Publishing (maintainers)
 
 Publishing is automated via GitHub Actions (PyPI Trusted Publishing) on every push to `main` and on tags `v*`.
