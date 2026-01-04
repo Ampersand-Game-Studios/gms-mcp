@@ -9,4 +9,12 @@ SRC_ROOT = REPO_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
 # Default GameMaker project root (directory containing the .yyp)
-os.environ.setdefault("PROJECT_ROOT", str(REPO_ROOT / "gamemaker"))
+GAMEMAKER_DIR = REPO_ROOT / "gamemaker"
+if not GAMEMAKER_DIR.exists():
+    GAMEMAKER_DIR.mkdir(parents=True, exist_ok=True)
+    # Create minimal .yyp if missing
+    if not any(GAMEMAKER_DIR.glob("*.yyp")):
+        with (GAMEMAKER_DIR / "test.yyp").open("w") as f:
+            f.write('{"resources":[]}')
+
+os.environ.setdefault("PROJECT_ROOT", str(GAMEMAKER_DIR))

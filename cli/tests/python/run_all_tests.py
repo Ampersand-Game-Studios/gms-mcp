@@ -90,9 +90,18 @@ def run_test_file(test_file_path):
     python_exe = find_python_executable()
 
     try:
+        # Ensure gamemaker directory exists (it's ignored by git but needed as a default context)
+        gamemaker_dir = PROJECT_ROOT / "gamemaker"
+        if not gamemaker_dir.exists():
+            gamemaker_dir.mkdir(parents=True, exist_ok=True)
+            # Create a minimal .yyp if it's completely missing
+            yyp_file = gamemaker_dir / "minimal.yyp"
+            if not any(gamemaker_dir.glob("*.yyp")):
+                with open(yyp_file, "w") as f:
+                    f.write('{"resources":[], "MetaData":{"name":"minimal"}}')
+
         # Run the test from gamemaker directory so CLI tools find the .yyp file
         # Use absolute path for the test file since we're changing working directory
-        gamemaker_dir = PROJECT_ROOT / "gamemaker"
         result = subprocess.run([
             python_exe, str(test_file_path.resolve())
         ], cwd=str(gamemaker_dir),
