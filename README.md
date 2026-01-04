@@ -118,6 +118,13 @@ Build a dependency graph of assets with two modes:
 Pre-built, cacheable project data for agents:
 - `gms://project/index`: Complete project structure (assets, folders, room order, audio/texture groups, IDE version)
 - `gms://project/asset-graph`: Asset dependency graph
+- `gms://system/updates`: Returns a human-readable message if a newer version of `gms-mcp` is available on PyPI or GitHub.
+
+### Update Notifier
+The server automatically checks for updates on startup and during common operations:
+- **Tool**: `gm_check_updates` returns structured update info.
+- **Auto-check**: `gm_project_info` includes an `updates` field.
+- **Resource**: `gms://system/updates` provides a quick text status.
 
 ## CLI usage
 

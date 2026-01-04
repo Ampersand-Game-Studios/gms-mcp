@@ -25,6 +25,10 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
   - **MCP Resources** (addressable, cacheable data for fast agent context loading):
     - `gms://project/index`: Complete project structure (assets, folders, room order, audio/texture groups)
     - `gms://project/asset-graph`: Asset dependency graph (structural references)
+    - `gms://system/updates`: Check for newer versions of `gms-mcp` (human-readable)
+  - **Updates**:
+    - `gm_check_updates`: Manually check for updates on PyPI and GitHub
+    - `gm_project_info`: Now includes an `updates` summary
   - **Maintenance**: auto + lint/validate-json/list-orphans/prune-missing/validate-paths/dedupe-resources/sync-events/clean-old-files/clean-orphans/fix-issues
   - **Runner**: compile/run + stop/status
   - **Escape hatch**: `gm_cli` (run arbitrary `gms` args)

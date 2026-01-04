@@ -830,6 +830,7 @@ def build_server():
     Kept in a function so importing this module doesn't require MCP installed.
     """
     from mcp.server.fastmcp import Context, FastMCP
+    from .update_notifier import check_for_updates
 
     # region agent log
     _dbg(
@@ -854,10 +855,17 @@ def build_server():
         """
         _ = ctx
         project_directory = _resolve_project_directory_no_deps(project_root)
+        
+        # Check for updates in a separate thread to avoid blocking (best-effort)
+        # However, for a quick check, we can just call it.
+        # We'll use a 2s timeout in the notifier to keep it snappy.
+        update_info = check_for_updates()
+        
         return {
             "project_directory": str(project_directory),
             "yyp": _find_yyp_file(project_directory),
             "tools_mode": "installed",
+            "updates": update_info,
         }
 
     @mcp.tool()
@@ -3105,6 +3113,17 @@ def build_server():
         
         graph = build_asset_graph(project_directory, deep=False)
         return json.dumps(graph, indent=2)
+
+    @mcp.tool()
+    async def gm_check_updates() -> Dict[str, Any]:
+        """Check for newer versions of gms-mcp on PyPI."""
+        return check_for_updates()
+
+    @mcp.resource("gms://system/updates")
+    async def gm_updates_resource() -> str:
+        """Check for updates and return the status as a human-readable message."""
+        info = check_for_updates()
+        return info["message"]
 
     # region agent log
     _dbg(
