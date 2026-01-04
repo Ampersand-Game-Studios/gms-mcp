@@ -28,6 +28,12 @@ dependencies = [
   "mcp>=1.0.0",
 ]
 
+[project.optional-dependencies]
+dev = [
+  "pytest>=9.0.0",
+  "pytest-cov>=6.0.0",
+]
+
 [project.urls]
 Homepage = "https://github.com/Ampersand-Game-Studios/gms-mcp"
 Repository = "https://github.com/Ampersand-Game-Studios/gms-mcp"
@@ -55,3 +61,10 @@ gms_helpers = [
 fallback_version = "0.1.0"
 version_scheme = "guess-next-dev"
 local_scheme = "no-local-version"
+
+[tool.pytest.ini_options]
+testpaths = ["cli/tests/python"]
+python_files = ["test_*.py"]
+addopts = "--cov=gms_helpers --cov-report=term-missing --cov-report=html"
+pythonpath = ["src"]
+
