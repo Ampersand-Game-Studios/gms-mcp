@@ -65,6 +65,5 @@ local_scheme = "no-local-version"
 [tool.pytest.ini_options]
 testpaths = ["cli/tests/python"]
 python_files = ["test_*.py"]
-addopts = "--cov=gms_helpers --cov-report=term-missing --cov-report=html"
 pythonpath = ["src"]
 
