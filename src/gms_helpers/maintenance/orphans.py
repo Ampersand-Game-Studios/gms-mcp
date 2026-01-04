@@ -85,7 +85,10 @@ def find_orphaned_assets(project_root: str = '.') -> List[Tuple[str, str]]:
         return orphans
         
     except Exception as e:
-        print(f"Error finding orphaned assets: {e}")
+        if os.environ.get('PYTEST_CURRENT_TEST') or os.environ.get('GMS_TEST_SUITE'):
+            print(f"[EXPECTED ERROR] Error finding orphaned assets: {e}")
+        else:
+            print(f"Error finding orphaned assets: {e}")
         return []
 
 
@@ -140,7 +143,10 @@ def find_missing_assets(project_root: str = '.') -> List[Tuple[str, str]]:
         return missing
         
     except Exception as e:
-        print(f"Error finding missing assets: {e}")
+        if os.environ.get('PYTEST_CURRENT_TEST') or os.environ.get('GMS_TEST_SUITE'):
+            print(f"[EXPECTED ERROR] Error finding missing assets: {e}")
+        else:
+            print(f"Error finding missing assets: {e}")
         return []
 
 

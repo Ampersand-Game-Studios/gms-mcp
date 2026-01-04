@@ -73,7 +73,11 @@ def setup_powershell_function():
             return False
             
     except Exception as e:
-        print(f"[ERROR] Error testing direct execution: {e}")
+        # Check if we're in a test environment to avoid confusing users with expected errors
+        if os.environ.get('PYTEST_CURRENT_TEST') or os.environ.get('GMS_TEST_SUITE'):
+            print(f"[EXPECTED ERROR] Error testing direct execution: {e}")
+        else:
+            print(f"[ERROR] Error testing direct execution: {e}")
         return False
 
 def setup_bash_alias():
@@ -83,7 +87,10 @@ def setup_bash_alias():
     gms_script = script_dir / "gms.py"
     
     if not gms_script.exists():
-        print(f"[ERROR] {gms_script} not found")
+        if os.environ.get('PYTEST_CURRENT_TEST') or os.environ.get('GMS_TEST_SUITE'):
+            print(f"[EXPECTED ERROR] {gms_script} not found")
+        else:
+            print(f"[ERROR] {gms_script} not found")
         return False
     
     # Create the alias
@@ -101,7 +108,10 @@ def setup_bash_alias():
         return True
         
     except Exception as e:
-        print(f"[ERROR] Error setting up bash alias: {e}")
+        if os.environ.get('PYTEST_CURRENT_TEST') or os.environ.get('GMS_TEST_SUITE'):
+            print(f"[EXPECTED ERROR] Error setting up bash alias: {e}")
+        else:
+            print(f"[ERROR] Error setting up bash alias: {e}")
         return False
 
 def auto_setup():

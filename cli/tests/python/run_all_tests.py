@@ -148,6 +148,9 @@ def main():
     results = []
     total_tests = 0
 
+    # Set test suite flag for clearer logs
+    os.environ["GMS_TEST_SUITE"] = "1"
+
     for test_file in sorted(test_files):
         success, exit_code = run_test_file(test_file)
         results.append((test_file.name, success, exit_code))

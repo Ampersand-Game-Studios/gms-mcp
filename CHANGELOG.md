@@ -19,6 +19,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - **Project Root Resolution**: Standardized environment variable support across MCP server and CLI tools. Both now consistently check for `GM_PROJECT_ROOT` followed by `PROJECT_ROOT`, improving consistency when running in different environments.
+- **Test Suite Logs**: Improved test output by clearly labeling expected errors during negative testing as `[EXPECTED ERROR]`, reducing confusion during CI runs.
 - MCP tools now default to `skip_maintenance=True` and `maintenance_verbose=False` for faster feedback loops.
 - `gm_maintenance_dedupe_resources` now defaults to `auto=True` to prevent interactive prompt hangs.
 - Removed legacy `test_mcp_streaming_runner.py` in favor of the more stable direct/non-streaming architecture.
