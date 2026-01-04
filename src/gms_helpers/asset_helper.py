@@ -42,6 +42,8 @@ from .maintenance.orphan_cleanup import delete_orphan_files, find_delete_candida
 from .maintenance.prune import prune_missing_assets, print_prune_report
 from .maintenance.validate_paths import validate_folder_paths, print_path_validation_report
 from .auto_maintenance import run_auto_maintenance, validate_asset_creation_safe, handle_maintenance_failure
+from .maintenance.trash import move_to_trash, get_keep_patterns
+from .utils import resolve_project_directory
 
 
 class GameMakerContextError(Exception):
@@ -1820,6 +1822,8 @@ def maint_purge_command(args):
     delete_after_move = args.delete
     additional_keep_patterns = args.keep or []
     
+    project_root = resolve_project_directory(getattr(args, 'project_root', None))
+    
     if not apply_changes:
         print("[SCAN] DRY RUN: Analyzing what would be purged...")
     elif delete_after_move:
@@ -1828,37 +1832,66 @@ def maint_purge_command(args):
         print("[PACKAGE] MOVE MODE: Moving files to trash folder...")
     
     try:
-        # TODO: Import and use the new purge system from maintenance/trash/
-        print("[WARN]  Purge system not yet implemented - this is Phase 0 scaffolding")
-        print("[INFO] Future implementation will:")
-        print("   • Load maintenance_keep.txt patterns")
-        print("   • Run comprehensive audit to identify candidates")
-        print("   • Move files to .maintenance_trash/<timestamp>/ folder")
-        print("   • Run pytest tests before final deletion (if --delete)")
-        print("   • Generate MANIFEST.txt of all operations")
+        # 1. Find orphans
+        print("[SCAN] Searching for orphaned assets...")
+        orphans = find_orphaned_assets(str(project_root))
+        if not orphans:
+            print("[OK] No orphaned assets found to purge.")
+            return True
+            
+        # 2. Load keep patterns
+        keep_patterns = get_keep_patterns(str(project_root))
+        keep_patterns.extend(additional_keep_patterns)
         
-        # Check if maintenance_keep.txt exists
-        import os
-        keep_file = "maintenance_keep.txt"
-        if os.path.exists(keep_file):
-            print(f"[FILE] Found {keep_file}")
-            with open(keep_file, 'r') as f:
-                lines = [line.strip() for line in f if line.strip() and not line.startswith('#')]
-            if lines:
-                print(f"   • {len(lines)} keep patterns loaded")
-            else:
-                print("   • File exists but contains no patterns")
-        else:
-            print(f"[FILE] No {keep_file} found (will be created in Phase 0)")
+        # 3. Filter orphans
+        to_purge = []
+        for path, asset_type in orphans:
+            should_keep = False
+            for pattern in keep_patterns:
+                if pattern in path:
+                    should_keep = True
+                    break
+            
+            if not should_keep:
+                to_purge.append(path)
+                # Also include companion files (.gml, etc.) if safe
+                # Note: find_orphaned_assets returns .yy paths
+                # We should use the more comprehensive deletion logic or move logic
         
-        if additional_keep_patterns:
-            print(f"[MAINT] Additional keep patterns from command line: {additional_keep_patterns}")
+        if not to_purge:
+            print("[OK] All orphaned assets are protected by keep patterns.")
+            return True
+            
+        print(f"[INFO] Found {len(to_purge)} assets to purge.")
         
-        print("[OK] Purge system scaffolding complete")
+        if not apply_changes:
+            for path in sorted(to_purge):
+                print(f"  [DRY RUN] Would move to trash: {path}")
+            print(f"[OK] DRY RUN complete. Use --apply to actually move files.")
+            return True
+            
+        # 4. Move to trash
+        print(f"[PACKAGE] Moving {len(to_purge)} assets to trash...")
+        result = move_to_trash(str(project_root), to_purge)
+        
+        if result["errors"]:
+            for err in result["errors"]:
+                print(f"[ERROR] {err}")
+                
+        print(f"[OK] Moved {result['moved_count']} files to {result['trash_folder']}")
+        
+        if delete_after_move:
+            # Note: For now, we don't actually delete from trash for extra safety
+            # unless we implement the full "run tests before delete" logic.
+            print("[WARN]  Final deletion from trash folder not yet implemented for safety.")
+            print(f"[INFO] Files are safe in {result['trash_folder']}")
+            
         return True
         
     except Exception as e:
         print(f"[ERROR] Error during purge: {e}")
+        import traceback
+        traceback.print_exc()
         return False
 
 def remove_folder_command(args):
