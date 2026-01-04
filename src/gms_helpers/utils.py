@@ -15,14 +15,16 @@ import os
 # ---- make console prints Unicode-safe on Windows -----------------
 import sys, os
 if os.name == "nt":                      # Windows only
-    for _s in (sys.stdout, sys.stderr):
-        try:                             # Python 3.7+
-            _s.reconfigure(encoding="utf-8", errors="replace")
-        except AttributeError:
-            # Older Pythons – fall back to write-through helper
-            import io
-            _s = io.TextIOWrapper(_s.buffer, encoding="utf-8",
-                                  errors="replace", line_buffering=True)
+    try:                             # Python 3.7+
+        sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+        sys.stderr.reconfigure(encoding="utf-8", errors="replace")
+    except AttributeError:
+        # Older Pythons – fall back to write-through helper
+        import io
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
+                                     errors="replace", line_buffering=True)
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8",
+                                     errors="replace", line_buffering=True)
 # ------------------------------------------------------------------
 
 # ------------------------------------------------------------------
