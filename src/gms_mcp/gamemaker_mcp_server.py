@@ -2965,6 +2965,147 @@ def build_server():
             ctx=ctx,
         )
 
+    # -----------------------------
+    # Introspection tools
+    # -----------------------------
+    @mcp.tool()
+    async def gm_list_assets(
+        asset_type: Optional[str] = None,
+        include_included_files: bool = True,
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        List all assets in the project, optionally filtered by type.
+        
+        Supports all GameMaker asset types including extensions and datafiles:
+        script, object, sprite, room, sound, font, shader, path, timeline,
+        tileset, animcurve, sequence, note, folder, extension, includedfile.
+        """
+        _ = ctx
+        project_directory = _resolve_project_directory(project_root)
+        from gms_helpers.introspection import list_assets_by_type
+        
+        assets = list_assets_by_type(project_directory, asset_type, include_included_files)
+        return {
+            "project_directory": str(project_directory),
+            "assets": assets,
+            "count": sum(len(l) for l in assets.values()),
+            "types_found": list(assets.keys())
+        }
+
+    @mcp.tool()
+    async def gm_read_asset(
+        asset_identifier: str,
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Read the .yy JSON data for a given asset by name or path.
+        Returns the complete metadata for any asset type.
+        """
+        _ = ctx
+        project_directory = _resolve_project_directory(project_root)
+        from gms_helpers.introspection import read_asset_yy
+        
+        asset_data = read_asset_yy(project_directory, asset_identifier)
+        if not asset_data:
+            return {"ok": False, "error": f"Asset '{asset_identifier}' not found"}
+            
+        return {"ok": True, "asset_data": asset_data}
+
+    @mcp.tool()
+    async def gm_search_references(
+        pattern: str,
+        scope: str = "all",
+        is_regex: bool = False,
+        case_sensitive: bool = False,
+        max_results: int = 100,
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Search for a pattern in project files.
+        
+        Scopes: 'all', 'gml', 'yy', 'scripts', 'objects', 'extensions', 'datafiles'.
+        """
+        _ = ctx
+        project_directory = _resolve_project_directory(project_root)
+        from gms_helpers.introspection import search_references
+        
+        results = search_references(
+            project_directory,
+            pattern,
+            scope=scope,
+            is_regex=is_regex,
+            case_sensitive=case_sensitive,
+            max_results=max_results
+        )
+        return {
+            "pattern": pattern,
+            "scope": scope,
+            "results": results,
+            "count": len(results)
+        }
+
+    @mcp.tool()
+    async def gm_get_asset_graph(
+        deep: bool = False,
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Build a dependency graph of assets.
+        
+        Args:
+            deep: If True, parse all GML code for references (slower but complete).
+                  If False, only parse .yy structural references (fast).
+        
+        Returns nodes (assets) and edges (relationships like parent, sprite, code_reference).
+        """
+        _ = ctx
+        project_directory = _resolve_project_directory(project_root)
+        from gms_helpers.introspection import build_asset_graph
+        
+        graph = build_asset_graph(project_directory, deep=deep)
+        return graph
+
+    @mcp.tool()
+    async def gm_get_project_stats(
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Get quick statistics about a project (asset counts by type).
+        Faster than building a full index.
+        """
+        _ = ctx
+        project_directory = _resolve_project_directory(project_root)
+        from gms_helpers.introspection import get_project_stats
+        
+        return get_project_stats(project_directory)
+
+    # -----------------------------
+    # MCP Resources
+    # -----------------------------
+    @mcp.resource("gms://project/index")
+    async def gm_project_index(project_root: str = ".") -> str:
+        """Return the full project index as JSON."""
+        project_directory = _resolve_project_directory(project_root)
+        from gms_helpers.introspection import build_project_index
+        
+        index = build_project_index(project_directory)
+        return json.dumps(index, indent=2)
+
+    @mcp.resource("gms://project/asset-graph")
+    async def gm_asset_graph_resource(project_root: str = ".") -> str:
+        """Return the asset dependency graph as JSON (structural refs only, use gm_get_asset_graph tool for deep mode)."""
+        project_directory = _resolve_project_directory(project_root)
+        from gms_helpers.introspection import build_asset_graph
+        
+        graph = build_asset_graph(project_directory, deep=False)
+        return json.dumps(graph, indent=2)
+
     # region agent log
     _dbg(
         "H2",

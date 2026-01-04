@@ -3,6 +3,8 @@
 This repo provides:
 - `gms`: a Python CLI for GameMaker project operations (asset creation, maintenance, runner, etc).
 - `gms-mcp`: an MCP server that exposes the same operations as MCP tools (Cursor is the primary example client).
+- **Introspection**: complete project inspection with support for all asset types (including extensions and datafiles).
+- **MCP Resources**: addressable project index and asset graph for high-performance agent context loading.
 - `gms-mcp-init`: generates shareable MCP config files for a workspace.
 
 ## Install (recommended: pipx)
@@ -89,6 +91,33 @@ Preview output without writing files:
 ```powershell
 gms-mcp-init --cursor --dry-run
 ```
+
+## Introspection Tools
+
+The MCP server provides comprehensive project introspection capabilities:
+
+### Asset Listing (`gm_list_assets`)
+List all assets in your project, optionally filtered by type:
+- **Supported types**: script, object, sprite, room, sound, font, shader, path, timeline, tileset, animcurve, sequence, note, folder, **extension**, **includedfile** (datafiles)
+
+### Asset Reading (`gm_read_asset`)
+Read the complete `.yy` JSON metadata for any asset by name or path.
+
+### Reference Search (`gm_search_references`)
+Search for patterns across project files with:
+- **Scopes**: `all`, `gml`, `yy`, `scripts`, `objects`, `extensions`, `datafiles`
+- **Modes**: literal string or regex
+- **Options**: case sensitivity, max results
+
+### Asset Graph (`gm_get_asset_graph`)
+Build a dependency graph of assets with two modes:
+- **Shallow (fast)**: Parses `.yy` files for structural references (parent objects, sprites, etc.)
+- **Deep (complete)**: Also scans all GML code for runtime references like `instance_create`, `sprite_index`, `audio_play_sound`, etc.
+
+### MCP Resources
+Pre-built, cacheable project data for agents:
+- `gms://project/index`: Complete project structure (assets, folders, room order, audio/texture groups, IDE version)
+- `gms://project/asset-graph`: Asset dependency graph
 
 ## CLI usage
 

@@ -16,6 +16,15 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
   - **Events**: add/remove/duplicate/list/validate/fix
   - **Workflow**: duplicate/rename/delete/swap-sprite
   - **Rooms**: ops (duplicate/rename/delete/list), layers (add/remove/list), instances (add/remove/list)
+  - **Introspection** (complete support for all asset types including extensions and datafiles):
+    - `gm_list_assets`: List all assets by type (scripts, objects, sprites, rooms, sounds, fonts, shaders, paths, timelines, tilesets, animcurves, sequences, notes, folders, **extensions**, **includedfiles**)
+    - `gm_read_asset`: Read complete .yy JSON metadata for any asset
+    - `gm_search_references`: Search for patterns (string or regex) across the project with scoping options
+    - `gm_get_asset_graph`: Build dependency graph with optional **deep mode** for GML code reference parsing
+    - `gm_get_project_stats`: Quick project statistics
+  - **MCP Resources** (addressable, cacheable data for fast agent context loading):
+    - `gms://project/index`: Complete project structure (assets, folders, room order, audio/texture groups)
+    - `gms://project/asset-graph`: Asset dependency graph (structural references)
   - **Maintenance**: auto + lint/validate-json/list-orphans/prune-missing/validate-paths/dedupe-resources/sync-events/clean-old-files/clean-orphans/fix-issues
   - **Runner**: compile/run + stop/status
   - **Escape hatch**: `gm_cli` (run arbitrary `gms` args)

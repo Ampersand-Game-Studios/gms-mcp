@@ -5,6 +5,10 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Introspection Tools**: Implemented comprehensive project introspection tools including `gm_list_assets`, `gm_read_asset`, and `gm_search_references`. These tools support all GameMaker asset types, including **Extensions** and **Included Files (Datafiles)**.
+- **Asset Dependency Graph**: Added `gm_get_asset_graph` tool with both **Shallow** (structural metadata only) and **Deep** (full GML code parsing) modes for tracing relationships between objects, sprites, scripts, and more.
+- **MCP Resources**: Exposed addressable, cacheable project indices and graphs via MCP resources (`gms://project/index` and `gms://project/asset-graph`) for high-performance agent context loading.
+- **Project Statistics**: Added `gm_get_project_stats` for quick summaries of project asset counts by type.
 - **Project-Relative Debug Logging**: Debug logs are now normalized to `.gms_mcp/logs/debug.log` within the resolved project root, ensuring logs are captured correctly in both development and installed (`pipx`) environments.
 - **Purge Command**: Implemented the previously stubbed `purge` command. It now correctly identifies orphaned assets, respects `maintenance_keep.txt` and `--keep` patterns, and safely moves files to a timestamped `.maintenance_trash` folder with an automatically generated `MANIFEST.txt`.
 - **CI Test Suite**: Added a comprehensive CI test job to `publish.yml` that runs the full test suite and final verification across Linux and Windows on Python 3.11, 3.12, and 3.13, ensuring project stability before every build. Updated test runner to automatically create a minimal GameMaker project environment when running in clean CI environments.
