@@ -13,6 +13,7 @@ All notable changes to this project will be documented in this file.
 - **FastMCP Parameter Conflict**: Renamed `constructor` parameter to `is_constructor` in `gm_create_script` to resolve internal naming conflicts in FastMCP.
 
 ### Changed
+- **Project Root Resolution**: Standardized environment variable support across MCP server and CLI tools. Both now consistently check for `GM_PROJECT_ROOT` followed by `PROJECT_ROOT`, improving consistency when running in different environments.
 - MCP tools now default to `skip_maintenance=True` and `maintenance_verbose=False` for faster feedback loops.
 - `gm_maintenance_dedupe_resources` now defaults to `auto=True` to prevent interactive prompt hangs.
 - Removed legacy `test_mcp_streaming_runner.py` in favor of the more stable direct/non-streaming architecture.

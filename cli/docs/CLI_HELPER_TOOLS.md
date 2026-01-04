@@ -60,7 +60,7 @@ gms asset create script my_function --parent-path "folders/Scripts.yy"
 ### ✅ Supported (run from anywhere)
 The `gms` CLI will auto-locate the project using:
 - `--project-root <path>` (preferred for one-off commands)
-- `PROJECT_ROOT` environment variable (preferred for a whole session)
+- `GM_PROJECT_ROOT` or `PROJECT_ROOT` environment variable (preferred for a whole session)
 - automatic upward search for a `.yyp` (fallback)
 - automatic `./gamemaker` detection when invoked from repo root (fallback)
 
@@ -112,6 +112,8 @@ gms --project-root gamemaker asset create script my_function --parent-path "fold
 **Option C (persistent session):**
 
 ```powershell
+$Env:GM_PROJECT_ROOT = "$PWD\gamemaker"
+# OR
 $Env:PROJECT_ROOT = "$PWD\gamemaker"
 gms --version
 gms asset create script my_function --parent-path "folders/Scripts.yy"
@@ -142,6 +144,7 @@ C:\...\gms2-template\gamemaker> gms --version
 4. **Fix it using one of:**
    - `cd gamemaker`
    - `gms --project-root gamemaker ...`
+   - `$Env:GM_PROJECT_ROOT = "$PWD\gamemaker"`
    - `$Env:PROJECT_ROOT = "$PWD\gamemaker"`
 
 **The CLI tools now automatically validate the working directory and will show clear error messages if you're in the wrong location.**

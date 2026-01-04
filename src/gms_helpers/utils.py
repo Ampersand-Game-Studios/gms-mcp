@@ -319,7 +319,7 @@ def validate_working_directory():
         print("[INFO] SOLUTION:")
         print("   - cd into the directory that contains your .yyp file, OR")
         print("   - run with: gms --project-root <path-to-gamemaker-project>, OR")
-        print("   - set env var: PROJECT_ROOT=<absolute path to gamemaker project>")
+        print("   - set env var: GM_PROJECT_ROOT or PROJECT_ROOT=<absolute path to gamemaker project>")
         print()
         print("[SCAN] EXPLANATION: CLI tools require direct access to the GameMaker project file (.yyp).")
         sys.exit(1)
@@ -374,7 +374,7 @@ def resolve_project_directory(project_root_arg: str | Path | None = None) -> Pat
 
     Resolution order:
     1) explicit --project-root argument (if provided and not ".")
-    2) PROJECT_ROOT environment variable (if set)
+    2) GM_PROJECT_ROOT or PROJECT_ROOT environment variable (if set)
     3) upward search from current working directory for a .yyp
     4) upward search for a 'gamemaker/' directory containing a .yyp
 
@@ -393,9 +393,10 @@ def resolve_project_directory(project_root_arg: str | Path | None = None) -> Pat
             candidates.append(Path(arg_str))
 
     # 2) environment variable
-    env_root = os.environ.get("PROJECT_ROOT")
-    if env_root:
-        candidates.append(Path(env_root))
+    for env_key in ("GM_PROJECT_ROOT", "PROJECT_ROOT"):
+        env_val = os.environ.get(env_key)
+        if env_val:
+            candidates.append(Path(env_val))
 
     # 3/4) current working directory as a start point for searches
     candidates.append(Path.cwd())
@@ -437,7 +438,7 @@ def resolve_project_directory(project_root_arg: str | Path | None = None) -> Pat
         "No GameMaker project (.yyp) found.\n"
         f"Tried: {', '.join(tried)}\n"
         "Fix: cd into the directory that contains your .yyp, or pass --project-root, "
-        "or set PROJECT_ROOT to the absolute path."
+        "or set GM_PROJECT_ROOT or PROJECT_ROOT to the absolute path."
     )
 
 def find_yyp_file():

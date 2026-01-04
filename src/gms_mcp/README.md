@@ -47,7 +47,7 @@ After changing `.cursor/mcp.json`, **Reload Window** in Cursor to pick up MCP co
 
 - **Project resolution**:
   - Tools accept an optional `project_root` parameter. You can pass `.` (default), a path to the repo root, or a path to `gamemaker/`.
-  - You can also set `GM_PROJECT_ROOT` or `PROJECT_ROOT` environment variables (useful for agents / terminal sessions).
+  - The server and underlying CLI tools check for both `GM_PROJECT_ROOT` and `PROJECT_ROOT` environment variables (useful for agents / terminal sessions).
 - **Execution model / “no silent hangs”**:
   - By default, tools use **direct in-process execution**. This is near-instant and avoids subprocess issues on Windows.
   - Subprocess execution (`gm_cli` or via `prefer_cli=True`) isolates the child process from MCP stdin (setting it to `DEVNULL`).
