@@ -31,6 +31,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from .execution_policy import policy_manager, ExecutionMode
+
 
 def _get_debug_log_path() -> Optional[Path]:
     """Resolve the debug log path safely (best-effort)."""
@@ -295,9 +297,8 @@ def _find_yyp_file(project_directory: Path) -> Optional[str]:
         return None
 
 
-def _capture_output(callable_to_run: Callable[[], Any]) -> Tuple[bool, str, str, Any, Optional[str]]:
-    # Use TextIOWrapper over BytesIO so captured streams behave like real stdio
-    # (notably: some project code expects sys.stdout.buffer to exist).
+def _capture_output(callable_to_run: Callable[[], Any]) -> Tuple[bool, str, str, Any, Optional[str], Optional[int]]:
+    # ... buffers ...
     stdout_bytes = io.BytesIO()
     stderr_bytes = io.BytesIO()
     stdout_buffer = io.TextIOWrapper(stdout_bytes, encoding="utf-8", errors="replace", line_buffering=True)
@@ -306,10 +307,21 @@ def _capture_output(callable_to_run: Callable[[], Any]) -> Tuple[bool, str, str,
     error_text: Optional[str] = None
 
     system_exit_code: Any | None = None
+    from gms_helpers.exceptions import GMSError
+
     with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
         try:
             result_value = callable_to_run()
-            ok = bool(result_value) if isinstance(result_value, bool) else True
+            if hasattr(result_value, "success"):
+                ok = result_value.success
+            elif isinstance(result_value, bool):
+                ok = result_value
+            else:
+                ok = True
+        except GMSError as e:
+            ok = False
+            error_text = f"{type(e).__name__}: {e.message}"
+            system_exit_code = e.exit_code
         except SystemExit as e:
             system_exit_code = getattr(e, "code", None)
             ok = system_exit_code in (0, None)
@@ -333,7 +345,7 @@ def _capture_output(callable_to_run: Callable[[], Any]) -> Tuple[bool, str, str,
         stdout_text = ""
         stderr_text = ""
 
-    if system_exit_code is not None and not ok:
+    if system_exit_code is not None and not ok and not error_text:
         pieces = [f"SystemExit: {system_exit_code!r}"]
         if stdout_text:
             pieces.append("stdout:\n" + stdout_text)
@@ -341,7 +353,7 @@ def _capture_output(callable_to_run: Callable[[], Any]) -> Tuple[bool, str, str,
             pieces.append("stderr:\n" + stderr_text)
         error_text = "\n".join(pieces)
 
-    return ok, stdout_text, stderr_text, result_value, error_text
+    return ok, stdout_text, stderr_text, result_value, error_text, system_exit_code
 
 
 def _run_direct(handler: Callable[[argparse.Namespace], Any], args: argparse.Namespace, project_root: str | None) -> ToolRunResult:
@@ -357,12 +369,13 @@ def _run_direct(handler: Callable[[argparse.Namespace], Any], args: argparse.Nam
             setattr(args, "project_root", ".")
             return handler(args)
 
-    ok, stdout_text, stderr_text, _result_value, error_text = _capture_output(_invoke)
+    ok, stdout_text, stderr_text, _result_value, error_text, exit_code = _capture_output(_invoke)
     return ToolRunResult(
         ok=ok,
         stdout=stdout_text,
         stderr=stderr_text,
         direct_used=True,
+        exit_code=exit_code,
         error=error_text,
     )
 
@@ -391,13 +404,13 @@ def _run_gms_inprocess(cli_args: List[str], project_root: str | None) -> ToolRun
         finally:
             sys.argv = previous_argv
 
-    ok, stdout_text, stderr_text, _result_value, error_text = _capture_output(_invoke)
+    ok, stdout_text, stderr_text, _result_value, error_text, exit_code = _capture_output(_invoke)
     return ToolRunResult(
         ok=ok,
         stdout=stdout_text,
         stderr=stderr_text,
         direct_used=True,
-        exit_code=0 if ok else None,
+        exit_code=exit_code if exit_code is not None else (0 if ok else 1),
         error=error_text,
     )
 
@@ -785,21 +798,25 @@ async def _run_with_fallback(
         head = [p for p in (cli_args[:3] if cli_args else []) if p]
         derived_tool_name = "-".join(head) if head else "tool"
 
-    # Safety-first default:
-    # - Subprocess execution is cancellable and avoids blocking the MCP server.
-    # - Direct execution is opt-in via GMS_MCP_ENABLE_DIRECT=1.
-    enable_direct = os.environ.get("GMS_MCP_ENABLE_DIRECT", "0").strip().lower() in ("1", "true", "yes", "on")
+    # Get execution policy for this tool
+    policy = policy_manager.get_policy(derived_tool_name)
+    effective_mode = policy.mode
+    effective_timeout = timeout_seconds if timeout_seconds is not None else policy.timeout_seconds
 
-    if prefer_cli or not enable_direct:
+    # Respect manual override via prefer_cli
+    if prefer_cli:
+        effective_mode = ExecutionMode.SUBPROCESS
+
+    if effective_mode == ExecutionMode.SUBPROCESS:
         return _apply_output_mode(
-            (await _run_cli_async(cli_args, project_root, timeout_seconds=timeout_seconds, tool_name=derived_tool_name, ctx=ctx)).as_dict(),
+            (await _run_cli_async(cli_args, project_root, timeout_seconds=effective_timeout, tool_name=derived_tool_name, ctx=ctx)).as_dict(),
             output_mode=output_mode,
             tail_lines=tail_lines,
             max_chars=max_chars,
             quiet=quiet,
         )
 
-    # Optional legacy mode: direct in-process execution (fast, but not killable).
+    # ExecutionMode.DIRECT
     _ = ctx
 
     direct_result = _run_direct(direct_handler, direct_args, project_root)
@@ -867,6 +884,25 @@ def build_server():
             "tools_mode": "installed",
             "updates": update_info,
         }
+
+    @mcp.tool()
+    async def gm_mcp_health(project_root: str = ".", ctx: Context | None = None) -> Dict[str, Any]:
+        """
+        Perform a comprehensive health check of the GameMaker development environment.
+        Verifies project validity, GameMaker runtimes/Igor, licenses, and Python dependencies.
+        """
+        from gms_helpers.health import gm_mcp_health as health_check
+        import argparse
+        
+        return await _run_with_fallback(
+            direct_handler=lambda args: health_check(args.project_root),
+            direct_args=argparse.Namespace(project_root=project_root),
+            cli_args=["maintenance", "health"],
+            project_root=project_root,
+            prefer_cli=False,
+            tool_name="gm-mcp-health",
+            ctx=ctx
+        )
 
     @mcp.tool()
     async def gm_cli(
@@ -2377,8 +2413,7 @@ def build_server():
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.event_commands import handle_event_remove
 
-        # CLI uses --keep-file which sets delete_file=False
-        args = argparse.Namespace(object=object, event=event, delete_file=(not keep_file), project_root=project_root)
+        args = argparse.Namespace(object=object, event=event, keep_file=keep_file, project_root=project_root)
         cli_args = ["event", "remove", object, event]
         if keep_file:
             cli_args.append("--keep-file")
@@ -2802,6 +2837,8 @@ def build_server():
 
         args = argparse.Namespace(room_name=room_name, layer_type=layer_type, layer_name=layer_name, depth=depth, project_root=project_root)
         cli_args = ["room", "layer", "add", room_name, layer_type, layer_name]
+        if depth:
+            cli_args.extend(["--depth", str(depth)])
 
         return await _run_with_fallback(
             direct_handler=handle_room_layer_add,
@@ -3115,18 +3152,18 @@ def build_server():
     # MCP Resources
     # -----------------------------
     @mcp.resource("gms://project/index")
-    async def gm_project_index(project_root: str = ".") -> str:
+    async def gm_project_index() -> str:
         """Return the full project index as JSON."""
-        project_directory = _resolve_project_directory(project_root)
+        project_directory = _resolve_project_directory(".")
         from gms_helpers.introspection import build_project_index
         
         index = build_project_index(project_directory)
         return json.dumps(index, indent=2)
 
     @mcp.resource("gms://project/asset-graph")
-    async def gm_asset_graph_resource(project_root: str = ".") -> str:
+    async def gm_asset_graph_resource() -> str:
         """Return the asset dependency graph as JSON (structural refs only, use gm_get_asset_graph tool for deep mode)."""
-        project_directory = _resolve_project_directory(project_root)
+        project_directory = _resolve_project_directory(".")
         from gms_helpers.introspection import build_asset_graph
         
         graph = build_asset_graph(project_directory, deep=False)

@@ -13,74 +13,12 @@ Fixes orphaned GML files and missing event references in GameMaker objects.
 import os
 import json
 import re
+import sys
 from pathlib import Path
 from typing import Dict, List, Tuple, Set
 
-def find_yyp_file(project_root):
-    """Find the .yyp file in the project root"""
-    for file in os.listdir(project_root):
-        if file.endswith('.yyp'):
-            return os.path.join(project_root, file)
-    raise FileNotFoundError("No .yyp file found in project root.")
-
-def find_gamemaker_project_root(start_path: str = '.') -> str:
-    """
-    Find the actual GameMaker project root directory containing the .yyp file.
-    Handles both direct project directories and template projects with gamemaker/ subdirectory.
-    """
-    current_dir = Path(start_path).resolve()
-    
-    # First, try the current directory
-    try:
-        find_yyp_file(str(current_dir))
-        return str(current_dir)
-    except FileNotFoundError:
-        pass
-    
-    # Walk up the directory tree looking for a GameMaker project
-    while current_dir != current_dir.parent:
-        # Check if this directory contains a .yyp file
-        yyp_files = list(current_dir.glob("*.yyp"))
-        if yyp_files:
-            return str(current_dir)
-        current_dir = current_dir.parent
-    
-    # Check if we're in root and need to look in gamemaker/ subdirectory
-    start_path_obj = Path(start_path).resolve()
-    gamemaker_subdir = start_path_obj / "gamemaker"
-    if gamemaker_subdir.exists() and gamemaker_subdir.is_dir():
-        try:
-            find_yyp_file(str(gamemaker_subdir))
-            return str(gamemaker_subdir)
-        except FileNotFoundError:
-            pass
-    
-    # Also check parent directories for gamemaker/ subdirectory
-    current_dir = start_path_obj
-    while current_dir != current_dir.parent:
-        gamemaker_subdir = current_dir / "gamemaker"
-        if gamemaker_subdir.exists() and gamemaker_subdir.is_dir():
-            try:
-                find_yyp_file(str(gamemaker_subdir))
-                return str(gamemaker_subdir)
-            except FileNotFoundError:
-                pass
-        current_dir = current_dir.parent
-    
-    raise FileNotFoundError(f"No GameMaker project (.yyp file) found starting from {start_path}")
-
-def load_json_loose(path):
-    """Load JSON with trailing commas support"""
-    with open(path, 'r', encoding='utf-8') as f:
-        content = f.read()
-    # Remove trailing commas before closing braces/brackets
-    content = re.sub(r',(\s*[}\]])', r'\1', content)
-    return json.loads(content)
-
-def save_json_loose(path, data):
-    """Save JSON with GameMaker-style formatting (trailing commas allowed)"""
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(data, f, indent=2, separators=(',', ':'))
+from ..utils import load_json_loose, save_json_loose, find_yyp, resolve_project_directory
+from ..exceptions import ProjectNotFoundError, GMSError
 
 def parse_gml_filename(filename: str) -> Tuple[str, int]:
     """
@@ -146,8 +84,8 @@ def scan_object_events(object_path: str) -> Tuple[Set[str], Set[str]]:
     yy_events = set()
     if yy_file.exists():
         try:
-            yy_data = load_json_loose(str(yy_file))
-            if 'eventList' in yy_data:
+            yy_data = load_json_loose(yy_file)
+            if yy_data and 'eventList' in yy_data:
                 for event in yy_data['eventList']:
                     if 'resourceVersion' in event and 'resourceType' in event:
                         # Extract filename from event data
@@ -158,7 +96,7 @@ def scan_object_events(object_path: str) -> Tuple[Set[str], Set[str]]:
                         if type_name:
                             filename = f"{type_name}_{event_num}.gml"
                             yy_events.add(filename)
-        except (json.JSONDecodeError, KeyError) as e:
+        except Exception as e:
             print(f"Warning: Could not parse {yy_file}: {e}")
     
     return gml_files, yy_events
@@ -180,6 +118,7 @@ def get_event_type_name(event_type_id: int) -> str:
         11: 'Trigger',
         12: 'CleanUp',
         13: 'Gesture',
+        14: 'Gesture', # Some versions use 14 for gesture too
         -1: 'PreCreate'
     }
     return type_map.get(event_type_id, 'Other')
@@ -205,7 +144,10 @@ def fix_orphaned_gml_files(object_path: str, dry_run: bool = True) -> Tuple[int,
     fixed = 0
     if not dry_run:
         try:
-            yy_data = load_json_loose(str(yy_file))
+            yy_data = load_json_loose(yy_file)
+            if not yy_data:
+                return 0, 0
+            
             if 'eventList' not in yy_data:
                 yy_data['eventList'] = []
             
@@ -315,8 +257,8 @@ def fix_missing_gml_files(object_path: str, dry_run: bool = True) -> Tuple[int, 
     fixed = 0
     if not dry_run:
         try:
-            yy_data = load_json_loose(str(yy_file))
-            if 'eventList' in yy_data:
+            yy_data = load_json_loose(yy_file)
+            if yy_data and 'eventList' in yy_data:
                 original_count = len(yy_data['eventList'])
                 
                 # Filter out events for missing files
@@ -366,20 +308,18 @@ def sync_all_object_events(project_root: str = None, dry_run: bool = True) -> Di
     Synchronize events for all objects in the project.
     Returns: total stats dictionary
     """
-    # Find the actual GameMaker project root if not provided
-    if project_root is None:
-        project_root = find_gamemaker_project_root()
-    else:
-        # Validate the provided project root contains a .yyp file
-        try:
-            find_yyp_file(project_root)
-        except FileNotFoundError:
-            # Try to find the correct project root starting from provided path
-            project_root = find_gamemaker_project_root(project_root)
+    # Use standard resolution
+    project_path = resolve_project_directory(project_root)
     
-    objects_dir = Path(project_root) / 'objects'
+    objects_dir = project_path / 'objects'
     if not objects_dir.exists():
-        return {'objects_processed': 0}
+        return {
+            'objects_processed': 0,
+            'orphaned_found': 0,
+            'orphaned_fixed': 0,
+            'missing_found': 0,
+            'missing_created': 0
+        }
     
     total_stats = {
         'objects_processed': 0,
@@ -408,7 +348,7 @@ def sync_all_object_events(project_root: str = None, dry_run: bool = True) -> Di
     
     return total_stats
 
-if __name__ == "__main__":
+def main():
     import argparse
     
     parser = argparse.ArgumentParser(description="Synchronize GameMaker object events")
@@ -419,23 +359,15 @@ if __name__ == "__main__":
     args = parser.parse_args()
     
     # Use proper project root detection
-    try:
-        if args.project_root:
-            project_root = find_gamemaker_project_root(args.project_root)
-        else:
-            project_root = find_gamemaker_project_root()
-        print(f"[FOLDER] Using GameMaker project: {project_root}")
-    except FileNotFoundError as e:
-        print(f"[ERROR] ERROR: {e}")
-        print("[INFO] Make sure you're running from a GameMaker project directory or specify --project-root")
-        exit(1)
+    project_root = resolve_project_directory(args.project_root)
+    print(f"[FOLDER] Using GameMaker project: {project_root}")
     
     dry_run = not args.fix
     
     if args.object:
-        object_path = os.path.join(project_root, 'objects', args.object)
-        if os.path.exists(object_path):
-            stats = sync_object_events(object_path, dry_run)
+        object_path = project_root / 'objects' / args.object
+        if object_path.exists():
+            stats = sync_object_events(str(object_path), dry_run)
             print(f"Processed {args.object}: {stats}")
         else:
             print(f"Object {args.object} not found in {object_path}")
@@ -444,9 +376,19 @@ if __name__ == "__main__":
         if dry_run:
             print("(DRY RUN - use --fix to actually make changes)")
         
-        stats = sync_all_object_events(project_root, dry_run)
+        stats = sync_all_object_events(str(project_root), dry_run)
         
         print(f"\n[SUMMARY] Summary:")
         print(f"  Objects processed: {stats['objects_processed']}")
         print(f"  Orphaned GML files: {stats['orphaned_found']} found, {stats['orphaned_fixed']} fixed")
-        print(f"  Missing GML files: {stats['missing_found']} found, {stats['missing_created']} created") 
+        print(f"  Missing GML files: {stats['missing_found']} found, {stats['missing_created']} created")
+
+if __name__ == "__main__":
+    try:
+        main()
+    except GMSError as e:
+        print(f"[ERROR] {e.message}")
+        sys.exit(e.exit_code)
+    except Exception as e:
+        print(f"[ERROR] Unexpected error: {e}")
+        sys.exit(1)

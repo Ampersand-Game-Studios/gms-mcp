@@ -65,13 +65,13 @@ class AllPhasesTestResult:
     def add_success(self, test_name):
         self.tests_run += 1
         self.tests_passed += 1
-        print(f"✅ {test_name}")
+        print(f"[PASS] {test_name}")
     
     def add_failure(self, test_name, error):
         self.tests_run += 1
         self.tests_failed += 1
         self.failures.append((test_name, error))
-        print(f"❌ {test_name}: {error}")
+        print(f"[FAIL] {test_name}: {error}")
     
     def print_summary(self):
         print(f"\n{'='*60}")
@@ -84,15 +84,15 @@ class AllPhasesTestResult:
         if self.failures:
             print(f"\nFAILURES:")
             for test_name, error in self.failures:
-                print(f"  ❌ {test_name}: {error}")
+                print(f"  [FAIL] {test_name}: {error}")
         
         success_rate = (self.tests_passed / self.tests_run * 100) if self.tests_run > 0 else 0
         print(f"Success Rate: {success_rate:.1f}%")
         
         if self.tests_failed == 0:
-            print("🎉 ALL TESTS PASSED! 🎉")
+            print("ALL TESTS PASSED!")
         else:
-            print(f"⚠️  {self.tests_failed} TESTS FAILED")
+            print(f"WARNING: {self.tests_failed} TESTS FAILED")
 
 class GameMakerCLITester:
     def __init__(self):
@@ -110,7 +110,7 @@ class GameMakerCLITester:
         try:
             # Create temporary directory
             self.test_dir = Path(tempfile.mkdtemp(prefix="gm_cli_test_"))
-            print(f"🔧 Created test environment: {self.test_dir}")
+            print(f"[SETUP] Created test environment: {self.test_dir}")
             
             # Change to test directory
             os.chdir(self.test_dir)
@@ -392,13 +392,13 @@ class GameMakerCLITester:
             os.chdir(Path.home())  # Change away from test directory
             if self.test_dir and self.test_dir.exists():
                 shutil.rmtree(self.test_dir)
-            print(f"🧹 Cleaned up test environment")
+            print(f"[CLEANUP] Cleaned up test environment")
         except Exception as e:
-            print(f"⚠️  Warning: Could not clean up test environment: {e}")
+            print(f"[WARNING] Could not clean up test environment: {e}")
     
     def run_all_tests(self):
         """Run the complete test suite."""
-        print("🚀 Starting GameMaker CLI Tools Comprehensive Test Suite")
+        print("Starting GameMaker CLI Tools Comprehensive Test Suite")
         print("="*60)
         
         # Setup
@@ -407,22 +407,22 @@ class GameMakerCLITester:
         
         try:
             # Run all test categories
-            print("\n📋 Testing help commands...")
+            print("\n[PHASE] Testing help commands...")
             self.test_help_commands()
             
-            print("\n🏗️  Testing asset creation (all 14 types)...")
+            print("\n[PHASE] Testing asset creation (all 14 types)...")
             self.test_asset_creation()
             
-            print("\n🔧 Testing maintenance commands...")
+            print("\n[PHASE] Testing maintenance commands...")
             self.test_maintenance_commands()
             
-            print("\n🏠 Testing room management...")
+            print("\n[PHASE] Testing room management...")
             self.test_room_management()
             
-            print("\n⚡ Testing event management...")
+            print("\n[PHASE] Testing event management...")
             self.test_event_management()
             
-            print("\n🔍 Testing project integrity...")
+            print("\n[PHASE] Testing project integrity...")
             self.test_project_integrity()
             
         finally:
@@ -441,10 +441,10 @@ def main():
     success = tester.run_all_tests()
     
     if success:
-        print("\n🎉 ALL PHASES VALIDATED SUCCESSFULLY! 🎉")
+        print("\nALL PHASES VALIDATED SUCCESSFULLY!")
         sys.exit(0)
     else:
-        print("\n💥 SOME TESTS FAILED - REVIEW ABOVE OUTPUT")
+        print("\nSOME TESTS FAILED - REVIEW ABOVE OUTPUT")
         sys.exit(1)
 
 class TestAllPhases:

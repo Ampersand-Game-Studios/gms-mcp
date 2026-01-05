@@ -5,6 +5,11 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Telemetry & Health Check**: Introduced `gm_mcp_health` tool (and `gms maintenance health` CLI command) for one-click diagnostic verification of the GameMaker development environment. It checks for project validity, Igor.exe, GameMaker runtimes, licenses, and Python dependencies.
+- **Execution Policy Manager**: Created a central `PolicyManager` in `src/gms_mcp/execution_policy.py` that determines per-tool execution modes (`DIRECT` vs `SUBPROCESS`). This allows "Fast assets, Resilient runner" behavior, defaulting safe operations like introspection and asset creation to in-process execution while keeping long-running tasks like the runner in isolated subprocesses.
+- **Typed Result Objects**: Introduced `@dataclass` result objects in `src/gms_helpers/results.py` (e.g., `AssetResult`, `MaintenanceResult`, `OperationResult`). This standardizes return values across tools, ensuring consistency and better integration with the MCP server.
+- **Library-First Exception Hierarchy**: Introduced a comprehensive custom exception hierarchy (`GMSError` and subclasses) in `src/gms_helpers/exceptions.py`. This replaces monolithic `sys.exit()` calls in library code, allowing for structured error handling and clean JSON-RPC error codes in the MCP server.
+- **Improved Error Reporting**: The MCP server now captures library-specific exceptions and returns descriptive error messages and exit codes, making it easier for users and agents to diagnose issues like missing `.yyp` files or invalid asset types.
 - **Introspection Tools**: Implemented comprehensive project introspection tools including `gm_list_assets`, `gm_read_asset`, and `gm_search_references`. These tools support all GameMaker asset types, including **Extensions** and **Included Files (Datafiles)**.
 - **Asset Dependency Graph**: Added `gm_get_asset_graph` tool with both **Shallow** (structural metadata only) and **Deep** (full GML code parsing) modes for tracing relationships between objects, sprites, scripts, and more.
 - **MCP Resources**: Exposed addressable, cacheable project indices and graphs via MCP resources (`gms://project/index` and `gms://project/asset-graph`) for high-performance agent context loading.
@@ -15,6 +20,7 @@ All notable changes to this project will be documented in this file.
 - **Coverage Tooling**: Wired up `pytest-cov` and added coverage reporting targets in `pyproject.toml`. Developers can now generate HTML and terminal coverage reports using `pytest`.
 
 ### Fixed
+- **MCP Resource Parameters**: Resolved a `ValueError` that prevented the MCP server from starting. Removed invalid `project_root` parameters from fixed URI resources (`gms://project/index` and `gms://project/asset-graph`), as FastMCP requires URI parameters to match function arguments.
 - **Output Encoding**: Corrected a bug in `utils.py` where the UTF-8 fallback wrapper failed to reassign `sys.stdout` and `sys.stderr` on older Windows systems, ensuring Unicode-safe console output.
 - **MCP Stdio Deadlocks**: Resolved "silent hangs" in Cursor by isolating subprocess stdin (`DEVNULL`) and disabling streaming logs (`ctx.log()`) during active execution.
 - **Windows Performance**: Defaulted to in-process execution for MCP tools, making them near-instant on Windows and bypassing shim/wrapper overhead.

@@ -38,7 +38,7 @@ class TestFinalVerification:
             if Path(test_file).exists():
                 success = run_test_file(test_file, description)
                 results.append(success)
-                print(f"{'✅' if success else '❌'} {description}: {'PASS' if success else 'FAIL'}")
+                print(f"[{'PASS' if success else 'FAIL'}] {description}")
         
         # Require at least 50% of critical tests to pass
         passed = sum(results)
@@ -59,7 +59,7 @@ class TestFinalVerification:
             if Path(test_file).exists():
                 success = run_test_file(test_file, f"Comprehensive: {test_file}")
                 results.append(success)
-                print(f"{'✅' if success else '❌'} {test_file}: {'PASS' if success else 'FAIL'}")
+                print(f"[{'PASS' if success else 'FAIL'}] {test_file}")
         
         # At least 1 comprehensive suite should pass if any exist
         passed = sum(results) if results else 1  # Pass if no tests found
@@ -78,7 +78,7 @@ class TestFinalVerification:
             if Path(test_file).exists():
                 success = run_test_file(test_file, f"Room Helper: {test_file}")
                 results.append(success)
-                print(f"{'✅' if success else '❌'} {test_file}: {'PASS' if success else 'FAIL'}")
+                print(f"[{'PASS' if success else 'FAIL'}] {test_file}")
         
         # At least 2 out of 3 room helper suites should pass
         passed = sum(results)

@@ -1,81 +1,35 @@
-"""Room management command implementations."""
+"""Room management command implementations for tests."""
 
-import sys
-import os  # Retained for compatibility
-
-# Import existing functionality
-# Ensure src is on Python path for gms_helpers
-from pathlib import Path
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SRC_ROOT = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC_ROOT))
-
-# Import from room helpers
 from gms_helpers.room_layer_helper import add_layer, remove_layer, list_layers
 from gms_helpers.room_helper import duplicate_room, rename_room, delete_room, list_rooms
 from gms_helpers.room_instance_helper import add_instance, remove_instance, list_instances
 
-# Layer commands
 def handle_room_layer_add(args):
-    """Handle room layer addition."""
-    # Convert CLI arguments to match what the room helper expects
-    args.layer_type = args.layer_type
-    args.depth = getattr(args, 'depth', 0)
-    return add_layer(args)
+    return add_layer(args.room, args.name, args.layer_type, getattr(args, 'depth', 0))
 
 def handle_room_layer_remove(args):
-    """Handle room layer removal."""
-    return remove_layer(args)
+    return remove_layer(args.room, args.name)
 
 def handle_room_layer_list(args):
-    """Handle room layer listing."""
-    return list_layers(args)
+    return list_layers(args.room)
 
-# Standard room operation commands (replacing template commands)
 def handle_room_duplicate(args):
-    """Handle room duplication."""
-    # Map CLI args to room function args
-    room_args = type('Args', (), {
-        'source_room': args.source_room,
-        'new_name': args.new_name
-    })()
-    return duplicate_room(room_args)
+    return duplicate_room(args.source_room, args.new_name)
 
 def handle_room_rename(args):
-    """Handle room renaming."""
-    # Map CLI args to room function args
-    room_args = type('Args', (), {
-        'room_name': args.room_name,
-        'new_name': args.new_name
-    })()
-    return rename_room(room_args)
+    return rename_room(args.room_name, args.new_name)
 
 def handle_room_delete(args):
-    """Handle room deletion."""
-    # Map CLI args to room function args
-    room_args = type('Args', (), {
-        'room_name': args.room_name,
-        'dry_run': getattr(args, 'dry_run', False)
-    })()
-    return delete_room(room_args)
+    return delete_room(args.room_name, getattr(args, 'dry_run', False))
 
 def handle_room_list(args):
-    """Handle room listing."""
-    # Map CLI args to room function args
-    room_args = type('Args', (), {
-        'verbose': getattr(args, 'verbose', False)
-    })()
-    return list_rooms(room_args)
+    return list_rooms(getattr(args, 'verbose', False))
 
-# Instance commands
 def handle_room_instance_add(args):
-    """Handle room instance addition."""
-    return add_instance(args)
+    return add_instance(args.room, args.object, args.x, args.y, getattr(args, 'layer', 'Instances'))
 
 def handle_room_instance_remove(args):
-    """Handle room instance removal."""
-    return remove_instance(args)
+    return remove_instance(args.room, args.instance_id)
 
 def handle_room_instance_list(args):
-    """Handle room instance listing."""
-    return list_instances(args)
+    return list_instances(args.room, getattr(args, 'layer', None))
