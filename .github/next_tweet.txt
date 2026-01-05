@@ -1,1 +1,1 @@
-(No tweet pending - agent should write here before pushing to main)
+gms-mcp just hit 100% test pass rate across all 59 tools. 🛡️ Fixed those annoying JSON bugs in room layers, added event duplication, and hardened the Windows compiler. AI-powered GameMaker dev just got a major reliability boost. 🎮
