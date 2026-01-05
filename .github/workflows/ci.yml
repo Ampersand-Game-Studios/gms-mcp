@@ -20,7 +20,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.12"]
+        python-version: ["3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@v4
 
@@ -42,4 +42,7 @@ jobs:
 
       - name: Run test suite
         run: python cli/tests/python/run_all_tests.py
+
+      - name: Run final verification
+        run: python -m pytest cli/tests/python/test_final_verification.py
 
