@@ -4,6 +4,9 @@ on:
   pull_request:
     branches:
       - "main"
+  push:
+    branches:
+      - "main"
 
 permissions:
   contents: read
@@ -14,7 +17,7 @@ concurrency:
 
 jobs:
   test:
-    name: test
+    name: Test (${{ matrix.os }}, Py${{ matrix.python-version }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -46,3 +49,17 @@ jobs:
       - name: Run final verification
         run: python -m pytest cli/tests/python/test_final_verification.py
 
+  # Summary job - this is the ONE check you require in branch protection
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    needs: [test]
+    if: always()
+    steps:
+      - name: Check test results
+        run: |
+          if [ "${{ needs.test.result }}" != "success" ]; then
+            echo "Tests failed or were cancelled"
+            exit 1
+          fi
+          echo "All tests passed!"

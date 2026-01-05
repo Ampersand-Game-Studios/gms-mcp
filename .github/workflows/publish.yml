@@ -1,12 +1,5 @@
 name: Publish to PyPI
 
-concurrency:
-  group: pypi-publish
-  cancel-in-progress: false
-
-permissions:
-  contents: read
-
 on:
   push:
     branches:
@@ -19,6 +12,13 @@ on:
         description: "Publish a packaging-only post-release (example: 0.1.0.post1)"
         required: false
         type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pypi-publish
+  cancel-in-progress: false
 
 jobs:
   compute:
@@ -47,32 +47,8 @@ jobs:
           echo "should_publish=${{ steps.ver.outputs.should_publish }}"
           echo "reason=${{ steps.ver.outputs.reason }}"
 
-  test:
-    name: Test (${{ matrix.os }}, Py${{ matrix.python-version }})
-    runs-on: ${{ matrix.os }}
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest]
-        python-version: ["3.11", "3.12", "3.13"]
-    steps:
-      - uses: actions/checkout@v4
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v5
-        with:
-          python-version: ${{ matrix.python-version }}
-      - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install pytest
-          pip install -e .
-      - name: Run all tests
-        run: python cli/tests/python/run_all_tests.py
-      - name: Run final verification
-        run: python -m pytest cli/tests/python/test_final_verification.py
-
   build:
-    needs: [compute, test]
+    needs: [compute]
     if: needs.compute.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
     steps:
