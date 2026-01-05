@@ -44,6 +44,7 @@ from .maintenance.validate_paths import validate_folder_paths, print_path_valida
 from .auto_maintenance import run_auto_maintenance, validate_asset_creation_safe, handle_maintenance_failure
 from .maintenance.trash import move_to_trash, get_keep_patterns
 from .utils import resolve_project_directory
+from .exceptions import GMSError, ProjectNotFoundError, ValidationError
 
 
 class GameMakerContextError(Exception):
@@ -120,12 +121,14 @@ def validate_asset_directory_structure():
         return gamemaker_root
         
     except GameMakerContextError as e:
-        print(str(e))
-        print("\n[INFO] To fix this:")
-        print("   1. Navigate to your GameMaker project directory (contains .yyp file)")
-        print("   2. Run GameMaker asset commands from within the project")
-        print("   3. Use relative paths for --parent-path arguments")
-        sys.exit(1)
+        message = (
+            f"{e}\n\n"
+            "[INFO] To fix this:\n"
+            "   1. Navigate to your GameMaker project directory (contains .yyp file)\n"
+            "   2. Run GameMaker asset commands from within the project\n"
+            "   3. Use relative paths for --parent-path arguments"
+        )
+        raise ProjectNotFoundError(message)
 
 def create_script(args):
     """Create a new script asset."""
@@ -1450,14 +1453,16 @@ Maintenance Commands:
     args = parser.parse_args()
     
     try:
-        success = args.func(args)
-        sys.exit(0 if success else 1)
+        return args.func(args)
+    except GMSError as e:
+        print(f"[ERROR] {e.message}")
+        raise
     except KeyboardInterrupt:
         print("\nOperation cancelled.")
-        sys.exit(1)
+        return False
     except Exception as e:
         print(f"Unexpected error: {e}")
-        sys.exit(1)
+        return False
 
 def maint_lint_command(args):
     """Lint the GameMaker project for issues."""
@@ -1615,7 +1620,7 @@ def maint_sync_events_command(args):
                     action_text = "FIXED" if not dry_run and stats['orphaned_fixed'] > 0 else "FOUND"
                     print(f"  [ORPHAN] Orphaned GML files: {stats['orphaned_found']} {action_text}")
                 if stats['missing_found'] > 0:
-                    action_text = "REMOVED" if not dry_run and stats['missing_fixed'] > 0 else "FOUND"
+                    action_text = "CREATED" if not dry_run and stats.get('missing_created', 0) > 0 else "FOUND"
                     print(f"  [MISSING] Missing GML files: {stats['missing_found']} {action_text}")
                 if stats['orphaned_found'] == 0 and stats['missing_found'] == 0:
                     print(f"  [OK] All events synchronized")
@@ -1629,7 +1634,7 @@ def maint_sync_events_command(args):
             print(f"\n[SUMMARY] Summary:")
             print(f"  Objects processed: {stats['objects_processed']}")
             print(f"  Orphaned GML files: {stats['orphaned_found']} found, {stats['orphaned_fixed']} fixed")
-            print(f"  Missing GML files: {stats['missing_found']} found, {stats['missing_fixed']} removed")
+            print(f"  Missing GML files: {stats['missing_found']} found, {stats.get('missing_created', 0)} created")
             
             if stats['orphaned_found'] == 0 and stats['missing_found'] == 0:
                 print("[OK] All object events are properly synchronized")
@@ -1700,7 +1705,7 @@ def maint_clean_orphans_command(args):
         if errors:
             print(f"\n[WARN] {len(errors)} errors occurred during cleanup:")
             for error in errors[:5]:  # Show first 5 errors
-                print(f"  • {error}")
+                print(f"  - {error}")
             if len(errors) > 5:
                 print(f"  ... and {len(errors) - 5} more errors")
         
@@ -1710,7 +1715,7 @@ def maint_clean_orphans_command(args):
             if deleted_files:
                 print(f"\nFiles that would be deleted:")
                 for file_path in deleted_files[:20]:  # Show first 20 files
-                    print(f"  • {file_path}")
+                    print(f"  - {file_path}")
                 if len(deleted_files) > 20:
                     print(f"  ... and {len(deleted_files) - 20} more files")
         
@@ -1791,12 +1796,12 @@ def maint_audit_command(args):
         
         print(f"[OK] Comprehensive audit complete (Phase 1 + 2)!")
         print(f"[SUMMARY] Summary:")
-        print(f"   • Total files on disk: {phase_2['filesystem_files_count']}")
-        print(f"   • Referenced files: {phase_1['referenced_files_count']}")
-        print(f"   • Missing files: {final['missing_but_referenced_count']}")
-        print(f"   • True orphans: {final['true_orphans_count']}")
-        print(f"   • Case sensitivity issues: {final['case_sensitivity_issues_count']}")
-        print(f"   • Derivable orphans: {len(phase_2['derivable_orphans'])}")
+        print(f"   - Total files on disk: {phase_2['filesystem_files_count']}")
+        print(f"   - Referenced files: {phase_1['referenced_files_count']}")
+        print(f"   - Missing files: {final['missing_but_referenced_count']}")
+        print(f"   - True orphans: {final['true_orphans_count']}")
+        print(f"   - Case sensitivity issues: {final['case_sensitivity_issues_count']}")
+        print(f"   - Derivable orphans: {len(phase_2['derivable_orphans'])}")
         print(f"[REPORT] Detailed report saved to: {output_file}")
         
         if final['missing_but_referenced_count'] > 0:
@@ -1938,7 +1943,7 @@ def list_folders_command(args):
                 print("\nFolders:")
                 for folder in folders:
                     if show_paths:
-                        print(f"  [FOLDER] {folder['name']} → {folder['path']}")
+                        print(f"  [FOLDER] {folder['name']} -> {folder['path']}")
                     else:
                         print(f"  [FOLDER] {folder['name']}")
                         
@@ -1957,5 +1962,10 @@ def list_folders_command(args):
         return False
 
 if __name__ == "__main__":
-    success = main()
-    sys.exit(0 if success else 1)
+    try:
+        success = main()
+        sys.exit(0 if success else 1)
+    except GMSError as e:
+        sys.exit(e.exit_code)
+    except Exception:
+        sys.exit(1)

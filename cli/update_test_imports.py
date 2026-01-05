@@ -145,9 +145,9 @@ def update_all_test_files(dry_run: bool = False, verbose: bool = False) -> None:
             if verbose and changes:
                 print(f"  Changes in {test_file.name}:")
                 for change in changes[:3]:  # Show first 3 changes
-                    print(f"    • {change}")
+                    print(f"    - {change}")
                 if len(changes) > 3:
-                    print(f"    • ... and {len(changes) - 3} more")
+                    print(f"    - ... and {len(changes) - 3} more")
                 print()
     
     print("=" * 50)

@@ -9,6 +9,7 @@ import sys
 import platform
 import subprocess
 from pathlib import Path
+from .exceptions import GMSError
 
 # Added optional auto flag to trigger silent installation steps
 def install_gms_command(auto: bool = False):
@@ -145,4 +146,12 @@ def _parse_args_and_run():
     sys.exit(0 if success else 1)
 
 if __name__ == "__main__":
-    _parse_args_and_run() 
+    try:
+        _parse_args_and_run()
+    except GMSError as e:
+        print(f"[ERROR] {e.message}")
+        sys.exit(e.exit_code)
+    except Exception as e:
+        print(f"[ERROR] Unexpected error: {e}")
+        sys.exit(1)
+ 

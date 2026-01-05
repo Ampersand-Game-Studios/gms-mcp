@@ -40,7 +40,7 @@ def handle_asset_create(args):
     }
 
     if asset_type not in creators:
-        print(f"❌ Unknown asset type: {asset_type}")
+        print(f"[ERROR] Unknown asset type: {asset_type}")
         return False
 
     return creators[asset_type](args)

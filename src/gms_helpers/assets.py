@@ -985,7 +985,7 @@ class TileSetAsset(BaseAsset):
         if sprite_id:
             sprite_ref = {
                 "name": sprite_id,
-                "path": f"sprites/{sprite_id.lower()}/{sprite_id}.yy"
+                "path": f"sprites/{sprite_id}/{sprite_id}.yy"
             }
         
         return {
@@ -1012,10 +1012,6 @@ class TileSetAsset(BaseAsset):
             "textureGroupId": {
                 "name": "Default",
                 "path": "texturegroups/Default"
-            },
-            "tileAnimation": {
-                "FrameData": [],
-                "SerialiseFrameCount": 1
             },
             "tileAnimationFrames": [],
             "tileAnimationSpeed": 15.0,
@@ -1173,7 +1169,9 @@ class NoteAsset(BaseAsset):
     
     def create_yy_data(self, name: str, parent_path: str, **kwargs) -> Dict[str, Any]:
         # Note configuration parameters
-        content = kwargs.get("content", f"# {name}\n\nThis is a note created by the CLI helper tools.\n\nAdd your documentation here.")
+        # NOTE: content is stored in the companion .txt file; keep kwargs handling here for consistency,
+        # and ensure None does not propagate to file writes.
+        _ = (kwargs.get("content") or f"# {name}\n\nThis is a note created by the CLI helper tools.\n\nAdd your documentation here.")
         
         return {
             "$GMNotes": "",
@@ -1191,7 +1189,7 @@ class NoteAsset(BaseAsset):
         # Create the note content file
         note_path = asset_folder / f"{name}.txt"
         if not note_path.exists():
-            content = kwargs.get("content", f"# {name}\n\nThis is a note created by the CLI helper tools.\n\nAdd your documentation here.")
+            content = kwargs.get("content") or f"# {name}\n\nThis is a note created by the CLI helper tools.\n\nAdd your documentation here."
             note_path.write_text(content, encoding="utf-8")
             print(f"Created {note_path.name}")
     

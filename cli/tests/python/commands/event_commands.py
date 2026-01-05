@@ -1,38 +1,17 @@
-"""Event management command implementations."""
-
-import sys
-import os  # Retained for compatibility; can be removed later
-
-# Ensure src is on Python path so gms_helpers is importable
-from pathlib import Path
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-SRC_ROOT = PROJECT_ROOT / "src"
-sys.path.insert(0, str(SRC_ROOT))
+"""Event management command implementations for tests."""
 
 from gms_helpers.event_helper import (
-    cmd_add, cmd_remove, cmd_duplicate, cmd_list, cmd_validate, cmd_fix
+    add_event, remove_event, list_events
 )
 
 def handle_event_add(args):
     """Handle event addition."""
-    return cmd_add(args)
+    return add_event(args.object, args.event, getattr(args, "template", ""))
 
 def handle_event_remove(args):
     """Handle event removal."""
-    return cmd_remove(args)
-
-def handle_event_duplicate(args):
-    """Handle event duplication."""
-    return cmd_duplicate(args)
+    return remove_event(args.object, args.event, getattr(args, "keep_file", False))
 
 def handle_event_list(args):
     """Handle event listing."""
-    return cmd_list(args)
-
-def handle_event_validate(args):
-    """Handle event validation."""
-    return cmd_validate(args)
-
-def handle_event_fix(args):
-    """Handle event fixing."""
-    return cmd_fix(args)
+    return list_events(args.object)

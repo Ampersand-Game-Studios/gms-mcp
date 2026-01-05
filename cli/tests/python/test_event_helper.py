@@ -1,7 +1,6 @@
 #!/usr/bin/env python3
 """
-Unit tests for event_helper.py
-Simplified version that works with unittest instead of pytest.
+Unit tests for refactored event_helper.py
 """
 
 import json
@@ -18,15 +17,15 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
-# Import the module we're testing
 from gms_helpers.event_helper import (
-    _event_to_filename, _filename_to_event, _parse_event_spec,
-    cmd_add, cmd_remove, cmd_list, cmd_validate, cmd_fix, cmd_duplicate
+    _event_to_filename, _filename_to_event,
+    add_event, remove_event, list_events, main
 )
-
+from gms_helpers.exceptions import AssetNotFoundError, ValidationError
+from gms_helpers.utils import load_json_loose
 
 class TestEventHelper(unittest.TestCase):
-    """Test suite for event helper functions."""
+    """Test suite for refactored event helper functions."""
     
     def test_event_to_filename(self):
         """Test event type/num to filename conversion."""
@@ -34,140 +33,72 @@ class TestEventHelper(unittest.TestCase):
         self.assertEqual(_event_to_filename(1, 0), "Destroy_0.gml")
         self.assertEqual(_event_to_filename(3, 2), "Step_2.gml")
         self.assertEqual(_event_to_filename(8, 64), "Draw_64.gml")
-        self.assertEqual(_event_to_filename(4, 0, "o_wall"), "Collision_o_wall.gml")
     
     def test_filename_to_event(self):
         """Test filename to event type/num conversion."""
-        self.assertEqual(_filename_to_event("Create_0.gml"), (0, 0, None))
-        self.assertEqual(_filename_to_event("Step_2.gml"), (3, 2, None))
-        self.assertEqual(_filename_to_event("Draw_64.gml"), (8, 64, None))
-        self.assertEqual(_filename_to_event("Collision_o_wall.gml"), (4, 0, "o_wall"))
-    
-    def test_parse_event_spec(self):
-        """Test parsing event specifications."""
-        self.assertEqual(_parse_event_spec("create"), (0, 0, None))
-        self.assertEqual(_parse_event_spec("step"), (3, 0, None))
-        self.assertEqual(_parse_event_spec("step:end"), (3, 2, None))
-        self.assertEqual(_parse_event_spec("step:1"), (3, 1, None))
-        self.assertEqual(_parse_event_spec("draw:gui"), (8, 64, None))
-        self.assertEqual(_parse_event_spec("collision:o_wall"), (4, 0, "o_wall"))
-    
-    @patch('gms_helpers.event_helper.add_event')
-    def test_cmd_add(self, mock_add):
-        """Test cmd_add function."""
-        mock_add.return_value = True
-        args = Mock()
-        args.object = 'o_test'
-        args.event = 'create'
-        args.template = None
-        
-        result = cmd_add(args)
-        
-        self.assertTrue(result)
-        mock_add.assert_called_once()
-    
-    @patch('gms_helpers.event_helper.remove_event')
-    def test_cmd_remove(self, mock_remove):
-        """Test cmd_remove function."""
-        mock_remove.return_value = True
-        args = Mock()
-        args.object = 'o_test'
-        args.event = 'create'
-        
-        result = cmd_remove(args)
-        
-        self.assertTrue(result)
-        mock_remove.assert_called_once()
-    
-    @patch('gms_helpers.event_helper.list_events')
-    def test_cmd_list(self, mock_list):
-        """Test cmd_list function."""
-        mock_list.return_value = []
-        args = Mock()
-        args.object = 'o_test'
-        args.verbose = False
-        
-        result = cmd_list(args)
-        
-        self.assertTrue(result)
-        mock_list.assert_called_once_with('o_test')
-    
-    @patch('gms_helpers.event_helper.validate_events')
-    def test_cmd_validate(self, mock_validate):
-        """Test cmd_validate function."""
-        mock_report = Mock()
-        mock_report.errors = []
-        mock_report.warnings = []
-        mock_report.missing_files = []
-        mock_report.orphan_files = []
-        mock_report.duplicates = []
-        mock_validate.return_value = mock_report
-        
-        args = Mock()
-        args.object = 'o_test'
-        
-        result = cmd_validate(args)
-        
-        self.assertTrue(result)
-        mock_validate.assert_called_once_with('o_test')
-    
-    @patch('gms_helpers.event_helper.fix_events')
-    def test_cmd_fix(self, mock_fix):
-        """Test cmd_fix function."""
-        mock_report = Mock()
-        mock_report.files_created = 0
-        mock_report.files_deleted = 0  # Added missing attribute
-        mock_report.events_added = 0
-        mock_report.events_removed = 0
-        mock_report.issues_fixed = []  # Added missing attribute
-        mock_fix.return_value = mock_report
-        
-        args = Mock()
-        args.object = 'o_test'
-        args.safe_mode = True  # Fixed: should be safe_mode not safe
-        args.dry_run = False
-        
-        result = cmd_fix(args)
-        
-        self.assertTrue(result)
-        mock_fix.assert_called_once()
-    
-    @patch('gms_helpers.event_helper.duplicate_event')
-    def test_cmd_duplicate(self, mock_duplicate):
-        """Test cmd_duplicate function."""
-        mock_duplicate.return_value = True
-        args = Mock()
-        args.object = 'o_test'
-        args.source_event = 'create'  # Fixed: should be source_event not source
-        args.target_num = 1
-        
-        result = cmd_duplicate(args)
-        
-        self.assertTrue(result)
-        mock_duplicate.assert_called_once()
-    
-    def test_cmd_functions_with_failures(self):
-        """Test command functions handling failures."""
-        # Test cmd_add with invalid event
-        args = Mock()
-        args.object = 'o_test'
-        args.event = 'invalid_event'
-        args.template = None
-        
-        with patch('gms_helpers.event_helper._parse_event_spec') as mock_parse:
-            mock_parse.side_effect = ValueError("Invalid event")
-            result = cmd_add(args)
-            self.assertFalse(result)
-        
-        # Test cmd_validate with object not found
-        args = Mock()
-        args.object = 'o_nonexistent'
-        
-        with patch('gms_helpers.event_helper.validate_events') as mock_validate:
-            mock_validate.return_value = None
-            result = cmd_validate(args)
-            self.assertFalse(result)
+        self.assertEqual(_filename_to_event("Create_0.gml"), (0, 0))
+        self.assertEqual(_filename_to_event("Step_2.gml"), (3, 2))
+        self.assertEqual(_filename_to_event("Draw_64.gml"), (8, 64))
 
+    def setUp(self):
+        self.test_dir = Path(tempfile.mkdtemp())
+        self.old_cwd = os.getcwd()
+        os.chdir(self.test_dir)
+        
+        # Create minimal project structure
+        (self.test_dir / "objects" / "o_test").mkdir(parents=True)
+        self.yy_path = self.test_dir / "objects" / "o_test" / "o_test.yy"
+        self.yy_path.write_text(json.dumps({"name": "o_test", "eventList": []}))
+        
+        # Create fake .yyp
+        (self.test_dir / "test.yyp").write_text("{}")
+
+    def tearDown(self):
+        os.chdir(self.old_cwd)
+        shutil.rmtree(self.test_dir)
+
+    def test_add_event_success(self):
+        """Test adding an event successfully."""
+        result = add_event("o_test", "create")
+        self.assertTrue(result)
+        
+        # Verify file created
+        self.assertTrue((self.test_dir / "objects" / "o_test" / "Create_0.gml").exists())
+        
+        # Verify .yy updated
+        data = load_json_loose(self.yy_path)
+        self.assertEqual(len(data["eventList"]), 1)
+        self.assertEqual(data["eventList"][0]["eventType"], 0)
+
+    def test_add_event_invalid_spec(self):
+        """Test adding an event with invalid specification."""
+        with self.assertRaises(ValidationError):
+            add_event("o_test", "invalid_type")
+
+    def test_remove_event_success(self):
+        """Test removing an event successfully."""
+        # Add first
+        add_event("o_test", "step")
+        self.assertTrue((self.test_dir / "objects" / "o_test" / "Step_0.gml").exists())
+        
+        # Remove
+        result = remove_event("o_test", "step")
+        self.assertTrue(result)
+        self.assertFalse((self.test_dir / "objects" / "o_test" / "Step_0.gml").exists())
+        
+        data = load_json_loose(self.yy_path)
+        self.assertEqual(len(data["eventList"]), 0)
+
+    def test_list_events(self):
+        """Test listing events."""
+        add_event("o_test", "create")
+        add_event("o_test", "step")
+        
+        events = list_events("o_test")
+        self.assertEqual(len(events), 2)
+        filenames = [e["filename"] for e in events]
+        self.assertIn("Create_0.gml", filenames)
+        self.assertIn("Step_0.gml", filenames)
 
 if __name__ == "__main__":
-    unittest.main(verbosity=2)
+    unittest.main()

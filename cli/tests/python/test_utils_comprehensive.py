@@ -28,6 +28,7 @@ from gms_helpers.utils import (
     check_resource_conflicts, find_duplicate_resources, dedupe_resources,
     update_yyp_file, validate_parent_path, remove_folder_from_yyp, list_folders_in_yyp
 )
+from gms_helpers.exceptions import GMSError, ProjectNotFoundError, ValidationError
 
 
 class TestUtilsComprehensive(unittest.TestCase):
@@ -259,8 +260,8 @@ class TestProjectManagement(TestUtilsComprehensive):
         self.assertEqual(result, yyp_file)
     
     def test_find_yyp_missing(self):
-        """Test finding .yyp file when none exists - should raise SystemExit."""
-        with self.assertRaises(SystemExit):
+        """Test finding .yyp file when none exists - should raise ProjectNotFoundError."""
+        with self.assertRaises(ProjectNotFoundError):
             find_yyp(self.project_root)
     
     def test_find_yyp_multiple_files(self):
@@ -632,11 +633,11 @@ class TestValidationUtilities(TestUtilsComprehensive):
             "folders/invalid@name.yy",  # Special character
             "folders/invalid.txt",  # Wrong extension
         ]
-        
+    
         for path in invalid_paths:
             with self.subTest(path=path):
-                # Should raise SystemExit for invalid paths
-                with self.assertRaises(SystemExit):
+                # Should raise ValidationError for invalid paths
+                with self.assertRaises((ValidationError, ProjectNotFoundError)):
                     validate_parent_path(path)
 
 
@@ -750,11 +751,11 @@ class TestErrorConditions(TestUtilsComprehensive):
         self.assertEqual(loaded_data, test_data)
     
     def test_find_yyp_empty_directory(self):
-        """Test finding .yyp in empty directory - should raise SystemExit."""
+        """Test finding .yyp in empty directory - should raise ProjectNotFoundError."""
         empty_dir = self.project_root / "empty"
         empty_dir.mkdir()
         
-        with self.assertRaises(SystemExit):
+        with self.assertRaises(ProjectNotFoundError):
             find_yyp(empty_dir)
     
     def test_insert_into_resources_malformed_list(self):
@@ -806,12 +807,12 @@ class TestCrossPlatformCompatibility(TestUtilsComprehensive):
     """Test cross-platform compatibility scenarios."""
     
     def test_path_handling_windows_style(self):
-        """Test handling Windows-style paths - should exit when path not found."""
+        """Test handling Windows-style paths - should raise error when path not found."""
         # Test with backslashes (should be normalized but still fail if path doesn't exist)
         windows_path = "folders\\TestFolder.yy"
         
-        # validate_parent_path calls sys.exit(1) when path is invalid
-        with self.assertRaises(SystemExit):
+        # validate_parent_path raises error when path is invalid
+        with self.assertRaises((ValidationError, ProjectNotFoundError)):
             validate_parent_path(windows_path)
     
     def test_unicode_file_names(self):

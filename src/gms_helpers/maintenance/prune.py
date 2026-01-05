@@ -43,7 +43,7 @@ def prune_missing_assets(project_root: str = '.', dry_run: bool = False) -> List
                 
                 # Determine asset type first
                 asset_type = _get_asset_type_from_path(path)
-                # Folders are logical only – treat them as always existing
+                # Folders are logical only - treat them as always existing
                 if asset_type == 'folder':
                     valid_resources.append(resource)
                     continue

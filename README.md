@@ -1,8 +1,11 @@
 # GameMaker MCP Tools
 
-This repo provides:
+## Project Features
+
 - `gms`: a Python CLI for GameMaker project operations (asset creation, maintenance, runner, etc).
 - `gms-mcp`: an MCP server that exposes the same operations as MCP tools (Cursor is the primary example client).
+- **Reliability-First Architecture**: Custom exception hierarchy, typed result objects, and an execution policy manager replace monolithic exit calls and raw dictionaries. This enables structured error handling, consistent tool integration, and optimized performance (Fast assets, Resilient runner).
+- **Health & Diagnostics**: `gm_mcp_health` provides a one-click diagnostic tool to verify the local GameMaker environment, including Igor.exe, runtimes, and licenses.
 - **Introspection**: complete project inspection with support for all asset types (including extensions and datafiles).
 - **MCP Resources**: addressable project index and asset graph for high-performance agent context loading.
 - `gms-mcp-init`: generates shareable MCP config files for a workspace. Now auto-detects environment variables like `GMS_MCP_GMS_PATH` to include in the generated config.
@@ -59,9 +62,9 @@ This repo can post to X automatically when `main` is updated.
 - If it contains the placeholder text (or is empty), it **skips posting**.
 - If it contains a real tweet, it posts to X and then **clears the file** back to the placeholder.
 
-### Maintainer flow (dev → pre-release → main)
+### Maintainer flow (dev -> pre-release -> main)
 
-Because this repo promotes changes `dev` → `pre-release` → `main`, prepare the tweet during the `pre-release` → `main` PR:
+Because this repo promotes changes `dev` -> `pre-release` -> `main`, prepare the tweet during the `pre-release` -> `main` PR:
 
 - Update `.github/next_tweet.txt` with the tweet (following `.github/x-personality.md`)
 - Merge to `main`

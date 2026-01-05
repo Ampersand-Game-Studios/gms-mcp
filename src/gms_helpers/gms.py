@@ -10,6 +10,7 @@ import os
 
 # Import utilities for directory validation
 from .utils import validate_working_directory, resolve_project_directory
+from .exceptions import GMSError
 
 def create_parser():
     """Create the master argument parser with all subcommands."""
@@ -330,7 +331,7 @@ def setup_event_commands(subparsers):
     remove_parser = event_subparsers.add_parser('remove', help='Remove an event from an object')
     remove_parser.add_argument('object', help='Object name (e.g., o_player)')
     remove_parser.add_argument('event', help='Event specification (e.g., create, step:1)')
-    remove_parser.add_argument('--keep-file', dest='delete_file', action='store_false', help='Keep the GML file')
+    remove_parser.add_argument('--keep-file', action='store_true', help='Keep the GML file (do not delete .gml)')
     remove_parser.set_defaults(func=handle_event_remove)
     
     # Duplicate command
@@ -430,8 +431,15 @@ def setup_room_commands(subparsers):
     # Add layer
     layer_add_parser = layer_subparsers.add_parser('add', help='Add a layer to a room')
     layer_add_parser.add_argument('room_name', help='Room name (e.g., r_level)')
-    layer_add_parser.add_argument('layer_type', choices=['background', 'instance', 'asset', 'tile', 'path', 'effect'], help='Layer type')
+    # Accept some common synonyms/casing to reduce foot-guns in MCP usage.
+    layer_add_parser.add_argument(
+        'layer_type',
+        type=lambda s: (s or "").strip().lower(),
+        choices=['background', 'instance', 'instances', 'asset', 'tile', 'path', 'effect'],
+        help='Layer type',
+    )
     layer_add_parser.add_argument('layer_name', help='Layer name')
+    layer_add_parser.add_argument('--depth', type=int, default=0, help='Layer depth (default: 0)')
     layer_add_parser.set_defaults(func=handle_room_layer_add)
     
     # Remove layer
@@ -529,6 +537,10 @@ def setup_maintenance_commands(subparsers):
     clean_orphans_parser.add_argument('--skip-types', nargs='*', default=['folder'], help='Asset types to skip during cleanup')
     clean_orphans_parser.set_defaults(func=handle_maintenance_clean_orphans)
     
+    # Health check
+    health_parser = maint_subparsers.add_parser('health', help='Perform environment health check')
+    health_parser.set_defaults(func=handle_maintenance_health)
+    
     # Fix issues
     fix_issues_parser = maint_subparsers.add_parser('fix-issues', help='Run comprehensive auto-maintenance with fixes enabled')
     fix_issues_parser.add_argument('--verbose', action='store_true', help='Show detailed progress and reports')
@@ -571,7 +583,6 @@ def setup_runner_commands(subparsers):
     status_parser.set_defaults(func=handle_runner_status)
 
 # Import command handlers
-# TODO: Uncomment these imports as command modules are created
 from .commands.asset_commands import handle_asset_create, handle_asset_delete
 from .commands.event_commands import (
     handle_event_add, handle_event_remove, handle_event_duplicate,
@@ -590,7 +601,7 @@ from .commands.maintenance_commands import (
     handle_maintenance_auto, handle_maintenance_lint, handle_maintenance_validate_json,
     handle_maintenance_list_orphans, handle_maintenance_prune_missing, handle_maintenance_validate_paths,
     handle_maintenance_dedupe_resources, handle_maintenance_sync_events, handle_maintenance_clean_old_files,
-    handle_maintenance_clean_orphans, handle_maintenance_fix_issues
+    handle_maintenance_clean_orphans, handle_maintenance_fix_issues, handle_maintenance_health
 )
 from .commands.runner_commands import (
     handle_runner_compile, handle_runner_run, handle_runner_stop, handle_runner_status
@@ -625,7 +636,12 @@ def main():
     os.chdir(project_dir)
 
     # Now validate and parse full args.
-    validate_working_directory()
+    try:
+        validate_working_directory()
+    except GMSError as e:
+        print(f"[ERROR] {e.message}")
+        raise
+        
     args = parser.parse_args()
 
     # Normalize project_root after chdir so downstream handlers resolve correctly.
@@ -634,7 +650,13 @@ def main():
     
     # Route to appropriate handler
     try:
-        return args.func(args)
+        result = args.func(args)
+        if hasattr(result, "success"):
+            return result.success
+        return result
+    except GMSError as e:
+        print(f"[ERROR] {e.message}")
+        raise
     except KeyboardInterrupt:
         print("\n[WARN]  Operation cancelled by user")
         return False
@@ -645,5 +667,10 @@ def main():
         return False
 
 if __name__ == "__main__":
-    success = main()
-    sys.exit(0 if success else 1) 
+    try:
+        success = main()
+        sys.exit(0 if success else 1)
+    except GMSError as e:
+        sys.exit(e.exit_code)
+    except Exception:
+        sys.exit(1)

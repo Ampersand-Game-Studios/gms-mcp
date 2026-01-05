@@ -14,7 +14,7 @@ def handle_runner_compile(args):
         else:
             project_root = Path.cwd()
         
-        print(f"🔨 Compiling GameMaker project in: {project_root}")
+        print(f"[BUILD] Compiling GameMaker project in: {project_root}")
         
         runner = GameMakerRunner(project_root)
         
@@ -26,7 +26,7 @@ def handle_runner_compile(args):
         if success:
             print("[SUCCESS] Compilation completed successfully!")
         else:
-            print("💥 Compilation failed!")
+            print("[ERROR] Compilation failed!")
             
         return success
         
@@ -96,9 +96,9 @@ def handle_runner_status(args):
         runner = GameMakerRunner(project_root)
         
         if runner.is_game_running():
-            print("🎮 Game is currently running")
+            print("[OK] Game is currently running")
         else:
-            print("💤 No game currently running")
+            print("[OK] No game currently running")
             
         return True
         

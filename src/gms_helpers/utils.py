@@ -12,6 +12,8 @@ from pathlib import Path
 from typing import Dict, Any, List
 import os
 
+from .exceptions import GMSError, ProjectNotFoundError, ValidationError
+
 # ---- make console prints Unicode-safe on Windows -----------------
 import sys, os
 if os.name == "nt":                      # Windows only
@@ -19,7 +21,7 @@ if os.name == "nt":                      # Windows only
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
     except AttributeError:
-        # Older Pythons – fall back to write-through helper
+        # Older Pythons - fall back to write-through helper
         import io
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8",
                                      errors="replace", line_buffering=True)
@@ -61,6 +63,14 @@ def save_pretty_json_gm(path: Path, data: Dict[str, Any]):
     json_str = add_trailing_commas(json_str)
     path.write_text(json_str, encoding="utf-8")
 
+def save_json_loose(path: Path | str, data: Dict[str, Any]):
+    """Save data as JSON with GameMaker-style trailing commas."""
+    if isinstance(path, str):
+        path = Path(path)
+    json_str = json.dumps(data, indent=2, ensure_ascii=False)
+    json_str = add_trailing_commas(json_str)
+    path.write_text(json_str, encoding="utf-8")
+
 def save_json(data, file_path):
     """Save data as JSON to a file with GameMaker-style trailing commas."""
     dir_path = os.path.dirname(file_path)
@@ -78,7 +88,7 @@ def find_yyp(project_root: Path) -> Path:
     """Pick the first .yyp file in the project root."""
     yyp_files = list(project_root.glob("*.yyp"))
     if not yyp_files:
-        sys.exit("ERROR: No .yyp file found in project root")
+        raise ProjectNotFoundError(f"No .yyp file found in project root: {project_root}")
     return yyp_files[0]
 
 def ensure_directory(path: Path):
@@ -107,7 +117,7 @@ def insert_into_resources(resources: List[Dict], asset_name: str, asset_path: st
     for r in resources:
         existing_name = r.get("id", {}).get("name") if isinstance(r.get("id"), dict) else None
         if existing_name == asset_name:
-            print(f"'{asset_name}' already present in .yyp – skipping insertion")
+            print(f"'{asset_name}' already present in .yyp - skipping insertion")
             return False
     
     # Add new resource
@@ -126,7 +136,7 @@ def insert_into_folders(folders: List[Dict], folder_name: str, folder_path: str)
     """Insert a new folder into the Folders array in alphabetical order."""
     # Check for duplicates
     if any(f["folderPath"] == folder_path for f in folders):
-        print(f"Folder '{folder_path}' already exists – skipping insertion")
+        print(f"Folder '{folder_path}' already exists - skipping insertion")
         return False
     
     # Add new folder
@@ -313,16 +323,16 @@ def validate_working_directory():
     yyp_files = [f for f in os.listdir('.') if f.endswith('.yyp')]
     
     if not yyp_files:
-        print("[ERROR] ERROR: No .yyp file found in current directory")
-        print("[FOLDER] Current directory:", os.getcwd())
-        print()
-        print("[INFO] SOLUTION:")
-        print("   - cd into the directory that contains your .yyp file, OR")
-        print("   - run with: gms --project-root <path-to-gamemaker-project>, OR")
-        print("   - set env var: GM_PROJECT_ROOT or PROJECT_ROOT=<absolute path to gamemaker project>")
-        print()
-        print("[SCAN] EXPLANATION: CLI tools require direct access to the GameMaker project file (.yyp).")
-        sys.exit(1)
+        message = (
+            "ERROR: No .yyp file found in current directory\n"
+            f"Current directory: {os.getcwd()}\n\n"
+            "SOLUTION:\n"
+            "   - cd into the directory that contains your .yyp file, OR\n"
+            "   - run with: gms --project-root <path-to-gamemaker-project>, OR\n"
+            "   - set env var: GM_PROJECT_ROOT or PROJECT_ROOT=<absolute path to gamemaker project>\n\n"
+            "EXPLANATION: CLI tools require direct access to the GameMaker project file (.yyp)."
+        )
+        raise ProjectNotFoundError(message)
     
     if len(yyp_files) > 1:
         print("[WARN]  WARNING: Multiple .yyp files found in current directory:")
@@ -616,7 +626,7 @@ def validate_parent_path(parent_path):
     """Validate that a parent folder path exists in the project's .yyp Folders list.
     
     If the folder is missing the process now aborts instead of only emitting
-    a warning – this prevents dangling assets from being created.
+    a warning - this prevents dangling assets from being created.
     """
     if not parent_path:
         return True  # No parent path is valid
@@ -633,18 +643,18 @@ def validate_parent_path(parent_path):
         if parent_path in folder_paths:
             return True
         
-        # Folder not found → stop immediately and show the user what went wrong
+        # Folder not found -> stop immediately and show the user what went wrong
         available = "\n  - ".join(sorted(p for p in folder_paths if p))
-        print(
-            f"[ERROR] Parent folder path '{parent_path}' not found in project Folders list.\n"
-            f"Available folder paths:\n  - {available}",
-            file=sys.stderr,
+        raise ValidationError(
+            f"Parent folder path '{parent_path}' not found in project Folders list.\n"
+            f"Available folder paths:\n  - {available}"
         )
-        sys.exit(1)
             
+    except GMSError:
+        # Re-raise GMS errors
+        raise
     except Exception as e:
-        print(f"[ERROR] Error validating parent path '{parent_path}': {e}", file=sys.stderr)
-        sys.exit(1)
+        raise ValidationError(f"Error validating parent path '{parent_path}': {e}")
 
 def remove_folder_from_yyp(folder_path, force=False, dry_run=False):
     """

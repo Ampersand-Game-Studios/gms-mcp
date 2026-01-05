@@ -12,6 +12,7 @@ from typing import List, Dict, Tuple, Set, Optional
 from dataclasses import dataclass
 
 from .utils import load_json_loose, save_pretty_json_gm
+from .exceptions import GMSError
 
 
 @dataclass
@@ -457,8 +458,6 @@ def comprehensive_rename_asset(project_root: Path, old_name: str, new_name: str,
 
 
 if __name__ == "__main__":
-    # Test the reference scanner
-    import sys
     if len(sys.argv) != 5:
         print("Usage: python reference_scanner.py <project_root> <old_name> <new_name> <asset_type>")
         sys.exit(1)
@@ -468,5 +467,12 @@ if __name__ == "__main__":
     new_name = sys.argv[3]
     asset_type = sys.argv[4]
     
-    success = comprehensive_rename_asset(project_root, old_name, new_name, asset_type)
-    sys.exit(0 if success else 1) 
+    try:
+        success = comprehensive_rename_asset(project_root, old_name, new_name, asset_type)
+        sys.exit(0 if success else 1)
+    except GMSError as e:
+        print(f"[ERROR] {e.message}")
+        sys.exit(e.exit_code)
+    except Exception as e:
+        print(f"[ERROR] Unexpected error: {e}")
+        sys.exit(1)

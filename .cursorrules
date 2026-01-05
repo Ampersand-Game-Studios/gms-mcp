@@ -15,3 +15,7 @@ Before any change is merged into `main` (i.e. when preparing the PR `pre-release
 Important:
 - Do NOT include X credentials anywhere in the repo.
 - Do NOT modify `.github/workflows/x-post.yml` unless explicitly asked.
+
+## Output style (required)
+- Do not use emojis or other non-ASCII glyphs in code, CLI output, test output, logs, or docs.
+- Use ASCII-only status markers (e.g., `[OK]`, `[ERROR]`, `PASS/FAIL`) to avoid Windows console encoding issues.

@@ -14,6 +14,7 @@ from typing import List, Optional, Dict, Any
 
 # Direct imports - no complex fallbacks needed
 from .utils import find_yyp
+from .exceptions import RuntimeNotFoundError, LicenseNotFoundError
 
 
 class GameMakerRunner:
@@ -152,13 +153,13 @@ class GameMakerRunner:
         """Build Igor.exe command line."""
         igor_path = self.find_gamemaker_runtime()
         if not igor_path:
-            raise RuntimeError("GameMaker runtime not found. Please install GameMaker Studio.")
+            raise RuntimeNotFoundError("GameMaker runtime not found. Please install GameMaker Studio.")
             
         project_file = self.find_project_file()
         license_file = self.find_license_file()
         
         if not license_file:
-            raise RuntimeError("GameMaker license file not found. Please log into GameMaker IDE first.")
+            raise LicenseNotFoundError("GameMaker license file not found. Please log into GameMaker IDE first.")
         
         # Build command
         cmd = [str(igor_path)]
@@ -195,44 +196,11 @@ class GameMakerRunner:
         """Compile the GameMaker project."""
         try:
             print(f"[BUILD] Compiling project for {platform_target} ({runtime_type})...")
-            
-            cmd = self.build_igor_command("Run", platform_target, runtime_type)
-            
-            print(f"[CMD] Command: {' '.join(cmd)}")
-            
-            # Run compilation
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
-            
-            # Stream output in real-time
-            if process.stdout:
-                for line in process.stdout:
-                    line = line.strip()
-                    if line:
-                        # Basic log filtering
-                        if "error" in line.lower():
-                            print(f"[ERROR] {line}")
-                        elif "warning" in line.lower():
-                            print(f"[WARN] {line}")
-                        elif "compile" in line.lower() or "build" in line.lower():
-                            print(f"[BUILD] {line}")
-                        else:
-                            print(f"   {line}")
-            
-            process.wait()
-            
-            if process.returncode == 0:
-                print("[OK] Compilation successful!")
-                return True
-            else:
-                print(f"[ERROR] Compilation failed with exit code {process.returncode}")
-                return False
+
+            # Use Igor PackageZip (same as the IDE run pipeline) but do not launch the executable.
+            # This avoids Igor's "Cannot start process because a file name has not been provided."
+            # which can occur when using the "Run" action without output parameters.
+            return self._run_project_stitch_approach(platform_target, runtime_type, background=True, run_executable=False)
                 
         except Exception as e:
             print(f"[ERROR] Compilation error: {e}")
@@ -253,7 +221,7 @@ class GameMakerRunner:
         else:  # output_location == "project"
             return self._run_project_classic_approach(platform_target, runtime_type, background)
     
-    def _run_project_stitch_approach(self, platform_target="Windows", runtime_type="VM", background=False):
+    def _run_project_stitch_approach(self, platform_target="Windows", runtime_type="VM", background=False, run_executable: bool = True):
         """
         Run the project using Stitch approach:
         1. Package to zip in IDE temp directory
@@ -316,7 +284,9 @@ class GameMakerRunner:
             cmd.extend([f"/temp={temp_dir}"])
             
             # Add output parameters (BEFORE the -- separator)
-            cmd.extend([f"--of={ide_temp_dir / project_name}"])
+            # Igor uses /of= (not --of=). Using the wrong prefix causes opaque "file name not provided" failures.
+            # Igor PackageZip expects a file prefix or path for the output.
+            cmd.extend([f"/of={ide_temp_dir / project_name}"])
             
             # Add runtime type
             if runtime_type.upper() == "YYC":
@@ -384,7 +354,11 @@ class GameMakerRunner:
                 
             print(f"[OK] Game packaged successfully: {exe_path}")
             
-            # Step 3: Run the executable directly
+            # Step 3: Run the executable directly (optional)
+            if not run_executable:
+                print("[OK] Compilation/package step completed successfully.")
+                return True
+
             print("[RUN] Starting game...")
             
             # Change to the game directory and run the executable
@@ -513,7 +487,8 @@ class GameMakerRunner:
         """Stop the running game."""
         if not self.game_process:
             print("[WARN] No game process running")
-            return False
+            # Treat as idempotent success for CLI/MCP usage.
+            return True
             
         try:
             pid = self.game_process.pid
