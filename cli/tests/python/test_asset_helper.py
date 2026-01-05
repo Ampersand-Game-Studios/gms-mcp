@@ -601,16 +601,16 @@ def run_tests():
 
 
 if __name__ == "__main__":
-    print("🧪 Running GameMaker Asset Helper Test Suite")
+    print("Running GameMaker Asset Helper Test Suite")
     print("=" * 60)
 
     result = run_tests()
 
     print("\n" + "=" * 60)
     if result.wasSuccessful():
-        print("✅ All tests passed!")
+        print("All tests passed!")
     else:
-        print(f"❌ {len(result.failures)} failures, {len(result.errors)} errors")
+        print(f"{len(result.failures)} failures, {len(result.errors)} errors")
 
         if result.failures:
             print("\nFailures:")

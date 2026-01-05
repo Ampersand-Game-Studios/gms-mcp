@@ -11,74 +11,8 @@ import shutil
 from pathlib import Path
 import sys
 
-# Helper to find the .yyp file in the project root
-
-def find_yyp_file(project_root):
-    for file in os.listdir(project_root):
-        if file.endswith('.yyp'):
-            return os.path.join(project_root, file)
-    raise FileNotFoundError("No .yyp file found in project root.")
-
-def find_gamemaker_project_root(start_path: str = '.') -> str:
-    """
-    Find the actual GameMaker project root directory containing the .yyp file.
-    Handles both direct project directories and template projects with gamemaker/ subdirectory.
-    """
-    current_dir = Path(start_path).resolve()
-    
-    # First, try the current directory
-    try:
-        find_yyp_file(str(current_dir))
-        return str(current_dir)
-    except FileNotFoundError:
-        pass
-    
-    # Walk up the directory tree looking for a GameMaker project
-    while current_dir != current_dir.parent:
-        # Check if this directory contains a .yyp file
-        yyp_files = list(current_dir.glob("*.yyp"))
-        if yyp_files:
-            return str(current_dir)
-        current_dir = current_dir.parent
-    
-    # Check if we're in root and need to look in gamemaker/ subdirectory
-    start_path_obj = Path(start_path).resolve()
-    gamemaker_subdir = start_path_obj / "gamemaker"
-    if gamemaker_subdir.exists() and gamemaker_subdir.is_dir():
-        try:
-            find_yyp_file(str(gamemaker_subdir))
-            return str(gamemaker_subdir)
-        except FileNotFoundError:
-            pass
-    
-    # Also check parent directories for gamemaker/ subdirectory
-    current_dir = start_path_obj
-    while current_dir != current_dir.parent:
-        gamemaker_subdir = current_dir / "gamemaker"
-        if gamemaker_subdir.exists() and gamemaker_subdir.is_dir():
-            try:
-                find_yyp_file(str(gamemaker_subdir))
-                return str(gamemaker_subdir)
-            except FileNotFoundError:
-                pass
-        current_dir = current_dir.parent
-    
-    raise FileNotFoundError(f"No GameMaker project (.yyp file) found starting from {start_path}")
-
-# Helper to load JSON (loose) - handles trailing commas
-def load_json(path):
-    import json
-    import re
-    with open(path, 'r', encoding='utf-8') as f:
-        content = f.read()
-    
-    # Try to parse as-is first, then clean up trailing commas if needed
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError:
-        # Remove trailing commas before closing braces and brackets
-        content = re.sub(r',(\s*[}\]])', r'\1', content)
-        return json.loads(content)
+from ..utils import load_json_loose, find_yyp, resolve_project_directory
+from ..exceptions import ProjectNotFoundError, GMSError
 
 def collect_referenced_folders(yyp_data, asset_type):
     referenced = set()
@@ -92,10 +26,14 @@ def collect_referenced_folders(yyp_data, asset_type):
     return referenced
 
 def clean_unused_folders(project_root, asset_type, do_delete=False):
-    yyp_path = find_yyp_file(project_root)
-    yyp_data = load_json(yyp_path)
+    project_root = Path(project_root)
+    yyp_path = find_yyp(project_root)
+    yyp_data = load_json_loose(yyp_path)
+    if not yyp_data:
+        return 0, 0
+        
     referenced = collect_referenced_folders(yyp_data, asset_type)
-    asset_dir = Path(project_root) / asset_type
+    asset_dir = project_root / asset_type
     if not asset_dir.exists():
         print(f"[SKIP] {asset_type}/ directory does not exist.")
         return 0, 0
@@ -122,16 +60,8 @@ def main():
     args = parser.parse_args()
 
     # Use proper project root detection
-    try:
-        if args.project_root:
-            project_root = find_gamemaker_project_root(args.project_root)
-        else:
-            project_root = find_gamemaker_project_root()
-        print(f"[FOLDER] Using GameMaker project: {project_root}")
-    except FileNotFoundError as e:
-        print(f"[ERROR] ERROR: {e}")
-        print("[INFO] Make sure you're running from a GameMaker project directory or specify --project-root")
-        sys.exit(1)
+    project_root = resolve_project_directory(args.project_root)
+    print(f"[FOLDER] Using GameMaker project: {project_root}")
 
     asset_types = [t.strip() for t in args.types.split(',') if t.strip()]
     total_found = 0
@@ -148,39 +78,36 @@ def main():
 def clean_old_yy_files(project_root: str, do_delete: bool = False) -> tuple[int, int]:
     """
     Find and optionally delete .old.yy files throughout the project.
-    
-    Args:
-        project_root: Root directory of the project
-        do_delete: If True, actually delete the files. If False, just count them.
-        
-    Returns:
-        Tuple of (files_found, files_deleted)
     """
-    import os
-    from pathlib import Path
-    
     project_path = Path(project_root)
     found = 0
     deleted = 0
     
-    # Search through all directories for .old.yy files
-    for root, dirs, files in os.walk(project_path):
-        for file in files:
-            if file.endswith('.old.yy'):
-                file_path = Path(root) / file
-                found += 1
-                
-                if do_delete:
-                    try:
-                        file_path.unlink()
-                        print(f"[DELETED] {file_path}")
-                        deleted += 1
-                    except Exception as e:
-                        print(f"[ERROR] Could not delete {file_path}: {e}")
-                else:
-                    print(f"[OLD FILE] {file_path}")
+    # Common asset directories to scan
+    search_dirs = ['objects', 'sprites', 'scripts', 'rooms', 'sounds', 'paths', 'fonts', 'shaders', 'animcurves', 'tilesets', 'timelines', 'sequences']
+    
+    for d in search_dirs:
+        dir_path = project_path / d
+        if not dir_path.exists():
+            continue
+            
+        for file_path in dir_path.rglob("*.old.yy"):
+            found += 1
+            if do_delete:
+                file_path.unlink()
+                print(f"[DELETED] {file_path}")
+                deleted += 1
+            else:
+                print(f"[OLD FILE] {file_path}")
     
     return found, deleted
 
 if __name__ == "__main__":
-    main() 
+    try:
+        main()
+    except GMSError as e:
+        print(f"[ERROR] {e.message}")
+        sys.exit(e.exit_code)
+    except Exception as e:
+        print(f"[ERROR] Unexpected error: {e}")
+        sys.exit(1)

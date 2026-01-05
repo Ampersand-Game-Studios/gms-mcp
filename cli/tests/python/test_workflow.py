@@ -68,7 +68,9 @@ class TestWorkflow(unittest.TestCase):
             delete_asset(proj, yy_path, dry_run=False)
             self.assertFalse((proj / "scripts" / "todelete").exists())
             # Lint should pass (zero problems)
-            self.assertEqual(lint_project(proj), 0)
+            result = lint_project(proj)
+            self.assertTrue(result.success)
+            self.assertEqual(result.issues_found, 0)
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

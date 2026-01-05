@@ -84,7 +84,7 @@ def find_python_executable():
 def run_test_file(test_file_path):
     """Run a single test file and return results"""
     print(f"\n{'='*60}")
-    print(f"🧪 Running {test_file_path.name}")
+    print(f"[RUN] {test_file_path.name}")
     print(f"{'='*60}")
 
     python_exe = find_python_executable()
@@ -110,23 +110,23 @@ def run_test_file(test_file_path):
 
         return result.returncode == 0, result.returncode
     except Exception as e:
-        print(f"❌ Error running {test_file_path.name}: {e}")
+        print(f"[ERROR] Error running {test_file_path.name}: {e}")
         return False, -1
 
 def main():
     """Main test runner function"""
-    print("🚀 GameMaker Project Test Suite Runner")
+    print("GameMaker Project Test Suite Runner")
     print("=" * 60)
 
     # Show which Python we're using
     python_exe = find_python_executable()
-    print(f"🐍 Using Python: {python_exe}")
+    print(f"Using Python: {python_exe}")
 
     try:
         version_result = subprocess.run([python_exe, "--version"],
                                       capture_output=True, text=True)
         if version_result.returncode == 0:
-            print(f"📦 Version: {version_result.stdout.strip()}")
+            print(f"Version: {version_result.stdout.strip()}")
     except:
         pass
 
@@ -137,12 +137,12 @@ def main():
     test_files = list(test_dir.glob("test_*.py"))
 
     if not test_files:
-        print("❌ No test files found in current directory")
+        print("[ERROR] No test files found in current directory")
         return 1
 
     print(f"Found {len(test_files)} test files:")
     for test_file in test_files:
-        print(f"  • {test_file.name}")
+        print(f"  - {test_file.name}")
 
     # Run all tests
     results = []
@@ -157,25 +157,25 @@ def main():
 
     # Print summary
     print(f"\n{'='*60}")
-    print("📊 TEST SUMMARY")
+    print("TEST SUMMARY")
     print(f"{'='*60}")
 
     passed = sum(1 for _, success, _ in results if success)
     failed = len(results) - passed
 
     for test_name, success, exit_code in results:
-        status = "✅ PASS" if success else f"❌ FAIL (exit code: {exit_code})"
+        status = "PASS" if success else f"FAIL (exit code: {exit_code})"
         print(f"{test_name:<30} {status}")
 
-    print(f"\n📈 OVERALL RESULTS:")
+    print(f"\nOVERALL RESULTS:")
     print(f"   Passed: {passed}/{len(results)}")
     print(f"   Failed: {failed}/{len(results)}")
 
     if failed == 0:
-        print(f"\n🎉 ALL TESTS PASSED! 🎉")
+        print("\nALL TESTS PASSED")
         return 0
     else:
-        print(f"\n💥 {failed} test file(s) failed")
+        print(f"\n{failed} test file(s) failed")
         return 1
 
 if __name__ == "__main__":

@@ -22,11 +22,11 @@ This repo includes an MCP server (`gms-mcp`) that mirrors the `gms` CLI as tools
 
 MCP setup/notes: `README.md` (generate Cursor config: `gms-mcp-init --cursor`; other client examples: `gms-mcp-init --vscode --windsurf --antigravity`)
 
-## 🚨 **CRITICAL PREREQUISITE: Python Installation**
+## **CRITICAL PREREQUISITE: Python Installation**
 
 **BEFORE attempting ANY CLI tool usage, Python MUST be properly installed and added to system PATH.**
 
-### ⚠️ **PYTHON PATH REQUIREMENT** ⚠️
+### **PYTHON PATH REQUIREMENT**
 
 **If ANY of these commands fail:**
 - `python --version`
@@ -50,11 +50,11 @@ MCP setup/notes: `README.md` (generate Cursor config: `gms-mcp-init --cursor`; o
 
 ---
 
-## 🚨 **CRITICAL REQUIREMENT: Project Root** 🚨
+## **CRITICAL REQUIREMENT: Project Root**
 
 **All CLI commands must run against the directory that contains your `.yyp` file.**
 
-### ✅ Recommended (simple + predictable)
+### Recommended (simple + predictable)
 Run commands from inside `gamemaker/`:
 
 ```powershell
@@ -63,14 +63,14 @@ gms --version
 gms asset create script my_function --parent-path "folders/Scripts.yy"
 ```
 
-### ✅ Supported (run from anywhere)
+### Supported (run from anywhere)
 The `gms` CLI will auto-locate the project using:
 - `--project-root <path>` (preferred for one-off commands)
 - `GM_PROJECT_ROOT` or `PROJECT_ROOT` environment variable (preferred for a whole session)
 - automatic upward search for a `.yyp` (fallback)
 - automatic `./gamemaker` detection when invoked from repo root (fallback)
 
-### ✅ Cursor agents (recommended: no setup, no cwd dependency)
+### Cursor agents (recommended: no setup, no cwd dependency)
 Cursor agents often execute commands from a temp working directory. Avoid relative wrappers like `.\gms.bat`.
 
 Use module invocation with `PYTHONPATH` set to the repo `src` directory:
@@ -81,7 +81,7 @@ python -m gms_helpers.gms --project-root "<WORKSPACE>\gamemaker" --version
 python -m gms_helpers.gms --project-root "<WORKSPACE>\gamemaker" asset create script my_function --parent-path "folders/Scripts.yy"
 ```
 
-### 📁 **Project Directory Structure (Typical):**
+### **Project Directory Structure (Typical):**
 ```
 gms2-template/           <- Project Root (repo root)
 |-- gamemaker/           <- CLI WORKING DIRECTORY (run CLI here)
@@ -97,7 +97,7 @@ gms2-template/           <- Project Root (repo root)
     `-- reports/
 ```
 
-### ✅ **CORRECT Usage Patterns:**
+### **CORRECT Usage Patterns:**
 
 **Option A (recommended):**
 
@@ -125,24 +125,24 @@ gms --version
 gms asset create script my_function --parent-path "folders/Scripts.yy"
 ```
 
-### ❌ **COMMON MISTAKES:**
+### **COMMON MISTAKES:**
 ```powershell
 # WRONG - Running from project root
 C:\...\gms2-template> gms --version
-❌ ERROR: No .yyp file found in current directory
+ERROR: No .yyp file found in current directory
 
 # WRONG - Running from src directory
 C:\...\gms2-template\src> gms --version
-❌ ERROR: No .yyp file found in current directory
+ERROR: No .yyp file found in current directory
 
 # CORRECT - Running from gamemaker directory
 C:\...\gms2-template\gamemaker> gms --version
-✅ Found GameMaker project: project.yyp
+Found GameMaker project: project.yyp
 ```
 
-### 🔍 **Troubleshooting Project Root Issues:**
+### **Troubleshooting Project Root Issues:**
 
-**If you see: "❌ ERROR: No .yyp file found in current directory"**
+**If you see: "ERROR: No .yyp file found in current directory"**
 
 1. **Check current directory:** `pwd` (Linux/Mac) or `cd` (Windows)
 2. **List files:** `ls` (Linux/Mac) or `dir` (Windows)
@@ -155,12 +155,12 @@ C:\...\gms2-template\gamemaker> gms --version
 
 **The CLI tools now automatically validate the working directory and will show clear error messages if you're in the wrong location.**
 
-### 📋 **Why This Requirement Exists:**
+### **Why This Requirement Exists:**
 - CLI tools need **direct access** to the `.yyp` project file
 - Asset paths are **relative** to the GameMaker project root
 - Maintenance operations require access to the **full project structure**
 
-## 📦 Project Structure & Import Management
+## Project Structure & Import Management
 
 ### Code Organization
 The CLI tools are organized under `src/gms_helpers/` in the project structure:
@@ -195,39 +195,39 @@ from gms_helpers.event_helper import add_event
 ```
 
 **Future-Proofing:**
-If the package location needs to change (e.g., `gms_helpers` → `src.gamemaker_tools`):
+If the package location needs to change (e.g., `gms_helpers` -> `src.gamemaker_tools`):
 1. Update `REAL_PACKAGE_PATH` in `cli/test_config.py`
 2. Run `python cli/update_test_imports.py`
 3. All imports are automatically updated across the entire test suite
 
 This system eliminates hardcoded import paths and provides a single source of truth for package organization.
 
-## 🗂️ Project Layout Update (July 2025)
+## Project Layout Update (July 2025)
 The GameMaker project now resides in the `gamemaker/` directory at the repo root.
 All CLI calls and tests will automatically respect the location when either of the following is true:
 
 1. The `--project-root gamemaker` flag is supplied, **or**
 2. The environment variable `PROJECT_ROOT` is set to the absolute path of `gamemaker/`.
 
-Example – ad-hoc command:
+Example - ad-hoc command:
 ```bash
 # One-off
 gms --project-root gamemaker asset list
 ```
 
-Example – persistent (PowerShell):
+Example - persistent (PowerShell):
 ```powershell
 $Env:PROJECT_ROOT = "$PWD\gamemaker"
 ```
 
-Example – persistent (bash/zsh):
+Example - persistent (bash/zsh):
 ```bash
 export PROJECT_ROOT="$(git rev-parse --show-toplevel)/gamemaker"
 ```
 
 If neither flag nor env-var is supplied the CLI falls back to searching upward from the current working directory for a `.yyp` file (and also checks for a `gamemaker/` folder while searching).
 
-## ⚠️ **CRITICAL: PowerShell Syntax**
+## **CRITICAL: PowerShell Syntax**
 
 **For PowerShell users: Use `;` (semicolon) for command chaining:**
 
@@ -237,7 +237,7 @@ $Env:PYTHONPATH = "$PWD\..\src"; cd gamemaker; python -m gms_helpers.gms --versi
 
 **Path**: Use `python -m gms_helpers.*` with `PYTHONPATH=src` when running from source.
 
-## 🚀 Installation
+## Installation
 
 ### Zero-click in-repo usage
 If you are **inside** the project folder you can run the wrappers in `cli/`:
@@ -263,7 +263,7 @@ What this does:
 
 No manual copy/paste, profile edits, or shell restarts required.
 
-## 📚 Quick Reference
+## Quick Reference
 
 ```bash
 # Help & Information
@@ -305,7 +305,7 @@ gms event [command] [arguments]
 
 ### Commands
 
-• **add** – Add an event to an object
+- **add** - Add an event to an object
 ```bash
 gms event add o_player create
 gms event add o_enemy step:end
@@ -313,31 +313,31 @@ gms event add o_wall collision:o_player
 gms event add o_boss alarm:0
 ```
 
-• **remove** – Remove an event from an object
+- **remove** - Remove an event from an object
 ```bash
 gms event remove o_player destroy
 gms event remove o_enemy step:1 --keep-file
 ```
 
-• **duplicate** – Duplicate an event within an object
+- **duplicate** - Duplicate an event within an object
 ```bash
 gms event duplicate o_boss step:0 1
 gms event duplicate o_player create 1
 ```
 
-• **list** – List all events for an object
+- **list** - List all events for an object
 ```bash
 gms event list o_player
 gms event list o_enemy
 ```
 
-• **validate** – Validate object events
+- **validate** - Validate object events
 ```bash
 gms event validate o_player
 gms event validate o_enemy
 ```
 
-• **fix** – Fix object event issues
+- **fix** - Fix object event issues
 ```bash
 python -m gms_helpers.event_helper fix o_player
 python -m gms_helpers.event_helper fix o_enemy --no-safe-mode
@@ -355,9 +355,9 @@ python -m gms_helpers.event_helper fix o_enemy --no-safe-mode
 | `alarm:n` | Alarm `n` |
 
 ### Options
-• `--template [file]` – Use custom template file for event content
-• `--keep-file` – Keep GML file when removing an event
-• `--no-safe-mode` – Allow potentially destructive fixes
+- `--template [file]` - Use custom template file for event content
+- `--keep-file` - Keep GML file when removing an event
+- `--no-safe-mode` - Allow potentially destructive fixes
 
 ---
 
@@ -372,7 +372,7 @@ gms run [command] [arguments]
 
 ### Commands
 
-• **start** – Compile and run the GameMaker project
+- **start** - Compile and run the GameMaker project
 ```bash
 gms run start                                    # Default: IDE-style temp directory
 gms run start --output-location temp             # Explicit temp directory (same as default)
@@ -381,19 +381,19 @@ gms run start --platform Windows --runtime YYC  # Specify platform and runtime
 gms run start --background                       # Run in background mode
 ```
 
-• **compile** – Compile the project without running
+- **compile** - Compile the project without running
 ```bash
 gms run compile                                  # Compile for Windows VM (default)
 gms run compile --platform HTML5 --runtime VM   # Compile for HTML5
 gms run compile --platform macOS --runtime YYC  # Compile for macOS with YYC
 ```
 
-• **stop** – Stop the currently running game
+- **stop** - Stop the currently running game
 ```bash
 gms run stop
 ```
 
-• **status** – Check if a game is currently running
+- **status** - Check if a game is currently running
 ```bash
 gms run status
 ```
@@ -465,7 +465,7 @@ python -m gms_helpers.asset_helper [asset_type] [name] [options]
 
 ### Asset Types
 
-• **script** – Create a script asset
+- **script** - Create a script asset
 ```bash
 # Regular snake_case script
 python -m gms_helpers.asset_helper script my_function --parent-path "folders/Scripts.yy"
@@ -476,54 +476,54 @@ python -m gms_helpers.asset_helper script PlayerData --parent-path "folders/Scri
 python -m gms_helpers.asset_helper script InventoryItem --parent-path "folders/Scripts.yy" --constructor
 ```
 
-• **object** – Create an object asset
+- **object** - Create an object asset
 ```bash
 python -m gms_helpers.asset_helper object o_player --parent-path "folders/Objects.yy"
 python -m gms_helpers.asset_helper object o_enemy --parent-path "folders/Actors/Characters/Enemies/Parent.yy" --parent-object "o_character"
 python -m gms_helpers.asset_helper object o_bullet --parent-path "folders/Objects.yy" --sprite-id "spr_bullet"
 ```
 
-• **sprite** – Create a sprite asset
+- **sprite** - Create a sprite asset
 ```bash
 python -m gms_helpers.asset_helper sprite spr_player --parent-path "folders/Sprites.yy"
 python -m gms_helpers.asset_helper sprite spr_enemy_idle --parent-path "folders/Actors/Characters/Enemies/Parent/Sprites.yy"
 ```
 
-• **room** – Create a room asset
+- **room** - Create a room asset
 ```bash
 python -m gms_helpers.asset_helper room r_menu --parent-path "folders/Rooms.yy"
 python -m gms_helpers.asset_helper room r_level_1 --parent-path "folders/Rooms.yy" --width 1920 --height 1080
 ```
 
-• **folder** – Create a folder asset (supports nested paths)
+- **folder** - Create a folder asset (supports nested paths)
 ```bash
 python -m gms_helpers.asset_helper folder "Scripts" --path "folders/Scripts.yy"
 python -m gms_helpers.asset_helper folder "Enemies" --path "folders/Actors/Characters/Enemies.yy"
 python -m gms_helpers.asset_helper folder "Parent" --path "folders/Actors/Characters/Enemies/Parent.yy"
 ```
 
-• **font** – Create a font asset
+- **font** - Create a font asset
 ```bash
 python -m gms_helpers.asset_helper font fnt_ui_title --parent-path "folders/Fonts.yy" --size 24 --bold
 python -m gms_helpers.asset_helper font fnt_dialogue --parent-path "folders/UI/Fonts.yy" --font-name "Courier New" --size 16
 python -m gms_helpers.asset_helper font fnt_hud_small --parent-path "folders/HUD.yy" --size 10 --aa-level 2
 ```
 
-• **shader** – Create a shader asset
+- **shader** - Create a shader asset
 ```bash
 python -m gms_helpers.asset_helper shader sh_blur --parent-path "folders/Shaders.yy"
 python -m gms_helpers.asset_helper shader sh_lighting --parent-path "folders/VFX/Shaders.yy" --shader-type 1
 python -m gms_helpers.asset_helper shader shader_water --parent-path "folders/Effects.yy" --shader-type 2
 ```
 
-• **animcurve** – Create an animation curve asset
+- **animcurve** - Create an animation curve asset
 ```bash
 python -m gms_helpers.asset_helper animcurve curve_ease_bounce --parent-path "folders/Curves.yy" --curve-type ease_in
 python -m gms_helpers.asset_helper animcurve ac_player_jump --parent-path "folders/Player/Curves.yy" --curve-type smooth
 python -m gms_helpers.asset_helper animcurve curve_camera_zoom --parent-path "folders/Camera.yy" --curve-type ease_out --channel-name "zoom"
 ```
 
-• **delete** – Delete an asset (NEW)
+- **delete** - Delete an asset (NEW)
 ```bash
 python -m gms_helpers.asset_helper delete script my_old_function --dry-run   # Preview deletion
 python -m gms_helpers.asset_helper delete object o_old_enemy                 # Actually delete
@@ -531,59 +531,59 @@ python -m gms_helpers.asset_helper delete sprite spr_unused                  # R
 ```
 
 ### Object Options
-• `--parent-object [name]` – Set parent object for inheritance
+- `--parent-object [name]` - Set parent object for inheritance
   **IMPORTANT: Use ONLY the object name, NOT the full path**
-  ✅ **CORRECT**: `--parent-object "o_actor"`
-  ❌ **WRONG**: `--parent-object "objects/o_actor/o_actor.yy"`
+  **CORRECT**: `--parent-object "o_actor"`
+  **WRONG**: `--parent-object "objects/o_actor/o_actor.yy"`
 
-• `--sprite-id [name]` – Assign a sprite to the object (e.g., `--sprite-id "spr_player"`)
+- `--sprite-id [name]` - Assign a sprite to the object (e.g., `--sprite-id "spr_player"`)
 
 ### Room Options
-• `--width [pixels]` – Set room width (default: 1024)
-• `--height [pixels]` – Set room height (default: 768)
+- `--width [pixels]` - Set room width (default: 1024)
+- `--height [pixels]` - Set room height (default: 768)
 
 ### Font Options
-• `--font-name [name]` – Font family name (default: Arial)
-• `--size [points]` – Font size in points (default: 12)
-• `--bold` – Make the font bold
-• `--italic` – Make the font italic
-• `--aa-level [0-3]` – Anti-aliasing level: 0=none, 1=low, 2=medium, 3=high (default: 1)
-• `--uses-sdf` – Enable SDF (Signed Distance Field) rendering (default: True)
+- `--font-name [name]` - Font family name (default: Arial)
+- `--size [points]` - Font size in points (default: 12)
+- `--bold` - Make the font bold
+- `--italic` - Make the font italic
+- `--aa-level [0-3]` - Anti-aliasing level: 0=none, 1=low, 2=medium, 3=high (default: 1)
+- `--uses-sdf` - Enable SDF (Signed Distance Field) rendering (default: True)
 
 ### Shader Options
-• `--shader-type [1-4]` – Shader language type:
+- `--shader-type [1-4]` - Shader language type:
   - 1 = GLSL ES (default, mobile/web compatible)
   - 2 = GLSL (desktop OpenGL)
   - 3 = HLSL 9 (DirectX 9)
   - 4 = HLSL 11 (DirectX 11)
 
 ### Animation Curve Options
-• `--curve-type [type]` – Predefined curve shape:
-  - `linear` – Straight line from 0 to 1 (default)
-  - `smooth` – Smooth S-curve
-  - `ease_in` – Slow start, fast end
-  - `ease_out` – Fast start, slow end
-• `--channel-name [name]` – Name for the curve channel (default: "curve")
+- `--curve-type [type]` - Predefined curve shape:
+  - `linear` - Straight line from 0 to 1 (default)
+  - `smooth` - Smooth S-curve
+  - `ease_in` - Slow start, fast end
+  - `ease_out` - Fast start, slow end
+- `--channel-name [name]` - Name for the curve channel (default: "curve")
 
 ### Delete Options
-• `--dry-run` – Preview what would be deleted without making changes
-• Supports all asset types: script, object, sprite, room, folder, font, shader, animcurve, sound, path, tileset, timeline, sequence, note
-• Removes both .yyp entries and disk files/folders
-• Runs automatic maintenance validation before and after deletion
+- `--dry-run` - Preview what would be deleted without making changes
+- Supports all asset types: script, object, sprite, room, folder, font, shader, animcurve, sound, path, tileset, timeline, sequence, note
+- Removes both .yyp entries and disk files/folders
+- Runs automatic maintenance validation before and after deletion
 
 ### Global Options
-• `--skip-maintenance` – Skip automatic maintenance operations (not recommended)
-• `--no-auto-fix` – Prevent automatic issue fixing during maintenance
-• `--maintenance-verbose` – Show verbose maintenance output (default: True)
+- `--skip-maintenance` - Skip automatic maintenance operations (not recommended)
+- `--no-auto-fix` - Prevent automatic issue fixing during maintenance
+- `--maintenance-verbose` - Show verbose maintenance output (default: True)
 
 ### Key Features
-• **Automatic .yyp Integration**: All assets are automatically added to the project file
-• **Nested Folder Support**: Create complex folder hierarchies with proper nesting
-• **Object Inheritance**: Objects can inherit from parent objects
-• **Auto-Maintenance**: Validates project health before and after asset creation
-• **Error Prevention**: Blocks asset creation if critical project issues are detected
-• **Strict Folder Validation**: Immediately exits if parent folder path doesn't exist (prevents dangling assets)
-• **Asset Deletion**: Safe removal of assets from both project and disk with preview mode
+- **Automatic .yyp Integration**: All assets are automatically added to the project file
+- **Nested Folder Support**: Create complex folder hierarchies with proper nesting
+- **Object Inheritance**: Objects can inherit from parent objects
+- **Auto-Maintenance**: Validates project health before and after asset creation
+- **Error Prevention**: Blocks asset creation if critical project issues are detected
+- **Strict Folder Validation**: Immediately exits if parent folder path doesn't exist (prevents dangling assets)
+- **Asset Deletion**: Safe removal of assets from both project and disk with preview mode
 
 ### Maintenance Commands
 
@@ -606,18 +606,18 @@ python -m gms_helpers.asset_helper maint dedupe-resources --auto # Remove duplic
 ```
 
 ### Path Validation Options
-• `--strict-disk-check` – Also validate that folder .yy files exist on disk (legacy behavior, not recommended)
-• `--include-parent-folders` – Show parent folders as orphaned even if they have subfolders with assets
+- `--strict-disk-check` - Also validate that folder .yy files exist on disk (legacy behavior, not recommended)
+- `--include-parent-folders` - Show parent folders as orphaned even if they have subfolders with assets
 
 ### Understanding GameMaker Folder Paths
 
 **IMPORTANT**: GameMaker folder paths (like `folders/Scripts.yy`) are **logical references** that exist only in the project's `.yyp` file, not physical directories on disk.
 
 #### Key Concepts:
-• **Logical Folders**: Entries in the `.yyp` file's "Folders" list that organize assets in GameMaker's asset browser
-• **Physical Files**: Actual `.yy` files and directories on your hard drive
-• **Folder Path Validation**: By default, tools validate against the `.yyp` Folders list (recommended)
-• **Legacy Disk Validation**: Use `--strict-disk-check` only if you need to check physical `.yy` files exist
+- **Logical Folders**: Entries in the `.yyp` file's "Folders" list that organize assets in GameMaker's asset browser
+- **Physical Files**: Actual `.yy` files and directories on your hard drive
+- **Folder Path Validation**: By default, tools validate against the `.yyp` Folders list (recommended)
+- **Legacy Disk Validation**: Use `--strict-disk-check` only if you need to check physical `.yy` files exist
 
 #### How Folder Validation Works:
 1. **Default Behavior**: Checks if folder path exists in `.yyp` Folders list
@@ -628,10 +628,10 @@ python -m gms_helpers.asset_helper maint dedupe-resources --auto # Remove duplic
 ### Duplicate Resource Prevention (NEW)
 The asset creation system now includes duplicate resource detection to prevent `.yyp` file corruption:
 
-• **Pre-creation validation**: Checks for existing resources before creation
-• **Conflict detection**: Identifies exact duplicates vs. name conflicts
-• **Automatic cleanup**: `dedupe-resources` command removes duplicates interactively or automatically
-• **Clear error messages**: Provides specific guidance when conflicts are detected
+- **Pre-creation validation**: Checks for existing resources before creation
+- **Conflict detection**: Identifies exact duplicates vs. name conflicts
+- **Automatic cleanup**: `dedupe-resources` command removes duplicates interactively or automatically
+- **Clear error messages**: Provides specific guidance when conflicts are detected
 
 ### Recommended Workflow (ENFORCED)
 The CLI tools now enforce a strict workflow to prevent project corruption:
@@ -659,10 +659,10 @@ The CLI tools now enforce a strict workflow to prevent project corruption:
    ```
 
 **Key Benefits**:
-• **No more dangling assets**: Invalid folder paths cause immediate exit
-• **Clear error messages**: Shows all available folder paths when validation fails
-• **Project integrity**: Prevents corrupted .yyp files from invalid asset creation
-• **Clean workflow**: Forces proper folder structure before asset creation
+- **No more dangling assets**: Invalid folder paths cause immediate exit
+- **Clear error messages**: Shows all available folder paths when validation fails
+- **Project integrity**: Prevents corrupted .yyp files from invalid asset creation
+- **Clean workflow**: Forces proper folder structure before asset creation
 
 ---
 
@@ -676,30 +676,30 @@ python -m gms_helpers.auto_maintenance [options]
 ```
 
 ### Options
-• `--fix` – Actually fix issues (default: dry-run mode that only reports)
-• `--verbose` – Show detailed output for each maintenance step
-• `--dry-run` – Only report issues without fixing them (default behavior)
+- `--fix` - Actually fix issues (default: dry-run mode that only reports)
+- `--verbose` - Show detailed output for each maintenance step
+- `--dry-run` - Only report issues without fixing them (default behavior)
 
 ### What Auto-Maintenance Does
 The auto-maintenance system performs a comprehensive 9-step health check:
 
-1. **🔍 Linting** - Check for JSON syntax errors and structural issues
-2. **📁 Path Validation** - Verify all folder references are valid
-3. **🔧 JSON Fixes** - Repair trailing comma issues in .yy files
-4. **👻 Missing Assets** - Remove references to deleted/missing assets
-5. **📂 Event Sync** - Ensure object events match physical .gml files
-6. **🧹 Old File Cleanup** - Remove .bak and other temporary files
-7. **🔍 Duplicate Detection** - Find and report duplicate resource entries
-8. **🗑️ Orphan Cleanup** - Remove orphaned asset files (with safety checks)
-9. **⚠️ Multi-Asset Directories** - Detect problematic asset organization
+1. **Linting** - Check for JSON syntax errors and structural issues
+2. **Path Validation** - Verify all folder references are valid
+3. **JSON Fixes** - Repair trailing comma issues in .yy files
+4. **Missing Assets** - Remove references to deleted/missing assets
+5. **Event Sync** - Ensure object events match physical .gml files
+6. **Old File Cleanup** - Remove .bak and other temporary files
+7. **Duplicate Detection** - Find and report duplicate resource entries
+8. **Orphan Cleanup** - Remove orphaned asset files (with safety checks)
+9. **Multi-Asset Directories** - Detect problematic asset organization
 
 ### Orphan Cleanup Safety Features
 The orphan cleanup system includes comprehensive safety checks to prevent accidental deletion:
 
-• **Multi-Asset Directory Protection** - Won't delete companion files (`.gml`, `.png`) if multiple assets exist in the same directory
-• **UUID-Based Sprite Attribution** - Matches sprite PNG files to their exact `.yy` file using UUID references
-• **Safety Warnings** - Reports when companion files are protected from deletion
-• **Comprehensive Logging** - Shows exactly what was deleted vs. what was protected
+- **Multi-Asset Directory Protection** - Won't delete companion files (`.gml`, `.png`) if multiple assets exist in the same directory
+- **UUID-Based Sprite Attribution** - Matches sprite PNG files to their exact `.yy` file using UUID references
+- **Safety Warnings** - Reports when companion files are protected from deletion
+- **Comprehensive Logging** - Shows exactly what was deleted vs. what was protected
 
 ### Example Output
 ```bash
@@ -711,14 +711,14 @@ python -m gms_helpers.auto_maintenance --fix --verbose
 
 # Example safety warning output:
 # SAFETY: Skipped companion files for objects/o_btn_social_discord/o_btn_social_twitter.yy - directory contains other assets
-# 🛡️ Protected 368 companion files from accidental deletion
+# Protected 368 companion files from accidental deletion
 ```
 
 ### Best Practices
-• **Always run in dry-run mode first** to see what would be changed
-• **Review safety warnings** to understand what files are being protected
-• **Run after major changes** to ensure project health
-• **Use `--verbose` flag** to understand what each step is doing
+- **Always run in dry-run mode first** to see what would be changed
+- **Review safety warnings** to understand what files are being protected
+- **Run after major changes** to ensure project health
+- **Use `--verbose` flag** to understand what each step is doing
 
 ---
 
@@ -733,39 +733,39 @@ python -m gms_helpers.room_layer_helper [command] [arguments]
 
 ### Commands
 
-• **add-layer** – Add a new layer to a room
+- **add-layer** - Add a new layer to a room
 ```bash
 python -m gms_helpers.room_layer_helper add-layer r_game "lyr_enemies" --type instance --depth 4150
 python -m gms_helpers.room_layer_helper add-layer r_game "Background" --type background --depth 5000
 ```
 
-• **remove-layer** – Remove a layer from a room
+- **remove-layer** - Remove a layer from a room
 ```bash
 python -m gms_helpers.room_layer_helper remove-layer r_game "lyr_old_layer"
 ```
 
-• **list-layers** – List all layers in a room
+- **list-layers** - List all layers in a room
 ```bash
 python -m gms_helpers.room_layer_helper list-layers r_game
 ```
 
-• **reorder-layer** – Change the depth of a layer
+- **reorder-layer** - Change the depth of a layer
 ```bash
 python -m gms_helpers.room_layer_helper reorder-layer r_game "lyr_player" --new-depth 3950
 ```
 
 ### Layer Types
-• `background` – Background layers (sprites, colors)
-• `instance` – Instance layers (objects)
-• `asset` – Asset layers (sprites, sounds)
-• `tile` – Tile layers (tilemap)
-• `path` – Path layers (movement paths)
-• `effect` – Effect layers (particles, shaders)
+- `background` - Background layers (sprites, colors)
+- `instance` - Instance layers (objects)
+- `asset` - Asset layers (sprites, sounds)
+- `tile` - Tile layers (tilemap)
+- `path` - Path layers (movement paths)
+- `effect` - Effect layers (particles, shaders)
 
 ### Features
-• **Duplicate prevention**: Won't create layers with existing names
-• **Automatic sorting**: Layers are automatically sorted by depth
-• **Type validation**: Ensures valid layer types are used
+- **Duplicate prevention**: Won't create layers with existing names
+- **Automatic sorting**: Layers are automatically sorted by depth
+- **Type validation**: Ensures valid layer types are used
 
 ---
 
@@ -780,43 +780,43 @@ python -m gms_helpers.room_instance_helper [command] [arguments]
 
 ### Commands
 
-• **add-instance** – Add an object instance to a room layer
+- **add-instance** - Add an object instance to a room layer
 ```bash
 python -m gms_helpers.room_instance_helper add-instance r_game o_player --layer "lyr_player" --x 100 --y 200
 python -m gms_helpers.room_instance_helper add-instance r_game o_enemy_zombie --layer "lyr_enemies" --x 300 --y 400 --scale-x 1.5 --rotation 45
 ```
 
-• **remove-instance** – Remove an instance from a room
+- **remove-instance** - Remove an instance from a room
 ```bash
 python -m gms_helpers.room_instance_helper remove-instance r_game inst_12345678
 ```
 
-• **list-instances** – List instances in a room (all or by layer)
+- **list-instances** - List instances in a room (all or by layer)
 ```bash
 python -m gms_helpers.room_instance_helper list-instances r_game
 python -m gms_helpers.room_instance_helper list-instances r_game --layer "lyr_player"
 ```
 
-• **modify-instance** – Modify properties of an instance
+- **modify-instance** - Modify properties of an instance
 ```bash
 python -m gms_helpers.room_instance_helper modify-instance r_game inst_12345678 --x 150 --y 250 --rotation 45
 ```
 
-• **set-creation-code** – Set creation code for an instance
+- **set-creation-code** - Set creation code for an instance
 ```bash
 python -m gms_helpers.room_instance_helper set-creation-code r_game inst_12345678 --code "hp = 100; damage = 25;"
 ```
 
 ### Instance Options
-• `--x, --y` – Position coordinates
-• `--scale-x, --scale-y` – Scale factors
-• `--rotation` – Rotation in degrees
-• `--creation-code` – Custom GML code for initialization
+- `--x, --y` - Position coordinates
+- `--scale-x, --scale-y` - Scale factors
+- `--rotation` - Rotation in degrees
+- `--creation-code` - Custom GML code for initialization
 
 ### Features
-• **Layer validation**: Ensures target layer exists and is an instance layer
-• **Automatic UUID generation**: Creates unique instance names automatically
-• **Creation code support**: Add custom GML code that runs when instance is created
+- **Layer validation**: Ensures target layer exists and is an instance layer
+- **Automatic UUID generation**: Creates unique instance names automatically
+- **Creation code support**: Add custom GML code that runs when instance is created
 
 ---
 
@@ -831,36 +831,36 @@ python -m gms_helpers.room_helper [command] [arguments]
 
 ### Commands
 
-• **duplicate** – Duplicate an existing room with a new name
+- **duplicate** - Duplicate an existing room with a new name
 ```bash
 python -m gms_helpers.room_helper duplicate r_level_01 r_level_02
 python -m gms_helpers.room_helper duplicate r_base_room r_custom_room
 ```
 
-• **rename** – Rename an existing room
+- **rename** - Rename an existing room
 ```bash
 python -m gms_helpers.room_helper rename r_old_name r_new_name
 python -m gms_helpers.room_helper rename r_temp r_level_final
 ```
 
-• **delete** – Delete a room from the project
+- **delete** - Delete a room from the project
 ```bash
 python -m gms_helpers.room_helper delete r_unused_room
 python -m gms_helpers.room_helper delete r_test_room --dry-run
 ```
 
-• **list** – List all rooms in the project
+- **list** - List all rooms in the project
 ```bash
 python -m gms_helpers.room_helper list
 python -m gms_helpers.room_helper list --verbose
 ```
 
 ### Features
-• **Standard workflow**: Uses the same duplicate/rename/delete operations as other asset types
-• **Automatic UUID handling**: Properly regenerates instance UUIDs when duplicating rooms
-• **Project integration**: Automatically updates `.yyp` file with all operations
-• **Layer preservation**: Complete room structure including layers, instances, and settings is maintained
-• **Safety features**: Dry-run mode for deletions, validation for all operations
+- **Standard workflow**: Uses the same duplicate/rename/delete operations as other asset types
+- **Automatic UUID handling**: Properly regenerates instance UUIDs when duplicating rooms
+- **Project integration**: Automatically updates `.yyp` file with all operations
+- **Layer preservation**: Complete room structure including layers, instances, and settings is maintained
+- **Safety features**: Dry-run mode for deletions, validation for all operations
 
 ### Room Operations
 Room operations now follow the standard asset workflow pattern:
@@ -874,8 +874,8 @@ Room operations now follow the standard asset workflow pattern:
 ## Comprehensive Documentation
 
 For detailed usage examples, workflows, and best practices, see:
-• **[Room Management Tools & Duplicate Resource Handling](ROOM_MANAGEMENT_TOOLS.md)** – Complete guide to the new room management system
-• **[Folder Path System Guide](FOLDER_PATH_SYSTEM.md)** – Complete understanding of GameMaker folder paths (CRITICAL)
+- **[Room Management Tools & Duplicate Resource Handling](ROOM_MANAGEMENT_TOOLS.md)** - Complete guide to the new room management system
+- **[Folder Path System Guide](FOLDER_PATH_SYSTEM.md)** - Complete understanding of GameMaker folder paths (CRITICAL)
 
 ---
 

@@ -26,6 +26,9 @@ classifiers = [
 ]
 dependencies = [
   "mcp>=1.0.0",
+  "fastmcp>=0.4.1",
+  "tqdm>=4.66.0",
+  "colorama>=0.4.6",
 ]
 
 [project.optional-dependencies]
