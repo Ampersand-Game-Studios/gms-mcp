@@ -46,6 +46,26 @@ If you are working on the `gms-mcp` codebase itself, follow these steps to set u
 Publishing is automated via GitHub Actions (PyPI Trusted Publishing) on every push to `main` and on tags `v*`.
 See `RELEASING.md` for the one-time PyPI setup and the first manual upload helper scripts.
 
+## X (Twitter) posting on `main`
+
+This repo can post to X automatically when `main` is updated.
+
+- **Personality / voice**: `.github/x-personality.md`
+- **Tweet staging file**: `.github/next_tweet.txt`
+
+### How it works
+
+- When a commit lands on `main`, GitHub Actions reads `.github/next_tweet.txt`.
+- If it contains the placeholder text (or is empty), it **skips posting**.
+- If it contains a real tweet, it posts to X and then **clears the file** back to the placeholder.
+
+### Maintainer flow (dev → pre-release → main)
+
+Because this repo promotes changes `dev` → `pre-release` → `main`, prepare the tweet during the `pre-release` → `main` PR:
+
+- Update `.github/next_tweet.txt` with the tweet (following `.github/x-personality.md`)
+- Merge to `main`
+
 ## Use with a GameMaker project (multi-project friendly)
 
 Run this inside each GameMaker project workspace (or repo) to generate config:
