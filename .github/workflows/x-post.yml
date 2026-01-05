@@ -1,0 +1,65 @@
+name: Post to X
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  post:
+    # Only run in the real repo, not forks
+    if: github.repository == 'Ampersand-Game-Studios/gms-mcp'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Check for tweet content
+        id: check
+        run: |
+          TWEET_FILE=".github/next_tweet.txt"
+          if [ ! -f "$TWEET_FILE" ]; then
+            echo "No tweet file found, skipping"
+            echo "should_post=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          CONTENT=$(cat "$TWEET_FILE")
+          
+          # Skip if placeholder or empty
+          if [[ "$CONTENT" == *"No tweet pending"* ]] || [[ -z "$CONTENT" ]]; then
+            echo "No tweet content, skipping"
+            echo "should_post=false" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+          
+          echo "Tweet content found: $CONTENT"
+          echo "should_post=true" >> $GITHUB_OUTPUT
+          
+          # Store content for the action (handle multiline safely)
+          echo "content<<EOF" >> $GITHUB_OUTPUT
+          echo "$CONTENT" >> $GITHUB_OUTPUT
+          echo "EOF" >> $GITHUB_OUTPUT
+
+      - name: Post to X
+        if: steps.check.outputs.should_post == 'true'
+        uses: captradeoff/x-post-action@v1
+        with:
+          appKey: ${{ secrets.X_APP_KEY }}
+          appSecret: ${{ secrets.X_APP_SECRET }}
+          accessToken: ${{ secrets.X_ACCESS_TOKEN }}
+          accessSecret: ${{ secrets.X_ACCESS_SECRET }}
+          message: ${{ steps.check.outputs.content }}
+
+      - name: Clear tweet file after posting
+        if: steps.check.outputs.should_post == 'true'
+        run: |
+          echo "(No tweet pending - agent should write here before pushing to main)" > .github/next_tweet.txt
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/next_tweet.txt
+          git commit -m "chore: clear posted tweet [skip ci]" || echo "Nothing to commit"
+          git push
