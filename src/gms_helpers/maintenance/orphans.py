@@ -23,8 +23,8 @@ def find_orphaned_assets(project_root: str = '.') -> List[Tuple[str, str]]:
         # Ensure we have the correct GameMaker project root
         if not project_root or project_root == '.':
             # Use proper project root detection if not specified or using current dir
-            from .event_sync import find_gamemaker_project_root
-            project_root = find_gamemaker_project_root()
+            from ..utils import resolve_project_directory
+            project_root = resolve_project_directory()
         
         # Change to project directory temporarily to use find_yyp_file()
         original_cwd = os.getcwd()
@@ -171,7 +171,7 @@ def print_orphan_report(orphans: List[Tuple[str, str]], missing: List[Tuple[str,
         for asset_type, paths in by_type.items():
             print(f"\n  {asset_type.upper()}S ({len(paths)}):")
             for path in sorted(paths):
-                print(f"    📂 {path}")
+                print(f"    - {path}")
     
     if missing:
         print(f"\nMISSING ASSETS:")

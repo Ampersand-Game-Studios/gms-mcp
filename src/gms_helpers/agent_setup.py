@@ -9,6 +9,7 @@ import sys
 import subprocess
 import platform
 from pathlib import Path
+from .exceptions import GMSError
 
 def detect_shell():
     """Detect the current shell environment."""
@@ -128,7 +129,7 @@ def auto_setup():
         install_script = Path(__file__).parent / "install.py"
         subprocess.run([sys.executable, str(install_script), "--auto"], capture_output=True, text=True)
     except Exception:
-        pass  # Ignore if auto install fails – we'll fall back to session-only function
+        pass  # Ignore if auto install fails - we'll fall back to session-only function
 
     # Re-check after attempted auto-install
     if test_gms_command():
@@ -160,5 +161,12 @@ def main():
     return success
 
 if __name__ == "__main__":
-    success = main()
-    sys.exit(0 if success else 1) 
+    try:
+        success = main()
+        sys.exit(0 if success else 1)
+    except GMSError as e:
+        print(f"[ERROR] {e.message}")
+        sys.exit(e.exit_code)
+    except Exception as e:
+        print(f"[ERROR] Unexpected error: {e}")
+        sys.exit(1)

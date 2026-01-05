@@ -1,6 +1,7 @@
 """Maintenance command implementations."""
 
 from ..auto_maintenance import run_auto_maintenance
+from ..health import gm_mcp_health
 from ..asset_helper import (
     maint_lint_command, maint_validate_json_command, maint_list_orphans_command,
     maint_prune_missing_command, maint_validate_paths_command, maint_dedupe_resources_command,
@@ -55,4 +56,11 @@ def handle_maintenance_clean_orphans(args):
 
 def handle_maintenance_fix_issues(args):
     """Handle comprehensive issue fixing."""
-    return maint_fix_issues_command(args) 
+    return maint_fix_issues_command(args)
+
+def handle_maintenance_health(args):
+    """Handle environment health check."""
+    result = gm_mcp_health(getattr(args, 'project_root', '.'))
+    for detail in result.details:
+        print(detail)
+    return result.success

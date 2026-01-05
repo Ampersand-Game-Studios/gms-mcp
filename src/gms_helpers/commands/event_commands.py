@@ -1,29 +1,35 @@
 """Event management command implementations."""
 
 from ..event_helper import (
-    cmd_add, cmd_remove, cmd_duplicate, cmd_list, cmd_validate, cmd_fix
+    add_event, remove_event, list_events, duplicate_event
 )
+from ..maintenance.event_sync import sync_object_events
 
 def handle_event_add(args):
     """Handle event addition."""
-    return cmd_add(args)
+    template = getattr(args, "template", None) or ""
+    return add_event(args.object, args.event, template)
 
 def handle_event_remove(args):
     """Handle event removal."""
-    return cmd_remove(args)
+    return remove_event(args.object, args.event, getattr(args, "keep_file", False))
 
 def handle_event_duplicate(args):
     """Handle event duplication."""
-    return cmd_duplicate(args)
+    return duplicate_event(args.object, args.source_event, args.target_num)
 
 def handle_event_list(args):
     """Handle event listing."""
-    return cmd_list(args)
+    return list_events(args.object)
 
 def handle_event_validate(args):
     """Handle event validation."""
-    return cmd_validate(args)
+    from pathlib import Path
+    results = sync_object_events(str(Path("objects") / args.object), dry_run=True)
+    return results['orphaned_found'] == 0 and results['missing_found'] == 0
 
 def handle_event_fix(args):
     """Handle event fixing."""
-    return cmd_fix(args) 
+    from pathlib import Path
+    results = sync_object_events(str(Path("objects") / args.object), dry_run=False)
+    return True

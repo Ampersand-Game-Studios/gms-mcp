@@ -56,7 +56,7 @@ The Cursor config is written to `.cursor/mcp.json` and:
 
 - It uses `${workspaceFolder}` (no usernames / absolute paths)
 - By default it launches `gms-mcp` (assumes the tool is on PATH, e.g. via pipx)
-- It sets `cwd` to the workspace (prevents “temp project” issues)
+- It sets `cwd` to the workspace (prevents "temp project" issues)
 - It sets `GM_PROJECT_ROOT` to a detected `.yyp` directory when possible (otherwise defaults to `${workspaceFolder}`)
 
 After changing `.cursor/mcp.json`, **Reload Window** in Cursor to pick up MCP config changes.
@@ -66,7 +66,7 @@ After changing `.cursor/mcp.json`, **Reload Window** in Cursor to pick up MCP co
 - **Project resolution**:
   - Tools accept an optional `project_root` parameter. You can pass `.` (default), a path to the repo root, or a path to `gamemaker/`.
   - The server and underlying CLI tools check for both `GM_PROJECT_ROOT` and `PROJECT_ROOT` environment variables (useful for agents / terminal sessions).
-- **Execution model / “no silent hangs”**:
+- **Execution model / "no silent hangs"**:
   - By default, tools use **isolated subprocess execution**. This ensures they are cancellable, avoid blocking the MCP server, and prevent "silent hangs" on Windows.
   - Subprocess execution (via `gm_cli` or default fallback) isolates the child process from MCP stdin (setting it to `DEVNULL`).
   - Streaming logs via `ctx.log()` is **disabled** during subprocess execution to prevent stdio deadlocks with MCP clients like Cursor.
@@ -75,7 +75,7 @@ After changing `.cursor/mcp.json`, **Reload Window** in Cursor to pick up MCP co
   - To bypass subprocess overhead and use faster **in-process execution**, set `GMS_MCP_ENABLE_DIRECT=1`. This is faster but less resilient to hangs in library code.
 
 - **Picking the `gms` executable (Windows shims)**:
-  - The server prefers a “real” `gms` when multiple are present on Windows (avoids the WindowsApps shim when possible).
+  - The server prefers a "real" `gms` when multiple are present on Windows (avoids the WindowsApps shim when possible).
   - To pin the executable, set `GMS_MCP_GMS_PATH` to a full path (e.g. `C:\\Python313\\Scripts\\gms.exe`).
 
 - **Output control (quiet / capture mode)**:

@@ -21,13 +21,14 @@ class TestCaptureOutputSystemExit(unittest.TestCase):
             print("oops", file=sys.stderr)
             raise SystemExit(2)
 
-        ok, out, err, result, error_text = _capture_output(_fn)
+        ok, out, err, result, error_text, exit_code = _capture_output(_fn)
         self.assertFalse(ok)
         self.assertIn("hello", out)
         self.assertIn("oops", err)
         self.assertIsNone(result)
         self.assertIsNotNone(error_text)
         self.assertIn("SystemExit: 2", error_text)
+        self.assertEqual(exit_code, 2)
         self.assertIn("stdout:", error_text)
         self.assertIn("stderr:", error_text)
         self.assertIn("hello", error_text)
@@ -38,11 +39,12 @@ class TestCaptureOutputSystemExit(unittest.TestCase):
             print("done")
             raise SystemExit(0)
 
-        ok, out, err, result, error_text = _capture_output(_fn)
+        ok, out, err, result, error_text, exit_code = _capture_output(_fn)
         self.assertTrue(ok)
         self.assertIn("done", out)
         self.assertEqual(err, "")
         self.assertIsNone(error_text)
+        self.assertEqual(exit_code, 0)
 
 
 class TestRunWithFallbackDefaults(unittest.TestCase):
@@ -60,7 +62,7 @@ class TestRunWithFallbackDefaults(unittest.TestCase):
                         server._run_with_fallback(
                             direct_handler=lambda _args: True,
                             direct_args=argparse.Namespace(),
-                            cli_args=["workflow", "duplicate"],
+                            cli_args=["unknown", "tool"],
                             project_root=".",
                             prefer_cli=False,
                             output_mode="full",
@@ -80,19 +82,22 @@ class TestRunWithFallbackDefaults(unittest.TestCase):
             return cli_result
 
         with patch.dict(os.environ, {"GMS_MCP_ENABLE_DIRECT": "1"}, clear=True):
-            with patch("gms_mcp.gamemaker_mcp_server._run_direct", return_value=direct_result) as mock_direct:
-                with patch("gms_mcp.gamemaker_mcp_server._run_cli_async", side_effect=_fake_cli) as mock_cli:
-                    result = asyncio.run(
-                        server._run_with_fallback(
-                            direct_handler=lambda _args: True,
-                            direct_args=argparse.Namespace(),
-                            cli_args=["workflow", "duplicate"],
-                            project_root=".",
-                            prefer_cli=False,
-                            output_mode="full",
-                            quiet=True,
+            # Re-initialize policy manager to pick up env var
+            from gms_mcp.execution_policy import PolicyManager
+            with patch("gms_mcp.gamemaker_mcp_server.policy_manager", PolicyManager()):
+                with patch("gms_mcp.gamemaker_mcp_server._run_direct", return_value=direct_result) as mock_direct:
+                    with patch("gms_mcp.gamemaker_mcp_server._run_cli_async", side_effect=_fake_cli) as mock_cli:
+                        result = asyncio.run(
+                            server._run_with_fallback(
+                                direct_handler=lambda _args: True,
+                                direct_args=argparse.Namespace(),
+                                cli_args=["unknown", "tool"],
+                                project_root=".",
+                                prefer_cli=False,
+                                output_mode="full",
+                                quiet=True,
+                            )
                         )
-                    )
 
         self.assertTrue(result["direct_used"])
         self.assertTrue(mock_direct.called)
