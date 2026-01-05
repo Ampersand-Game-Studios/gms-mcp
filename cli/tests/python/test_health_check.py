@@ -26,11 +26,17 @@ class TestHealthCheck(unittest.TestCase):
         mock_runner.runtime_path = Path("/fake/runtime-1.2.3")
         mock_runner.find_license_file.return_value = Path("/fake/license.plist")
         
-        # Mock dependencies to all be present
-        with patch("builtins.__import__", return_value=None):
+        # Mock dependencies to all be present using sys.modules
+        mock_modules = {
+            "mcp": MagicMock(),
+            "fastmcp": MagicMock(),
+            "colorama": MagicMock(),
+            "tqdm": MagicMock()
+        }
+        with patch.dict("sys.modules", mock_modules):
             result = gm_mcp_health("/fake/project")
             
-        self.assertTrue(result.success)
+        self.assertTrue(result.success, f"Health check failed: {result.message}\nDetails: {result.details}")
         self.assertEqual(result.issues_found, 0)
         self.assertTrue(any("[OK] Project found: test.yyp" in d for d in result.details))
         self.assertTrue(any("Igor.exe found:" in d and "igor.exe" in d.lower() for d in result.details))
@@ -47,20 +53,16 @@ class TestHealthCheck(unittest.TestCase):
         mock_runner.find_gamemaker_runtime.return_value = None
         mock_runner.find_license_file.return_value = None
         
-        # Mock one missing dependency
-        def side_effect(name, *args, **kwargs):
-            if name == "mcp":
-                raise ImportError("Missing")
-            return MagicMock()
-            
-        with patch("builtins.__import__", side_effect=side_effect):
+        # Mock missing dependency using sys.modules
+        # Setting a module to None in sys.modules causes an ImportError on import
+        with patch.dict("sys.modules", {"mcp": None}):
             result = gm_mcp_health("/fake/project")
             
         self.assertFalse(result.success)
         self.assertGreater(result.issues_found, 0)
         self.assertTrue(any("Project not found" in d for d in result.details))
-        self.assertTrue(any("Igor.exe not found" in d for d in result.details))
-        self.assertTrue(any("license file not found" in d for d in result.details))
+        self.assertTrue(any("GameMaker runtime or Igor.exe not found" in d for d in result.details))
+        self.assertTrue(any("GameMaker license file not found" in d for d in result.details))
         self.assertTrue(any("Missing dependencies: mcp" in d for d in result.details))
 
 if __name__ == "__main__":
