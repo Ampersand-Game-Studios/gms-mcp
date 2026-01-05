@@ -1,0 +1,21 @@
+---
+alwaysApply: true
+---
+## Branch flow (required)
+- Contributors work on `dev`.
+- Maintainers merge `dev` -> `pre-release` via PR.
+- Maintainers merge `pre-release` -> `main` via PR.
+
+## X posting (required for merges into main)
+This repo posts to X automatically when `main` is updated.
+
+Before any change is merged into `main` (i.e. when preparing the PR `pre-release` -> `main`):
+- Read `.github/x-personality.md`
+- Write ONE tweet (<= 280 chars) into `.github/next_tweet.txt`
+- The tweet should describe the user-visible impact of the changes (not a diff, not raw logs)
+- If the change is not tweet-worthy, leave `.github/next_tweet.txt` unchanged (it will skip posting)
+
+Important:
+- Do NOT include X credentials anywhere in the repo.
+- Do NOT modify `.github/workflows/x-post.yml` unless explicitly asked.
+
