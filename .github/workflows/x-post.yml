@@ -17,6 +17,11 @@ jobs:
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
       - name: Check for tweet content
         id: check
         run: |
@@ -36,23 +41,46 @@ jobs:
             exit 0
           fi
           
-          echo "Tweet content found: $CONTENT"
+          echo "Tweet content found."
           echo "should_post=true" >> $GITHUB_OUTPUT
           
-          # Store content for the action (handle multiline safely)
-          echo "content<<EOF" >> $GITHUB_OUTPUT
-          echo "$CONTENT" >> $GITHUB_OUTPUT
-          echo "EOF" >> $GITHUB_OUTPUT
+          # Store content for the python script safely
+          echo "TWEET_CONTENT<<EOF" >> $GITHUB_ENV
+          echo "$CONTENT" >> $GITHUB_ENV
+          echo "EOF" >> $GITHUB_ENV
 
-      - name: Post to X
+      - name: Post to X via Python
         if: steps.check.outputs.should_post == 'true'
-        uses: captradeoff/x-post-action@v1
-        with:
-          appKey: ${{ secrets.X_APP_KEY }}
-          appSecret: ${{ secrets.X_APP_SECRET }}
-          accessToken: ${{ secrets.X_ACCESS_TOKEN }}
-          accessSecret: ${{ secrets.X_ACCESS_SECRET }}
-          message: ${{ steps.check.outputs.content }}
+        env:
+          X_APP_KEY: ${{ secrets.X_APP_KEY }}
+          X_APP_SECRET: ${{ secrets.X_APP_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
+        run: |
+          pip install tweepy
+          python -c "
+          import tweepy, os, sys
+          
+          try:
+              client = tweepy.Client(
+                  consumer_key=os.environ['X_APP_KEY'],
+                  consumer_secret=os.environ['X_APP_SECRET'],
+                  access_token=os.environ['X_ACCESS_TOKEN'],
+                  access_token_secret=os.environ['X_ACCESS_SECRET']
+              )
+              
+              tweet_text = os.environ.get('TWEET_CONTENT', '').strip()
+              if not tweet_text:
+                  print('Error: Tweet content is empty')
+                  sys.exit(1)
+                  
+              print(f'Posting tweet: {tweet_text[:50]}...')
+              response = client.create_tweet(text=tweet_text)
+              print(f'Successfully posted! Tweet ID: {response.data[\"id\"]}')
+          except Exception as e:
+              print(f'Error posting to X: {e}')
+              sys.exit(1)
+          "
 
       - name: Clear tweet file after posting
         if: steps.check.outputs.should_post == 'true'
