@@ -2,11 +2,13 @@
 Concrete implementations of GameMaker asset types
 """
 
+import re
 from pathlib import Path
 from typing import Dict, Any
 
 from .base_asset import BaseAsset
 from .utils import generate_uuid, create_dummy_png, ensure_directory
+from .naming_config import get_config
 
 
 class ScriptAsset(BaseAsset):
@@ -60,12 +62,19 @@ function {name}() {{
             print(f"Created {gml_path.name}")
     
     def validate_name(self, name: str) -> bool:
-        # Scripts should be snake_case (no hyphens allowed)
+        """Validate script name against configured pattern."""
         if not name:
             return False
-        if not name.replace("_", "").isalnum():
-            return False
-        return "_" in name or name.islower()
+        config = get_config()
+        if not config.naming_enabled:
+            return True  # Skip validation if disabled
+        rule = config.get_rule("script")
+        if not rule:
+            return True
+        pattern = rule.get("pattern")
+        if not pattern:
+            return True
+        return bool(re.match(pattern, name))
 
 
 class ObjectAsset(BaseAsset):
@@ -147,10 +156,19 @@ class ObjectAsset(BaseAsset):
                 print(f"Created {create_path.name}")
     
     def validate_name(self, name: str) -> bool:
-        # Objects should start with o_
+        """Validate object name against configured pattern."""
         if not super().validate_name(name):
             return False
-        return name.startswith("o_")
+        config = get_config()
+        if not config.naming_enabled:
+            return True
+        rule = config.get_rule("object")
+        if not rule:
+            return True
+        pattern = rule.get("pattern")
+        if not pattern:
+            return True
+        return bool(re.match(pattern, name))
 
 
 class SpriteAsset(BaseAsset):
@@ -342,10 +360,19 @@ class SpriteAsset(BaseAsset):
             print(f"[WARN]  Replace dummy PNG files with actual artwork before using in GameMaker!")
     
     def validate_name(self, name: str) -> bool:
-        # Sprites should start with spr_
+        """Validate sprite name against configured pattern."""
         if not super().validate_name(name):
             return False
-        return name.startswith("spr_")
+        config = get_config()
+        if not config.naming_enabled:
+            return True
+        rule = config.get_rule("sprite")
+        if not rule:
+            return True
+        pattern = rule.get("pattern")
+        if not pattern:
+            return True
+        return bool(re.match(pattern, name))
 
 
 class RoomAsset(BaseAsset):
@@ -482,10 +509,19 @@ class RoomAsset(BaseAsset):
         pass
     
     def validate_name(self, name: str) -> bool:
-        # Rooms should start with r_
+        """Validate room name against configured pattern."""
         if not super().validate_name(name):
             return False
-        return name.startswith("r_")
+        config = get_config()
+        if not config.naming_enabled:
+            return True
+        rule = config.get_rule("room")
+        if not rule:
+            return True
+        pattern = rule.get("pattern")
+        if not pattern:
+            return True
+        return bool(re.match(pattern, name))
 
 
 class FolderAsset(BaseAsset):
@@ -601,12 +637,21 @@ class FolderAsset(BaseAsset):
         return folder_path
     
     def validate_name(self, name: str) -> bool:
-        # Folders can have slashes for nested paths
+        """Validate folder name against configured pattern."""
         if not name:
             return False
-        # Allow alphanumeric, underscores, spaces, and forward slashes
-        allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_/ ")
-        return all(c in allowed_chars for c in name)
+        config = get_config()
+        if not config.naming_enabled:
+            return True
+        rule = config.get_rule("folder")
+        if not rule:
+            # Fallback to default folder validation
+            allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_/ ")
+            return all(c in allowed_chars for c in name)
+        pattern = rule.get("pattern")
+        if not pattern:
+            return True
+        return bool(re.match(pattern, name))
 
 class FontAsset(BaseAsset):
     """GameMaker Font asset."""
@@ -687,10 +732,19 @@ class FontAsset(BaseAsset):
             print(f"[WARN]  Font will need to be regenerated in GameMaker IDE!")
     
     def validate_name(self, name: str) -> bool:
-        # Fonts should start with fnt_
+        """Validate font name against configured pattern."""
         if not super().validate_name(name):
             return False
-        return name.startswith("fnt_")
+        config = get_config()
+        if not config.naming_enabled:
+            return True
+        rule = config.get_rule("font")
+        if not rule:
+            return True
+        pattern = rule.get("pattern")
+        if not pattern:
+            return True
+        return bool(re.match(pattern, name))
 
 
 class ShaderAsset(BaseAsset):
@@ -761,10 +815,19 @@ void main()
             print(f"Created {fsh_path.name} (fragment shader)")
     
     def validate_name(self, name: str) -> bool:
-        # Shaders should start with sh_ or shader_
+        """Validate shader name against configured pattern."""
         if not super().validate_name(name):
             return False
-        return name.startswith("sh_") or name.startswith("shader_")
+        config = get_config()
+        if not config.naming_enabled:
+            return True
+        rule = config.get_rule("shader")
+        if not rule:
+            return True
+        pattern = rule.get("pattern")
+        if not pattern:
+            return True
+        return bool(re.match(pattern, name))
 
 
 class AnimCurveAsset(BaseAsset):
@@ -835,10 +898,19 @@ class AnimCurveAsset(BaseAsset):
         pass
     
     def validate_name(self, name: str) -> bool:
-        # Animation curves should start with curve_ or ac_
+        """Validate animation curve name against configured pattern."""
         if not super().validate_name(name):
             return False
-        return name.startswith("curve_") or name.startswith("ac_")
+        config = get_config()
+        if not config.naming_enabled:
+            return True
+        rule = config.get_rule("animcurve")
+        if not rule:
+            return True
+        pattern = rule.get("pattern")
+        if not pattern:
+            return True
+        return bool(re.match(pattern, name))
 
 
 class SoundAsset(BaseAsset):
@@ -894,10 +966,19 @@ class SoundAsset(BaseAsset):
             print(f"[WARN]  Replace with actual audio file (.ogg, .mp3, or .wav) before using!")
     
     def validate_name(self, name: str) -> bool:
-        # Sounds should start with snd_ or sfx_
+        """Validate sound name against configured pattern."""
         if not super().validate_name(name):
             return False
-        return name.startswith("snd_") or name.startswith("sfx_")
+        config = get_config()
+        if not config.naming_enabled:
+            return True
+        rule = config.get_rule("sound")
+        if not rule:
+            return True
+        pattern = rule.get("pattern")
+        if not pattern:
+            return True
+        return bool(re.match(pattern, name))
 
 
 class PathAsset(BaseAsset):
@@ -958,10 +1039,19 @@ class PathAsset(BaseAsset):
         pass
     
     def validate_name(self, name: str) -> bool:
-        # Paths should start with pth_ or path_
+        """Validate path name against configured pattern."""
         if not super().validate_name(name):
             return False
-        return name.startswith("pth_") or name.startswith("path_")
+        config = get_config()
+        if not config.naming_enabled:
+            return True
+        rule = config.get_rule("path")
+        if not rule:
+            return True
+        pattern = rule.get("pattern")
+        if not pattern:
+            return True
+        return bool(re.match(pattern, name))
 
 
 class TileSetAsset(BaseAsset):
@@ -1029,10 +1119,19 @@ class TileSetAsset(BaseAsset):
         pass
     
     def validate_name(self, name: str) -> bool:
-        # Tilesets should start with ts_ or tile_
+        """Validate tileset name against configured pattern."""
         if not super().validate_name(name):
             return False
-        return name.startswith("ts_") or name.startswith("tile_")
+        config = get_config()
+        if not config.naming_enabled:
+            return True
+        rule = config.get_rule("tileset")
+        if not rule:
+            return True
+        pattern = rule.get("pattern")
+        if not pattern:
+            return True
+        return bool(re.match(pattern, name))
 
 
 class TimelineAsset(BaseAsset):
@@ -1087,10 +1186,19 @@ class TimelineAsset(BaseAsset):
             print(f"Created moment_0.gml")
     
     def validate_name(self, name: str) -> bool:
-        # Timelines should start with tl_ or timeline_
+        """Validate timeline name against configured pattern."""
         if not super().validate_name(name):
             return False
-        return name.startswith("tl_") or name.startswith("timeline_")
+        config = get_config()
+        if not config.naming_enabled:
+            return True
+        rule = config.get_rule("timeline")
+        if not rule:
+            return True
+        pattern = rule.get("pattern")
+        if not pattern:
+            return True
+        return bool(re.match(pattern, name))
 
 
 class SequenceAsset(BaseAsset):
@@ -1154,10 +1262,19 @@ class SequenceAsset(BaseAsset):
         pass
     
     def validate_name(self, name: str) -> bool:
-        # Sequences should start with seq_ or sequence_
+        """Validate sequence name against configured pattern."""
         if not super().validate_name(name):
             return False
-        return name.startswith("seq_") or name.startswith("sequence_")
+        config = get_config()
+        if not config.naming_enabled:
+            return True
+        rule = config.get_rule("sequence")
+        if not rule:
+            return True
+        pattern = rule.get("pattern")
+        if not pattern:
+            return True
+        return bool(re.match(pattern, name))
 
 
 class NoteAsset(BaseAsset):
@@ -1194,12 +1311,21 @@ class NoteAsset(BaseAsset):
             print(f"Created {note_path.name}")
     
     def validate_name(self, name: str) -> bool:
-        # Notes can have more flexible naming
+        """Validate note name against configured pattern."""
         if not name:
             return False
-        # Allow alphanumeric, underscores, spaces, and hyphens
-        allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_- ")
-        return all(c in allowed_chars for c in name)
+        config = get_config()
+        if not config.naming_enabled:
+            return True
+        rule = config.get_rule("note")
+        if not rule:
+            # Fallback to default note validation
+            allowed_chars = set("abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789_- ")
+            return all(c in allowed_chars for c in name)
+        pattern = rule.get("pattern")
+        if not pattern:
+            return True
+        return bool(re.match(pattern, name))
 
 
 # Registry of asset handler singletons (exported for other modules)
