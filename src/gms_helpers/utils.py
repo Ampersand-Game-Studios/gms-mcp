@@ -259,57 +259,67 @@ def add_trailing_commas(json_str):
     
     return '\n'.join(lines)
 
-def validate_name(name, asset_type, allow_constructor=False):
-    """Validate asset name follows GameMaker conventions."""
+def validate_name(name, asset_type, allow_constructor=False, config=None):
+    """Validate asset name follows configurable naming conventions.
+    
+    Args:
+        name: The asset name to validate
+        asset_type: The type of asset (e.g., 'object', 'sprite', 'script')
+        allow_constructor: If True, allow PascalCase for constructor scripts
+        config: Optional NamingConfig instance. If None, uses cached config.
+        
+    Raises:
+        ValueError: If the name doesn't match the configured pattern
+    """
     # Handle None input
     if name is None:
         raise ValueError("Asset name cannot be None")
+    
+    # Get config (uses caching)
+    if config is None:
+        from .naming_config import get_config
+        config = get_config()
+    
+    # Check if naming validation is enabled
+    if not config.naming_enabled:
+        return  # Skip all validation
+    
+    # Get the rule for this asset type
+    rule = config.get_rule(asset_type)
+    if not rule:
+        return  # No rule defined for this type, skip validation
+    
+    # Handle constructor scripts specially
+    if asset_type == 'script' and allow_constructor:
+        if config.allows_pascal_constructors('script'):
+            if re.match(r'^[A-Z][a-zA-Z0-9]*$', name):
+                return  # Valid PascalCase constructor name
+    
+    # Get the pattern for validation
+    pattern = rule.get("pattern")
+    if not pattern:
+        return  # No pattern defined, skip validation
+    
+    # Validate against the pattern
+    if not re.match(pattern, name):
+        # Build a helpful error message
+        prefix = rule.get("prefix", "")
+        description = rule.get("description", "")
         
-    if asset_type == 'script':
-        # Allow PascalCase for constructor scripts when flag is set
-        if allow_constructor and re.match(r'^[A-Z][a-zA-Z0-9]*$', name):
-            return  # Valid PascalCase constructor name
-        if not re.match(r'^[a-z][a-z0-9_]*$', name):
-            raise ValueError(f"Script name '{name}' must be snake_case (lowercase with underscores)")
-    elif asset_type == 'object':
-        if not name.startswith('o_'):
-            raise ValueError(f"Object name '{name}' must start with 'o_' prefix")
-        if not re.match(r'^o_[a-z0-9_]*$', name):
-            raise ValueError(f"Object name '{name}' must be o_ followed by lowercase letters, numbers, and underscores only")
-    elif asset_type == 'sprite':
-        if not name.startswith('spr_'):
-            raise ValueError(f"Sprite name '{name}' must start with 'spr_' prefix")
-    elif asset_type == 'room':
-        if not name.startswith('r_'):
-            raise ValueError(f"Room name '{name}' must start with 'r_' prefix")
-    elif asset_type == 'font':
-        if not name.startswith('fnt_'):
-            raise ValueError(f"Font name '{name}' must start with 'fnt_' prefix")
-    elif asset_type == 'shader':
-        if not (name.startswith('sh_') or name.startswith('shader_')):
-            raise ValueError(f"Shader name '{name}' must start with 'sh_' or 'shader_' prefix")
-    elif asset_type == 'animcurve':
-        if not (name.startswith('curve_') or name.startswith('ac_')):
-            raise ValueError(f"Animation curve name '{name}' must start with 'curve_' or 'ac_' prefix")
-    elif asset_type == 'sound':
-        if not (name.startswith('snd_') or name.startswith('sfx_')):
-            raise ValueError(f"Sound name '{name}' must start with 'snd_' or 'sfx_' prefix")
-    elif asset_type == 'path':
-        if not (name.startswith('pth_') or name.startswith('path_')):
-            raise ValueError(f"Path name '{name}' must start with 'pth_' or 'path_' prefix")
-    elif asset_type == 'tileset':
-        if not (name.startswith('ts_') or name.startswith('tile_')):
-            raise ValueError(f"Tileset name '{name}' must start with 'ts_' or 'tile_' prefix")
-    elif asset_type == 'timeline':
-        if not (name.startswith('tl_') or name.startswith('timeline_')):
-            raise ValueError(f"Timeline name '{name}' must start with 'tl_' or 'timeline_' prefix")
-    elif asset_type == 'sequence':
-        if not (name.startswith('seq_') or name.startswith('sequence_')):
-            raise ValueError(f"Sequence name '{name}' must start with 'seq_' or 'sequence_' prefix")
-    elif asset_type == 'note':
-        # Notes have more flexible naming (allow alphanumeric, underscores, spaces, hyphens)
-        if not re.match(r'^[a-zA-Z0-9_\- ]+$', name):
-            raise ValueError(f"Note name '{name}' can only contain letters, numbers, underscores, hyphens, and spaces")
+        if isinstance(prefix, list):
+            prefix_str = " or ".join(f"'{p}'" for p in prefix)
+        elif prefix:
+            prefix_str = f"'{prefix}'"
+        else:
+            prefix_str = ""
+        
+        # Use description if available, otherwise build message from prefix
+        if description:
+            raise ValueError(f"{asset_type.capitalize()} name '{name}' invalid: {description}")
+        elif prefix_str:
+            raise ValueError(f"{asset_type.capitalize()} name '{name}' must start with {prefix_str} prefix")
+        else:
+            raise ValueError(f"{asset_type.capitalize()} name '{name}' does not match expected naming pattern")
 
 def validate_working_directory():
     """
