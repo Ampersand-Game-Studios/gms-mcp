@@ -45,8 +45,17 @@ Examples:
     setup_room_commands(subparsers)
     setup_maintenance_commands(subparsers)
     setup_runner_commands(subparsers)
+    setup_diagnostics_commands(subparsers)
     
     return parser
+
+def setup_diagnostics_commands(subparsers):
+    """Set up diagnostics commands."""
+    parser = subparsers.add_parser('diagnostics', help='Run project diagnostics')
+    parser.add_argument('--depth', default='quick', choices=['quick', 'deep'], 
+                              help='Search depth (default: quick)')
+    parser.add_argument('--include-info', action='store_true', help='Include info-level diagnostics')
+    parser.set_defaults(func=handle_diagnostics)
 
 def setup_asset_commands(subparsers):
     """Set up asset management commands."""
@@ -559,6 +568,7 @@ def setup_runner_commands(subparsers):
                                help='Target platform (default: Windows)')
     compile_parser.add_argument('--runtime', default='VM', choices=['VM', 'YYC'],
                                help='Runtime type (default: VM)')
+    compile_parser.add_argument('--runtime-version', help='Specific runtime version to use (e.g. 2024.1100.0.625)')
     compile_parser.set_defaults(func=handle_runner_compile)
     
     # Run command 
@@ -568,6 +578,7 @@ def setup_runner_commands(subparsers):
                            help='Target platform (default: Windows)')
     run_parser.add_argument('--runtime', default='VM', choices=['VM', 'YYC'],
                            help='Runtime type (default: VM)')
+    run_parser.add_argument('--runtime-version', help='Specific runtime version to use')
     run_parser.add_argument('--background', action='store_true', 
                            help='Run in background (don\'t capture output)')
     run_parser.add_argument('--output-location', default='temp', choices=['temp', 'project'],
@@ -584,6 +595,7 @@ def setup_runner_commands(subparsers):
 
 # Import command handlers
 from .commands.asset_commands import handle_asset_create, handle_asset_delete
+from .commands.diagnostics_commands import handle_diagnostics
 from .commands.event_commands import (
     handle_event_add, handle_event_remove, handle_event_duplicate,
     handle_event_list, handle_event_validate, handle_event_fix

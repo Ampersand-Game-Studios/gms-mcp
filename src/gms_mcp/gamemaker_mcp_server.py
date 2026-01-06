@@ -959,6 +959,53 @@ def build_server():
         )
 
     # -----------------------------
+    # Diagnostic tools
+    # -----------------------------
+    @mcp.tool()
+    async def gm_diagnostics(
+        depth: str = "quick",
+        include_info: bool = False,
+        project_root: str = ".",
+        prefer_cli: bool = False,
+        output_mode: str = "full",
+        tail_lines: int = 120,
+        quiet: bool = False,
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Run project diagnostics and return structured issues.
+        
+        Args:
+            depth: "quick" runs fast lint checks only; "deep" adds reference 
+                   analysis, orphan detection, and GML string search.
+            include_info: Whether to include info-level diagnostics.
+        """
+        repo_root = _resolve_repo_root(project_root)
+        _ensure_cli_on_sys_path(repo_root)
+        from gms_helpers.commands.diagnostics_commands import handle_diagnostics
+
+        args = argparse.Namespace(
+            depth=depth,
+            include_info=include_info,
+            project_root=project_root,
+        )
+        cli_args = ["diagnostics", "--depth", depth]
+        if include_info:
+            cli_args.append("--include-info")
+
+        return await _run_with_fallback(
+            direct_handler=handle_diagnostics,
+            direct_args=args,
+            cli_args=cli_args,
+            project_root=project_root,
+            prefer_cli=prefer_cli,
+            output_mode=output_mode,
+            tail_lines=tail_lines,
+            quiet=quiet,
+            ctx=ctx,
+        )
+
+    # -----------------------------
     # Asset creation tools
     # -----------------------------
     @mcp.tool()
@@ -2214,12 +2261,103 @@ def build_server():
         )
 
     # -----------------------------
+    # Runtime management tools
+    # -----------------------------
+    @mcp.tool()
+    async def gm_runtime_list(
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        List all installed GameMaker runtimes.
+        """
+        from gms_helpers.runtime_manager import RuntimeManager
+        from pathlib import Path
+        
+        project_directory = _resolve_project_directory_no_deps(project_root)
+        manager = RuntimeManager(project_directory)
+        
+        installed = manager.list_installed()
+        pinned = manager.get_pinned()
+        active = manager.select()
+        
+        return {
+            "runtimes": [r.to_dict() for r in installed],
+            "pinned_version": pinned,
+            "active_version": active.version if active else None,
+            "count": len(installed)
+        }
+
+    @mcp.tool()
+    async def gm_runtime_pin(
+        version: str,
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Pin a specific runtime version for this project.
+        """
+        from gms_helpers.runtime_manager import RuntimeManager
+        from pathlib import Path
+        
+        project_directory = _resolve_project_directory_no_deps(project_root)
+        manager = RuntimeManager(project_directory)
+        
+        success = manager.pin(version)
+        
+        return {
+            "ok": success,
+            "pinned_version": version if success else None,
+            "error": None if success else f"Runtime version {version} is not installed or invalid."
+        }
+
+    @mcp.tool()
+    async def gm_runtime_unpin(
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Remove runtime pin, reverting to auto-select (newest).
+        """
+        from gms_helpers.runtime_manager import RuntimeManager
+        from pathlib import Path
+        
+        project_directory = _resolve_project_directory_no_deps(project_root)
+        manager = RuntimeManager(project_directory)
+        
+        success = manager.unpin()
+        
+        return {
+            "ok": True,  # Always true even if no pin existed
+            "message": "Runtime pin removed." if success else "No runtime pin existed."
+        }
+
+    @mcp.tool()
+    async def gm_runtime_verify(
+        version: str | None = None,
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Verify a runtime is valid and ready to use.
+        If version is None, verifies the currently selected runtime.
+        """
+        from gms_helpers.runtime_manager import RuntimeManager
+        from pathlib import Path
+        
+        project_directory = _resolve_project_directory_no_deps(project_root)
+        manager = RuntimeManager(project_directory)
+        
+        return manager.verify(version)
+
+    # -----------------------------
     # Runner tools
     # -----------------------------
     @mcp.tool()
     async def gm_compile(
         platform: str = "Windows",
         runtime: str = "VM",
+        runtime_version: str | None = None,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
@@ -2235,9 +2373,12 @@ def build_server():
         args = argparse.Namespace(
             platform=platform,
             runtime=runtime,
+            runtime_version=runtime_version,
             project_root=project_root,
         )
         cli_args = ["run", "compile", "--platform", platform, "--runtime", runtime]
+        if runtime_version:
+            cli_args.extend(["--runtime-version", runtime_version])
 
         return await _run_with_fallback(
             direct_handler=handle_runner_compile,
@@ -2255,6 +2396,7 @@ def build_server():
     async def gm_run(
         platform: str = "Windows",
         runtime: str = "VM",
+        runtime_version: str | None = None,
         background: bool = False,
         output_location: str = "temp",
         project_root: str = ".",
@@ -2264,7 +2406,7 @@ def build_server():
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Run the project using Igor (IDE-temp/classic approaches handled by your runner)."""
+        """Run the project using Igor."""
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.runner_commands import handle_runner_run
@@ -2272,6 +2414,7 @@ def build_server():
         args = argparse.Namespace(
             platform=platform,
             runtime=runtime,
+            runtime_version=runtime_version,
             background=background,
             output_location=output_location,
             project_root=project_root,
@@ -2286,6 +2429,8 @@ def build_server():
             "--output-location",
             output_location,
         ]
+        if runtime_version:
+            cli_args.extend(["--runtime-version", runtime_version])
         if background:
             cli_args.append("--background")
 

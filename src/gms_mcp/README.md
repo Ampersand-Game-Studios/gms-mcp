@@ -29,8 +29,9 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
   - **Updates**:
     - `gm_check_updates`: Manually check for updates on PyPI and GitHub
     - `gm_project_info`: Now includes an `updates` summary
-  - **Maintenance**: auto + lint/validate-json/list-orphans/prune-missing/validate-paths/dedupe-resources/sync-events/clean-old-files/clean-orphans/fix-issues
-  - **Runner**: compile/run + stop/status
+  - **Maintenance**: auto + diagnostics/lint/validate-json/list-orphans/prune-missing/validate-paths/dedupe-resources/sync-events/clean-old-files/clean-orphans/fix-issues
+  - **Runtime Management**: list/pin/unpin/verify GameMaker runtimes
+  - **Runner**: compile/run (with runtime version pinning) + stop/status
   - **Escape hatch**: `gm_cli` (run arbitrary `gms` args)
   - **Project info**: `gm_project_info`
 
