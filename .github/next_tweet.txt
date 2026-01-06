@@ -1,1 +1,1 @@
-(No tweet pending - agent should write here before pushing to main)
+New GML symbol indexing just dropped! You can now jump to definitions and trace references across your project with one tool call. Also added support for Sounds, Tilesets, and 4 other asset types. Igor compiler issues? Fixed 'em. 🎮
