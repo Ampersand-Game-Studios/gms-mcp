@@ -47,26 +47,23 @@ This repo includes an **MCP server** (`gms-mcp`) that exposes GameMaker operatio
 
 ## 🎯 Implementation Phases
 
-### ✅ Phase 1: Room Management & Duplicate Prevention
+### ✅ Phase 3: Advanced Assets & Code Intelligence
 **Status**: Complete
 
 **Features Added**:
-- Duplicate resource prevention system
-- Room layer management (`room_layer_helper.py`)
-- Room instance management (`room_instance_helper.py`)
-- Room operations system (`room_helper.py`) - duplicate, rename, delete, list
-
-### ✅ Phase 2: Missing Asset Types
-**Status**: Complete
-
-**Features Added**:
-- Font asset creation with customization options
-- Shader asset creation with template code
-- Animation curve creation with preset types
+- Full GML Symbol Indexing (functions, enums, macros, globalvars)
+- Definition jump and Reference tracing across the project
+- Sound asset creation with automatic placeholder generation
+- Tileset management with sprite linking
+- Path creation (straight/smooth)
+- Timeline support with moment stubs
+- Sequence creation with naming enforcement
+- Note asset management
+- Maintenance automation fixes for Igor compiler compatibility
 
 ## 📊 Tool Coverage
 
-### Currently Supported Asset Types (8 total)
+### Currently Supported Asset Types (14 total)
 | Asset Type | Command | Prefix | Phase |
 |------------|---------|--------|-------|
 | Scripts | `script` | `snake_case` (or `PascalCase` with `--constructor`) | Original |
@@ -74,9 +71,15 @@ This repo includes an **MCP server** (`gms-mcp`) that exposes GameMaker operatio
 | Sprites | `sprite` | `spr_` | Original |
 | Rooms | `room` | `r_` | Original |
 | Folders | `folder` | - | Original |
-| Fonts | `font` | `fnt_` | **Phase 2** |
-| Shaders | `shader` | `sh_` or `shader_` | **Phase 2** |
-| Animation Curves | `animcurve` | `curve_` or `ac_` | **Phase 2** |
+| Fonts | `font` | `fnt_` | Phase 2 |
+| Shaders | `shader` | `sh_` or `shader_` | Phase 2 |
+| Animation Curves | `animcurve` | `curve_` or `ac_` | Phase 2 |
+| Sounds | `sound` | `snd_` | **Phase 3** |
+| Tilesets | `tileset` | `ts_` | **Phase 3** |
+| Paths | `path` | `pth_` | **Phase 3** |
+| Timelines | `timeline` | `tl_` | **Phase 3** |
+| Sequences | `sequence` | `seq_` | **Phase 3** |
+| Notes | `note` | `note_` | **Phase 3** |
 
 ### Asset Management Commands
 | Command | Purpose | Features |
@@ -190,6 +193,7 @@ python -m gms_helpers.asset_helper maint prune-missing
 ### Recent Changes
 - **Stricter validation**: Tools now **immediately exit** when folder paths are invalid (prevents corrupted projects)
 - **Delete command**: New `delete` sub-command for safe asset removal with dry-run support
+- **Igor Compatibility**: Objects and events now use standardized schemas (`$GMObject: "v1"`, `resourceVersion: "2.0"`) to prevent build failures.
 
 ### Getting Help
 1. Check command help: `python -m gms_helpers.<tool> --help`
@@ -199,12 +203,10 @@ python -m gms_helpers.asset_helper maint prune-missing
 
 ## 🚀 Future Development
 
-### Potential Phase 3+ Additions
-- Sound assets (`GMSound`)
-- Tileset management (`GMTileSet`)
-- Path creation (`GMPath`)
-- Timeline support (`GMTimeline`)
-- Sequence editing (`GMSequence`)
+### Potential Phase 4+ Additions
+- Sprite sheet / Texture group management
+- Extension editing (JSON-based)
+- Live GML reloading system
 
 ### Contributing
 The modular architecture makes it easy to add new asset types:
@@ -226,6 +228,18 @@ room <name> --parent-path <path> [--width <w>] [--height <h>]
 font <name> --parent-path <path> [--size <n>] [--bold] [--italic]
 shader <name> --parent-path <path> [--shader-type <1-4>]
 animcurve <name> --parent-path <path> [--curve-type <type>]
+sound <name> --parent-path <path> [--volume <n>] [--pitch <n>]
+tileset <name> --parent-path <path> --sprite-id <sprite>
+path <name> --parent-path <path> [--path-type <type>]
+timeline <name> --parent-path <path>
+sequence <name> --parent-path <path>
+note <name> --parent-path <path>
+
+# Code Intelligence
+python -m gms_helpers.gms symbol build
+python -m gms_helpers.gms symbol find-definition <name>
+python -m gms_helpers.gms symbol find-references <name>
+python -m gms_helpers.gms symbol list [--kind <type>] [--name-filter <str>]
 
 # Room Management
 python -m gms_helpers.room_layer_helper add-layer <room> <layer> --type <type> --depth <n>
@@ -243,4 +257,4 @@ python -m gms_helpers.asset_helper maint fix-commas
 
 ---
 
-**Current Version**: Phase 2 Complete - 8 asset types supported with comprehensive room management and maintenance tools.
+**Current Version**: Phase 3 Complete - 14 asset types supported with comprehensive room management, maintenance tools, and GML symbol intelligence.

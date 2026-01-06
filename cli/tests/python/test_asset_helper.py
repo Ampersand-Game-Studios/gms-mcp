@@ -367,7 +367,7 @@ class TestAssetCreation(unittest.TestCase):
 
         # Check .yy file content
         yy_data = load_json_loose(yy_file)
-        self.assertEqual(yy_data["$GMObject"], "")
+        self.assertEqual(yy_data["$GMObject"], "v1")
         self.assertEqual(yy_data["name"], "o_test_object")
         self.assertIsNone(yy_data["spriteId"])  # No sprite assigned
         self.assertIsNone(yy_data["parentObjectId"])  # No parent object
@@ -393,7 +393,7 @@ class TestAssetCreation(unittest.TestCase):
 
         # Check child .yy file content has parent object
         child_yy_data = load_json_loose(child_yy_file)
-        self.assertEqual(child_yy_data["$GMObject"], "")
+        self.assertEqual(child_yy_data["$GMObject"], "v1")
         self.assertEqual(child_yy_data["name"], "o_child_object")
         self.assertIsNotNone(child_yy_data["parentObjectId"])
         self.assertEqual(child_yy_data["parentObjectId"]["name"], "o_test_object")

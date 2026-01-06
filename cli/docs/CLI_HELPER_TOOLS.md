@@ -10,6 +10,11 @@ This repo includes an MCP server (`gms-mcp`) that mirrors the `gms` CLI as tools
 - **Events**: add/remove/duplicate/list/validate/fix
 - **Workflow**: duplicate/rename/delete/swap-sprite
 - **Rooms**: ops/layers/instances
+- **Code Intelligence** (GML symbol analysis):
+  - `gm_build_index`: Build/rebuild the GML symbol index (cached for performance)
+  - `gm_find_definition`: Find definition(s) of a GML symbol (function, enum, macro, globalvar)
+  - `gm_find_references`: Find all references to a symbol across the project
+  - `gm_list_symbols`: List all symbols with optional filtering by kind, name, or file
 - **Introspection**: 
   - `gm_list_assets`: List all project assets (scripts, objects, etc.) with advanced filtering support (**`asset_type`**, **`name_contains`**, **`folder_prefix`**).
   - `gm_read_asset`: Read complete .yy JSON metadata.
@@ -236,6 +241,44 @@ $Env:PYTHONPATH = "$PWD\..\src"; cd gamemaker; python -m gms_helpers.gms --versi
 ```
 
 **Path**: Use `python -m gms_helpers.*` with `PYTHONPATH=src` when running from source.
+
+## GML Code Intelligence
+
+The `gms` CLI provides powerful GML symbol analysis and cross-reference capabilities.
+
+### Usage
+```bash
+gms symbol [command] [arguments]
+```
+
+### Commands
+
+- **build** - Build or rebuild the GML symbol index
+```bash
+gms symbol build
+gms symbol build --force
+```
+
+- **find-definition** - Find the definition of a symbol
+```bash
+gms symbol find-definition scr_player_init
+gms symbol find-definition GlobalVarName
+```
+
+- **find-references** - Find all references to a symbol
+```bash
+gms symbol find-references o_player
+gms symbol find-references my_custom_function --max-results 100
+```
+
+- **list** - List all symbols in the project
+```bash
+gms symbol list
+gms symbol list --kind function --name-filter "init"
+gms symbol list --file-filter "scripts/player"
+```
+
+---
 
 ## Installation
 
@@ -521,6 +564,36 @@ python -m gms_helpers.asset_helper shader shader_water --parent-path "folders/Ef
 python -m gms_helpers.asset_helper animcurve curve_ease_bounce --parent-path "folders/Curves.yy" --curve-type ease_in
 python -m gms_helpers.asset_helper animcurve ac_player_jump --parent-path "folders/Player/Curves.yy" --curve-type smooth
 python -m gms_helpers.asset_helper animcurve curve_camera_zoom --parent-path "folders/Camera.yy" --curve-type ease_out --channel-name "zoom"
+```
+
+- **sound** - Create a sound asset
+```bash
+python -m gms_helpers.asset_helper sound snd_player_jump --parent-path "folders/Sounds.yy" --volume 0.8 --pitch 1.2
+```
+
+- **tileset** - Create a tileset asset
+```bash
+python -m gms_helpers.asset_helper tileset ts_dungeon --parent-path "folders/Tilesets.yy" --sprite-id "spr_dungeon_tiles"
+```
+
+- **path** - Create a movement path asset
+```bash
+python -m gms_helpers.asset_helper path pth_enemy_patrol --parent-path "folders/Paths.yy" --path-type smooth
+```
+
+- **timeline** - Create a timeline asset
+```bash
+python -m gms_helpers.asset_helper timeline tl_cutscene_01 --parent-path "folders/Timelines.yy"
+```
+
+- **sequence** - Create a sequence asset
+```bash
+python -m gms_helpers.asset_helper sequence seq_opening_titles --parent-path "folders/Sequences.yy"
+```
+
+- **note** - Create a documentation note asset
+```bash
+python -m gms_helpers.asset_helper note note_todo_list --parent-path "folders/Notes.yy"
 ```
 
 - **delete** - Delete an asset (NEW)

@@ -9,6 +9,14 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 
 from ..utils import load_json, validate_name, find_yyp_file
+from ..diagnostics import (
+    Diagnostic,
+    CODE_JSON_INVALID,
+    CODE_NAMING_VIOLATION,
+    CODE_STRUCTURE_DUPLICATE,
+    CODE_REFERENCE_MISSING,
+    CODE_PROJECT_LOAD_FAIL
+)
 
 
 @dataclass
@@ -20,6 +28,41 @@ class LintIssue:
     message: str
     line_number: Optional[int] = None
     
+    def to_diagnostic(self) -> Diagnostic:
+        """Convert LintIssue to a structured Diagnostic object."""
+        # Map severity
+        sev_map = {
+            'error': 'error',
+            'warning': 'warning',
+            'info': 'info'
+        }
+        
+        # Map diagnostic codes
+        code_map = {
+            ('error', 'json'): CODE_JSON_INVALID,
+            ('warning', 'naming'): CODE_NAMING_VIOLATION,
+            ('error', 'structure'): CODE_STRUCTURE_DUPLICATE,
+            ('error', 'reference'): CODE_REFERENCE_MISSING,
+        }
+        
+        # Fallback for general project load errors
+        if "Failed to load project file" in self.message:
+            code = CODE_PROJECT_LOAD_FAIL
+        else:
+            code = code_map.get((self.severity, self.category))
+
+        return Diagnostic(
+            severity=sev_map.get(self.severity, 'info'),
+            category=self.category,
+            file_path=self.file_path,
+            message=self.message,
+            code=code,
+            line=self.line_number,
+            source="lint",
+            can_auto_fix=self.category == 'json',
+            suggested_fix="Run 'gms maintenance fix-issues' to attempt an automatic fix." if self.category == 'json' else None
+        )
+
     def __str__(self):
         severity_icon = {
             'error': '[ERROR]',

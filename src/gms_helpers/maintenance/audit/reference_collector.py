@@ -12,6 +12,12 @@ from pathlib import Path
 from typing import Set, Dict, List, Tuple, Optional
 from collections import defaultdict
 
+from ...diagnostics import (
+    Diagnostic,
+    CODE_REFERENCE_MISSING,
+    CODE_ORPHAN_FILE,
+    CODE_CASE_MISMATCH
+)
 from ...utils import load_json, find_yyp_file
 from ..path_utils import (
     build_filesystem_map,
@@ -456,6 +462,72 @@ def comprehensive_analysis(project_root: str = '.') -> Dict:
     print(f"   [SUMMARY] Issues: {len(path_categories['found_case_diff'])} case sensitivity issues")
     
     return results
+
+
+def audit_to_diagnostics(audit_results: Dict) -> List[Diagnostic]:
+    """Convert comprehensive analysis results to structured diagnostics."""
+    diagnostics = []
+    final = audit_results.get('final_analysis', {})
+    phase_2 = audit_results.get('phase_2_results', {})
+    
+    # 1. Missing but referenced files (Errors)
+    for missing in final.get('missing_but_referenced', []):
+        diagnostics.append(Diagnostic(
+            severity='error',
+            category='reference',
+            file_path=missing,
+            message="File is referenced in project but missing from disk.",
+            code=CODE_REFERENCE_MISSING,
+            source="audit"
+        ) )
+        
+    # 2. Case sensitivity issues (Warnings)
+    for case_issue in final.get('case_sensitivity_issues', []):
+        if ' -> ' in case_issue:
+            ref, actual = case_issue.split(' -> ')
+            diagnostics.append(Diagnostic(
+                severity='warning',
+                category='case',
+                file_path=ref,
+                message=f"Case mismatch: referenced as '{ref}' but exists as '{actual}' on disk. This will fail on non-Windows platforms.",
+                code=CODE_CASE_MISMATCH,
+                source="audit",
+                can_auto_fix=False,
+                suggested_fix=f"Rename file to match reference exactly, or update reference to match disk."
+            ))
+
+    # 3. True orphans (Warnings)
+    for orphan in final.get('true_orphans', []):
+        diagnostics.append(Diagnostic(
+            severity='warning',
+            category='orphan',
+            file_path=orphan,
+            message="File exists on disk but is not referenced by the project file.",
+            code=CODE_ORPHAN_FILE,
+            source="audit",
+            can_auto_fix=False,
+            suggested_fix="Delete the file if unused, or add it to the project."
+        ))
+
+    # 4. Derivable orphans (Info)
+    for derivable in phase_2.get('derivable_orphans', []):
+        # Format is usually "path (reason)"
+        path = derivable
+        message = "File is not directly referenced but may be used via naming conventions or string references."
+        if '(' in derivable:
+            path, reason = derivable.split(' (', 1)
+            message = f"File may be used via {reason.rstrip(')')}."
+            
+        diagnostics.append(Diagnostic(
+            severity='info',
+            category='orphan',
+            file_path=path,
+            message=message,
+            code=CODE_ORPHAN_FILE,
+            source="audit"
+        ))
+
+    return diagnostics
 
 
 if __name__ == '__main__':

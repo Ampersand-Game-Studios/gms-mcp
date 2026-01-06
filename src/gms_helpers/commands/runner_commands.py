@@ -16,10 +16,12 @@ def handle_runner_compile(args):
         
         print(f"[BUILD] Compiling GameMaker project in: {project_root}")
         
-        runner = GameMakerRunner(project_root)
+        runtime_version = getattr(args, 'runtime_version', None)
+        runner = GameMakerRunner(project_root, runtime_version=runtime_version)
         
         platform = getattr(args, 'platform', 'Windows')
         runtime = getattr(args, 'runtime', 'VM')
+        runtime_version = getattr(args, 'runtime_version', None)
         
         success = runner.compile_project(platform, runtime)
         
@@ -46,10 +48,12 @@ def handle_runner_run(args):
         
         print(f"[START] Running GameMaker project in: {project_root}")
         
-        runner = GameMakerRunner(project_root)
+        runtime_version = getattr(args, 'runtime_version', None)
+        runner = GameMakerRunner(project_root, runtime_version=runtime_version)
         
         platform = getattr(args, 'platform', 'Windows')
         runtime = getattr(args, 'runtime', 'VM')
+        runtime_version = getattr(args, 'runtime_version', None)
         background = getattr(args, 'background', False)
         output_location = getattr(args, 'output_location', 'temp')
         
