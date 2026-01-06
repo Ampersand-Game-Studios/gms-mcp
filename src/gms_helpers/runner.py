@@ -15,17 +15,20 @@ from typing import List, Optional, Dict, Any
 # Direct imports - no complex fallbacks needed
 from .utils import find_yyp
 from .exceptions import RuntimeNotFoundError, LicenseNotFoundError
+from .runtime_manager import RuntimeManager
 
 
 class GameMakerRunner:
     """Handles GameMaker project compilation and execution."""
     
-    def __init__(self, project_root: Path):
+    def __init__(self, project_root: Path, runtime_version: Optional[str] = None):
         self.project_root = Path(project_root).resolve()
+        self.runtime_version = runtime_version
         self.yyp_file = None
         self.igor_path = None
         self.runtime_path = None
         self.game_process = None
+        self._runtime_manager = RuntimeManager(self.project_root)
         
     def find_project_file(self) -> Path:
         """Find the .yyp file in the project root."""
@@ -53,67 +56,16 @@ class GameMakerRunner:
         raise FileNotFoundError(f"No .yyp file found in {self.project_root} or {self.project_root}/gamemaker")
     
     def find_gamemaker_runtime(self) -> Optional[Path]:
-        """Locate GameMaker runtime and Igor.exe."""
+        """Locate GameMaker runtime and Igor.exe using RuntimeManager."""
         if self.igor_path:
             return self.igor_path
             
-        system = platform.system()
-        
-        # Common GameMaker installation paths
-        if system == "Windows":
-            possible_paths = [
-                Path("C:/ProgramData/GameMakerStudio2/Cache/runtimes"),
-                Path.home() / "AppData/Roaming/GameMakerStudio2/Cache/runtimes",
-                Path("C:/Users/Shared/GameMakerStudio2/Cache/runtimes"),
-            ]
-        elif system == "Darwin":  # macOS
-            possible_paths = [
-                Path("/Users/Shared/GameMakerStudio2/Cache/runtimes"),
-                Path.home() / "Library/Application Support/GameMakerStudio2/Cache/runtimes",
-            ]
-        else:  # Linux
-            possible_paths = [
-                Path.home() / ".local/share/GameMakerStudio2/Cache/runtimes",
-                Path("/opt/GameMakerStudio2/Cache/runtimes"),
-            ]
-        
-        # Find the most recent runtime
-        for base_path in possible_paths:
-            if not base_path.exists():
-                continue
-                
-            # Look for runtime directories
-            runtime_dirs = [d for d in base_path.glob("runtime-*") if d.is_dir()]
-            if not runtime_dirs:
-                continue
-                
-            # Sort by name (should give us newest first)
-            runtime_dirs.sort(reverse=True)
+        runtime_info = self._runtime_manager.select(self.runtime_version)
+        if runtime_info and runtime_info.is_valid:
+            self.igor_path = Path(runtime_info.igor_path)
+            self.runtime_path = Path(runtime_info.path)
+            return self.igor_path
             
-            for runtime_dir in runtime_dirs:
-                # Find Igor.exe in the runtime
-                if system == "Windows":
-                    igor_patterns = [
-                        runtime_dir / "bin/igor/windows/x64/Igor.exe",
-                        runtime_dir / "bin/igor/windows/Igor.exe"
-                    ]
-                elif system == "Darwin":
-                    igor_patterns = [
-                        runtime_dir / "bin/igor/osx/x64/Igor",
-                        runtime_dir / "bin/igor/osx/Igor"
-                    ]
-                else:  # Linux
-                    igor_patterns = [
-                        runtime_dir / "bin/igor/linux/x64/Igor",
-                        runtime_dir / "bin/igor/linux/Igor"
-                    ]
-                
-                for igor_path in igor_patterns:
-                    if igor_path.exists():
-                        self.igor_path = igor_path
-                        self.runtime_path = runtime_dir
-                        return igor_path
-        
         return None
     
     def find_license_file(self) -> Optional[Path]:
@@ -198,9 +150,79 @@ class GameMakerRunner:
             print(f"[BUILD] Compiling project for {platform_target} ({runtime_type})...")
 
             # Use Igor PackageZip (same as the IDE run pipeline) but do not launch the executable.
-            # This avoids Igor's "Cannot start process because a file name has not been provided."
-            # which can occur when using the "Run" action without output parameters.
-            return self._run_project_ide_temp_approach(platform_target, runtime_type, background=True, run_executable=False)
+            # This ensures we get a valid build in the temp area without actually starting the game.
+            
+            project_file = self.find_project_file()
+            import tempfile
+            system_temp = Path(tempfile.gettempdir())
+            project_name = project_file.stem
+            
+            # Use IDE temp directory structure
+            ide_temp_dir = system_temp / "GameMakerStudio2" / project_name
+            ide_temp_dir.mkdir(parents=True, exist_ok=True)
+            
+            igor_path = self.find_gamemaker_runtime()
+            if not igor_path or not self.runtime_path:
+                raise RuntimeNotFoundError("GameMaker runtime not found")
+            
+            license_file = self.find_license_file()
+            if not license_file:
+                raise LicenseNotFoundError("GameMaker license file not found")
+            
+            # Build Igor command for PackageZip
+            cmd = [str(igor_path)]
+            cmd.extend([f"/lf={license_file}"])
+            cmd.extend([f"/rp={self.runtime_path}"])
+            cmd.extend([f"/project={project_file}"])
+            
+            cache_dir = system_temp / "gms_cache"
+            temp_dir = system_temp / "gms_temp"
+            cmd.extend([f"/cache={cache_dir}"])
+            cmd.extend([f"/temp={temp_dir}"])
+            
+            # Output location
+            cmd.extend([f"--of={ide_temp_dir / project_name}"])
+            
+            if runtime_type.upper() == "YYC":
+                cmd.extend(["/runtime=YYC"])
+            
+            cmd.extend(["--", platform_target, "PackageZip"])
+            
+            print(f"[CMD] Command: {' '.join(cmd)}")
+            
+            # Run compilation
+            process = subprocess.Popen(
+                cmd,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                text=True,
+                bufsize=1,
+                universal_newlines=True
+            )
+            
+            # Stream output in real-time
+            if process.stdout:
+                for line in process.stdout:
+                    line = line.strip()
+                    if line:
+                        # Basic log filtering
+                        if "error" in line.lower():
+                            print(f"[ERROR] {line}")
+                        elif "warning" in line.lower():
+                            print(f"[WARN] {line}")
+                        elif "compile" in line.lower() or "build" in line.lower():
+                            print(f"[BUILD] {line}")
+                        else:
+                            print(f"   {line}")
+            
+            process.wait()
+            
+            if process.returncode == 0:
+                print("[OK] Compilation successful!")
+                return True
+            else:
+                print(f"[ERROR] Compilation failed with exit code {process.returncode}")
+                return False
                 
         except Exception as e:
             print(f"[ERROR] Compilation error: {e}")
@@ -221,7 +243,7 @@ class GameMakerRunner:
         else:  # output_location == "project"
             return self._run_project_classic_approach(platform_target, runtime_type, background)
     
-    def _run_project_ide_temp_approach(self, platform_target="Windows", runtime_type="VM", background=False, run_executable: bool = True):
+    def _run_project_ide_temp_approach(self, platform_target="Windows", runtime_type="VM", background=False):
         """
         Run the project using IDE-temp approach:
         1. Package to zip in IDE temp directory
@@ -248,22 +270,14 @@ class GameMakerRunner:
             ide_temp_dir = system_temp / "GameMakerStudio2" / project_name
             ide_temp_dir.mkdir(parents=True, exist_ok=True)
             
-            # Build Igor command for PackageZip - but we need to modify build_igor_command
-            # to accept output parameters, so we'll build it manually here
-            
-            import tempfile
-            system_temp = Path(tempfile.gettempdir())
-            
             # Find required files
             igor_path = self.find_gamemaker_runtime()
             if not igor_path or not self.runtime_path:
-                raise RuntimeError("GameMaker runtime not found")
+                raise RuntimeNotFoundError("GameMaker runtime not found")
             
-            project_file = self.find_project_file()
             license_file = self.find_license_file()
-            
             if not license_file:
-                raise RuntimeError("GameMaker license file not found")
+                raise LicenseNotFoundError("GameMaker license file not found")
             
             # Build Igor command manually with correct parameter order
             cmd = [str(igor_path)]
@@ -284,9 +298,7 @@ class GameMakerRunner:
             cmd.extend([f"/temp={temp_dir}"])
             
             # Add output parameters (BEFORE the -- separator)
-            # Igor uses /of= (not --of=). Using the wrong prefix causes opaque "file name not provided" failures.
-            # Igor PackageZip expects a file prefix or path for the output.
-            cmd.extend([f"/of={ide_temp_dir / project_name}"])
+            cmd.extend([f"--of={ide_temp_dir / project_name}"])
             
             # Add runtime type
             if runtime_type.upper() == "YYC":
@@ -354,11 +366,7 @@ class GameMakerRunner:
                 
             print(f"[OK] Game packaged successfully: {exe_path}")
             
-            # Step 3: Run the executable directly (optional)
-            if not run_executable:
-                print("[OK] Compilation/package step completed successfully.")
-                return True
-
+            # Step 3: Run the executable directly
             print("[RUN] Starting game...")
             
             # Change to the game directory and run the executable
@@ -367,20 +375,20 @@ class GameMakerRunner:
                 os.chdir(ide_temp_dir)
                 
                 # Run the game executable directly
-                game_process = subprocess.Popen([str(exe_path)])
+                self.game_process = subprocess.Popen([str(exe_path)])
                 
-                print(f"[OK] Game started! PID: {game_process.pid}")
+                print(f"[OK] Game started! PID: {self.game_process.pid}")
                 print("   Game is running in the background...")
                 print("   Close the game window to return to console.")
                 
                 # Wait for game to finish
-                game_process.wait()
+                self.game_process.wait()
                 
-                if game_process.returncode == 0:
+                if self.game_process.returncode == 0:
                     print("[OK] Game finished successfully!")
                     return True
                 else:
-                    print(f"[ERROR] Game exited with code {game_process.returncode}")
+                    print(f"[ERROR] Game exited with code {self.game_process.returncode}")
                     return False
                     
             finally:
@@ -408,13 +416,13 @@ class GameMakerRunner:
             # Build Igor command for classic Run (no --of parameter, creates output folder)
             igor_path = self.find_gamemaker_runtime()
             if not igor_path or not self.runtime_path:
-                raise RuntimeError("GameMaker runtime not found")
+                raise RuntimeNotFoundError("GameMaker runtime not found")
             
             project_file = self.find_project_file()
             license_file = self.find_license_file()
             
             if not license_file:
-                raise RuntimeError("GameMaker license file not found")
+                raise LicenseNotFoundError("GameMaker license file not found")
             
             # Build Igor command - classic approach (no --of parameter)
             cmd = [str(igor_path)]
@@ -446,7 +454,7 @@ class GameMakerRunner:
             print(f"[CMD] Run command: {' '.join(cmd)}")
             
             # Run the game using Igor Run command
-            process = subprocess.Popen(
+            self.game_process = subprocess.Popen(
                 cmd,
                 stdout=subprocess.PIPE,
                 stderr=subprocess.STDOUT,
@@ -456,8 +464,8 @@ class GameMakerRunner:
             )
             
             # Stream output in real-time
-            if process.stdout:
-                for line in process.stdout:
+            if self.game_process.stdout:
+                for line in self.game_process.stdout:
                     line = line.strip()
                     if line:
                         # Basic log filtering
@@ -470,13 +478,13 @@ class GameMakerRunner:
                         else:
                             print(f"   {line}")
             
-            process.wait()
+            self.game_process.wait()
             
-            if process.returncode == 0:
+            if self.game_process.returncode == 0:
                 print("[OK] Game finished successfully!")
                 return True
             else:
-                print(f"[ERROR] Game failed with exit code {process.returncode}")
+                print(f"[ERROR] Game failed with exit code {self.game_process.returncode}")
                 return False
                  
         except Exception as e:
@@ -487,8 +495,7 @@ class GameMakerRunner:
         """Stop the running game."""
         if not self.game_process:
             print("[WARN] No game process running")
-            # Treat as idempotent success for CLI/MCP usage.
-            return True
+            return False
             
         try:
             pid = self.game_process.pid
@@ -520,16 +527,17 @@ class GameMakerRunner:
 
 # Convenience functions for command-line usage
 def compile_project(project_root: str = ".", platform: str = "Windows", 
-                   runtime: str = "VM") -> bool:
+                   runtime: str = "VM", runtime_version: Optional[str] = None) -> bool:
     """Compile GameMaker project."""
-    runner = GameMakerRunner(Path(project_root))
+    runner = GameMakerRunner(Path(project_root), runtime_version=runtime_version)
     return runner.compile_project(platform, runtime)
 
 
 def run_project(project_root: str = ".", platform: str = "Windows", 
-               runtime: str = "VM", background: bool = False, output_location: str = "temp") -> bool:
+               runtime: str = "VM", background: bool = False, output_location: str = "temp",
+               runtime_version: Optional[str] = None) -> bool:
     """Run GameMaker project directly (like IDE does)."""
-    runner = GameMakerRunner(Path(project_root))
+    runner = GameMakerRunner(Path(project_root), runtime_version=runtime_version)
     return runner.run_project_direct(platform, runtime, background, output_location)
 
 

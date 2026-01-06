@@ -5,6 +5,27 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Structured Diagnostics**: Introduced `gm_diagnostics` tool (and `gms diagnostics` CLI command) providing machine-readable project diagnostics (JSON validity, naming conventions, structural orphans, and deep reference analysis). Issues include severity, category, diagnostic codes (e.g., `GM001`), and suggested fixes.
+- **Runtime Management**: Implemented a comprehensive suite for GameMaker runtime version control:
+    - `gm_runtime_list`: Discover all installed IDE/Runtime versions.
+    - `gm_runtime_pin`: Lock a project to a specific runtime version via `.gms_mcp/runtime.json`.
+    - `gm_runtime_unpin`: Revert to auto-selecting the newest stable runtime.
+    - `gm_runtime_verify`: Comprehensive check of a specific runtime's validity (Igor, licenses, pathing).
+- **Advanced Compilation Controls**: Updated `gm_compile` and `gm_run` to accept a `runtime_version` override, allowing for manual version testing without changing project-wide pins.
+- **Structured Diagnostic Standard**: Implemented a standardized `Diagnostic` data format across the entire maintenance suite, enabling better integration with IDE problem panels and CI reporting.
+
+### Fixed
+- **CLI Import Regressions**: Resolved `ImportError` in `gms_helpers.commands` that occurred after previous refactoring, ensuring all asset and room commands are correctly exposed.
+- **Runtime Discovery Pathing**: Fixed an issue where Igor pathing was hardcoded to older x86 paths; now dynamically resolves through the new `RuntimeManager`.
+
+### Changed
+- **Renamed Legacy Methods**: Standardized terminology across the codebase by removing mentions of third-party extensions in favor of generic terms like "IDE-temp approach".
+- **Enhanced `gm_run`**: Improved the runner logic to better handle IDE-style temporary packaging and execution, including improved background process tracking.
+- **Test Suite expansion**: Added `test_diagnostics.py` and `test_runtime_manager.py` to the core test suite, covering all new structured diagnostic and version management logic.
+- **Documentation Refresh**: Fully updated `README.md` and `src/gms_mcp/README.md` to reflect the new diagnostics and runtime management capabilities.
+
+## [0.1.1.dev41] - 2025-12-18 (Approximate)
+### Added
 - **Telemetry & Health Check**: Introduced `gm_mcp_health` tool (and `gms maintenance health` CLI command) for one-click diagnostic verification of the GameMaker development environment. It checks for project validity, Igor.exe, GameMaker runtimes, licenses, and Python dependencies.
 - **Execution Policy Manager**: Created a central `PolicyManager` in `src/gms_mcp/execution_policy.py` that determines per-tool execution modes (`DIRECT` vs `SUBPROCESS`). This allows "Fast assets, Resilient runner" behavior, defaulting safe operations like introspection and asset creation to in-process execution while keeping long-running tasks like the runner in isolated subprocesses.
 - **Typed Result Objects**: Introduced `@dataclass` result objects in `src/gms_helpers/results.py` (e.g., `AssetResult`, `MaintenanceResult`, `OperationResult`). This standardizes return values across tools, ensuring consistency and better integration with the MCP server.
@@ -32,7 +53,7 @@ All notable changes to this project will be documented in this file.
 - **Execution Model Documentation**: Updated README and tool docstrings to align with the actual high-reliability subprocess execution model (standardizing on captured output and isolated stdin).
 - **Project Root Resolution**: Standardized environment variable support across MCP server and CLI tools. Both now consistently check for `GM_PROJECT_ROOT` followed by `PROJECT_ROOT`, improving consistency when running in different environments.
 - **Test Suite Logs**: Improved test output by clearly labeling expected errors during negative testing as `[EXPECTED ERROR]`, reducing confusion during CI runs.
-- MCP tools now default to `skip_maintenance=True` and `maintenance_verbose=False` for faster feedback loops.
-- `gm_maintenance_dedupe_resources` now defaults to `auto=True` to prevent interactive prompt hangs.
-- Removed legacy `test_mcp_streaming_runner.py` in favor of the more stable direct/non-streaming architecture.
-- CLI test suite now imports `gms_helpers` directly from `src` and uses module invocation, removing legacy shim modules.
+- **Asset Creation Defaults**: MCP tools now default to `skip_maintenance=True` and `maintenance_verbose=False` for faster feedback loops.
+- **Dedupe Resources**: `gm_maintenance_dedupe_resources` now defaults to `auto=True` to prevent interactive prompt hangs.
+- **Legacy Removal**: Removed legacy `test_mcp_streaming_runner.py` in favor of the more stable direct/non-streaming architecture.
+- **Test Suite Architecture**: CLI test suite now imports `gms_helpers` directly from `src` and uses module invocation, removing legacy shim modules.
