@@ -1,12 +1,135 @@
+"""
+Static search utilities for finding asset references in GML code.
+
+This module provides functions to search through GML files for string references
+to assets, using configurable naming conventions.
+"""
+
 import os
 import re
-from typing import Set, Dict, List
+from typing import Set, Dict, List, Optional
 from pathlib import Path
 
-def find_string_references_in_gml(root_dir: str) -> Dict[str, Set[str]]:
+# Import naming config for dynamic pattern building
+try:
+    from ..naming_config import get_config, NamingConfig
+except ImportError:
+    # Fallback for standalone usage
+    get_config = None
+    NamingConfig = None
+
+
+def _build_prefix_pattern(prefixes: List[str]) -> str:
+    """Build a regex pattern from a list of prefixes.
+    
+    Args:
+        prefixes: List of prefix strings (e.g., ['spr_', 'sprite_'])
+        
+    Returns:
+        Regex pattern that matches any of the prefixes followed by word chars
+    """
+    if not prefixes:
+        return None
+    
+    # Escape special regex characters in prefixes
+    escaped = [re.escape(p) for p in prefixes]
+    
+    # Build alternation pattern
+    if len(escaped) == 1:
+        return rf'\b{escaped[0]}\w+\b'
+    else:
+        return rf'\b({"|".join(escaped)})\w+\b'
+
+
+def _get_asset_patterns_from_config(config: Optional["NamingConfig"] = None) -> Dict[str, List[str]]:
+    """Build asset search patterns from config.
+    
+    Args:
+        config: NamingConfig instance, or None to use defaults
+        
+    Returns:
+        Dict mapping asset types to list of regex patterns
+    """
+    # Asset type to folder name mapping
+    asset_type_map = {
+        'sprites': 'sprite',
+        'sounds': 'sound',
+        'objects': 'object',
+        'scripts': 'script',
+        'rooms': 'room',
+        'fonts': 'font',
+        'shaders': 'shader',
+    }
+    
+    patterns = {}
+    
+    for plural_name, asset_type in asset_type_map.items():
+        type_patterns = []
+        
+        # Try to get prefixes from config
+        if config:
+            prefixes = config.get_prefixes(asset_type)
+            if prefixes:
+                prefix_pattern = _build_prefix_pattern(prefixes)
+                if prefix_pattern:
+                    type_patterns.append(prefix_pattern)
+        
+        # Add fallback patterns if no config prefixes
+        if not type_patterns:
+            # Use default patterns
+            default_patterns = _get_default_patterns()
+            if plural_name in default_patterns:
+                type_patterns.extend(default_patterns[plural_name])
+        else:
+            # Add function-based patterns that are always useful
+            func_patterns = _get_function_patterns().get(plural_name, [])
+            type_patterns.extend(func_patterns)
+        
+        patterns[plural_name] = type_patterns
+    
+    return patterns
+
+
+def _get_default_patterns() -> Dict[str, List[str]]:
+    """Get default hardcoded patterns as fallback."""
+    return {
+        'sprites': [r'\bspr_\w+\b', r'sprite_get_name\(["\']([^"\']+)["\']', r'asset_get_index\(["\']([^"\']+)["\']'],
+        'sounds': [r'\bsnd_\w+\b', r'\bmus_\w+\b', r'audio_play_sound\(["\']([^"\']+)["\']'],
+        'objects': [r'\bo_\w+\b', r'instance_create\w*\([^,]+,\s*[^,]+,\s*([^,\)]+)', r'object_get_name\(["\']([^"\']+)["\']'],
+        'scripts': [r'\b[a-z_][a-z0-9_]*\s*\(', r'script_execute\(["\']([^"\']+)["\']'],
+        'rooms': [r'\br_\w+\b', r'room_goto\(([^)]+)\)', r'room_get_name\(["\']([^"\']+)["\']'],
+        'fonts': [r'\bfnt_\w+\b', r'font_get_name\(["\']([^"\']+)["\']'],
+        'shaders': [r'\bshd_\w+\b', r'shader_get_name\(["\']([^"\']+)["\']']
+    }
+
+
+def _get_function_patterns() -> Dict[str, List[str]]:
+    """Get patterns based on GameMaker function calls (these don't change with naming config)."""
+    return {
+        'sprites': [r'sprite_get_name\(["\']([^"\']+)["\']', r'asset_get_index\(["\']([^"\']+)["\']'],
+        'sounds': [r'audio_play_sound\(["\']([^"\']+)["\']'],
+        'objects': [r'instance_create\w*\([^,]+,\s*[^,]+,\s*([^,\)]+)', r'object_get_name\(["\']([^"\']+)["\']'],
+        'scripts': [r'script_execute\(["\']([^"\']+)["\']'],
+        'rooms': [r'room_goto\(([^)]+)\)', r'room_get_name\(["\']([^"\']+)["\']'],
+        'fonts': [r'font_get_name\(["\']([^"\']+)["\']'],
+        'shaders': [r'shader_get_name\(["\']([^"\']+)["\']']
+    }
+
+
+def find_string_references_in_gml(
+    root_dir: str, 
+    config: Optional["NamingConfig"] = None
+) -> Dict[str, Set[str]]:
     """
     Search through all .gml files for string references to assets.
-    Returns dict mapping reference types to sets of found references.
+    
+    Args:
+        root_dir: Root directory to search for .gml files
+        config: Optional NamingConfig to use for pattern building.
+                If None, attempts to load from root_dir or uses defaults.
+    
+    Returns:
+        Dict mapping reference types to sets of found references.
     """
     references = {
         'sprites': set(),
@@ -18,16 +141,15 @@ def find_string_references_in_gml(root_dir: str) -> Dict[str, Set[str]]:
         'shaders': set()
     }
     
-    # Common GameMaker asset prefixes
-    asset_patterns = {
-        'sprites': [r'\bspr_\w+\b', r'sprite_get_name\(["\']([^"\']+)["\']', r'asset_get_index\(["\']([^"\']+)["\']'],
-        'sounds': [r'\bsnd_\w+\b', r'\bmus_\w+\b', r'audio_play_sound\(["\']([^"\']+)["\']'],
-        'objects': [r'\bo_\w+\b', r'instance_create\w*\([^,]+,\s*[^,]+,\s*([^,\)]+)', r'object_get_name\(["\']([^"\']+)["\']'],
-        'scripts': [r'\b[a-z_][a-z0-9_]*\s*\(', r'script_execute\(["\']([^"\']+)["\']'],
-        'rooms': [r'\br_\w+\b', r'room_goto\(([^)]+)\)', r'room_get_name\(["\']([^"\']+)["\']'],
-        'fonts': [r'\bfnt_\w+\b', r'font_get_name\(["\']([^"\']+)["\']'],
-        'shaders': [r'\bshd_\w+\b', r'shader_get_name\(["\']([^"\']+)["\']']
-    }
+    # Get config if not provided
+    if config is None and get_config is not None:
+        try:
+            config = get_config(root_dir)
+        except Exception:
+            config = None
+    
+    # Build asset patterns from config
+    asset_patterns = _get_asset_patterns_from_config(config)
     
     # Find all .gml files
     gml_files = []
@@ -63,6 +185,7 @@ def find_string_references_in_gml(root_dir: str) -> Dict[str, Set[str]]:
             print(f"Warning: Could not read {gml_file}: {e}")
     
     return references
+
 
 def find_asset_name_patterns(filesystem_files: Set[str]) -> Dict[str, Set[str]]:
     """
@@ -103,6 +226,7 @@ def find_asset_name_patterns(filesystem_files: Set[str]) -> Dict[str, Set[str]]:
                 asset_names[asset_type].add(asset_name)
     
     return asset_names
+
 
 def cross_reference_strings_to_files(string_refs: Dict[str, Set[str]], 
                                    filesystem_files: Set[str],
@@ -168,12 +292,22 @@ def cross_reference_strings_to_files(string_refs: Dict[str, Set[str]],
     
     return results
 
-def identify_derivable_orphans(filesystem_files: Set[str], 
-                             referenced_files: Set[str],
-                             string_refs: Dict[str, Set[str]]) -> List[str]:
+
+def identify_derivable_orphans(
+    filesystem_files: Set[str], 
+    referenced_files: Set[str],
+    string_refs: Dict[str, Set[str]],
+    config: Optional["NamingConfig"] = None
+) -> List[str]:
     """
     Identify orphaned files that could be derived from naming conventions or string references.
     These are files that exist but aren't directly referenced, but follow patterns that suggest they might be used.
+    
+    Args:
+        filesystem_files: Set of all files in the filesystem
+        referenced_files: Set of files that are referenced
+        string_refs: Dict of string references by type
+        config: Optional NamingConfig to use for pattern checking
     """
     derivable_orphans = []
     
@@ -181,6 +315,17 @@ def identify_derivable_orphans(filesystem_files: Set[str],
     all_string_refs = set()
     for refs in string_refs.values():
         all_string_refs.update(refs)
+    
+    # Build set of prefixes to check from config
+    known_prefixes = set()
+    if config:
+        for asset_type in ['sprite', 'object', 'room', 'font', 'sound', 'shader']:
+            prefixes = config.get_prefixes(asset_type)
+            known_prefixes.update(prefixes)
+    
+    # Fallback to default prefixes if no config
+    if not known_prefixes:
+        known_prefixes = {'spr_', 'o_', 'r_', 'fnt_', 'snd_', 'mus_', 'shd_'}
     
     for file_path in filesystem_files:
         if file_path not in referenced_files:
@@ -194,9 +339,12 @@ def identify_derivable_orphans(filesystem_files: Set[str],
                 if asset_name in all_string_refs:
                     derivable_orphans.append(f"{file_path} (referenced as string: {asset_name})")
                 
-                # Check naming convention patterns
-                elif (asset_name.startswith(('spr_', 'o_', 'r_', 'fnt_', 'snd_', 'mus_', 'shd_')) or
-                      any(pattern in asset_name.lower() for pattern in ['_create', '_step', '_draw', '_collision'])):
+                # Check naming convention patterns using configured prefixes
+                elif any(asset_name.startswith(prefix) for prefix in known_prefixes):
+                    derivable_orphans.append(f"{file_path} (follows naming convention)")
+                
+                # Also check for event-like patterns
+                elif any(pattern in asset_name.lower() for pattern in ['_create', '_step', '_draw', '_collision']):
                     derivable_orphans.append(f"{file_path} (follows naming convention)")
     
-    return derivable_orphans 
+    return derivable_orphans
