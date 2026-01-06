@@ -5,24 +5,23 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
-- **Structured Diagnostics**: Introduced `gm_diagnostics` tool (and `gms diagnostics` CLI command) providing machine-readable project diagnostics (JSON validity, naming conventions, structural orphans, and deep reference analysis). Issues include severity, category, diagnostic codes (e.g., `GM001`), and suggested fixes.
-- **Runtime Management**: Implemented a comprehensive suite for GameMaker runtime version control:
-    - `gm_runtime_list`: Discover all installed IDE/Runtime versions.
-    - `gm_runtime_pin`: Lock a project to a specific runtime version via `.gms_mcp/runtime.json`.
-    - `gm_runtime_unpin`: Revert to auto-selecting the newest stable runtime.
-    - `gm_runtime_verify`: Comprehensive check of a specific runtime's validity (Igor, licenses, pathing).
-- **Advanced Compilation Controls**: Updated `gm_compile` and `gm_run` to accept a `runtime_version` override, allowing for manual version testing without changing project-wide pins.
-- **Structured Diagnostic Standard**: Implemented a standardized `Diagnostic` data format across the entire maintenance suite, enabling better integration with IDE problem panels and CI reporting.
+- **GML Symbol Indexing & Code Intelligence**: Implemented a core GML parsing and indexing engine for advanced code analysis:
+    - `gm_build_index`: Scan the entire project and build a high-performance cache of symbols (functions, enums, macros, globalvars, constructors) and their references.
+    - `gm_find_definition`: Instantly jump to the definition of any GML symbol.
+    - `gm_find_references`: Trace all usages of a symbol across the project.
+    - `gm_list_symbols`: Filtered listing of all project symbols by type, name, or file.
+- **Improved MCP Logging**: Updated the MCP server to suppress informational SDK logs that were previously sent to `stderr`, preventing Cursor from incorrectly flagging them as `[error]` markers.
+- **Enhanced Asset Compatibility**: Standardized object (`.yy`) and event (`.gml`) generation formats to ensure 100% compatibility with GameMaker's **Igor** compiler (fixing "No version changes" and JSON schema errors).
 
 ### Fixed
-- **CLI Import Regressions**: Resolved `ImportError` in `gms_helpers.commands` that occurred after previous refactoring, ensuring all asset and room commands are correctly exposed.
-- **Runtime Discovery Pathing**: Fixed an issue where Igor pathing was hardcoded to older x86 paths; now dynamically resolves through the new `RuntimeManager`.
+- **Object Creation Schema**: Fixed a critical bug where newly created objects were missing required `$GMObject: "v1"` markers, which prevented project compilation.
+- **Event Creation Schema**: Updated the event management system to use `resourceVersion: "2.0"` and required `%Name` fields, ensuring modern GameMaker compatibility.
+- **CLI Subcommand Registration**: Resolved an issue where `symbol` commands were not correctly registered in the main `gms` CLI entry point.
+- **Test Suite assertions**: Updated 371-test suite to reflect the new standardized asset versioning requirements.
 
 ### Changed
-- **Renamed Legacy Methods**: Standardized terminology across the codebase by removing mentions of third-party extensions in favor of generic terms like "IDE-temp approach".
-- **Enhanced `gm_run`**: Improved the runner logic to better handle IDE-style temporary packaging and execution, including improved background process tracking.
-- **Test Suite expansion**: Added `test_diagnostics.py` and `test_runtime_manager.py` to the core test suite, covering all new structured diagnostic and version management logic.
-- **Documentation Refresh**: Fully updated `README.md` and `src/gms_mcp/README.md` to reflect the new diagnostics and runtime management capabilities.
+- **Diagnostic output**: Refined tool outputs to be cleaner and more consistent across the code intelligence suite.
+- **Standardized Versioning**: Locked default asset creation to GameMaker 2024.x+ standards.
 
 ## [0.1.1.dev41] - 2025-12-18 (Approximate)
 ### Added

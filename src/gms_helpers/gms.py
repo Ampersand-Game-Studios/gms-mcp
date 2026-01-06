@@ -46,6 +46,7 @@ Examples:
     setup_maintenance_commands(subparsers)
     setup_runner_commands(subparsers)
     setup_diagnostics_commands(subparsers)
+    setup_symbol_commands(subparsers)
     
     return parser
 
@@ -593,6 +594,38 @@ def setup_runner_commands(subparsers):
     status_parser = runner_subparsers.add_parser('status', help='Check if game is running')
     status_parser.set_defaults(func=handle_runner_status)
 
+
+def setup_symbol_commands(subparsers):
+    """Set up symbol/code intelligence commands."""
+    symbol_parser = subparsers.add_parser('symbol', help='GML symbol indexing and code intelligence')
+    symbol_subparsers = symbol_parser.add_subparsers(dest='symbol_action', help='Symbol actions')
+    symbol_subparsers.required = True
+    
+    # Build index command
+    build_parser = symbol_subparsers.add_parser('build', help='Build or rebuild the GML symbol index')
+    build_parser.add_argument('--force', action='store_true', help='Force rebuild (ignore cache)')
+    build_parser.set_defaults(func=handle_build_index)
+    
+    # Find definition command
+    def_parser = symbol_subparsers.add_parser('find-definition', help='Find definition(s) of a symbol')
+    def_parser.add_argument('symbol_name', help='Name of symbol to find')
+    def_parser.set_defaults(func=handle_find_definition)
+    
+    # Find references command
+    ref_parser = symbol_subparsers.add_parser('find-references', help='Find all references to a symbol')
+    ref_parser.add_argument('symbol_name', help='Name of symbol to find references for')
+    ref_parser.add_argument('--max-results', type=int, default=50, help='Maximum number of results (default: 50)')
+    ref_parser.set_defaults(func=handle_find_references)
+    
+    # List symbols command
+    list_parser = symbol_subparsers.add_parser('list', help='List all symbols in the project')
+    list_parser.add_argument('--kind', choices=['function', 'enum', 'macro', 'globalvar', 'constructor'],
+                            help='Filter by symbol kind')
+    list_parser.add_argument('--name-filter', help='Filter symbols by name (case-insensitive substring)')
+    list_parser.add_argument('--file-filter', help='Filter symbols by file path (case-insensitive substring)')
+    list_parser.add_argument('--max-results', type=int, default=100, help='Maximum number of results (default: 100)')
+    list_parser.set_defaults(func=handle_list_symbols)
+
 # Import command handlers
 from .commands.asset_commands import handle_asset_create, handle_asset_delete
 from .commands.diagnostics_commands import handle_diagnostics
@@ -617,6 +650,9 @@ from .commands.maintenance_commands import (
 )
 from .commands.runner_commands import (
     handle_runner_compile, handle_runner_run, handle_runner_stop, handle_runner_status
+)
+from .commands.symbol_commands import (
+    handle_build_index, handle_find_definition, handle_find_references, handle_list_symbols
 )
 
 
