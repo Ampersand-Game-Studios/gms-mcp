@@ -5,7 +5,9 @@
 - `gms`: a Python CLI for GameMaker project operations (asset creation, maintenance, runner, etc).
 - `gms-mcp`: an MCP server that exposes the same operations as MCP tools (Cursor is the primary example client).
 - **Reliability-First Architecture**: Custom exception hierarchy, typed result objects, and an execution policy manager replace monolithic exit calls and raw dictionaries. This enables structured error handling, consistent tool integration, and optimized performance (Fast assets, Resilient runner).
-- **Health & Diagnostics**: `gm_mcp_health` provides a one-click diagnostic tool to verify the local GameMaker environment, including Igor.exe, runtimes, and licenses.
+- **Health & Diagnostics**: `gm_mcp_health` provides a one-click diagnostic tool to verify the local GameMaker environment. `gm_diagnostics` provides structured, machine-readable project diagnostics (JSON, naming, orphans, references) compatible with IDE problem panels.
+- **Runtime Management**: `gm_runtime_list`, `gm_runtime_pin`, and `gm_runtime_verify` allow precise control over which GameMaker runtime version is used for builds and execution.
+- **GML Symbol Indexing & Code Intelligence**: `gm_build_index`, `gm_find_definition`, `gm_find_references`, and `gm_list_symbols` provide deep, fast, and filtered code analysis (definitions and cross-file references).
 - **Introspection**: complete project inspection with support for all asset types (including extensions and datafiles).
 - **MCP Resources**: addressable project index and asset graph for high-performance agent context loading.
 - `gms-mcp-init`: generates shareable MCP config files for a workspace. Now auto-detects environment variables like `GMS_MCP_GMS_PATH` to include in the generated config.
@@ -115,9 +117,21 @@ Preview output without writing files:
 gms-mcp-init --cursor --dry-run
 ```
 
-## Introspection Tools
+## Code Intelligence & Introspection
 
-The MCP server provides comprehensive project introspection capabilities:
+The MCP server provides comprehensive project analysis capabilities:
+
+### GML Symbol Indexing (`gm_build_index`)
+Build a high-performance index of all functions, enums, macros, and global variables in the project. This is required for advanced code intelligence tools.
+
+### Symbol Definition (`gm_find_definition`)
+Find the exact location and docstrings for any GML symbol in your project.
+
+### Find References (`gm_find_references`)
+Search for all usages of a specific function or variable across your entire codebase.
+
+### List Symbols (`gm_list_symbols`)
+List all project symbols with filtering by type, name substring, or file path.
 
 ### Asset Listing (`gm_list_assets`)
 List all assets in your project, optionally filtered by type:
