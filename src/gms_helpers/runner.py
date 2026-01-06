@@ -200,7 +200,7 @@ class GameMakerRunner:
             # Use Igor PackageZip (same as the IDE run pipeline) but do not launch the executable.
             # This avoids Igor's "Cannot start process because a file name has not been provided."
             # which can occur when using the "Run" action without output parameters.
-            return self._run_project_stitch_approach(platform_target, runtime_type, background=True, run_executable=False)
+            return self._run_project_ide_temp_approach(platform_target, runtime_type, background=True, run_executable=False)
                 
         except Exception as e:
             print(f"[ERROR] Compilation error: {e}")
@@ -217,13 +217,13 @@ class GameMakerRunner:
             output_location: Where to output files - 'temp' (IDE-style, AppData) or 'project' (classic output folder)
         """
         if output_location == "temp":
-            return self._run_project_stitch_approach(platform_target, runtime_type, background)
+            return self._run_project_ide_temp_approach(platform_target, runtime_type, background)
         else:  # output_location == "project"
             return self._run_project_classic_approach(platform_target, runtime_type, background)
     
-    def _run_project_stitch_approach(self, platform_target="Windows", runtime_type="VM", background=False, run_executable: bool = True):
+    def _run_project_ide_temp_approach(self, platform_target="Windows", runtime_type="VM", background=False, run_executable: bool = True):
         """
-        Run the project using Stitch approach:
+        Run the project using IDE-temp approach:
         1. Package to zip in IDE temp directory
         2. Extract zip contents
         3. Run Runner.exe manually from extracted location
@@ -235,7 +235,7 @@ class GameMakerRunner:
             import platform
             from pathlib import Path
             
-            print("[RUN] Starting game using Stitch approach...")
+            print("[RUN] Starting game using IDE-temp approach...")
             
             # Step 1: Build PackageZip command to compile to IDE temp directory
             print("[PACKAGE] Packaging project to IDE temp directory...")
