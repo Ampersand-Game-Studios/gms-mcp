@@ -959,6 +959,53 @@ def build_server():
         )
 
     # -----------------------------
+    # Diagnostic tools
+    # -----------------------------
+    @mcp.tool()
+    async def gm_diagnostics(
+        depth: str = "quick",
+        include_info: bool = False,
+        project_root: str = ".",
+        prefer_cli: bool = False,
+        output_mode: str = "full",
+        tail_lines: int = 120,
+        quiet: bool = False,
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Run project diagnostics and return structured issues.
+        
+        Args:
+            depth: "quick" runs fast lint checks only; "deep" adds reference 
+                   analysis, orphan detection, and GML string search.
+            include_info: Whether to include info-level diagnostics.
+        """
+        repo_root = _resolve_repo_root(project_root)
+        _ensure_cli_on_sys_path(repo_root)
+        from gms_helpers.commands.diagnostics_commands import handle_diagnostics
+
+        args = argparse.Namespace(
+            depth=depth,
+            include_info=include_info,
+            project_root=project_root,
+        )
+        cli_args = ["diagnostics", "--depth", depth]
+        if include_info:
+            cli_args.append("--include-info")
+
+        return await _run_with_fallback(
+            direct_handler=handle_diagnostics,
+            direct_args=args,
+            cli_args=cli_args,
+            project_root=project_root,
+            prefer_cli=prefer_cli,
+            output_mode=output_mode,
+            tail_lines=tail_lines,
+            quiet=quiet,
+            ctx=ctx,
+        )
+
+    # -----------------------------
     # Asset creation tools
     # -----------------------------
     @mcp.tool()
@@ -2214,12 +2261,103 @@ def build_server():
         )
 
     # -----------------------------
+    # Runtime management tools
+    # -----------------------------
+    @mcp.tool()
+    async def gm_runtime_list(
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        List all installed GameMaker runtimes.
+        """
+        from gms_helpers.runtime_manager import RuntimeManager
+        from pathlib import Path
+        
+        project_directory = _resolve_project_directory_no_deps(project_root)
+        manager = RuntimeManager(project_directory)
+        
+        installed = manager.list_installed()
+        pinned = manager.get_pinned()
+        active = manager.select()
+        
+        return {
+            "runtimes": [r.to_dict() for r in installed],
+            "pinned_version": pinned,
+            "active_version": active.version if active else None,
+            "count": len(installed)
+        }
+
+    @mcp.tool()
+    async def gm_runtime_pin(
+        version: str,
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Pin a specific runtime version for this project.
+        """
+        from gms_helpers.runtime_manager import RuntimeManager
+        from pathlib import Path
+        
+        project_directory = _resolve_project_directory_no_deps(project_root)
+        manager = RuntimeManager(project_directory)
+        
+        success = manager.pin(version)
+        
+        return {
+            "ok": success,
+            "pinned_version": version if success else None,
+            "error": None if success else f"Runtime version {version} is not installed or invalid."
+        }
+
+    @mcp.tool()
+    async def gm_runtime_unpin(
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Remove runtime pin, reverting to auto-select (newest).
+        """
+        from gms_helpers.runtime_manager import RuntimeManager
+        from pathlib import Path
+        
+        project_directory = _resolve_project_directory_no_deps(project_root)
+        manager = RuntimeManager(project_directory)
+        
+        success = manager.unpin()
+        
+        return {
+            "ok": True,  # Always true even if no pin existed
+            "message": "Runtime pin removed." if success else "No runtime pin existed."
+        }
+
+    @mcp.tool()
+    async def gm_runtime_verify(
+        version: str | None = None,
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Verify a runtime is valid and ready to use.
+        If version is None, verifies the currently selected runtime.
+        """
+        from gms_helpers.runtime_manager import RuntimeManager
+        from pathlib import Path
+        
+        project_directory = _resolve_project_directory_no_deps(project_root)
+        manager = RuntimeManager(project_directory)
+        
+        return manager.verify(version)
+
+    # -----------------------------
     # Runner tools
     # -----------------------------
     @mcp.tool()
     async def gm_compile(
         platform: str = "Windows",
         runtime: str = "VM",
+        runtime_version: str | None = None,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
@@ -2235,9 +2373,12 @@ def build_server():
         args = argparse.Namespace(
             platform=platform,
             runtime=runtime,
+            runtime_version=runtime_version,
             project_root=project_root,
         )
         cli_args = ["run", "compile", "--platform", platform, "--runtime", runtime]
+        if runtime_version:
+            cli_args.extend(["--runtime-version", runtime_version])
 
         return await _run_with_fallback(
             direct_handler=handle_runner_compile,
@@ -2255,6 +2396,7 @@ def build_server():
     async def gm_run(
         platform: str = "Windows",
         runtime: str = "VM",
+        runtime_version: str | None = None,
         background: bool = False,
         output_location: str = "temp",
         project_root: str = ".",
@@ -2264,7 +2406,7 @@ def build_server():
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Run the project using Igor (stitch/classic approaches handled by your runner)."""
+        """Run the project using Igor."""
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.runner_commands import handle_runner_run
@@ -2272,6 +2414,7 @@ def build_server():
         args = argparse.Namespace(
             platform=platform,
             runtime=runtime,
+            runtime_version=runtime_version,
             background=background,
             output_location=output_location,
             project_root=project_root,
@@ -2286,6 +2429,8 @@ def build_server():
             "--output-location",
             output_location,
         ]
+        if runtime_version:
+            cli_args.extend(["--runtime-version", runtime_version])
         if background:
             cli_args.append("--background")
 
@@ -3149,6 +3294,190 @@ def build_server():
         return get_project_stats(project_directory)
 
     # -----------------------------
+    # Code Intelligence Tools
+    # -----------------------------
+    @mcp.tool()
+    async def gm_build_index(
+        project_root: str = ".",
+        force: bool = False,
+        prefer_cli: bool = False,
+        output_mode: str = "full",
+        tail_lines: int = 120,
+        quiet: bool = False,
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Build or rebuild the GML symbol index for code intelligence features.
+        
+        Args:
+            force: If True, rebuild from scratch. If False, use cache if valid.
+        """
+        repo_root = _resolve_repo_root(project_root)
+        _ensure_cli_on_sys_path(repo_root)
+        from gms_helpers.commands.symbol_commands import handle_build_index
+
+        args = argparse.Namespace(
+            project_root=_resolve_project_directory(project_root),
+            force=force,
+        )
+        
+        cli_args = ["symbol", "build"]
+        if force:
+            cli_args.append("--force")
+        
+        return await _run_with_fallback(
+            direct_handler=handle_build_index,
+            direct_args=args,
+            cli_args=cli_args,
+            project_root=project_root,
+            prefer_cli=prefer_cli,
+            output_mode=output_mode,
+            tail_lines=tail_lines,
+            quiet=quiet,
+            tool_name="gm-build-index",
+            ctx=ctx,
+        )
+
+    @mcp.tool()
+    async def gm_find_definition(
+        symbol_name: str,
+        project_root: str = ".",
+        prefer_cli: bool = False,
+        output_mode: str = "full",
+        tail_lines: int = 120,
+        quiet: bool = False,
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Find definition(s) of a GML symbol (function, enum, macro, globalvar).
+        
+        Args:
+            symbol_name: Name of the symbol to find.
+        """
+        repo_root = _resolve_repo_root(project_root)
+        _ensure_cli_on_sys_path(repo_root)
+        from gms_helpers.commands.symbol_commands import handle_find_definition
+
+        args = argparse.Namespace(
+            project_root=_resolve_project_directory(project_root),
+            symbol_name=symbol_name,
+        )
+        
+        cli_args = ["symbol", "find-definition", symbol_name]
+        
+        return await _run_with_fallback(
+            direct_handler=handle_find_definition,
+            direct_args=args,
+            cli_args=cli_args,
+            project_root=project_root,
+            prefer_cli=prefer_cli,
+            output_mode=output_mode,
+            tail_lines=tail_lines,
+            quiet=quiet,
+            tool_name="gm-find-definition",
+            ctx=ctx,
+        )
+
+    @mcp.tool()
+    async def gm_find_references(
+        symbol_name: str,
+        project_root: str = ".",
+        max_results: int = 50,
+        prefer_cli: bool = False,
+        output_mode: str = "full",
+        tail_lines: int = 120,
+        quiet: bool = False,
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Find all references to a GML symbol.
+        
+        Args:
+            symbol_name: Name of the symbol to find references for.
+            max_results: Maximum number of references to return.
+        """
+        repo_root = _resolve_repo_root(project_root)
+        _ensure_cli_on_sys_path(repo_root)
+        from gms_helpers.commands.symbol_commands import handle_find_references
+
+        args = argparse.Namespace(
+            project_root=_resolve_project_directory(project_root),
+            symbol_name=symbol_name,
+            max_results=max_results,
+        )
+        
+        cli_args = ["symbol", "find-references", symbol_name, "--max", str(max_results)]
+        
+        return await _run_with_fallback(
+            direct_handler=handle_find_references,
+            direct_args=args,
+            cli_args=cli_args,
+            project_root=project_root,
+            prefer_cli=prefer_cli,
+            output_mode=output_mode,
+            tail_lines=tail_lines,
+            quiet=quiet,
+            tool_name="gm-find-references",
+            ctx=ctx,
+        )
+
+    @mcp.tool()
+    async def gm_list_symbols(
+        project_root: str = ".",
+        kind: str | None = None,
+        name_filter: str | None = None,
+        file_filter: str | None = None,
+        max_results: int = 100,
+        prefer_cli: bool = False,
+        output_mode: str = "full",
+        tail_lines: int = 120,
+        quiet: bool = False,
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        List all GML symbols in the project, optionally filtered.
+        
+        Args:
+            kind: Filter by symbol kind (function, enum, macro, globalvar, constructor).
+            name_filter: Filter symbols by name (case-insensitive substring match).
+            file_filter: Filter symbols by file path (case-insensitive substring match).
+            max_results: Maximum number of symbols to return.
+        """
+        repo_root = _resolve_repo_root(project_root)
+        _ensure_cli_on_sys_path(repo_root)
+        from gms_helpers.commands.symbol_commands import handle_list_symbols
+
+        args = argparse.Namespace(
+            project_root=_resolve_project_directory(project_root),
+            kind=kind,
+            name_filter=name_filter,
+            file_filter=file_filter,
+            max_results=max_results,
+        )
+        
+        cli_args = ["symbol", "list"]
+        if kind:
+            cli_args.extend(["--kind", kind])
+        if name_filter:
+            cli_args.extend(["--name", name_filter])
+        if file_filter:
+            cli_args.extend(["--file", file_filter])
+        cli_args.extend(["--max", str(max_results)])
+        
+        return await _run_with_fallback(
+            direct_handler=handle_list_symbols,
+            direct_args=args,
+            cli_args=cli_args,
+            project_root=project_root,
+            prefer_cli=prefer_cli,
+            output_mode=output_mode,
+            tail_lines=tail_lines,
+            quiet=quiet,
+            tool_name="gm-list-symbols",
+            ctx=ctx,
+        )
+
+    # -----------------------------
     # MCP Resources
     # -----------------------------
     @mcp.resource("gms://project/index")
@@ -3192,6 +3521,11 @@ def build_server():
 
 
 def main() -> int:
+    # Suppress MCP SDK INFO logging to stderr (Cursor displays stderr as [error] which is confusing)
+    import logging
+    logging.getLogger("mcp").setLevel(logging.WARNING)
+    logging.getLogger("mcp.server").setLevel(logging.WARNING)
+    
     # region agent log
     _dbg(
         "H1",

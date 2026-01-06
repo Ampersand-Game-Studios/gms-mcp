@@ -5,6 +5,26 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **GML Symbol Indexing & Code Intelligence**: Implemented a core GML parsing and indexing engine for advanced code analysis:
+    - `gm_build_index`: Scan the entire project and build a high-performance cache of symbols (functions, enums, macros, globalvars, constructors) and their references.
+    - `gm_find_definition`: Instantly jump to the definition of any GML symbol.
+    - `gm_find_references`: Trace all usages of a symbol across the project.
+    - `gm_list_symbols`: Filtered listing of all project symbols by type, name, or file.
+- **Improved MCP Logging**: Updated the MCP server to suppress informational SDK logs that were previously sent to `stderr`, preventing Cursor from incorrectly flagging them as `[error]` markers.
+- **Enhanced Asset Compatibility**: Standardized object (`.yy`) and event (`.gml`) generation formats to ensure 100% compatibility with GameMaker's **Igor** compiler (fixing "No version changes" and JSON schema errors).
+
+### Fixed
+- **Object Creation Schema**: Fixed a critical bug where newly created objects were missing required `$GMObject: "v1"` markers, which prevented project compilation.
+- **Event Creation Schema**: Updated the event management system to use `resourceVersion: "2.0"` and required `%Name` fields, ensuring modern GameMaker compatibility.
+- **CLI Subcommand Registration**: Resolved an issue where `symbol` commands were not correctly registered in the main `gms` CLI entry point.
+- **Test Suite assertions**: Updated 371-test suite to reflect the new standardized asset versioning requirements.
+
+### Changed
+- **Diagnostic output**: Refined tool outputs to be cleaner and more consistent across the code intelligence suite.
+- **Standardized Versioning**: Locked default asset creation to GameMaker 2024.x+ standards.
+
+## [0.1.1.dev41] - 2025-12-18 (Approximate)
+### Added
 - **Telemetry & Health Check**: Introduced `gm_mcp_health` tool (and `gms maintenance health` CLI command) for one-click diagnostic verification of the GameMaker development environment. It checks for project validity, Igor.exe, GameMaker runtimes, licenses, and Python dependencies.
 - **Execution Policy Manager**: Created a central `PolicyManager` in `src/gms_mcp/execution_policy.py` that determines per-tool execution modes (`DIRECT` vs `SUBPROCESS`). This allows "Fast assets, Resilient runner" behavior, defaulting safe operations like introspection and asset creation to in-process execution while keeping long-running tasks like the runner in isolated subprocesses.
 - **Typed Result Objects**: Introduced `@dataclass` result objects in `src/gms_helpers/results.py` (e.g., `AssetResult`, `MaintenanceResult`, `OperationResult`). This standardizes return values across tools, ensuring consistency and better integration with the MCP server.
@@ -32,7 +52,7 @@ All notable changes to this project will be documented in this file.
 - **Execution Model Documentation**: Updated README and tool docstrings to align with the actual high-reliability subprocess execution model (standardizing on captured output and isolated stdin).
 - **Project Root Resolution**: Standardized environment variable support across MCP server and CLI tools. Both now consistently check for `GM_PROJECT_ROOT` followed by `PROJECT_ROOT`, improving consistency when running in different environments.
 - **Test Suite Logs**: Improved test output by clearly labeling expected errors during negative testing as `[EXPECTED ERROR]`, reducing confusion during CI runs.
-- MCP tools now default to `skip_maintenance=True` and `maintenance_verbose=False` for faster feedback loops.
-- `gm_maintenance_dedupe_resources` now defaults to `auto=True` to prevent interactive prompt hangs.
-- Removed legacy `test_mcp_streaming_runner.py` in favor of the more stable direct/non-streaming architecture.
-- CLI test suite now imports `gms_helpers` directly from `src` and uses module invocation, removing legacy shim modules.
+- **Asset Creation Defaults**: MCP tools now default to `skip_maintenance=True` and `maintenance_verbose=False` for faster feedback loops.
+- **Dedupe Resources**: `gm_maintenance_dedupe_resources` now defaults to `auto=True` to prevent interactive prompt hangs.
+- **Legacy Removal**: Removed legacy `test_mcp_streaming_runner.py` in favor of the more stable direct/non-streaming architecture.
+- **Test Suite Architecture**: CLI test suite now imports `gms_helpers` directly from `src` and uses module invocation, removing legacy shim modules.

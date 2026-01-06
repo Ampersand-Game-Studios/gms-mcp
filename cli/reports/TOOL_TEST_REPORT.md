@@ -64,7 +64,7 @@ Testing all 59 tools of the `gms-mcp` server.
 | `gm_search_references` | [X] OK | Reference searching functional. |
 | `gm_get_asset_graph` | [X] OK | Dependency graph generation functional. |
 | `gm_get_project_stats` | [X] OK | Project statistics functional. |
-| `gm_compile` | [X] OK | Verified successful build using Stitch approach. |
+| `gm_compile` | [X] OK | Verified successful build using IDE-temp approach. |
 | `gm_run` | [X] OK | Verified functional. |
 | `gm_run_stop` | [X] OK | Functional and idempotent. |
 | `gm_run_status` | [X] OK | Functional (ASCII only). |
