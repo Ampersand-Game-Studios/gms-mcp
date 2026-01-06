@@ -16,6 +16,11 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
   - **Events**: add/remove/duplicate/list/validate/fix
   - **Workflow**: duplicate/rename/delete/swap-sprite
   - **Rooms**: ops (duplicate/rename/delete/list), layers (add/remove/list), instances (add/remove/list)
+  - **Code Intelligence** (GML symbol analysis for navigation and understanding):
+    - `gm_build_index`: Build/rebuild the GML symbol index (cached for performance)
+    - `gm_find_definition`: Find definition(s) of a GML symbol (function, enum, macro, globalvar, constructor)
+    - `gm_find_references`: Find all references to a symbol across the project
+    - `gm_list_symbols`: List all symbols with optional filtering by kind, name, or file
   - **Introspection** (complete support for all asset types including extensions and datafiles):
     - `gm_list_assets`: List all assets by type, name, or folder. Supports filtering by **`asset_type`**, **`name_contains`**, and **`folder_prefix`**. (Includes scripts, objects, sprites, rooms, sounds, fonts, shaders, paths, timelines, tilesets, animcurves, sequences, notes, folders, **extensions**, **includedfiles**)
     - `gm_read_asset`: Read complete .yy JSON metadata for any asset

@@ -129,14 +129,17 @@ def add_event(object_name: str, event_spec: str, template: str = "") -> bool:
         print(f"[OK] Created event file: {gml_path}")
         
     # Add to .yy file
+    event_name = filename.replace(".gml", "")
     new_event = {
-        "resourceType": "GMEvent",
-        "resourceVersion": "1.0",
-        "name": "",
-        "isDnD": False,
+        "$GMEvent": "v1",
+        "%Name": event_name,
+        "collisionObjectId": None,
         "eventNum": e_num,
         "eventType": e_type,
-        "collisionObjectId": None
+        "isDnD": False,
+        "name": event_name,
+        "resourceType": "GMEvent",
+        "resourceVersion": "2.0"
     }
     
     if "eventList" not in data:
