@@ -2264,7 +2264,7 @@ def build_server():
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Run the project using Igor (stitch/classic approaches handled by your runner)."""
+        """Run the project using Igor (IDE-temp/classic approaches handled by your runner)."""
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.runner_commands import handle_runner_run
