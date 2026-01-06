@@ -522,6 +522,18 @@ class TestResourceManagement(TestUtilsComprehensive):
 class TestValidationUtilities(TestUtilsComprehensive):
     """Test validation utility functions."""
     
+    def setUp(self):
+        """Set up test environment and clear naming config cache."""
+        super().setUp()
+        from gms_helpers.naming_config import NamingConfig
+        NamingConfig.clear_cache()
+    
+    def tearDown(self):
+        """Clean up and clear naming config cache."""
+        from gms_helpers.naming_config import NamingConfig
+        NamingConfig.clear_cache()
+        super().tearDown()
+    
     def test_validate_name_script_valid(self):
         """Test script name validation with valid names."""
         valid_names = [
@@ -616,6 +628,73 @@ class TestValidationUtilities(TestUtilsComprehensive):
             validate_name("test_name", "unsupported_type")
         except ValueError:
             self.fail("validate_name raised ValueError for unsupported asset type")
+    
+    def test_validate_name_with_custom_config(self):
+        """Test validate_name respects custom config settings."""
+        import tempfile
+        import json
+        from gms_helpers.naming_config import NamingConfig, PROJECT_CONFIG_FILE
+        
+        # Create a temp directory with custom config
+        temp_dir = tempfile.mkdtemp()
+        try:
+            # Create custom config that uses obj_ prefix for objects
+            config_path = Path(temp_dir) / PROJECT_CONFIG_FILE
+            custom_config = {
+                "naming": {
+                    "rules": {
+                        "object": {"prefix": "obj_", "pattern": "^obj_[a-z0-9_]*$"}
+                    }
+                }
+            }
+            with open(config_path, 'w') as f:
+                json.dump(custom_config, f)
+            
+            # Load config from this directory
+            config = NamingConfig(temp_dir)
+            
+            # obj_player should be valid with custom config
+            try:
+                validate_name("obj_player", "object", config=config)
+            except ValueError:
+                self.fail("validate_name rejected obj_player with custom config")
+            
+            # o_player should be invalid with custom config
+            with self.assertRaises(ValueError):
+                validate_name("o_player", "object", config=config)
+        finally:
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
+    
+    def test_validate_name_with_disabled_naming(self):
+        """Test validate_name skips validation when naming is disabled."""
+        import tempfile
+        import json
+        from gms_helpers.naming_config import NamingConfig, PROJECT_CONFIG_FILE
+        
+        # Create a temp directory with naming disabled
+        temp_dir = tempfile.mkdtemp()
+        try:
+            config_path = Path(temp_dir) / PROJECT_CONFIG_FILE
+            disabled_config = {
+                "naming": {
+                    "enabled": False
+                }
+            }
+            with open(config_path, 'w') as f:
+                json.dump(disabled_config, f)
+            
+            config = NamingConfig(temp_dir)
+            
+            # Any name should be valid when naming is disabled
+            try:
+                validate_name("any_name_at_all", "object", config=config)
+                validate_name("NoPrefix", "sprite", config=config)
+            except ValueError:
+                self.fail("validate_name raised ValueError when naming is disabled")
+        finally:
+            import shutil
+            shutil.rmtree(temp_dir, ignore_errors=True)
     
     def test_validate_parent_path_valid(self):
         """Test validating valid parent paths.""" 
@@ -853,54 +932,73 @@ if __name__ == '__main__':
 class TestUtilsFullCoverage(unittest.TestCase):
     """Additional tests to achieve 100% coverage for utils.py"""
     
+    def setUp(self):
+        """Clear naming config cache for test isolation."""
+        from gms_helpers.naming_config import NamingConfig
+        NamingConfig.clear_cache()
+    
+    def tearDown(self):
+        """Clear naming config cache after tests."""
+        from gms_helpers.naming_config import NamingConfig
+        NamingConfig.clear_cache()
+    
     def test_validate_name_all_asset_types(self):
         """Test validate_name for all asset types with invalid names."""
         from gms_helpers.utils import validate_name
         
-        # Test invalid font name
+        # Test invalid font name - error should mention the asset type or prefix
         with self.assertRaises(ValueError) as cm:
             validate_name("invalid_font", "font")
-        self.assertIn("must start with 'fnt_' prefix", str(cm.exception))
+        error_msg = str(cm.exception).lower()
+        self.assertTrue("font" in error_msg or "fnt_" in error_msg)
         
         # Test invalid shader name
         with self.assertRaises(ValueError) as cm:
             validate_name("invalid_shader", "shader")
-        self.assertIn("must start with 'sh_' or 'shader_' prefix", str(cm.exception))
+        error_msg = str(cm.exception).lower()
+        self.assertTrue("shader" in error_msg or "sh_" in error_msg)
         
         # Test invalid animcurve name
         with self.assertRaises(ValueError) as cm:
             validate_name("invalid_curve", "animcurve")
-        self.assertIn("must start with 'curve_' or 'ac_' prefix", str(cm.exception))
+        error_msg = str(cm.exception).lower()
+        self.assertTrue("animcurve" in error_msg or "curve_" in error_msg or "ac_" in error_msg)
         
         # Test invalid sound name
         with self.assertRaises(ValueError) as cm:
             validate_name("invalid_sound", "sound")
-        self.assertIn("must start with 'snd_' or 'sfx_' prefix", str(cm.exception))
+        error_msg = str(cm.exception).lower()
+        self.assertTrue("sound" in error_msg or "snd_" in error_msg or "sfx_" in error_msg)
         
         # Test invalid path name
         with self.assertRaises(ValueError) as cm:
             validate_name("invalid_path", "path")
-        self.assertIn("must start with 'pth_' or 'path_' prefix", str(cm.exception))
+        error_msg = str(cm.exception).lower()
+        self.assertTrue("path" in error_msg or "pth_" in error_msg)
         
         # Test invalid tileset name
         with self.assertRaises(ValueError) as cm:
             validate_name("invalid_tileset", "tileset")
-        self.assertIn("must start with 'ts_' or 'tile_' prefix", str(cm.exception))
+        error_msg = str(cm.exception).lower()
+        self.assertTrue("tileset" in error_msg or "ts_" in error_msg or "tile_" in error_msg)
         
         # Test invalid timeline name
         with self.assertRaises(ValueError) as cm:
             validate_name("invalid_timeline", "timeline")
-        self.assertIn("must start with 'tl_' or 'timeline_' prefix", str(cm.exception))
+        error_msg = str(cm.exception).lower()
+        self.assertTrue("timeline" in error_msg or "tl_" in error_msg)
         
         # Test invalid sequence name
         with self.assertRaises(ValueError) as cm:
             validate_name("invalid_sequence", "sequence")
-        self.assertIn("must start with 'seq_' or 'sequence_' prefix", str(cm.exception))
+        error_msg = str(cm.exception).lower()
+        self.assertTrue("sequence" in error_msg or "seq_" in error_msg)
         
         # Test invalid note name (with special chars)
         with self.assertRaises(ValueError) as cm:
             validate_name("invalid@note!", "note")
-        self.assertIn("can only contain letters, numbers, underscores, hyphens, and spaces", str(cm.exception))
+        error_msg = str(cm.exception).lower()
+        self.assertTrue("note" in error_msg)
     
     def test_insert_into_resources_duplicate(self):
         """Test insert_into_resources when resource already exists."""

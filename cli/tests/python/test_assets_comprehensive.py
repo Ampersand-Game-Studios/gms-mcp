@@ -1014,15 +1014,23 @@ class TestAssetIntegrationScenarios(TestAssetsComprehensive):
     
     def test_asset_creation_with_unicode_names(self):
         """Test asset creation with Unicode characters in names."""
+        from gms_helpers.naming_config import NamingConfig
+        NamingConfig.clear_cache()
+        
         script_asset = ScriptAsset()
         parent_path = self._create_test_folder_structure()
         
-        # Test with Unicode characters (should be handled by validation)
+        # Test with Unicode characters - default config pattern does NOT allow Unicode
+        # This is the intended stricter behavior for the default naming conventions
         unicode_name = "test_script_é_ñ"
         
-        # Script validation currently allows Unicode - this passes base validation
-        # and contains underscore which makes it valid for script naming
-        self.assertTrue(script_asset.validate_name(unicode_name))
+        # With default config, Unicode names should fail validation
+        # (pattern ^[a-z][a-z0-9_]*$ only allows ASCII)
+        self.assertFalse(script_asset.validate_name(unicode_name))
+        
+        # Valid ASCII names should still work
+        ascii_name = "test_script_valid"
+        self.assertTrue(script_asset.validate_name(ascii_name))
     
     def test_asset_creation_performance_stress(self):
         """Test creating many assets rapidly."""

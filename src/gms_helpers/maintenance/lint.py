@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 
 from ..utils import load_json, validate_name, find_yyp_file
+from ..naming_config import get_config, NamingConfig
 from ..diagnostics import (
     Diagnostic,
     CODE_JSON_INVALID,
@@ -84,6 +85,8 @@ class ProjectLinter:
         self.issues: List[LintIssue] = []
         self.yyp_path = None
         self.yyp_data = None
+        # Load naming config for this project
+        self._config: NamingConfig = get_config(self.project_root)
     
     def scan_project(self) -> List[LintIssue]:
         """Perform a comprehensive project scan."""
@@ -159,9 +162,13 @@ class ProjectLinter:
             raise ValueError(f"Invalid options file format: {e}")
     
     def _validate_naming_conventions(self):
-        """Check asset naming conventions."""
+        """Check asset naming conventions based on project config."""
         if not self.yyp_data:
             return
+        
+        # Check if naming validation is enabled in config
+        if not self._config.naming_enabled:
+            return  # Skip all naming validation
         
         resources = self.yyp_data.get('resources', [])
         
@@ -178,12 +185,18 @@ class ProjectLinter:
             if not asset_type:
                 continue
             
-            # Skip naming validation for constructor scripts
-            if asset_type == 'script' and self._is_constructor_script(path):
-                continue
+            # Check if this asset type has a rule configured
+            rule = self._config.get_rule(asset_type)
+            if not rule:
+                continue  # No rule for this type, skip
+            
+            # Skip naming validation for constructor scripts if allowed
+            if asset_type == 'script':
+                if self._config.allows_pascal_constructors('script') and self._is_constructor_script(path):
+                    continue
             
             try:
-                validate_name(name, asset_type)
+                validate_name(name, asset_type, config=self._config)
             except ValueError as e:
                 self.issues.append(LintIssue(
                     severity='warning',
@@ -233,14 +246,30 @@ class ProjectLinter:
     
     def _get_asset_type_from_path(self, path: str) -> Optional[str]:
         """Determine asset type from file path."""
-        if '/scripts/' in path:
-            return 'script'
-        elif '/objects/' in path:
-            return 'object'
-        elif '/sprites/' in path:
-            return 'sprite'
-        elif '/rooms/' in path:
-            return 'room'
+        # Normalize path separators and ensure leading slash for consistent matching
+        normalized = '/' + path.replace('\\', '/').lstrip('/')
+        
+        # Map folder names to asset types
+        asset_type_map = {
+            '/scripts/': 'script',
+            '/objects/': 'object',
+            '/sprites/': 'sprite',
+            '/rooms/': 'room',
+            '/fonts/': 'font',
+            '/shaders/': 'shader',
+            '/sounds/': 'sound',
+            '/paths/': 'path',
+            '/tilesets/': 'tileset',
+            '/timelines/': 'timeline',
+            '/sequences/': 'sequence',
+            '/animcurves/': 'animcurve',
+            '/notes/': 'note',
+        }
+        
+        for folder, asset_type in asset_type_map.items():
+            if folder in normalized:
+                return asset_type
+        
         return None
     
     def _is_constructor_script(self, path: str) -> bool:

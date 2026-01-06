@@ -1,1 +1,1 @@
-gms-mcp just hit 100% test pass rate across all 59 tools. 🛡️ Fixed those annoying JSON bugs in room layers, added event duplication, and hardened the Windows compiler. AI-powered GameMaker dev just got a major reliability boost. 🎮
+Your project, your rules. gms-mcp now supports custom naming conventions and per-project linting. Use O_ or obj_, snake_case or PascalCase - the tool now adapts to your project's style instead of forcing mine. Setup is a breeze with the new config wizard. 🛠️
