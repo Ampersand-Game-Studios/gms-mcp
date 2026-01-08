@@ -172,7 +172,10 @@ def _select_gm_project_root(
         print("[ERROR] Out of range.")
 
 
-def _workspace_folder_var(_client: str) -> str:
+def _workspace_folder_var(client: str) -> str:
+    """Return the workspace/project directory variable for a given client."""
+    if client in ("claude-code", "claude-code-global"):
+        return "${CLAUDE_PROJECT_DIR}"
     return "${workspaceFolder}"
 
 
@@ -287,6 +290,102 @@ def _generate_example_configs(
         _write_json(out_path, config, dry_run=dry_run)
         out_paths.append(out_path)
     return out_paths
+
+
+def _get_package_version() -> str:
+    """Get the current package version, with fallback."""
+    try:
+        from importlib.metadata import version
+        return version("gms-mcp")
+    except Exception:
+        return "0.1.0"
+
+
+def _make_claude_code_plugin_manifest() -> dict:
+    """Create the plugin.json manifest for Claude Code."""
+    return {
+        "name": "gms-mcp",
+        "description": "GameMaker Studio MCP tools for asset management, code intelligence, and project maintenance",
+        "version": _get_package_version(),
+        "author": {
+            "name": "Ampersand Game Studios",
+            "url": "https://github.com/Ampersand-Game-Studios/gms-mcp"
+        },
+        "repository": "https://github.com/Ampersand-Game-Studios/gms-mcp",
+        "license": "MIT",
+        "keywords": ["gamemaker", "game-development", "mcp", "assets", "code-intelligence"]
+    }
+
+
+def _make_claude_code_mcp_config(
+    *,
+    server_name: str,
+    command: str,
+    args: list[str],
+) -> dict:
+    """
+    Create the .mcp.json config for Claude Code.
+
+    Uses ${CLAUDE_PROJECT_DIR} which dynamically resolves to whichever
+    project Claude Code is currently open in.
+    """
+    env: dict[str, str] = {
+        "GM_PROJECT_ROOT": "${CLAUDE_PROJECT_DIR}",
+        "PYTHONUNBUFFERED": "1",  # Ensure Python output is not buffered
+    }
+
+    # Include relevant environment variables from current process
+    for env_var in ["GMS_MCP_GMS_PATH", "GMS_MCP_DEFAULT_TIMEOUT_SECONDS", "GMS_MCP_ENABLE_DIRECT"]:
+        val = os.environ.get(env_var)
+        if val:
+            env[env_var] = val
+
+    return {
+        server_name: {
+            "command": command,
+            "args": args,
+            "env": env,
+        }
+    }
+
+
+def _generate_claude_code_plugin(
+    *,
+    plugin_dir: Path,
+    server_name: str,
+    command: str,
+    args_prefix: list[str],
+    dry_run: bool,
+) -> list[Path]:
+    """
+    Generate a Claude Code plugin with MCP server configuration.
+
+    Creates:
+      plugin_dir/
+      ├── .claude-plugin/
+      │   └── plugin.json
+      └── .mcp.json
+    """
+    written: list[Path] = []
+
+    # Create plugin manifest
+    manifest_dir = plugin_dir / ".claude-plugin"
+    manifest_path = manifest_dir / "plugin.json"
+    manifest = _make_claude_code_plugin_manifest()
+    _write_json(manifest_path, manifest, dry_run=dry_run)
+    written.append(manifest_path)
+
+    # Create MCP server config
+    mcp_config_path = plugin_dir / ".mcp.json"
+    mcp_config = _make_claude_code_mcp_config(
+        server_name=server_name,
+        command=command,
+        args=args_prefix,
+    )
+    _write_json(mcp_config_path, mcp_config, dry_run=dry_run)
+    written.append(mcp_config_path)
+
+    return written
 
 
 def _setup_project_config(
@@ -407,10 +506,17 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.add_argument("--cursor", action="store_true", help="Write Cursor workspace config to .cursor/mcp.json.")
     parser.add_argument("--cursor-global", action="store_true", help="Write Cursor *global* config to ~/.cursor/mcp.json.")
+    parser.add_argument("--claude-code", action="store_true", help="Write Claude Code plugin to current workspace (.claude-plugin/).")
+    parser.add_argument(
+        "--claude-code-global",
+        action="store_true",
+        help="Install Claude Code plugin globally to ~/.claude/plugins/gms-mcp/. "
+             "Works across all projects using ${CLAUDE_PROJECT_DIR}.",
+    )
     parser.add_argument("--vscode", action="store_true", help="Write a VS Code example config to mcp-configs/vscode.mcp.json.")
     parser.add_argument("--windsurf", action="store_true", help="Write a Windsurf example config to mcp-configs/windsurf.mcp.json.")
     parser.add_argument("--antigravity", action="store_true", help="Write an Antigravity example config to mcp-configs/antigravity.mcp.json.")
-    parser.add_argument("--all", action="store_true", help="Generate Cursor config + all example configs.")
+    parser.add_argument("--all", action="store_true", help="Generate Cursor config + all example configs (excludes Claude Code global).")
     
     # Naming convention config options
     parser.add_argument(
@@ -434,7 +540,11 @@ def main(argv: list[str] | None = None) -> int:
         non_interactive=bool(args.non_interactive),
     )
 
-    requested_any = args.cursor or args.cursor_global or args.vscode or args.windsurf or args.antigravity or args.all
+    requested_any = (
+        args.cursor or args.cursor_global or
+        args.claude_code or args.claude_code_global or
+        args.vscode or args.windsurf or args.antigravity or args.all
+    )
     if not requested_any:
         args.cursor = True
 
@@ -443,6 +553,7 @@ def main(argv: list[str] | None = None) -> int:
         args.vscode = True
         args.windsurf = True
         args.antigravity = True
+        # Note: --all does NOT include claude-code-global since it's a global install
 
     command, args_prefix = _resolve_launcher(mode=args.mode, python_command=args.python)
 
@@ -483,6 +594,34 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
 
+    if args.claude_code:
+        # Workspace-local Claude Code plugin
+        written.extend(
+            _generate_claude_code_plugin(
+                plugin_dir=workspace_root,
+                server_name=args.server_name,
+                command=command,
+                args_prefix=args_prefix,
+                dry_run=dry_run,
+            )
+        )
+
+    if args.claude_code_global:
+        # Global Claude Code plugin - uses ${CLAUDE_PROJECT_DIR} for dynamic project detection
+        claude_plugins_dir = Path.home() / ".claude" / "plugins" / "gms-mcp"
+        written.extend(
+            _generate_claude_code_plugin(
+                plugin_dir=claude_plugins_dir,
+                server_name=args.server_name,
+                command=command,
+                args_prefix=args_prefix,
+                dry_run=dry_run,
+            )
+        )
+        if not dry_run:
+            print(f"[INFO] Claude Code plugin installed to: {claude_plugins_dir}")
+            print("       The plugin will be available after restarting Claude Code.")
+
     example_clients: list[str] = []
     if args.vscode:
         example_clients.append("vscode")
@@ -519,6 +658,23 @@ def main(argv: list[str] | None = None) -> int:
                 gm_project_root_rel_posix=gm_rel_posix,
             )
             print(f"\n[DRY-RUN] {cursor_path}:\n{json.dumps(payload, indent=2)}\n")
+        if args.claude_code or args.claude_code_global:
+            plugin_dir = (
+                Path.home() / ".claude" / "plugins" / "gms-mcp"
+                if args.claude_code_global
+                else workspace_root
+            )
+            print(f"\n[DRY-RUN] Claude Code plugin would be created at: {plugin_dir}")
+            print(f"[DRY-RUN] {plugin_dir / '.claude-plugin' / 'plugin.json'}:")
+            print(json.dumps(_make_claude_code_plugin_manifest(), indent=2))
+            print(f"\n[DRY-RUN] {plugin_dir / '.mcp.json'}:")
+            mcp_config = _make_claude_code_mcp_config(
+                server_name=args.server_name,
+                command=command,
+                args=args_prefix,
+            )
+            print(json.dumps(mcp_config, indent=2))
+            print()
         return 0
 
     gm_note = str(gm_project_root) if gm_project_root else "(not selected; defaults to ${workspaceFolder})"
