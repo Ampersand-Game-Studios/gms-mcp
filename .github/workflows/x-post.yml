@@ -16,78 +16,31 @@ jobs:
       - uses: actions/checkout@v4
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
 
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.12"
 
-      - name: Check for tweet content
-        id: check
-        run: |
-          TWEET_FILE=".github/next_tweet.txt"
-          if [ ! -f "$TWEET_FILE" ]; then
-            echo "No tweet file found, skipping"
-            echo "should_post=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          CONTENT=$(cat "$TWEET_FILE")
-          
-          # Skip if placeholder or empty
-          if [[ "$CONTENT" == *"No tweet pending"* ]] || [[ -z "$CONTENT" ]]; then
-            echo "No tweet content, skipping"
-            echo "should_post=false" >> $GITHUB_OUTPUT
-            exit 0
-          fi
-          
-          echo "Tweet content found."
-          echo "should_post=true" >> $GITHUB_OUTPUT
-          
-          # Store content for the python script safely
-          echo "TWEET_CONTENT<<EOF" >> $GITHUB_ENV
-          echo "$CONTENT" >> $GITHUB_ENV
-          echo "EOF" >> $GITHUB_ENV
+      - name: Install dependencies
+        run: pip install tweepy
 
-      - name: Post to X via Python
-        if: steps.check.outputs.should_post == 'true'
+      - name: Post to X
+        id: post
         env:
           X_APP_KEY: ${{ secrets.X_APP_KEY }}
           X_APP_SECRET: ${{ secrets.X_APP_SECRET }}
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
         run: |
-          pip install tweepy
-          python -c "
-          import tweepy, os, sys
-          
-          try:
-              client = tweepy.Client(
-                  consumer_key=os.environ['X_APP_KEY'],
-                  consumer_secret=os.environ['X_APP_SECRET'],
-                  access_token=os.environ['X_ACCESS_TOKEN'],
-                  access_token_secret=os.environ['X_ACCESS_SECRET']
-              )
-              
-              tweet_text = os.environ.get('TWEET_CONTENT', '').strip()
-              if not tweet_text:
-                  print('Error: Tweet content is empty')
-                  sys.exit(1)
-                  
-              print(f'Posting tweet: {tweet_text[:50]}...')
-              response = client.create_tweet(text=tweet_text)
-              print(f'Successfully posted! Tweet ID: {response.data[\"id\"]}')
-          except Exception as e:
-              print(f'Error posting to X: {e}')
-              sys.exit(1)
-          "
+          python .github/scripts/post_tweet.py
 
-      - name: Clear tweet file after posting
-        if: steps.check.outputs.should_post == 'true'
+      - name: Commit changes
+        if: always() && steps.post.outputs.should_commit == 'true'
         run: |
-          echo "(No tweet pending - agent should write here before pushing to main)" > .github/next_tweet.txt
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .github/next_tweet.txt
-          git commit -m "chore: clear posted tweet [skip ci]" || echo "Nothing to commit"
-          git push
+          git add .github/next_tweet.txt .github/tweet_history.json
+          git diff --staged --quiet || git commit -m "chore: update tweet status [skip ci]"
+          git push || echo "Push failed - may need manual intervention"
