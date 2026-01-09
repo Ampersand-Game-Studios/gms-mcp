@@ -18,3 +18,6 @@ gamemaker/
 .vscode/settings.json
 .cursor/mcp.json
 .cursor/debug.log
+
+# Local environment (API keys, secrets)
+.env

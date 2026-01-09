@@ -150,7 +150,7 @@ class TestTweetFileOperations(unittest.TestCase):
         post_tweet.TWEET_FILE = self.original_tweet_file
 
     def test_clear_tweet_file(self):
-        """Should clear tweet file with placeholder."""
+        """Should clear tweet file to empty."""
         # Create a tweet file with content
         with open(post_tweet.TWEET_FILE, "w") as f:
             f.write("Some tweet content")
@@ -158,7 +158,7 @@ class TestTweetFileOperations(unittest.TestCase):
         post_tweet.clear_tweet_file()
 
         content = post_tweet.TWEET_FILE.read_text()
-        self.assertIn("No tweet pending", content)
+        self.assertEqual(content, "")
 
 
 class TestMainFunction(unittest.TestCase):
@@ -186,9 +186,9 @@ class TestMainFunction(unittest.TestCase):
         result = post_tweet.main()
         self.assertEqual(result, 0)
 
-    def test_main_placeholder_tweet_file(self):
-        """Should exit 0 if tweet file contains placeholder."""
-        post_tweet.TWEET_FILE.write_text("(No tweet pending - test)")
+    def test_main_whitespace_tweet_file(self):
+        """Should exit 0 if tweet file contains only whitespace."""
+        post_tweet.TWEET_FILE.write_text("   \n\t  \n  ")
         result = post_tweet.main()
         self.assertEqual(result, 0)
 
@@ -208,9 +208,9 @@ class TestMainFunction(unittest.TestCase):
         result = post_tweet.main()
         self.assertEqual(result, 0)
 
-        # Tweet file should be cleared
+        # Tweet file should be cleared (empty)
         content = post_tweet.TWEET_FILE.read_text()
-        self.assertIn("No tweet pending", content)
+        self.assertEqual(content, "")
 
 
 def run_tests():

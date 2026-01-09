@@ -19,7 +19,6 @@ from pathlib import Path
 # Constants
 TWEET_FILE = Path(".github/next_tweet.txt")
 HISTORY_FILE = Path(".github/tweet_history.json")
-PLACEHOLDER = "(No tweet pending - agent should write here before pushing to main)"
 MAX_HISTORY_ENTRIES = 100  # Keep last N tweets to prevent file bloat
 
 
@@ -70,9 +69,9 @@ def is_duplicate_in_history(history: dict, tweet_hash: str) -> bool:
 
 
 def clear_tweet_file() -> None:
-    """Clear the tweet file with placeholder text."""
+    """Clear the tweet file (empty it)."""
     with open(TWEET_FILE, "w", encoding="utf-8") as f:
-        f.write(PLACEHOLDER + "\n")
+        f.write("")
 
 
 def set_output(name: str, value: str) -> None:
@@ -97,10 +96,9 @@ def main() -> int:
     # Read tweet content
     tweet_content = TWEET_FILE.read_text(encoding="utf-8").strip()
 
-    # Check if it's a placeholder or empty
-    if not tweet_content or "No tweet pending" in tweet_content:
-        print("No tweet content (placeholder or empty)")
-        print("Nothing to post.")
+    # Skip if empty or whitespace only
+    if not tweet_content:
+        print("Tweet file is empty - nothing to post.")
         return 0
 
     print(f"Tweet content found ({len(tweet_content)} chars)")
