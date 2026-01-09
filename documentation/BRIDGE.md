@@ -1,5 +1,34 @@
 ## TCP Bridge (MCP Bridge) - Live Game Logging and Commands
 
+## QUICK REFERENCE CHECKLIST FOR AGENTS
+
+Before running a game with the bridge, verify ALL of the following:
+
+- [ ] **Correct project_root**: Run `gm_project_info()` first to confirm the `.yyp` location
+- [ ] **Bridge installed**: Run `gm_bridge_install()` if not already installed
+- [ ] **Bridge instance in room**: Use `gm_room_instance_add()` to add `__mcp_bridge` to your startup room
+- [ ] **instanceCreationOrder populated**: The room's `.yy` file MUST have the instance in `instanceCreationOrder[]` (not just in `layers[].instances[]`)
+- [ ] **Startup room is correct**: Check `RoomOrderNodes` in the `.yyp` - the first room listed is the startup room
+- [ ] **Use `__mcp_log()` not `show_debug_message()`**: Only `__mcp_log()` sends messages to the bridge
+- [ ] **Sandbox disabled** (Windows): Set `option_windows_disable_sandbox: true` in options_windows.yy for networking
+
+**Typical workflow**:
+```
+1. gm_project_info(project_root="gamemaker")           # Verify project
+2. gm_bridge_install(project_root="gamemaker")         # Install bridge (once)
+3. gm_room_instance_add(..., "__mcp_bridge", ...)      # Add to startup room (once)
+4. [Verify instanceCreationOrder in room .yy file]     # CRITICAL - see troubleshooting
+5. gm_run(background=true, enable_bridge=true)         # Run game
+6. [Wait 3-5 seconds for connection]
+7. gm_bridge_status() -> game_connected: true          # Verify connection
+8. gm_run_command("ping") -> "pong"                    # Test commands
+9. gm_run_command("spawn MyObject 100 100")            # Spawn objects
+10. gm_run_logs(lines=50)                              # Read logs
+11. gm_run_stop()                                      # Stop game
+```
+
+---
+
 This document is the source of truth for the optional TCP bridge used by `gms-mcp`.
 It enables bidirectional communication between:
 
@@ -217,12 +246,73 @@ Fix:
 
 Most common causes:
 
-- `__mcp_bridge` is not instantiated in the running game (not placed in a room).
-- The game is running from a different build/project than the one you think.
+1. **`__mcp_bridge` is not instantiated in the running game** (not placed in a room).
+2. **The `instanceCreationOrder` array is empty** in the room's `.yy` file (see CRITICAL section below).
+3. The game is running from a different build/project than the one you think.
+4. Windows Firewall is blocking the connection (unlikely for localhost).
 
 Fix:
 
 - Place an instance of `__mcp_bridge` in your startup room (see workflow Step 2), then restart via `gm_run`.
+- **CRITICAL**: Verify the room's `instanceCreationOrder` includes the bridge instance (see below).
+
+### CRITICAL: `instanceCreationOrder` must include the instance
+
+**This is the most common cause of "game_connected: false" when the instance appears to be in the room.**
+
+When you add an instance to a room (either via `gm_room_instance_add` or manually), the room's `.yy` file has TWO places that matter:
+
+1. `layers[].instances[]` - The instance definition (position, object, etc.)
+2. `instanceCreationOrder[]` - The order in which instances are created at runtime
+
+**If `instanceCreationOrder` is empty or doesn't include your instance, the instance will NOT be created at runtime**, even though it appears in the room file.
+
+Example of a BROKEN room file (instance exists but won't be created):
+```json
+{
+  "instanceCreationOrder": [],  // EMPTY - instances won't be created!
+  "layers": [
+    {
+      "instances": [
+        {
+          "name": "inst_abc123",
+          "objectId": { "name": "__mcp_bridge", ... }
+        }
+      ]
+    }
+  ]
+}
+```
+
+Example of a WORKING room file:
+```json
+{
+  "instanceCreationOrder": [
+    {
+      "name": "inst_abc123",
+      "path": "rooms/Room1/Room1.yy"
+    }
+  ],
+  "layers": [
+    {
+      "instances": [
+        {
+          "name": "inst_abc123",
+          "objectId": { "name": "__mcp_bridge", ... }
+        }
+      ]
+    }
+  ]
+}
+```
+
+**How to fix**: Read the room's `.yy` file and ensure `instanceCreationOrder` contains an entry for each instance in `layers[].instances[]`. The entry format is:
+```json
+{
+  "name": "<instance_name>",
+  "path": "rooms/<RoomName>/<RoomName>.yy"
+}
+```
 
 ### Commands work but logs are missing
 
