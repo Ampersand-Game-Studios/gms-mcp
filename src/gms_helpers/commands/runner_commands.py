@@ -1,11 +1,12 @@
 """Runner command implementations."""
 
 from pathlib import Path
+from typing import Dict, Any, Union
 
 from ..runner import GameMakerRunner
 
 
-def handle_runner_compile(args):
+def handle_runner_compile(args) -> bool:
     """Handle project compilation."""
     try:
         # Use current working directory if no project root specified
@@ -21,7 +22,6 @@ def handle_runner_compile(args):
         
         platform = getattr(args, 'platform', 'Windows')
         runtime = getattr(args, 'runtime', 'VM')
-        runtime_version = getattr(args, 'runtime_version', None)
         
         success = runner.compile_project(platform, runtime)
         
@@ -37,8 +37,14 @@ def handle_runner_compile(args):
         return False
 
 
-def handle_runner_run(args):
-    """Handle project execution."""
+def handle_runner_run(args) -> Union[bool, Dict[str, Any]]:
+    """
+    Handle project execution.
+    
+    Returns:
+        If background=False: bool (True if game exited successfully)
+        If background=True: dict with session info (pid, run_id, etc.)
+    """
     try:
         # Use current working directory if no project root specified
         if hasattr(args, 'project_root') and args.project_root:
@@ -53,21 +59,30 @@ def handle_runner_run(args):
         
         platform = getattr(args, 'platform', 'Windows')
         runtime = getattr(args, 'runtime', 'VM')
-        runtime_version = getattr(args, 'runtime_version', None)
         background = getattr(args, 'background', False)
         output_location = getattr(args, 'output_location', 'temp')
         
-        success = runner.run_project_direct(platform, runtime, background, output_location)
+        result = runner.run_project_direct(platform, runtime, background, output_location)
         
-        return success
+        return result
         
     except Exception as e:
         print(f"[ERROR] Error during execution: {e}")
+        if getattr(args, 'background', False):
+            return {"ok": False, "error": str(e), "message": f"Failed to start game: {e}"}
         return False
 
 
-def handle_runner_stop(args):
-    """Handle stopping the running game."""
+def handle_runner_stop(args) -> Dict[str, Any]:
+    """
+    Handle stopping the running game.
+    
+    Uses persistent session tracking to find and stop the game,
+    even if called from a different process or after restart.
+    
+    Returns:
+        Dict with result of stop operation
+    """
     try:
         # Use current working directory if no project root specified
         if hasattr(args, 'project_root') and args.project_root:
@@ -78,18 +93,31 @@ def handle_runner_stop(args):
         print(f"[STOP] Stopping GameMaker project in: {project_root}")
         
         runner = GameMakerRunner(project_root)
+        result = runner.stop_game()
         
-        success = runner.stop_game()
+        # Print result message
+        if result.get("ok"):
+            print(f"[OK] {result.get('message', 'Game stopped')}")
+        else:
+            print(f"[WARN] {result.get('message', 'Failed to stop game')}")
         
-        return success
+        return result
         
     except Exception as e:
         print(f"[ERROR] Error stopping game: {e}")
-        return False
+        return {"ok": False, "error": str(e), "message": f"Error stopping game: {e}"}
 
 
-def handle_runner_status(args):
-    """Check if game is currently running."""
+def handle_runner_status(args) -> Dict[str, Any]:
+    """
+    Check if game is currently running.
+    
+    Uses persistent session tracking to check status,
+    even if called from a different process or after restart.
+    
+    Returns:
+        Dict with session info and running status
+    """
     try:
         # Use current working directory if no project root specified
         if hasattr(args, 'project_root') and args.project_root:
@@ -98,14 +126,18 @@ def handle_runner_status(args):
             project_root = Path.cwd()
         
         runner = GameMakerRunner(project_root)
+        status = runner.get_game_status()
         
-        if runner.is_game_running():
-            print("[OK] Game is currently running")
-        else:
-            print("[OK] No game currently running")
-            
-        return True
+        # Print status message
+        print(f"[STATUS] {status.get('message', 'Unknown status')}")
+        
+        if status.get("running"):
+            print(f"   PID: {status.get('pid')}")
+            print(f"   Run ID: {status.get('run_id')}")
+            print(f"   Started: {status.get('started_at')}")
+        
+        return status
         
     except Exception as e:
         print(f"[ERROR] Error checking status: {e}")
-        return False 
+        return {"ok": False, "error": str(e), "message": f"Error checking status: {e}"}
