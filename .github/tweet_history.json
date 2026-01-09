@@ -1,3 +1,31 @@
 {
-  "posted": []
+  "posted": [
+    {
+      "hash": "8150a478c6ec4886",
+      "preview": "Claude Code users: gms-mcp now generates plugin co...",
+      "status": "posted",
+      "tweet_id": "2009614145813938430",
+      "timestamp": "2026-01-09T13:12:45.830545+00:00",
+      "topic": "integration",
+      "generated_by": "manual"
+    }
+  ],
+  "topic_coverage": {
+    "code_intelligence": null,
+    "asset_creation": null,
+    "maintenance": null,
+    "runtime_build": null,
+    "room_operations": null,
+    "events": null,
+    "introspection": null,
+    "diagnostics": null,
+    "workflow": null,
+    "integration": "2026-01-09T13:12:45.830545+00:00"
+  },
+  "generation_stats": {
+    "total_generated": 0,
+    "total_posted": 1,
+    "failures": 0,
+    "last_generation": null
+  }
 }

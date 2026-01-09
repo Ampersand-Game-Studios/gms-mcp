@@ -1,0 +1,63 @@
+name: Scheduled X Post
+
+on:
+  schedule:
+    # 8am UTC, 2pm UTC, 8pm UTC
+    - cron: '0 8 * * *'
+    - cron: '0 14 * * *'
+    - cron: '0 20 * * *'
+  workflow_dispatch: # Manual trigger for testing
+
+permissions:
+  contents: write
+
+jobs:
+  generate-and-post:
+    # Only run in the real repo, not forks
+    if: github.repository == 'Ampersand-Game-Studios/gms-mcp'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main # Always use main branch for content
+          token: ${{ secrets.GITHUB_TOKEN }}
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install tweepy anthropic
+
+      - name: Generate tweet with Claude
+        id: generate
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          python .github/scripts/generate_tweet.py
+          # Read topic from history for passing to post script
+          TOPIC=$(python -c "import json; h=json.load(open('.github/tweet_history.json')); print(h.get('topic_coverage',{}).keys().__iter__().__next__() if h else '')" 2>/dev/null || echo "")
+          echo "topic=$TOPIC" >> $GITHUB_OUTPUT
+
+      - name: Post to X
+        id: post
+        if: steps.generate.outputs.tweet_generated == 'true'
+        env:
+          X_APP_KEY: ${{ secrets.X_APP_KEY }}
+          X_APP_SECRET: ${{ secrets.X_APP_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
+          TWEET_TOPIC: ${{ steps.generate.outputs.topic }}
+          TWEET_GENERATED_BY: claude-api
+        run: python .github/scripts/post_tweet.py
+
+      - name: Commit history updates
+        if: always()
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add .github/next_tweet.txt .github/tweet_history.json
+          git diff --staged --quiet || git commit -m "chore: update tweet history [skip ci]"
+          git push || echo "Push failed - may need manual intervention"

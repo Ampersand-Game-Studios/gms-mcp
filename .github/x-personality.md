@@ -62,3 +62,36 @@ gms-mcp is a GameMaker tooling project - a CLI and MCP server that helps game de
 - Drama or negativity about other tools/engines
 - Promises about future features (ship first, tweet later)
 - Anything that sounds like marketing copy
+
+## AI-Generated Tweet Guidelines
+
+When Claude generates tweets automatically (3x daily):
+
+### Topic Rotation
+- Never tweet about the same tool category twice in a row
+- Categories: Code Intelligence, Asset Creation, Maintenance, Runtime/Build, Room Operations, Events, Introspection, Diagnostics, Workflow, Integration
+- The system tracks coverage and picks the least-recently-covered topic
+
+### Content Rules
+- Only reference features in released versions (not `[Unreleased]` in CHANGELOG)
+- Be specific: name the actual tool (e.g., `gm_find_references`) when relevant
+- Maximum 2 hashtags, prefer: #gamedev, #GameMaker, #indiedev
+- Aim for 180-240 characters (leave room for engagement)
+
+### Patterns to Avoid
+- "Did you know..." openers
+- "Pro tip:" prefixes
+- Rhetorical questions
+- Numbered lists in tweets
+- Generic statements that could apply to any tool
+
+### Time-of-Day Awareness
+- Morning (8am UTC): "Starting your day" angles, productivity focus
+- Afternoon (2pm UTC): Specific feature highlights, tool spotlights
+- Evening (8pm UTC): "End of day" angles, what you accomplished
+
+### Variety Mechanisms
+- Problem/Solution: "Tired of X? Now you can Y"
+- Announcement: "X just got better"
+- Capability: "You can now X with a single tool call"
+- Comparison: "What used to take 10 clicks is now one command"

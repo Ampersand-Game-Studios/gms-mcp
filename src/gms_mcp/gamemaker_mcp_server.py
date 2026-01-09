@@ -171,12 +171,14 @@ def _resolve_project_directory_no_deps(project_root: str | None) -> Path:
 
 def _resolve_repo_root(project_root: str | None) -> Path:
     """
-    Compatibility shim: older versions of this server expected a "repo root" that contained `cli/`.
-
-    In the packaged install, the tool code is importable as Python packages and does not require a repo root.
+    Resolve the project root path.
+    
+    If project_root is provided, resolve it to an absolute path.
+    Otherwise, use the current working directory.
     """
-    _ = project_root
-    return Path(__file__).resolve().parents[1]
+    if project_root:
+        return Path(project_root).resolve()
+    return Path.cwd()
 
 
 def _ensure_cli_on_sys_path(_repo_root: Path) -> None:
@@ -2404,9 +2406,33 @@ def build_server():
         output_mode: str = "full",
         tail_lines: int = 120,
         quiet: bool = False,
+        enable_bridge: bool | None = None,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Run the project using Igor."""
+        """
+        Run the project using Igor.
+        
+        Args:
+            platform: Target platform (default: Windows)
+            runtime: Runtime type VM or YYC (default: VM)
+            runtime_version: Specific runtime version to use
+            background: If True, launch game and return immediately without waiting.
+                        The game will run in the background and can be stopped with gm_run_stop.
+                        Returns session info (pid, run_id) for tracking.
+            output_location: 'temp' (IDE-style) or 'project' (classic output folder)
+            project_root: Path to project root
+            prefer_cli: Force CLI execution mode
+            output_mode: Output format (full, tail, none)
+            tail_lines: Number of lines to show in tail mode
+            quiet: Suppress verbose output
+            enable_bridge: If True, start bridge server for log capture and commands.
+                          If None (default), auto-detect based on whether bridge is installed.
+                          If False, explicitly disable bridge even if installed.
+            
+        Returns:
+            If background=True: Dict with session info (ok, pid, run_id, message, bridge_enabled)
+            If background=False: Dict with full execution result including stdout
+        """
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.runner_commands import handle_runner_run
@@ -2419,6 +2445,61 @@ def build_server():
             output_location=output_location,
             project_root=project_root,
         )
+        
+        # Auto-detect bridge if not explicitly set
+        bridge_enabled = False
+        bridge_server = None
+        
+        if enable_bridge is None or enable_bridge is True:
+            try:
+                from gms_helpers.bridge_installer import is_bridge_installed
+                from gms_helpers.bridge_server import get_bridge_server
+                
+                if is_bridge_installed(repo_root):
+                    if enable_bridge is not False:
+                        # Start bridge server
+                        bridge_server = get_bridge_server(repo_root, create=True)
+                        if bridge_server and bridge_server.start():
+                            bridge_enabled = True
+                            if not quiet:
+                                print(f"[BRIDGE] Server started on port {bridge_server.port}")
+            except Exception as e:
+                if not quiet:
+                    print(f"[BRIDGE] Failed to start bridge: {e}")
+        
+        # For background mode, we want to run directly and return quickly
+        # The game will be launched and we'll return session info immediately
+        if background:
+            # Run the handler directly - it will return session info without blocking
+            try:
+                result = handle_runner_run(args)
+                
+                # If result is a dict (background mode returns dict), add bridge info
+                if isinstance(result, dict):
+                    result["bridge_enabled"] = bridge_enabled
+                    if bridge_enabled and bridge_server:
+                        result["bridge_port"] = bridge_server.port
+                    return result
+                
+                # Fallback if somehow we got a bool
+                return {
+                    "ok": bool(result),
+                    "background": True,
+                    "bridge_enabled": bridge_enabled,
+                    "message": "Game launched" if result else "Failed to launch game",
+                }
+            except Exception as e:
+                # Stop bridge on failure
+                if bridge_server:
+                    bridge_server.stop()
+                return {
+                    "ok": False,
+                    "background": True,
+                    "error": str(e),
+                    "message": f"Failed to launch game: {e}",
+                }
+        
+        # For foreground mode, use the standard fallback mechanism
         cli_args = [
             "run",
             "start",
@@ -2431,8 +2512,6 @@ def build_server():
         ]
         if runtime_version:
             cli_args.extend(["--runtime-version", runtime_version])
-        if background:
-            cli_args.append("--background")
 
         return await _run_with_fallback(
             direct_handler=handle_runner_run,
@@ -2455,25 +2534,40 @@ def build_server():
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Stop the running game (if any)."""
+        """
+        Stop the running game (if any).
+        
+        Uses persistent session tracking to find and stop the game,
+        even if called from a different process or after MCP server restart.
+        Also stops the bridge server if it was running.
+        
+        Returns:
+            Dict with result of stop operation (ok, message)
+        """
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.runner_commands import handle_runner_stop
 
         args = argparse.Namespace(project_root=project_root)
-        cli_args = ["run", "stop"]
-
-        return await _run_with_fallback(
-            direct_handler=handle_runner_stop,
-            direct_args=args,
-            cli_args=cli_args,
-            project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
-        )
+        
+        # Stop bridge server if running
+        bridge_stopped = False
+        try:
+            from gms_helpers.bridge_server import stop_bridge_server
+            stop_bridge_server(repo_root)
+            bridge_stopped = True
+        except Exception:
+            pass
+        
+        # Run directly for immediate response
+        try:
+            result = handle_runner_stop(args)
+            if isinstance(result, dict):
+                result["bridge_stopped"] = bridge_stopped
+                return result
+            return {"ok": bool(result), "bridge_stopped": bridge_stopped, "message": "Game stopped" if result else "Failed to stop game"}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "message": f"Error stopping game: {e}"}
 
     @mcp.tool()
     async def gm_run_status(
@@ -2484,25 +2578,278 @@ def build_server():
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Check whether the game is running."""
+        """
+        Check whether the game is running.
+        
+        Uses persistent session tracking to check status,
+        even if called from a different process or after MCP server restart.
+        
+        Returns:
+            Dict with session info:
+            - has_session: bool - whether a session file exists
+            - running: bool - whether the game process is still alive
+            - run_id: str - unique session identifier
+            - pid: int - process ID
+            - started_at: str - ISO timestamp when game was launched
+            - message: str - human-readable status message
+        """
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.runner_commands import handle_runner_status
 
         args = argparse.Namespace(project_root=project_root)
-        cli_args = ["run", "status"]
+        
+        # Run directly for immediate response
+        try:
+            result = handle_runner_status(args)
+            if isinstance(result, dict):
+                return result
+            return {"running": bool(result), "message": "Status check completed"}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "message": f"Error checking status: {e}"}
 
-        return await _run_with_fallback(
-            direct_handler=handle_runner_status,
-            direct_args=args,
-            cli_args=cli_args,
-            project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
-        )
+    # -----------------------------
+    # Bridge tools (Phase 3)
+    # -----------------------------
+    @mcp.tool()
+    async def gm_bridge_install(
+        port: int = 6502,
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Install the MCP bridge into the GameMaker project.
+        
+        The bridge enables bidirectional communication between Cursor agents
+        and running GameMaker games, providing:
+        - Real-time log capture via __mcp_log(...) (also calls show_debug_message in-game)
+        - Command execution (spawn objects, change rooms, set variables)
+        - Game state querying
+
+        Note: Installing the bridge does not automatically place an instance in any room.
+        The game will only connect if __mcp_bridge is instantiated at runtime
+        (for example, by placing it in the startup room).
+        
+        Bridge assets use __mcp_ prefix and can be removed with gm_bridge_uninstall.
+        Once installed, the bridge is automatically used when running with gm_run.
+        
+        Args:
+            port: Port for bridge server (default: 6502)
+            project_root: Path to project root
+            
+        Returns:
+            Installation result with ok, message, and details
+        """
+        # Bridge installer needs actual project_root, not repo_root
+        from gms_helpers.bridge_installer import install_bridge
+        
+        try:
+            result = install_bridge(project_root, port)
+            return result
+        except Exception as e:
+            return {"ok": False, "error": str(e), "message": f"Installation failed: {e}"}
+
+    @mcp.tool()
+    async def gm_bridge_uninstall(
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Remove the MCP bridge from the GameMaker project.
+        
+        Safely removes all __mcp_ prefixed assets and cleans up .yyp references.
+        Uses backup/rollback to ensure project integrity.
+
+        Important: If you placed __mcp_bridge instances into rooms, remove those instances first.
+        Uninstalling removes the object asset; leaving room instance references can break IDE loading.
+        
+        Args:
+            project_root: Path to project root
+            
+        Returns:
+            Uninstallation result with ok, message, and details
+        """
+        # Bridge installer needs actual project_root, not repo_root
+        from gms_helpers.bridge_installer import uninstall_bridge
+        
+        try:
+            result = uninstall_bridge(project_root)
+            return result
+        except Exception as e:
+            return {"ok": False, "error": str(e), "message": f"Uninstallation failed: {e}"}
+
+    @mcp.tool()
+    async def gm_bridge_status(
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Check bridge installation and connection status.
+        
+        Returns:
+            Dict with:
+            - installed: bool - whether bridge assets exist in project
+            - server_running: bool - whether bridge server is active
+            - game_connected: bool - whether a game is connected to bridge
+            - log_count: int - number of buffered log messages
+        """
+        # Bridge needs actual project_root, not repo_root
+        from gms_helpers.bridge_installer import get_bridge_status
+        from gms_helpers.bridge_server import get_bridge_server
+        
+        try:
+            # Get installation status
+            install_status = get_bridge_status(project_root)
+            
+            # Get server status
+            server = get_bridge_server(project_root, create=False)
+            server_status = server.get_status() if server else {
+                "running": False,
+                "connected": False,
+                "log_count": 0,
+            }
+            
+            return {
+                "ok": True,
+                "installed": install_status.get("installed", False),
+                "server_running": server_status.get("running", False),
+                "game_connected": server_status.get("connected", False),
+                "log_count": server_status.get("log_count", 0),
+                "install_details": install_status,
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e), "message": f"Status check failed: {e}"}
+
+    @mcp.tool()
+    async def gm_run_logs(
+        lines: int = 50,
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Get recent log output from the running game.
+        
+        Requires:
+        - Bridge installed (gm_bridge_install)
+        - Game running (gm_run with background=true)
+        - Game connected to bridge
+        
+        Args:
+            lines: Number of log lines to return (default: 50)
+            project_root: Path to project root
+            
+        Notes:
+        - Only logs sent via __mcp_log(...) are available to this tool.
+        
+        Returns:
+            Dict with:
+            - ok: bool
+            - logs: list of log entries
+            - log_count: total buffered logs
+            - connected: whether game is connected
+        """
+        # Bridge needs actual project_root, not repo_root
+        from gms_helpers.bridge_server import get_bridge_server
+        
+        try:
+            server = get_bridge_server(project_root, create=False)
+            
+            if not server:
+                return {
+                    "ok": False,
+                    "error": "Bridge server not running",
+                    "message": "No bridge server active. Run the game first.",
+                    "logs": [],
+                }
+            
+            if not server.is_connected:
+                return {
+                    "ok": False,
+                    "error": "Game not connected",
+                    "message": "Game is not connected to bridge. Is bridge installed?",
+                    "logs": [],
+                    "server_running": True,
+                }
+            
+            logs = server.get_logs(count=lines)
+            
+            return {
+                "ok": True,
+                "logs": logs,
+                "log_count": server.get_log_count(),
+                "connected": True,
+                "message": f"Retrieved {len(logs)} log entries",
+            }
+        except Exception as e:
+            return {"ok": False, "error": str(e), "message": f"Failed to get logs: {e}", "logs": []}
+
+    @mcp.tool()
+    async def gm_run_command(
+        command: str,
+        timeout: float = 5.0,
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        Send a command to the running game via MCP bridge.
+        
+        Built-in commands:
+        - ping: Test connection (responds with "pong")
+        - goto_room <room_name>: Change to specified room
+        - get_var global.<name>: Get a global variable value
+        - set_var global.<name> <value>: Set a global variable
+        - spawn <object_name> <x> <y>: Create an instance
+        - room_info: Get current room name and size
+        - instance_count [object]: Count instances
+        
+        Custom commands can be added by editing __mcp_bridge.
+        
+        Args:
+            command: Command string to send
+            timeout: Seconds to wait for response (default: 5.0)
+            project_root: Path to project root
+            
+        Returns:
+            Dict with command result (ok, result, or error)
+        """
+        # Bridge needs actual project_root, not repo_root
+        from gms_helpers.bridge_server import get_bridge_server
+        
+        try:
+            server = get_bridge_server(project_root, create=False)
+            
+            if not server:
+                return {
+                    "ok": False,
+                    "error": "Bridge server not running",
+                    "message": "No bridge server active. Run the game first.",
+                }
+            
+            if not server.is_connected:
+                return {
+                    "ok": False,
+                    "error": "Game not connected",
+                    "message": "Game is not connected to bridge.",
+                }
+            
+            result = server.send_command(command, timeout=timeout)
+            
+            if result.success:
+                return {
+                    "ok": True,
+                    "command": command,
+                    "result": result.result,
+                    "message": f"Command executed: {result.result}",
+                }
+            else:
+                return {
+                    "ok": False,
+                    "command": command,
+                    "error": result.error or "Command failed",
+                    "message": result.error or "Command failed",
+                }
+        except Exception as e:
+            return {"ok": False, "error": str(e), "message": f"Failed to send command: {e}"}
 
     # -----------------------------
     # Event tools
