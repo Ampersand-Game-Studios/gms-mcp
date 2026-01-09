@@ -50,17 +50,31 @@ def save_history(history: dict) -> None:
         json.dump(history, f, indent=2)
 
 
-def add_to_history(history: dict, tweet_hash: str, tweet_preview: str, status: str, tweet_id: str = None) -> None:
+def add_to_history(
+    history: dict,
+    tweet_hash: str,
+    tweet_preview: str,
+    status: str,
+    tweet_id: str = None,
+    topic: str = None,
+    generated_by: str = "manual",
+) -> None:
     """Add a tweet to the history."""
     entry = {
         "hash": tweet_hash,
         "preview": tweet_preview[:50] + "..." if len(tweet_preview) > 50 else tweet_preview,
         "status": status,
         "timestamp": datetime.now(timezone.utc).isoformat(),
+        "topic": topic,
+        "generated_by": generated_by,
     }
     if tweet_id:
         entry["tweet_id"] = tweet_id
     history["posted"].append(entry)
+
+    # Update generation stats if present
+    if "generation_stats" in history and status == "posted":
+        history["generation_stats"]["total_posted"] = history["generation_stats"].get("total_posted", 0) + 1
 
 
 def is_duplicate_in_history(history: dict, tweet_hash: str) -> bool:
@@ -103,6 +117,10 @@ def main() -> int:
 
     print(f"Tweet content found ({len(tweet_content)} chars)")
     print(f"Preview: {tweet_content[:80]}...")
+
+    # Get optional metadata from environment (set by generate_tweet.py)
+    topic = os.environ.get("TWEET_TOPIC")
+    generated_by = os.environ.get("TWEET_GENERATED_BY", "manual")
 
     # Compute hash for duplicate detection
     tweet_hash = compute_hash(tweet_content)
@@ -151,7 +169,7 @@ def main() -> int:
         print(f"URL: https://x.com/i/status/{tweet_id}")
 
         # Record success and clear file
-        add_to_history(history, tweet_hash, tweet_content, "posted", tweet_id)
+        add_to_history(history, tweet_hash, tweet_content, "posted", tweet_id, topic, generated_by)
         save_history(history)
         clear_tweet_file()
         set_output("should_commit", "true")
@@ -167,7 +185,7 @@ def main() -> int:
             print("The tweet was likely already posted successfully.")
             print("Marking as posted and clearing file.")
 
-            add_to_history(history, tweet_hash, tweet_content, "duplicate_on_x")
+            add_to_history(history, tweet_hash, tweet_content, "duplicate_on_x", None, topic, generated_by)
             save_history(history)
             clear_tweet_file()
             set_output("should_commit", "true")
@@ -199,7 +217,7 @@ def main() -> int:
         print(f"\n[BAD REQUEST] {e}")
         print("The tweet content may be invalid (too long, forbidden content, etc.)")
         # Clear file to prevent repeated failures
-        add_to_history(history, tweet_hash, tweet_content, "rejected_invalid")
+        add_to_history(history, tweet_hash, tweet_content, "rejected_invalid", None, topic, generated_by)
         save_history(history)
         clear_tweet_file()
         set_output("should_commit", "true")
