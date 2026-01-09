@@ -1,1 +1,5 @@
-Live game bridge is here! 🎮 Now you can talk to your running GameMaker game directly from Cursor. Capturing logs and spawning objects on the fly just got a lot easier. Plus, we finally fixed that run-session ID collision. #GameMaker #gamedev
+Live game capture just landed! 📡
+
+The new TCP bridge lets AI assistants see your GameMaker logs in real-time and send commands back into your game while it's running. 
+
+Spawning test objects or switching rooms is now just a single tool call away. #GameMaker #gamedev
