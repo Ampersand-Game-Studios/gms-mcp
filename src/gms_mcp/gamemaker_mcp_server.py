@@ -2406,7 +2406,27 @@ def build_server():
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Run the project using Igor."""
+        """
+        Run the project using Igor.
+        
+        Args:
+            platform: Target platform (default: Windows)
+            runtime: Runtime type VM or YYC (default: VM)
+            runtime_version: Specific runtime version to use
+            background: If True, launch game and return immediately without waiting.
+                        The game will run in the background and can be stopped with gm_run_stop.
+                        Returns session info (pid, run_id) for tracking.
+            output_location: 'temp' (IDE-style) or 'project' (classic output folder)
+            project_root: Path to project root
+            prefer_cli: Force CLI execution mode
+            output_mode: Output format (full, tail, none)
+            tail_lines: Number of lines to show in tail mode
+            quiet: Suppress verbose output
+            
+        Returns:
+            If background=True: Dict with session info (ok, pid, run_id, message)
+            If background=False: Dict with full execution result including stdout
+        """
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.runner_commands import handle_runner_run
@@ -2419,6 +2439,33 @@ def build_server():
             output_location=output_location,
             project_root=project_root,
         )
+        
+        # For background mode, we want to run directly and return quickly
+        # The game will be launched and we'll return session info immediately
+        if background:
+            # Run the handler directly - it will return session info without blocking
+            try:
+                result = handle_runner_run(args)
+                
+                # If result is a dict (background mode returns dict), return it directly
+                if isinstance(result, dict):
+                    return result
+                
+                # Fallback if somehow we got a bool
+                return {
+                    "ok": bool(result),
+                    "background": True,
+                    "message": "Game launched" if result else "Failed to launch game",
+                }
+            except Exception as e:
+                return {
+                    "ok": False,
+                    "background": True,
+                    "error": str(e),
+                    "message": f"Failed to launch game: {e}",
+                }
+        
+        # For foreground mode, use the standard fallback mechanism
         cli_args = [
             "run",
             "start",
@@ -2431,8 +2478,6 @@ def build_server():
         ]
         if runtime_version:
             cli_args.extend(["--runtime-version", runtime_version])
-        if background:
-            cli_args.append("--background")
 
         return await _run_with_fallback(
             direct_handler=handle_runner_run,
@@ -2455,25 +2500,29 @@ def build_server():
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Stop the running game (if any)."""
+        """
+        Stop the running game (if any).
+        
+        Uses persistent session tracking to find and stop the game,
+        even if called from a different process or after MCP server restart.
+        
+        Returns:
+            Dict with result of stop operation (ok, message)
+        """
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.runner_commands import handle_runner_stop
 
         args = argparse.Namespace(project_root=project_root)
-        cli_args = ["run", "stop"]
-
-        return await _run_with_fallback(
-            direct_handler=handle_runner_stop,
-            direct_args=args,
-            cli_args=cli_args,
-            project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
-        )
+        
+        # Run directly for immediate response
+        try:
+            result = handle_runner_stop(args)
+            if isinstance(result, dict):
+                return result
+            return {"ok": bool(result), "message": "Game stopped" if result else "Failed to stop game"}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "message": f"Error stopping game: {e}"}
 
     @mcp.tool()
     async def gm_run_status(
@@ -2484,25 +2533,35 @@ def build_server():
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Check whether the game is running."""
+        """
+        Check whether the game is running.
+        
+        Uses persistent session tracking to check status,
+        even if called from a different process or after MCP server restart.
+        
+        Returns:
+            Dict with session info:
+            - has_session: bool - whether a session file exists
+            - running: bool - whether the game process is still alive
+            - run_id: str - unique session identifier
+            - pid: int - process ID
+            - started_at: str - ISO timestamp when game was launched
+            - message: str - human-readable status message
+        """
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.runner_commands import handle_runner_status
 
         args = argparse.Namespace(project_root=project_root)
-        cli_args = ["run", "status"]
-
-        return await _run_with_fallback(
-            direct_handler=handle_runner_status,
-            direct_args=args,
-            cli_args=cli_args,
-            project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
-        )
+        
+        # Run directly for immediate response
+        try:
+            result = handle_runner_status(args)
+            if isinstance(result, dict):
+                return result
+            return {"running": bool(result), "message": "Status check completed"}
+        except Exception as e:
+            return {"ok": False, "error": str(e), "message": f"Error checking status: {e}"}
 
     # -----------------------------
     # Event tools

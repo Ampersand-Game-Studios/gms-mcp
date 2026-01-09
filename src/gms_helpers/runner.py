@@ -16,6 +16,7 @@ from typing import List, Optional, Dict, Any
 from .utils import find_yyp
 from .exceptions import RuntimeNotFoundError, LicenseNotFoundError
 from .runtime_manager import RuntimeManager
+from .run_session import RunSessionManager, get_session_manager
 
 
 class GameMakerRunner:
@@ -29,6 +30,7 @@ class GameMakerRunner:
         self.runtime_path = None
         self.game_process = None
         self._runtime_manager = RuntimeManager(self.project_root)
+        self._session_manager = RunSessionManager(self.project_root)
         
     def find_project_file(self) -> Path:
         """Find the .yyp file in the project root."""
@@ -378,11 +380,38 @@ class GameMakerRunner:
                 self.game_process = subprocess.Popen([str(exe_path)])
                 
                 print(f"[OK] Game started! PID: {self.game_process.pid}")
-                print("   Game is running in the background...")
+                
+                # Create a persistent session so stop/status can find this process later
+                session = self._session_manager.create_session(
+                    pid=self.game_process.pid,
+                    exe_path=str(exe_path),
+                    platform_target=platform_target,
+                    runtime_type=runtime_type,
+                )
+                
+                if background:
+                    # Background mode: return immediately without waiting
+                    print("[OK] Game running in background mode.")
+                    print(f"   Session ID: {session.run_id}")
+                    print("   Use gm_run_status to check if game is running.")
+                    print("   Use gm_run_stop to stop the game.")
+                    return {
+                        "ok": True,
+                        "background": True,
+                        "pid": self.game_process.pid,
+                        "run_id": session.run_id,
+                        "exe_path": str(exe_path),
+                        "message": f"Game started in background (PID: {self.game_process.pid})",
+                    }
+                
+                # Foreground mode: wait for game to finish
+                print("   Game is running...")
                 print("   Close the game window to return to console.")
                 
-                # Wait for game to finish
                 self.game_process.wait()
+                
+                # Clean up session after game exits
+                self._session_manager.clear_session()
                 
                 if self.game_process.returncode == 0:
                     print("[OK] Game finished successfully!")
@@ -463,7 +492,32 @@ class GameMakerRunner:
                 universal_newlines=True
             )
             
-            # Stream output in real-time
+            # Create a persistent session so stop/status can find this process later
+            project_file = self.find_project_file()
+            session = self._session_manager.create_session(
+                pid=self.game_process.pid,
+                exe_path=str(project_file),  # For classic approach, we use project file as reference
+                platform_target=platform_target,
+                runtime_type=runtime_type,
+            )
+            
+            if background:
+                # Background mode: return immediately without waiting
+                # Note: For classic approach, Igor manages the game process
+                # We can't easily capture output in background mode
+                print(f"[OK] Game started in background mode (PID: {self.game_process.pid})")
+                print(f"   Session ID: {session.run_id}")
+                print("   Use gm_run_status to check if game is running.")
+                print("   Use gm_run_stop to stop the game.")
+                return {
+                    "ok": True,
+                    "background": True,
+                    "pid": self.game_process.pid,
+                    "run_id": session.run_id,
+                    "message": f"Game started in background (PID: {self.game_process.pid})",
+                }
+            
+            # Foreground mode: stream output and wait
             if self.game_process.stdout:
                 for line in self.game_process.stdout:
                     line = line.strip()
@@ -480,6 +534,9 @@ class GameMakerRunner:
             
             self.game_process.wait()
             
+            # Clean up session after game exits
+            self._session_manager.clear_session()
+            
             if self.game_process.returncode == 0:
                 print("[OK] Game finished successfully!")
                 return True
@@ -491,38 +548,55 @@ class GameMakerRunner:
             print(f"[ERROR] Error running project: {e}")
             return False
     
-    def stop_game(self) -> bool:
-        """Stop the running game."""
-        if not self.game_process:
-            print("[WARN] No game process running")
-            return False
-            
-        try:
-            pid = self.game_process.pid
-            print(f"[STOP] Stopping game (PID: {pid})...")
-            
-            # Terminate our subprocess
-            if self.game_process.poll() is None:
-                self.game_process.terminate()
-                try:
-                    self.game_process.wait(timeout=3)
-                except subprocess.TimeoutExpired:
-                    print("[WARN] Process didn't terminate gracefully, forcing kill...")
-                    self.game_process.kill()
-            
+    def stop_game(self) -> Dict[str, Any]:
+        """
+        Stop the running game.
+        
+        Uses the session manager to find and stop the game process,
+        even if this is a new GameMakerRunner instance.
+        
+        Returns:
+            Dict with result of stop operation
+        """
+        # First, try to use the session manager (works across instances)
+        result = self._session_manager.stop_game()
+        
+        # Also clean up our local reference if we have one
+        if self.game_process is not None:
+            try:
+                if self.game_process.poll() is None:
+                    self.game_process.terminate()
+                    try:
+                        self.game_process.wait(timeout=3)
+                    except subprocess.TimeoutExpired:
+                        self.game_process.kill()
+            except Exception:
+                pass
             self.game_process = None
-            print("[OK] Game stopped")
-            return True
-            
-        except Exception as e:
-            print(f"[ERROR] Error stopping game: {e}")
-            return False
+        
+        return result
     
     def is_game_running(self) -> bool:
-        """Check if game is currently running."""
-        if not self.game_process:
-            return False
-        return self.game_process.poll() is None
+        """
+        Check if game is currently running.
+        
+        Uses the session manager to check, even if this is a new
+        GameMakerRunner instance.
+        
+        Returns:
+            True if game is running, False otherwise
+        """
+        status = self._session_manager.get_session_status()
+        return status.get("running", False)
+    
+    def get_game_status(self) -> Dict[str, Any]:
+        """
+        Get detailed status of the running game.
+        
+        Returns:
+            Dict with session info and running status
+        """
+        return self._session_manager.get_session_status()
 
 
 # Convenience functions for command-line usage
@@ -535,13 +609,49 @@ def compile_project(project_root: str = ".", platform: str = "Windows",
 
 def run_project(project_root: str = ".", platform: str = "Windows", 
                runtime: str = "VM", background: bool = False, output_location: str = "temp",
-               runtime_version: Optional[str] = None) -> bool:
-    """Run GameMaker project directly (like IDE does)."""
+               runtime_version: Optional[str] = None):
+    """
+    Run GameMaker project directly (like IDE does).
+    
+    Args:
+        project_root: Path to project root
+        platform: Target platform (default: Windows)
+        runtime: Runtime type VM or YYC (default: VM)
+        background: If True, return immediately without waiting for game to exit
+        output_location: 'temp' (IDE-style) or 'project' (classic output folder)
+        runtime_version: Specific runtime version to use
+        
+    Returns:
+        If background=False: bool (True if game exited successfully)
+        If background=True: dict with session info (pid, run_id, etc.)
+    """
     runner = GameMakerRunner(Path(project_root), runtime_version=runtime_version)
     return runner.run_project_direct(platform, runtime, background, output_location)
 
 
-def stop_project(project_root: str = ".") -> bool:
-    """Stop running GameMaker project."""
+def stop_project(project_root: str = ".") -> Dict[str, Any]:
+    """
+    Stop running GameMaker project.
+    
+    Uses persistent session tracking to find and stop the game,
+    even if called from a different process or after restart.
+    
+    Returns:
+        Dict with result of stop operation
+    """
     runner = GameMakerRunner(Path(project_root))
-    return runner.stop_game() 
+    return runner.stop_game()
+
+
+def get_project_status(project_root: str = ".") -> Dict[str, Any]:
+    """
+    Get status of running GameMaker project.
+    
+    Uses persistent session tracking to check game status,
+    even if called from a different process or after restart.
+    
+    Returns:
+        Dict with session info and running status
+    """
+    runner = GameMakerRunner(Path(project_root))
+    return runner.get_game_status() 
