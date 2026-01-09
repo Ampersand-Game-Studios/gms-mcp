@@ -1,10 +1,10 @@
 # GameMaker Studio CLI Helper Tools Documentation
 
-## 📚 Documentation Index
+## Documentation Index
 
 Welcome to the comprehensive documentation for the GameMaker Studio CLI helper tools. These Python-based tools enhance your GameMaker development workflow with powerful command-line utilities.
 
-## 🚀 Quick Start
+## Quick Start
 
 From the repo root, set `PYTHONPATH=src` so module invocations resolve:
 
@@ -32,12 +32,13 @@ This repo includes an **MCP server** (`gms-mcp`) that exposes GameMaker operatio
 - Cursor (global, multi-project): `gms-mcp-init --cursor-global` (writes `~/.cursor/mcp.json`)
 - Other clients (examples): `gms-mcp-init --vscode --windsurf --antigravity` (writes `mcp-configs/*.mcp.json`)
 
-## 📖 Core Documentation
+## Core Documentation
 
 ### Setup & Overview
 - **[Systems Overview](SYSTEMS_OVERVIEW.md)** - High-level architecture overview
 - **[Console Commands](CONSOLE_COMMANDS.md)** - In-game console system reference
 - **[Folder Path System](FOLDER_PATH_SYSTEM.md)** - Complete guide to GameMaker folder paths (IMPORTANT)
+- **[TCP Bridge (Live Game)](../../documentation/BRIDGE.md)** - Optional TCP bridge for live commands + log capture (setup + troubleshooting)
 
 ### CLI Helper Tools
 - **[CLI Helper Tools](CLI_HELPER_TOOLS.md)** - Complete reference for all CLI commands
@@ -45,9 +46,9 @@ This repo includes an **MCP server** (`gms-mcp`) that exposes GameMaker operatio
 - **[Asset Helper](CLI_HELPER_TOOLS.md#asset-creation-helper-assethelperpy)** - Create all asset types
 - **[Test Suite Guide](TEST_SUITE_GUIDE.md)** - How to run and understand the test suite
 
-## 🎯 Implementation Phases
+## Implementation Phases
 
-### ✅ Phase 3: Advanced Assets & Code Intelligence
+### Phase 3: Advanced Assets & Code Intelligence
 **Status**: Complete
 
 **Features Added**:
@@ -61,7 +62,7 @@ This repo includes an **MCP server** (`gms-mcp`) that exposes GameMaker operatio
 - Note asset management
 - Maintenance automation fixes for Igor compiler compatibility
 
-## 📊 Tool Coverage
+## Tool Coverage
 
 ### Currently Supported Asset Types (14 total)
 | Asset Type | Command | Prefix | Phase |
@@ -96,8 +97,8 @@ This repo includes an **MCP server** (`gms-mcp`) that exposes GameMaker operatio
 ### Maintenance Commands
 | Command | Purpose |
 |---------|---------|
-| **`auto_maintenance.py`** | **🔧 Comprehensive health check (9 steps)** |
-| **`auto_maintenance.py --fix`** | **🔧 Fix all issues automatically** |
+| **`auto_maintenance.py`** | **Comprehensive health check (9 steps)** |
+| **`auto_maintenance.py --fix`** | **Fix all issues automatically** |
 | `maint lint` | Check project for issues |
 | `maint fix-commas` | Fix JSON trailing commas |
 | `maint list-orphans` | Find orphaned assets |
@@ -106,7 +107,7 @@ This repo includes an **MCP server** (`gms-mcp`) that exposes GameMaker operatio
 | `maint validate-paths --strict-disk-check` | Also check physical .yy files (legacy) |
 | `maint dedupe-resources` | Remove duplicate resources |
 
-## 💡 Understanding GameMaker Folder Paths
+## Understanding GameMaker Folder Paths
 
 **IMPORTANT**: GameMaker folder paths (like `folders/Scripts.yy`) are **logical references** in the `.yyp` file, not physical directories on disk.
 
@@ -116,7 +117,7 @@ This repo includes an **MCP server** (`gms-mcp`) that exposes GameMaker operatio
 - **Default Validation**: Tools check the `.yyp` Folders list (recommended)
 - **Legacy Validation**: Use `--strict-disk-check` only if needed for physical file checking
 
-## 💡 Common Workflows
+## Common Workflows
 
 ### Creating a Complete UI System
 ```bash
@@ -157,7 +158,7 @@ python -m gms_helpers.room_instance_helper add-instance r_level_01 o_spike \
   --layer "lyr_hazards" --x 200 --y 400
 ```
 
-## 🔧 Maintenance & Health
+## Maintenance & Health
 
 ### Pre-flight Check
 ```bash
@@ -173,7 +174,7 @@ python -m gms_helpers.asset_helper maint fix-commas
 python -m gms_helpers.asset_helper maint prune-missing
 ```
 
-## 📋 Best Practices
+## Best Practices
 
 1. **Always use the CLI tools** for asset creation when possible
 2. **Follow naming conventions** - tools enforce them automatically
@@ -181,19 +182,19 @@ python -m gms_helpers.asset_helper maint prune-missing
 4. **Use base rooms for duplication** for consistent room structures
 5. **Check help first** - Every tool has `--help` with examples
 
-## 🆘 Troubleshooting
+## Troubleshooting
 
 ### Common Issues
-- **"Resource already registered"** → Run `maint dedupe-resources`
-- **"Cannot find folder path"** → Check folder exists in .yyp Folders list with `maint validate-paths`
-- **"Folder path not found"** → **Tool exits immediately** - create folder first or use existing path
-- **Font looks wrong** → Regenerate in GameMaker IDE after creation
-- **Shader black screen** → Start with generated passthrough code
+- **"Resource already registered"** -> Run `maint dedupe-resources`
+- **"Cannot find folder path"** -> Check folder exists in .yyp Folders list with `maint validate-paths`
+- **"Folder path not found"** -> **Tool exits immediately** - create folder first or use existing path
+- **Font looks wrong** -> Regenerate in GameMaker IDE after creation
+- **Shader black screen** -> Start with generated passthrough code
 
 ### Recent Changes
 - **Stricter validation**: Tools now **immediately exit** when folder paths are invalid (prevents corrupted projects)
 - **Delete command**: New `delete` sub-command for safe asset removal with dry-run support
-- **Igor Compatibility**: Objects and events now use standardized schemas (`$GMObject: "v1"`, `resourceVersion: "2.0"`) to prevent build failures.
+- **Asset format compatibility**: Asset metadata format strings (`$GMObject`, `$GMScript`, `$GMFolder`) vary by project. Tools should detect existing formats and match them (some projects use `""`, others use `"v1"`) to avoid "project from later version" / conversion errors.
 
 ### Getting Help
 1. Check command help: `python -m gms_helpers.<tool> --help`
@@ -201,7 +202,7 @@ python -m gms_helpers.asset_helper maint prune-missing
 3. Run maintenance commands to check project health
 4. Examine the generated files for issues
 
-## 🚀 Future Development
+## Future Development
 
 ### Potential Phase 4+ Additions
 - Sprite sheet / Texture group management
@@ -217,7 +218,7 @@ The modular architecture makes it easy to add new asset types:
 
 ---
 
-## 📞 Quick Reference Card
+## Quick Reference Card
 
 ```bash
 # Asset Creation

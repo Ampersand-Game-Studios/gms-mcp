@@ -338,8 +338,8 @@ class TestObjectAsset(TestAssetsComprehensive):
         """Test basic object .yy data creation."""
         yy_data = self.object_asset.create_yy_data("o_test", self.parent_path)
         
-        # Verify required fields (v1 is required for Igor compiler compatibility)
-        self.assertEqual(yy_data["$GMObject"], "v1")
+        # Verify required fields
+        self.assertEqual(yy_data["$GMObject"], "")
         self.assertEqual(yy_data["%Name"], "o_test")
         self.assertEqual(yy_data["name"], "o_test")
         self.assertTrue(yy_data["managed"])

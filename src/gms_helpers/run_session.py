@@ -69,7 +69,9 @@ class RunSessionManager:
     
     def _generate_run_id(self) -> str:
         """Generate a unique run ID."""
-        return f"run_{int(time.time() * 1000)}"
+        # time.time_ns() is monotonic enough for our purposes and avoids collisions when
+        # multiple sessions are created within the same millisecond.
+        return f"run_{time.time_ns()}"
     
     def create_session(
         self,
