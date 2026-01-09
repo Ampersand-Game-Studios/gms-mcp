@@ -6,7 +6,7 @@ Usage:
     python .github/scripts/generate_tweet.py           # Generate and write to next_tweet.txt
     python .github/scripts/generate_tweet.py --dry-run # Preview without writing
 
-Requires ANTHROPIC_API_KEY environment variable.
+Requires ANTHROPIC_API_KEY environment variable (or in .env file for local testing).
 """
 
 import argparse
@@ -18,6 +18,23 @@ import sys
 import time
 from datetime import datetime, timezone
 from pathlib import Path
+
+
+def load_env_file():
+    """Load environment variables from .env file if it exists (for local testing)."""
+    env_path = Path(__file__).parent.parent.parent / ".env"
+    if env_path.exists():
+        with open(env_path, "r") as f:
+            for line in f:
+                line = line.strip()
+                if line and not line.startswith("#") and "=" in line:
+                    key, value = line.split("=", 1)
+                    if key.strip() not in os.environ:  # Don't override existing env vars
+                        os.environ[key.strip()] = value.strip()
+
+
+# Load .env for local testing
+load_env_file()
 
 # Add scripts directory to path for local imports
 sys.path.insert(0, str(Path(__file__).parent))

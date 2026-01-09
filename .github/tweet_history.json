@@ -8,10 +8,19 @@
       "timestamp": "2026-01-09T13:12:45.830545+00:00",
       "topic": "integration",
       "generated_by": "manual"
+    },
+    {
+      "hash": "663dc3c69d35d76e",
+      "preview": "Jump to any function definition across your entire...",
+      "status": "posted",
+      "tweet_id": "2009629843982340504",
+      "timestamp": "2026-01-09T14:14:40.583765+00:00",
+      "topic": "code_intelligence",
+      "generated_by": "claude-api"
     }
   ],
   "topic_coverage": {
-    "code_intelligence": null,
+    "code_intelligence": "2026-01-09T14:14:40.583782+00:00",
     "asset_creation": null,
     "maintenance": null,
     "runtime_build": null,
@@ -23,9 +32,9 @@
     "integration": "2026-01-09T13:12:45.830545+00:00"
   },
   "generation_stats": {
-    "total_generated": 0,
-    "total_posted": 1,
-    "failures": 0,
-    "last_generation": null
+    "total_generated": 1,
+    "total_posted": 2,
+    "failures": 1,
+    "last_generation": "2026-01-09T14:14:09.621453+00:00"
   }
 }
