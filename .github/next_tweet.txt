@@ -1,0 +1,1 @@
+Live game bridge is here! 🎮 Now you can talk to your running GameMaker game directly from Cursor. Capturing logs and spawning objects on the fly just got a lot easier. Plus, we finally fixed that run-session ID collision. #GameMaker #gamedev

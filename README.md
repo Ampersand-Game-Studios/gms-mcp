@@ -4,6 +4,7 @@
 
 - `gms`: a Python CLI for GameMaker project operations (asset creation, maintenance, runner, etc).
 - `gms-mcp`: an MCP server that exposes the same operations as MCP tools (Cursor is the primary example client).
+- **TCP Bridge (optional)**: live, bidirectional game communication (commands + log capture) via `gm_bridge_install`, `gm_run_command`, and `gm_run_logs`. See `documentation/BRIDGE.md`.
 - **Reliability-First Architecture**: Custom exception hierarchy, typed result objects, and an execution policy manager replace monolithic exit calls and raw dictionaries. This enables structured error handling, consistent tool integration, and optimized performance (Fast assets, Resilient runner).
 - **Health & Diagnostics**: `gm_mcp_health` provides a one-click diagnostic tool to verify the local GameMaker environment. `gm_diagnostics` provides structured, machine-readable project diagnostics (JSON, naming, orphans, references) compatible with IDE problem panels.
 - **Runtime Management**: `gm_runtime_list`, `gm_runtime_pin`, and `gm_runtime_verify` allow precise control over which GameMaker runtime version is used for builds and execution.
