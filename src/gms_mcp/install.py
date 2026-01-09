@@ -358,13 +358,21 @@ def _generate_claude_code_plugin(
     dry_run: bool,
 ) -> list[Path]:
     """
-    Generate a Claude Code plugin with MCP server configuration.
+    Generate Claude plugin files with MCP server configuration.
+
+    This creates files for BOTH Claude Desktop (GUI) and Claude Code (CLI),
+    but they are used differently:
+
+    - Claude Desktop: Uses ~/.claude/plugins/ with plugin.json manifest (global)
+    - Claude Code CLI: Uses per-project .mcp.json files (project-scoped)
+
+    The same file structure works for both, but the discovery mechanism differs.
 
     Creates:
       plugin_dir/
       ├── .claude-plugin/
-      │   └── plugin.json
-      └── .mcp.json
+      │   └── plugin.json   # For Claude Desktop only
+      └── .mcp.json         # For Claude Code CLI (or Claude Desktop)
     """
     written: list[Path] = []
 
@@ -506,12 +514,18 @@ def main(argv: list[str] | None = None) -> int:
 
     parser.add_argument("--cursor", action="store_true", help="Write Cursor workspace config to .cursor/mcp.json.")
     parser.add_argument("--cursor-global", action="store_true", help="Write Cursor *global* config to ~/.cursor/mcp.json.")
-    parser.add_argument("--claude-code", action="store_true", help="Write Claude Code plugin to current workspace (.claude-plugin/).")
+    parser.add_argument(
+        "--claude-code",
+        action="store_true",
+        help="Write .mcp.json for Claude Code CLI (per-project). "
+             "NOTE: For Claude Code CLI, run this in each GameMaker project. "
+             "Claude Code CLI does not support global MCP configs.",
+    )
     parser.add_argument(
         "--claude-code-global",
         action="store_true",
-        help="Install Claude Code plugin globally to ~/.claude/plugins/gms-mcp/. "
-             "Works across all projects using ${CLAUDE_PROJECT_DIR}.",
+        help="Install plugin for Claude Desktop GUI (NOT Claude Code CLI) to ~/.claude/plugins/gms-mcp/. "
+             "This is for the desktop app only. For the CLI, use --claude-code per-project instead.",
     )
     parser.add_argument("--vscode", action="store_true", help="Write a VS Code example config to mcp-configs/vscode.mcp.json.")
     parser.add_argument("--windsurf", action="store_true", help="Write a Windsurf example config to mcp-configs/windsurf.mcp.json.")
@@ -595,7 +609,7 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if args.claude_code:
-        # Workspace-local Claude Code plugin
+        # Per-project .mcp.json for Claude Code CLI
         written.extend(
             _generate_claude_code_plugin(
                 plugin_dir=workspace_root,
@@ -605,9 +619,14 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=dry_run,
             )
         )
+        if not dry_run:
+            print(f"[INFO] Created .mcp.json for Claude Code CLI (per-project config)")
+            print(f"[INFO] When you open Claude Code in this directory, it will auto-discover the MCP server.")
+            print(f"[INFO] You'll be prompted to approve it on first use.")
+            print(f"[INFO] To use in other GameMaker projects: copy .mcp.json or re-run this command.")
 
     if args.claude_code_global:
-        # Global Claude Code plugin - uses ${CLAUDE_PROJECT_DIR} for dynamic project detection
+        # Global plugin for Claude Desktop GUI (NOT Claude Code CLI)
         claude_plugins_dir = Path.home() / ".claude" / "plugins" / "gms-mcp"
         written.extend(
             _generate_claude_code_plugin(
@@ -619,8 +638,10 @@ def main(argv: list[str] | None = None) -> int:
             )
         )
         if not dry_run:
-            print(f"[INFO] Claude Code plugin installed to: {claude_plugins_dir}")
-            print("       The plugin will be available after restarting Claude Code.")
+            print(f"[INFO] Claude Desktop plugin installed to: {claude_plugins_dir}")
+            print("       This is for Claude Desktop GUI app, NOT Claude Code CLI.")
+            print("       The plugin will be available after restarting Claude Desktop.")
+            print("       For Claude Code CLI, use --claude-code (per-project) instead.")
 
     example_clients: list[str] = []
     if args.vscode:
