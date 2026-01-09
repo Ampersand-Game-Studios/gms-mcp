@@ -255,3 +255,40 @@ You can set user-wide defaults by creating `~/.gms-mcp/config.json`:
 ```
 
 This applies to all projects that don't have their own `.gms-mcp.json` override.
+
+## Prefabs Support
+
+Projects that use GameMaker prefabs (indicated by `ForcedPrefabProjectReferences` in the `.yyp` file) require the prefabs library path to be specified when running or compiling via Igor.
+
+### Automatic Detection
+
+GMS-MCP automatically detects the prefabs library location:
+
+- **Windows**: `C:/ProgramData/GameMakerStudio2/Prefabs`
+- **macOS**: `/Library/Application Support/GameMakerStudio2/Prefabs` or `~/Library/Application Support/GameMakerStudio2/Prefabs`
+- **Linux**: `~/.config/GameMakerStudio2/Prefabs` or `/opt/GameMakerStudio2/Prefabs`
+
+### Custom Prefabs Path
+
+If your prefabs are stored in a custom location, set the `GMS_PREFABS_PATH` environment variable:
+
+```bash
+# Windows (PowerShell)
+$env:GMS_PREFABS_PATH = "D:\GameMaker\Prefabs"
+
+# Windows (Command Prompt)
+set GMS_PREFABS_PATH=D:\GameMaker\Prefabs
+
+# macOS/Linux
+export GMS_PREFABS_PATH="/custom/path/to/Prefabs"
+```
+
+### How It Works
+
+When running or compiling a project, GMS-MCP will:
+
+1. Check if `GMS_PREFABS_PATH` environment variable is set and the path exists
+2. If not, check the default platform-specific locations
+3. If a valid prefabs path is found, add the `--pf` flag to Igor commands
+
+This ensures projects with prefab dependencies compile and run correctly via MCP.
