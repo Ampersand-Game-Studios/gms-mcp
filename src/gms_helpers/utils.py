@@ -16,7 +16,9 @@ from .exceptions import GMSError, ProjectNotFoundError, ValidationError
 
 # ---- make console prints Unicode-safe on Windows -----------------
 import sys, os
-if os.name == "nt":                      # Windows only
+# Skip reconfiguration if running in test suite or if PYTHONIOENCODING is already set
+# (indicates the parent process has already configured encoding)
+if os.name == "nt" and not os.environ.get("GMS_TEST_SUITE") and not os.environ.get("PYTHONIOENCODING"):
     try:                             # Python 3.7+
         sys.stdout.reconfigure(encoding="utf-8", errors="replace")
         sys.stderr.reconfigure(encoding="utf-8", errors="replace")
