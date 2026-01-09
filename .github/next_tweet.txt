@@ -1,1 +1,1 @@
-Your project, your rules. gms-mcp now supports custom naming conventions and per-project linting. Use O_ or obj_, snake_case or PascalCase - the tool now adapts to your project's style instead of forcing mine. Setup is a breeze with the new config wizard. 🛠️
+(No tweet pending - agent should write here before pushing to main)
