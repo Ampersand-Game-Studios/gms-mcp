@@ -1,0 +1,1 @@
+You can now launch your GameMaker builds in the background! Cursor agents won't freeze up while the game is running anymore. Check status or kill the process whenever you want. Your dev loop just got a lot tighter. 🎮 #GameMaker #gamedev
