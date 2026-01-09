@@ -69,7 +69,53 @@ class GameMakerRunner:
             return self.igor_path
             
         return None
-    
+
+    def get_prefabs_path(self) -> Optional[Path]:
+        """
+        Get the path to the GameMaker prefabs library.
+
+        Prefabs are required for projects that use ForcedPrefabProjectReferences.
+        The path can be configured via:
+        1. GMS_PREFABS_PATH environment variable
+        2. Auto-detected from ProgramData (Windows) or standard locations
+
+        Returns:
+            Path to prefabs folder, or None if not found
+        """
+        # Check environment variable first
+        env_path = os.environ.get("GMS_PREFABS_PATH")
+        if env_path:
+            prefabs_path = Path(env_path)
+            if prefabs_path.exists():
+                return prefabs_path
+
+        system = platform.system()
+
+        if system == "Windows":
+            # Default Windows location
+            default_paths = [
+                Path("C:/ProgramData/GameMakerStudio2/Prefabs"),
+                Path(os.environ.get("PROGRAMDATA", "C:/ProgramData")) / "GameMakerStudio2" / "Prefabs",
+            ]
+        elif system == "Darwin":
+            # macOS location
+            default_paths = [
+                Path("/Library/Application Support/GameMakerStudio2/Prefabs"),
+                Path.home() / "Library/Application Support/GameMakerStudio2/Prefabs",
+            ]
+        else:
+            # Linux location
+            default_paths = [
+                Path.home() / ".config/GameMakerStudio2/Prefabs",
+                Path("/opt/GameMakerStudio2/Prefabs"),
+            ]
+
+        for path in default_paths:
+            if path.exists():
+                return path
+
+        return None
+
     def find_license_file(self) -> Optional[Path]:
         """Find GameMaker license file."""
         system = platform.system()
@@ -137,6 +183,12 @@ class GameMakerRunner:
         temp_dir = system_temp / "gms_temp"
         cmd.extend([f"/temp={temp_dir}"])
         
+
+        # Add prefabs path if available (required for projects with ForcedPrefabProjectReferences)
+        prefabs_path = self.get_prefabs_path()
+        if prefabs_path:
+            cmd.extend([f"--pf={prefabs_path}"])
+
         # Add runtime type
         if runtime_type.upper() == "YYC":
             cmd.extend(["/runtime=YYC"])
@@ -182,6 +234,11 @@ class GameMakerRunner:
             cmd.extend([f"/cache={cache_dir}"])
             cmd.extend([f"/temp={temp_dir}"])
             
+            # Add prefabs path if available (required for projects with ForcedPrefabProjectReferences)
+            prefabs_path = self.get_prefabs_path()
+            if prefabs_path:
+                cmd.extend([f"--pf={prefabs_path}"])
+
             # Output location
             cmd.extend([f"--of={ide_temp_dir / project_name}"])
             
@@ -299,6 +356,11 @@ class GameMakerRunner:
             cmd.extend([f"/cache={cache_dir}"])
             cmd.extend([f"/temp={temp_dir}"])
             
+            # Add prefabs path if available (required for projects with ForcedPrefabProjectReferences)
+            prefabs_path = self.get_prefabs_path()
+            if prefabs_path:
+                cmd.extend([f"--pf={prefabs_path}"])
+
             # Add output parameters (BEFORE the -- separator)
             cmd.extend([f"--of={ide_temp_dir / project_name}"])
             
@@ -472,11 +534,16 @@ class GameMakerRunner:
             temp_dir = system_temp / "gms_temp"
             cmd.extend([f"/cache={cache_dir}"])
             cmd.extend([f"/temp={temp_dir}"])
-            
+
+            # Add prefabs path if available (required for projects with ForcedPrefabProjectReferences)
+            prefabs_path = self.get_prefabs_path()
+            if prefabs_path:
+                cmd.extend([f"--pf={prefabs_path}"])
+
             # Add runtime type
             if runtime_type.upper() == "YYC":
                 cmd.extend(["/runtime=YYC"])
-            
+
             # Add platform and action (classic Run command)
             cmd.extend(["--", platform_target, "Run"])
             
