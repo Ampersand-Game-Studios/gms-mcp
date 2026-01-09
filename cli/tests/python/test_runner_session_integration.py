@@ -304,5 +304,124 @@ class TestRunnerBackgroundMode(unittest.TestCase):
         mock_run.assert_called_once()
 
 
+
+
+class TestRunnerPrefabsPath(unittest.TestCase):
+    """Tests for get_prefabs_path method."""
+
+    def setUp(self):
+        """Create a temporary directory for test project."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.project_root = Path(self.temp_dir)
+
+        # Create a minimal .yyp file
+        yyp_path = self.project_root / "test_project.yyp"
+        yyp_path.write_text('{"name": "test_project", "resources": []}')
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_get_prefabs_path_returns_path_or_none(self):
+        """Test get_prefabs_path returns Path or None."""
+        runner = GameMakerRunner(self.project_root)
+        result = runner.get_prefabs_path()
+
+        # Result should be either a Path object or None
+        self.assertTrue(result is None or isinstance(result, Path))
+
+    @patch.dict('os.environ', {'GMS_PREFABS_PATH': ''})
+    def test_get_prefabs_path_empty_env_var(self):
+        """Test get_prefabs_path with empty env var falls back to defaults."""
+        runner = GameMakerRunner(self.project_root)
+        # Should not raise, just return result based on default paths
+        result = runner.get_prefabs_path()
+        self.assertTrue(result is None or isinstance(result, Path))
+
+    def test_get_prefabs_path_with_valid_env_var(self):
+        """Test get_prefabs_path uses GMS_PREFABS_PATH environment variable."""
+        import os
+        # Create a temporary prefabs directory
+        prefabs_dir = Path(self.temp_dir) / "custom_prefabs"
+        prefabs_dir.mkdir()
+
+        with patch.dict('os.environ', {'GMS_PREFABS_PATH': str(prefabs_dir)}):
+            runner = GameMakerRunner(self.project_root)
+            result = runner.get_prefabs_path()
+
+            self.assertEqual(result, prefabs_dir)
+
+    def test_get_prefabs_path_env_var_nonexistent_path(self):
+        """Test get_prefabs_path ignores non-existent env var path."""
+        with patch.dict('os.environ', {'GMS_PREFABS_PATH': '/nonexistent/path/prefabs'}):
+            runner = GameMakerRunner(self.project_root)
+            result = runner.get_prefabs_path()
+
+            # Should fall back to default paths (which may or may not exist)
+            # The env path should NOT be returned since it doesn't exist
+            if result is not None:
+                self.assertNotEqual(str(result), '/nonexistent/path/prefabs')
+
+
+class TestRunnerIgorCommandPrefabs(unittest.TestCase):
+    """Tests for prefabs flag in Igor command building."""
+
+    def setUp(self):
+        """Create a temporary directory for test project."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.project_root = Path(self.temp_dir)
+
+        # Create a minimal .yyp file
+        yyp_path = self.project_root / "test_project.yyp"
+        yyp_path.write_text('{"name": "test_project", "resources": []}')
+
+        # Create a temporary prefabs directory
+        self.prefabs_dir = Path(self.temp_dir) / "test_prefabs"
+        self.prefabs_dir.mkdir()
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    @patch.object(GameMakerRunner, 'find_gamemaker_runtime')
+    @patch.object(GameMakerRunner, 'find_license_file')
+    def test_build_igor_command_includes_prefabs(self, mock_license, mock_runtime):
+        """Test build_igor_command includes --pf flag when prefabs path exists."""
+        # Mock runtime and license
+        mock_runtime.return_value = Path("/fake/Igor.exe")
+        mock_license.return_value = Path("/fake/licence.plist")
+
+        with patch.dict('os.environ', {'GMS_PREFABS_PATH': str(self.prefabs_dir)}):
+            runner = GameMakerRunner(self.project_root)
+            runner.runtime_path = Path("/fake/runtime")
+
+            cmd = runner.build_igor_command(action="Run")
+
+            # Check that --pf flag is in the command
+            cmd_str = ' '.join(cmd)
+            self.assertIn('--pf=', cmd_str)
+            self.assertIn(str(self.prefabs_dir), cmd_str)
+
+    @patch.object(GameMakerRunner, 'find_gamemaker_runtime')
+    @patch.object(GameMakerRunner, 'find_license_file')
+    @patch.object(GameMakerRunner, 'get_prefabs_path')
+    def test_build_igor_command_no_prefabs_when_none(self, mock_prefabs, mock_license, mock_runtime):
+        """Test build_igor_command omits --pf flag when no prefabs path."""
+        # Mock runtime and license
+        mock_runtime.return_value = Path("/fake/Igor.exe")
+        mock_license.return_value = Path("/fake/licence.plist")
+        mock_prefabs.return_value = None
+
+        runner = GameMakerRunner(self.project_root)
+        runner.runtime_path = Path("/fake/runtime")
+
+        cmd = runner.build_igor_command(action="Run")
+
+        # Check that --pf flag is NOT in the command
+        cmd_str = ' '.join(cmd)
+        self.assertNotIn('--pf=', cmd_str)
+
 if __name__ == "__main__":
     unittest.main()
