@@ -112,7 +112,7 @@ class ObjectAsset(BaseAsset):
             }
         
         return {
-            "$GMObject": "v1",
+            "$GMObject": "",
             "%Name": name,
             "eventList": [],
             "managed": True,

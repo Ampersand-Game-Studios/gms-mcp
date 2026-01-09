@@ -37,6 +37,7 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
   - **Maintenance**: auto + diagnostics/lint/validate-json/list-orphans/prune-missing/validate-paths/dedupe-resources/sync-events/clean-old-files/clean-orphans/fix-issues
   - **Runtime Management**: list/pin/unpin/verify GameMaker runtimes
   - **Runner**: compile/run (with runtime version pinning) + stop/status
+  - **TCP Bridge (optional)**: live game commands + log capture via `gm_bridge_install`, `gm_bridge_status`, `gm_run_command`, `gm_run_logs` (see `documentation/BRIDGE.md`)
   - **Escape hatch**: `gm_cli` (run arbitrary `gms` args)
   - **Project info**: `gm_project_info`
 
