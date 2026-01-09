@@ -47,7 +47,9 @@ class TestBridgeInstallerInit(unittest.TestCase):
             installer = BridgeInstaller(Path(temp_dir))
             
             self.assertEqual(installer.project_root, Path(temp_dir).resolve())
-            self.assertEqual(installer.yyp_path, yyp_path)
+            # Windows CI can hand us short paths (e.g. RUNNER~1) while Path.resolve()
+            # expands to the long path (e.g. runneradmin). Compare canonical paths.
+            self.assertEqual(installer.yyp_path.resolve(), yyp_path.resolve())
             
     def test_init_without_yyp(self):
         """Test initialization without .yyp file."""

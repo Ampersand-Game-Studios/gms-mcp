@@ -14,6 +14,7 @@ the game process because the GameMakerRunner instance was recreated.
 
 import json
 import os
+import threading
 import time
 import subprocess
 import platform
@@ -53,6 +54,8 @@ class RunSessionManager:
     
     SESSIONS_DIR = ".gms_mcp/sessions"
     CURRENT_SESSION_FILE = "current.json"
+    _run_id_lock = threading.Lock()
+    _last_run_id_ns = 0
     
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root).resolve()
@@ -69,9 +72,16 @@ class RunSessionManager:
     
     def _generate_run_id(self) -> str:
         """Generate a unique run ID."""
-        # time.time_ns() is monotonic enough for our purposes and avoids collisions when
-        # multiple sessions are created within the same millisecond.
-        return f"run_{time.time_ns()}"
+        # On Windows, time.time_ns() can return the same value for back-to-back calls in
+        # fast unit tests. Ensure uniqueness within this process by enforcing a strictly
+        # increasing counter when needed.
+        cls = type(self)
+        with cls._run_id_lock:
+            ns = time.time_ns()
+            if ns <= cls._last_run_id_ns:
+                ns = cls._last_run_id_ns + 1
+            cls._last_run_id_ns = ns
+        return f"run_{ns}"
     
     def create_session(
         self,
