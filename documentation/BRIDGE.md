@@ -4,27 +4,30 @@
 
 Before running a game with the bridge, verify ALL of the following:
 
+- [ ] **STOP any running games FIRST**: Run `gm_run_stop()` before starting a new game. Only ONE game can connect to the bridge at a time (port 6502 conflict).
+- [ ] **Sandbox disabled (Windows)**: Set `option_windows_disable_sandbox: true` in `options_windows.yy`. **TCP networking WILL NOT WORK without this.** Verify by reading the file.
 - [ ] **Correct project_root**: Run `gm_project_info()` first to confirm the `.yyp` location
 - [ ] **Bridge installed**: Run `gm_bridge_install()` if not already installed
 - [ ] **Bridge instance in room**: Use `gm_room_instance_add()` to add `__mcp_bridge` to your startup room
 - [ ] **instanceCreationOrder populated**: The room's `.yy` file MUST have the instance in `instanceCreationOrder[]` (not just in `layers[].instances[]`)
 - [ ] **Startup room is correct**: Check `RoomOrderNodes` in the `.yyp` - the first room listed is the startup room
 - [ ] **Use `__mcp_log()` not `show_debug_message()`**: Only `__mcp_log()` sends messages to the bridge
-- [ ] **Sandbox disabled** (Windows): Set `option_windows_disable_sandbox: true` in options_windows.yy for networking
 
 **Typical workflow**:
 ```
-1. gm_project_info(project_root="gamemaker")           # Verify project
-2. gm_bridge_install(project_root="gamemaker")         # Install bridge (once)
-3. gm_room_instance_add(..., "__mcp_bridge", ...)      # Add to startup room (once)
-4. [Verify instanceCreationOrder in room .yy file]     # CRITICAL - see troubleshooting
-5. gm_run(background=true, enable_bridge=true)         # Run game
-6. [Wait 3-5 seconds for connection]
-7. gm_bridge_status() -> game_connected: true          # Verify connection
-8. gm_run_command("ping") -> "pong"                    # Test commands
-9. gm_run_command("spawn MyObject 100 100")            # Spawn objects
-10. gm_run_logs(lines=50)                              # Read logs
-11. gm_run_stop()                                      # Stop game
+1. gm_run_stop()                                         # STOP any running games first
+2. gm_project_info(project_root="gamemaker")             # Verify project
+3. [Verify option_windows_disable_sandbox: true]         # CRITICAL for TCP
+4. gm_bridge_install(project_root="gamemaker")           # Install bridge (once)
+5. gm_room_instance_add(..., "__mcp_bridge", ...)        # Add to startup room (once)
+6. [Verify instanceCreationOrder in room .yy file]       # CRITICAL - see troubleshooting
+7. gm_run(background=true, enable_bridge=true)           # Run game
+8. [Wait 3-5 seconds for connection]
+9. gm_bridge_status() -> game_connected: true            # Verify connection
+10. gm_run_command("ping") -> "pong"                     # Test commands
+11. gm_run_command("spawn MyObject 100 100")             # Spawn objects
+12. gm_run_logs(lines=50)                                # Read logs
+13. gm_run_stop()                                        # Stop game
 ```
 
 ---
@@ -41,6 +44,62 @@ The bridge is designed to be:
 - Local-only: the server listens on `127.0.0.1` and the game connects out to it.
 - Low footprint: assets are prefixed with `__mcp_` for easy identification/removal.
 - Safe-by-default: bridge install/uninstall use backup/rollback for `.yyp` edits.
+
+## Common Agent Mistakes
+
+These are common mistakes agents make when setting up or troubleshooting the bridge. **Read this section carefully before debugging.**
+
+### 1. Running multiple games simultaneously
+
+**Mistake**: Starting a new game without stopping the previous one.
+
+**Why it fails**: Port 6502 can only be used by one game at a time. If another game is already connected, the new game cannot connect.
+
+**Symptoms**:
+- `game_connected: false` even though bridge is installed and in room
+- No errors shown - the connection just silently fails
+
+**Fix**: Always run `gm_run_stop()` BEFORE starting a new game.
+
+### 2. Not checking if sandbox is disabled
+
+**Mistake**: Assuming TCP networking will work without verifying the sandbox setting.
+
+**Why it fails**: GameMaker's sandbox mode blocks TCP networking by default on Windows.
+
+**Symptoms**:
+- `game_connected: false`
+- Game runs fine but never connects to bridge
+- No errors in game output
+
+**Fix**: Read `options/windows/options_windows.yy` and verify `option_windows_disable_sandbox: true`. If false, change it.
+
+### 3. Repeatedly recompiling when connection fails
+
+**Mistake**: Re-running `gm_run()` over and over hoping it will fix connection issues.
+
+**Why it fails**: If the connection setup is wrong (sandbox, port conflict, missing instance), recompiling won't help.
+
+**Better approach**:
+1. Stop the game
+2. Run through the checklist systematically
+3. Verify each prerequisite before running again
+
+### 4. Not testing on a known-working project first
+
+**Mistake**: When debugging bridge issues in a complex project, continuing to debug there instead of testing the bridge on a known-working project.
+
+**Why it helps to test elsewhere**: If the bridge works on the MCP sample project but not on your project, the issue is project-specific. If it doesn't work on either, the issue is with your environment or MCP setup.
+
+**Better approach**: If stuck, test on the `gms-mcp/gamemaker` sample project first to isolate the problem.
+
+### 5. Editing files while GameMaker IDE has them open
+
+**Mistake**: Using file editing tools while the GameMaker IDE has the project open.
+
+**Why it fails**: The IDE may overwrite your changes or cause file conflicts.
+
+**Better approach**: Close the GameMaker IDE before making automated edits to `.yy` or `.gml` files, or use the IDE to make the changes directly.
 
 ## Key concepts (read this first)
 
@@ -104,13 +163,24 @@ It does NOT add room instances automatically.
 
 This is the recommended, repeatable sequence for running a game and interacting with it.
 
-### Step 0: Resolve the correct project root
+### Step 0: Stop any running games and verify project
 
 Run:
 
-- `gm_project_info(project_root=...)`
+- `gm_run_stop(project_root=...)` - Even if you think nothing is running
+- `gm_project_info(project_root=...)` - Verify project location
 
 Use the returned `.yyp` directory as `project_root` for everything below.
+
+### Step 0.5: Verify sandbox is disabled (Windows)
+
+Read `options/windows/options_windows.yy` and confirm:
+
+```json
+"option_windows_disable_sandbox": true
+```
+
+If it's `false`, TCP networking will NOT work. Change it to `true`.
 
 ### Step 1: Install the bridge (one-time per project)
 
@@ -246,13 +316,17 @@ Fix:
 
 Most common causes:
 
-1. **`__mcp_bridge` is not instantiated in the running game** (not placed in a room).
-2. **The `instanceCreationOrder` array is empty** in the room's `.yy` file (see CRITICAL section below).
-3. The game is running from a different build/project than the one you think.
-4. Windows Firewall is blocking the connection (unlikely for localhost).
+1. **Another game is already running** on port 6502. Run `gm_run_stop()` first.
+2. **Sandbox not disabled** (Windows). Verify `option_windows_disable_sandbox: true` in `options_windows.yy`.
+3. **`__mcp_bridge` is not instantiated in the running game** (not placed in a room).
+4. **The `instanceCreationOrder` array is empty** in the room's `.yy` file (see CRITICAL section below).
+5. The game is running from a different build/project than the one you think.
+6. Windows Firewall is blocking the connection (unlikely for localhost).
 
 Fix:
 
+- Run `gm_run_stop()` to ensure no other games are using the port.
+- Verify sandbox is disabled by reading `options_windows.yy`.
 - Place an instance of `__mcp_bridge` in your startup room (see workflow Step 2), then restart via `gm_run`.
 - **CRITICAL**: Verify the room's `instanceCreationOrder` includes the bridge instance (see below).
 
@@ -330,4 +404,3 @@ Fix:
 
 - If you changed Python: restart MCP.
 - If you changed GML: restart the game via `gm_run`.
-
