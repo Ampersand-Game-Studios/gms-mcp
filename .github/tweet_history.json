@@ -34,7 +34,15 @@
   "generation_stats": {
     "total_generated": 1,
     "total_posted": 2,
-    "failures": 1,
+    "failures": 2,
     "last_generation": "2026-01-09T14:14:09.621453+00:00"
+  },
+  "format_coverage": {
+    "problem_solution": null,
+    "concrete_scenario": null,
+    "comparison": null,
+    "tip_discovery": null,
+    "question_answer": null,
+    "workflow_story": null
   }
 }
