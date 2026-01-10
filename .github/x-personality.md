@@ -60,6 +60,9 @@ gms-mcp is a GameMaker tooling project - a CLI and MCP server that helps game de
 ## Topics to Avoid
 
 - Drama or negativity about other tools/engines
+- **NEVER be negative about GameMaker itself** - we complement it, we don't criticize it
+- Don't call GameMaker "painful", "tedious", "slow", "clunky", etc.
+- Frame benefits as "AI speeds this up" not "GameMaker is bad at X"
 - Promises about future features (ship first, tweet later)
 - Anything that sounds like marketing copy
 
@@ -90,8 +93,17 @@ When Claude generates tweets automatically (3x daily):
 - Afternoon (2pm UTC): Specific feature highlights, tool spotlights
 - Evening (8pm UTC): "End of day" angles, what you accomplished
 
-### Variety Mechanisms
-- Problem/Solution: "Tired of X? Now you can Y"
-- Announcement: "X just got better"
-- Capability: "You can now X with a single tool call"
-- Comparison: "What used to take 10 clicks is now one command"
+### Format Rotation (Automatic)
+The system rotates through these 6 formats independently of topic:
+1. **Problem -> Solution**: "X is annoying -> here's how gms-mcp fixes it"
+2. **Concrete Scenario**: A specific real situation where the tool helps
+3. **Before/After Comparison**: The old way vs the new way
+4. **Tip or Discovery**: Share something useful like telling a friend
+5. **Question -> Answer**: Ask a relatable question, provide the answer
+6. **Workflow Story**: Describe a quick workflow win
+
+This ensures tweets feel different even when covering similar features.
+
+### Opening Patterns to Avoid
+The system tracks recent tweet openings and explicitly tells Claude what patterns to avoid.
+This prevents the "Create sprites, objects, and rooms..." repetition problem.

@@ -17,16 +17,52 @@ from typing import Optional
 # Project root (relative to this script)
 PROJECT_ROOT = Path(__file__).parent.parent.parent
 
+# Tweet formats - rotated independently of topic
+# IMPORTANT: Never frame GameMaker negatively - we complement it, not criticize it
+TWEET_FORMATS = {
+    "problem_solution": {
+        "name": "Problem -> Solution",
+        "template": "Frame a common dev task -> show how gms-mcp speeds it up. Don't criticize GameMaker itself.",
+        "example": "Working on a big project with 200+ scripts? `gm_find_definition` jumps to any function instantly.",
+    },
+    "concrete_scenario": {
+        "name": "Concrete Scenario",
+        "template": "Describe a specific real situation where this helps - game jams, late night debugging, big projects",
+        "example": "Game jam weekend: asked Claude to scaffold player, enemies, and a test room. Had a playable prototype in 10 minutes.",
+    },
+    "comparison": {
+        "name": "Before/After Comparison",
+        "template": "Show how AI assistance speeds up the workflow. Focus on the speed gain, not criticizing the normal way.",
+        "example": "Setting up 5 enemy variants with different stats used to take a while. Now I just describe them to Claude and they're ready to test.",
+    },
+    "tip_discovery": {
+        "name": "Tip or Discovery",
+        "template": "Share something useful like telling a friend - a tool capability they might not know about",
+        "example": "TIL gm_get_asset_graph shows everything that references a sprite. Super useful before deleting old assets.",
+    },
+    "question_answer": {
+        "name": "Question -> Answer",
+        "template": "Ask a relatable question, provide the answer - focus on capability, not complaints",
+        "example": "Want to know which scripts aren't being used anymore? gm_maintenance_list_orphans. Found 40 dead scripts in my project.",
+    },
+    "workflow_story": {
+        "name": "Mini Workflow Story",
+        "template": "Describe a quick workflow win - what you asked for, what happened",
+        "example": "Asked Claude to 'duplicate rm_level1 as rm_level2 and add 3 enemy spawns'. Done in seconds. Love this workflow.",
+    },
+}
+
 # Topic categories and their associated tools/features
+# IMPORTANT: Each angle should be MEANINGFULLY DIFFERENT - different benefit, use case, or perspective
 TOPIC_CATEGORIES = {
     "code_intelligence": {
         "name": "Code Intelligence",
         "tools": ["gm_build_index", "gm_find_definition", "gm_find_references", "gm_list_symbols"],
         "angles": [
-            "Jump to any function definition instantly",
-            "Find every usage of a symbol across your project",
-            "Index your entire GML codebase in seconds",
-            "Navigate code like a pro with symbol search",
+            "Lost in a 200-script project? Find any function definition in seconds",
+            "Refactoring a function? See every place it's called before you break something",
+            "Onboarding to someone else's GameMaker project? Index it and explore the symbol tree",
+            "Your AI assistant can actually understand your GML codebase structure now",
         ],
     },
     "asset_creation": {
@@ -38,10 +74,10 @@ TOPIC_CATEGORIES = {
             "gm_create_timeline", "gm_create_sequence", "gm_create_note",
         ],
         "angles": [
-            "Create any GameMaker asset with one tool call",
-            "Batch create sprites, objects, rooms - no clicking",
-            "Generate fully configured objects with events",
-            "Stop clicking through menus to add assets",
+            "Prototyping a game jam entry? Scaffold all your base objects in one conversation",
+            "The .yy boilerplate GameMaker generates is handled for you - correct GUIDs, paths, everything",
+            "Setting up shaders, fonts, and tilesets used to mean navigating 5 different menus",
+            "Your AI can now spawn game objects that actually work in GameMaker - events, variables, sprite assignments",
         ],
     },
     "maintenance": {
@@ -52,20 +88,20 @@ TOPIC_CATEGORIES = {
             "gm_maintenance_dedupe_resources", "gm_maintenance_purge",
         ],
         "angles": [
-            "Clean up project mess in one command",
-            "Find and fix orphaned assets automatically",
-            "Lint your project structure for issues",
-            "Dedupe resources and reclaim disk space",
+            "That sprite you deleted 3 months ago? It's still referenced in 4 places. Now you can find them",
+            "Project file got corrupted after a merge conflict? Lint and auto-fix it",
+            "Duplicate resource entries in your .yyp silently causing issues? Dedupe them",
+            "Clean up a messy inherited project - find orphans, validate JSON, fix paths",
         ],
     },
     "runtime_build": {
         "name": "Build & Runtime",
         "tools": ["gm_compile", "gm_run", "gm_run_stop", "gm_runtime_list", "gm_runtime_pin", "gm_runtime_verify"],
         "angles": [
-            "Pin your runtime version - no more surprise updates",
-            "Compile and run from your AI assistant",
-            "List available runtimes without opening the IDE",
-            "Verify your build environment is ready",
+            "Pin your project to a specific runtime - no more 'works on my machine' surprises",
+            "CI/CD for GameMaker? Now your build server can compile without the IDE",
+            "Test your game directly from your AI chat - compile, run, iterate",
+            "Switching between runtime versions for different projects is actually manageable now",
         ],
     },
     "room_operations": {
@@ -75,20 +111,20 @@ TOPIC_CATEGORIES = {
             "gm_room_ops_duplicate", "gm_room_ops_rename", "gm_room_ops_delete",
         ],
         "angles": [
-            "Add layers and instances programmatically",
-            "Duplicate rooms with all their contents",
-            "Batch room operations that used to be tedious",
-            "Populate rooms without the room editor",
+            "Procedurally place 50 enemies across your level without clicking 50 times",
+            "Duplicate a room template and batch-modify instances - level design at scale",
+            "Room editor crashed and you need to add a layer? There's a tool for that",
+            "Your AI can now understand and modify room layouts - add instances, layers, backgrounds",
         ],
     },
     "events": {
         "name": "Event Management",
         "tools": ["gm_event_add", "gm_event_remove", "gm_event_duplicate", "gm_event_list", "gm_event_validate"],
         "angles": [
-            "Copy events between objects instantly",
-            "Add Step, Create, Draw events with code",
-            "Manage object events without the IDE",
-            "Validate event structure across objects",
+            "Copy your base enemy's event structure to 10 enemy variants instantly",
+            "Add Draw GUI events to every UI object in your project programmatically",
+            "Event files out of sync with your .yy? Validate and fix the mismatch",
+            "Audit which objects have Alarm events - useful for debugging timing issues",
         ],
     },
     "introspection": {
@@ -98,39 +134,39 @@ TOPIC_CATEGORIES = {
             "gm_get_asset_graph", "gm_get_project_stats", "gm_project_info",
         ],
         "angles": [
-            "See every asset dependency at a glance",
-            "Search references across your entire project",
-            "Get project stats without opening GameMaker",
-            "Trace what's using that sprite you want to delete",
+            "Before deleting that old sprite - see everything that references it first",
+            "Quick project stats: how many scripts, objects, rooms? No IDE needed",
+            "Search for every place a variable name appears across all your GML",
+            "Asset dependency graph shows the real structure of your project",
         ],
     },
     "diagnostics": {
         "name": "Diagnostics",
         "tools": ["gm_diagnostics", "gm_mcp_health", "gm_check_updates"],
         "angles": [
-            "One-click environment health check",
-            "Verify GameMaker setup is ready to go",
-            "Diagnose project issues before they bite",
-            "Check for gms-mcp updates",
+            "Environment health check: is your GameMaker setup ready to build?",
+            "Something's wrong but you don't know what - run diagnostics first",
+            "Verify your runtimes, licenses, and dependencies are all in order",
+            "Quick sanity check before starting a long dev session",
         ],
     },
     "workflow": {
         "name": "Workflow Tools",
         "tools": ["gm_workflow_duplicate", "gm_workflow_rename", "gm_workflow_delete"],
         "angles": [
-            "Bulk rename assets across your project",
-            "Duplicate entire asset hierarchies",
-            "Safe delete with dependency checking",
+            "Rename spr_player to spr_hero and update every reference automatically",
+            "Duplicate an entire object with all its events and properties intact",
+            "Safe delete: see what would break before you commit to removing an asset",
         ],
     },
     "integration": {
         "name": "AI Integration",
         "tools": [],
         "angles": [
-            "Works with Cursor, Claude Code, VS Code, and more",
-            "MCP server for AI-assisted GameMaker dev",
-            "Let your AI assistant understand your project",
-            "Bridge GameMaker and modern AI workflows",
+            "Cursor, Claude Code, Windsurf - your AI editor now speaks GameMaker",
+            "MCP protocol means any AI tool can understand your .yyp project",
+            "Describe what you want in plain English, get valid GameMaker assets",
+            "Your AI assistant finally has context about your actual project structure",
         ],
     },
 }
@@ -230,6 +266,23 @@ def select_topic(topic_coverage: dict[str, Optional[str]]) -> str:
     return sorted_topics[0][0]
 
 
+def select_format(format_coverage: dict[str, Optional[str]]) -> str:
+    """Select the least recently used tweet format."""
+    # Sort by last usage time (None = never used = highest priority)
+    sorted_formats = sorted(
+        format_coverage.items(),
+        key=lambda x: x[1] if x[1] else "1970-01-01T00:00:00Z"
+    )
+
+    # Return the least recently used format
+    return sorted_formats[0][0]
+
+
+def initialize_format_coverage() -> dict[str, Optional[str]]:
+    """Return initial format coverage dict with all formats set to None."""
+    return {fmt: None for fmt in TWEET_FORMATS.keys()}
+
+
 def get_time_slot() -> str:
     """Get current time slot (morning/afternoon/evening) in UTC."""
     hour = datetime.now(timezone.utc).hour
@@ -243,16 +296,34 @@ def get_time_slot() -> str:
 
 def build_context_for_claude(
     topic: str,
+    tweet_format: str,
     recent_tweets: list[dict],
     changelog_entries: list[dict],
 ) -> str:
-    """Build minimal context for Claude to generate a tweet."""
+    """Build context for Claude to generate a tweet with specific topic and format."""
     category = TOPIC_CATEGORIES.get(topic, TOPIC_CATEGORIES["integration"])
+    format_info = TWEET_FORMATS.get(tweet_format, TWEET_FORMATS["problem_solution"])
 
-    # Format recent tweets
-    recent_text = "\n".join(
-        f"- {t.get('preview', 'No preview')}" for t in recent_tweets[-10:]
-    ) if recent_tweets else "No recent tweets"
+    # Format recent tweets with their patterns to avoid
+    recent_text = ""
+    if recent_tweets:
+        for t in recent_tweets[-10:]:
+            preview = t.get('preview', 'No preview')
+            recent_text += f"- {preview}\n"
+    else:
+        recent_text = "No recent tweets"
+
+    # Extract opening patterns from recent tweets to avoid
+    recent_openings = []
+    for t in recent_tweets[-5:]:
+        preview = t.get('preview', '')
+        if preview:
+            # Get first 3-4 words
+            words = preview.split()[:4]
+            if words:
+                recent_openings.append(" ".join(words))
+
+    openings_to_avoid = ", ".join(f'"{o}..."' for o in recent_openings) if recent_openings else "None"
 
     # Format changelog highlights
     changelog_text = ""
@@ -263,18 +334,25 @@ def build_context_for_claude(
             items = "\n".join(f"  - {h['title']}" for h in highlights)
             changelog_text += f"Version {version}:\n{items}\n"
 
-    # Format topic details
+    # Format topic details - pick ONE random angle to focus on
+    import random
     topic_tools = ", ".join(category["tools"][:5]) if category["tools"] else "General features"
-    topic_angles = "\n".join(f"  - {a}" for a in category["angles"][:3])
+    selected_angle = random.choice(category["angles"])
 
     return f"""PROJECT: gms-mcp - GameMaker CLI and MCP server for AI-assisted game development
 
-TOPIC TO FOCUS ON: {category['name']}
-Tools in this category: {topic_tools}
-Suggested angles:
-{topic_angles}
+TOPIC: {category['name']}
+Tools: {topic_tools}
+Angle to explore: {selected_angle}
 
-RECENT TWEETS (avoid similar content):
+TWEET FORMAT TO USE: {format_info['name']}
+How to write it: {format_info['template']}
+Example of this format: "{format_info['example']}"
+
+CRITICAL - DO NOT START WITH THESE PATTERNS (recently used):
+{openings_to_avoid}
+
+RECENT TWEETS (your tweet must feel distinctly different):
 {recent_text}
 
 RELEASED FEATURES (can reference):
@@ -282,7 +360,7 @@ RELEASED FEATURES (can reference):
 
 TIME OF DAY: {get_time_slot()} UTC
 
-HASHTAG OPTIONS: {', '.join(HASHTAGS[:3])}
+HASHTAG OPTIONS (pick 1-2): {', '.join(HASHTAGS[:4])}
 """
 
 
