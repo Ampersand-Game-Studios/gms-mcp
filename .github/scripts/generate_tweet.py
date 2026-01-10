@@ -41,10 +41,13 @@ sys.path.insert(0, str(Path(__file__).parent))
 
 from tweet_context import (
     TOPIC_CATEGORIES,
+    TWEET_FORMATS,
     build_context_for_claude,
     get_personality_guide,
+    initialize_format_coverage,
     initialize_topic_coverage,
     parse_changelog_released,
+    select_format,
     select_topic,
 )
 
@@ -66,6 +69,7 @@ def load_history() -> dict:
         return {
             "posted": [],
             "topic_coverage": initialize_topic_coverage(),
+            "format_coverage": initialize_format_coverage(),
             "generation_stats": {
                 "total_generated": 0,
                 "total_posted": 0,
@@ -79,6 +83,8 @@ def load_history() -> dict:
             # Ensure all required fields exist
             if "topic_coverage" not in data:
                 data["topic_coverage"] = initialize_topic_coverage()
+            if "format_coverage" not in data:
+                data["format_coverage"] = initialize_format_coverage()
             if "generation_stats" not in data:
                 data["generation_stats"] = {
                     "total_generated": 0,
@@ -92,6 +98,7 @@ def load_history() -> dict:
         return {
             "posted": [],
             "topic_coverage": initialize_topic_coverage(),
+            "format_coverage": initialize_format_coverage(),
             "generation_stats": {"total_generated": 0, "total_posted": 0, "failures": 0, "last_generation": None},
         }
 
@@ -144,6 +151,10 @@ def validate_tweet(content: str, history: dict) -> tuple[bool, str]:
         (r"synergy", "corporate_speak"),
         (r"leverage", "corporate_speak"),
         (r"game.?changer", "hyperbole"),
+        # Never be negative about GameMaker
+        (r"gamemaker.{0,20}(painful|tedious|annoying|frustrating|slow|clunky)", "negative_gamemaker"),
+        (r"(painful|tedious|annoying|frustrating).{0,20}(menu|click|ide)", "negative_gamemaker"),
+        (r"nightmare", "negative_framing"),
     ]
 
     for pattern, reason in bad_patterns:
@@ -209,6 +220,8 @@ CRITICAL CONSTRAINTS:
 - Lead with user benefit ("You can now X" not "We implemented Y")
 - No corporate speak, no emoji spam
 - Be specific about what the tool does
+- NEVER be negative about GameMaker itself - we complement it, we don't criticize it
+- Frame benefits as "AI speeds this up" not "GameMaker is slow/tedious/painful"
 
 OUTPUT FORMAT:
 Return ONLY the tweet text. No quotes, no explanations, no "Here's a tweet:" prefix.
@@ -238,21 +251,26 @@ Requirements:
 Generate the tweet now:"""
 
 
-def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str]:
+def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str, str]:
     """Generate a tweet using Claude API.
 
-    Returns: (tweet_content, topic)
+    Returns: (tweet_content, topic, format)
     """
     # Select topic based on coverage
     topic_coverage = history.get("topic_coverage", initialize_topic_coverage())
     topic = select_topic(topic_coverage)
     print(f"Selected topic: {topic} ({TOPIC_CATEGORIES[topic]['name']})")
 
+    # Select format based on coverage
+    format_coverage = history.get("format_coverage", initialize_format_coverage())
+    tweet_format = select_format(format_coverage)
+    print(f"Selected format: {tweet_format} ({TWEET_FORMATS[tweet_format]['name']})")
+
     # Load context
     changelog = parse_changelog_released()
     recent_tweets = history.get("posted", [])[-10:]
 
-    context = build_context_for_claude(topic, recent_tweets, changelog)
+    context = build_context_for_claude(topic, tweet_format, recent_tweets, changelog)
     personality = get_personality_guide()
 
     system_prompt = build_system_prompt(personality)
@@ -262,7 +280,7 @@ def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str]:
 
     if dry_run and not os.environ.get("ANTHROPIC_API_KEY"):
         # Return a placeholder for dry-run without API key
-        return f"[DRY RUN] Would generate tweet about {topic}", topic
+        return f"[DRY RUN] Would generate tweet about {topic}", topic, tweet_format
 
     # Generate with validation loop
     for attempt in range(3):
@@ -275,7 +293,7 @@ def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str]:
         valid, reason = validate_tweet(tweet, history)
         if valid:
             print(f"Generated valid tweet ({len(tweet)} chars)")
-            return tweet, topic
+            return tweet, topic, tweet_format
 
         print(f"Attempt {attempt + 1}: Invalid tweet ({reason}), retrying...")
 
@@ -284,7 +302,7 @@ def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str]:
 
     # If all attempts fail, return last attempt anyway
     print("Warning: Could not generate valid tweet after 3 attempts")
-    return tweet, topic
+    return tweet, topic, tweet_format
 
 
 def set_github_output(name: str, value: str) -> None:
@@ -310,7 +328,7 @@ def main():
 
     # Generate tweet
     try:
-        tweet, topic = generate_tweet(history, dry_run=args.dry_run)
+        tweet, topic, tweet_format = generate_tweet(history, dry_run=args.dry_run)
     except Exception as e:
         print(f"Generation failed: {e}")
         history["generation_stats"]["failures"] = history["generation_stats"].get("failures", 0) + 1
@@ -325,6 +343,7 @@ def main():
     print(tweet)
     print("-" * 50)
     print(f"Topic: {topic}")
+    print(f"Format: {tweet_format}")
 
     if args.dry_run:
         print("\n[DRY RUN] Would write to next_tweet.txt")
@@ -339,12 +358,17 @@ def main():
     history["generation_stats"]["total_generated"] = history["generation_stats"].get("total_generated", 0) + 1
     history["generation_stats"]["last_generation"] = datetime.now(timezone.utc).isoformat()
 
-    # Update topic coverage
-    history["topic_coverage"][topic] = datetime.now(timezone.utc).isoformat()
+    # Update topic and format coverage
+    now = datetime.now(timezone.utc).isoformat()
+    history["topic_coverage"][topic] = now
+    if "format_coverage" not in history:
+        history["format_coverage"] = initialize_format_coverage()
+    history["format_coverage"][tweet_format] = now
 
     save_history(history)
     set_github_output("tweet_generated", "true")
     set_github_output("topic", topic)
+    set_github_output("format", tweet_format)
 
     print("Done!")
     return 0
