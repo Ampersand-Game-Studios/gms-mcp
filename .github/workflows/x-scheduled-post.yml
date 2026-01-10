@@ -50,6 +50,7 @@ jobs:
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
           TWEET_TOPIC: ${{ steps.generate.outputs.topic }}
+          TWEET_FORMAT: ${{ steps.generate.outputs.format }}
           TWEET_GENERATED_BY: claude-api
         run: python .github/scripts/post_tweet.py
 
