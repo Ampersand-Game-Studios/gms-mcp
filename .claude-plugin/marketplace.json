@@ -1,20 +1,20 @@
 {
-  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
   "name": "gms-mcp-marketplace",
   "description": "GameMaker development tools for Claude Code",
   "owner": {
-    "name": "Ampersand Game Studios"
+    "name": "Ampersand Game Studios",
+    "email": "callum@ampersandgamestudios.com"
   },
+  "version": "1.0.0",
   "plugins": [
     {
       "name": "gms-mcp",
+      "version": "0.2.0",
       "description": "GameMaker MCP server, skills, and hooks for Claude Code",
-      "category": "development",
       "source": {
         "source": "url",
         "url": "https://github.com/Ampersand-Game-Studios/gms-mcp.git"
-      },
-      "homepage": "https://github.com/Ampersand-Game-Studios/gms-mcp"
+      }
     }
   ]
 }
