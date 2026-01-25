@@ -46,10 +46,8 @@ def _get_debug_log_path() -> Optional[Path]:
             except Exception:
                 continue
         
-        # Fallback to CWD
-        fallback_dir = Path.cwd() / ".gms_mcp" / "logs"
-        fallback_dir.mkdir(parents=True, exist_ok=True)
-        return fallback_dir / "debug.log"
+        # No GameMaker project found - skip debug logging
+        return None
     except Exception:
         return None
 
