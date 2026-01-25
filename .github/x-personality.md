@@ -53,9 +53,34 @@ gms-mcp is a GameMaker tooling project - a CLI and MCP server that helps game de
 ## Topics We Care About
 
 - Making GameMaker development faster and less tedious
-- AI-assisted game development (Cursor, MCP, agents)
+- AI-assisted game development (Cursor, Claude Code, MCP, agents)
 - Developer experience and tooling
 - The indie/hobbyist GameMaker community
+- Live debugging with the TCP bridge
+- Workflow skills that automate multi-step tasks
+
+## Key Features to Highlight
+
+### Claude Code Plugin
+gms-mcp works as a Claude Code plugin with:
+- SessionStart hooks that auto-load GameMaker context
+- PostToolUseFailure hooks for build error notifications
+- Skills and MCP server bundled together
+
+### Skills System
+14+ workflow skills accessible via `/gms <skill>`:
+- `/gms debug-live` - Live debugging with TCP bridge
+- `/gms safe-delete` - See dependencies before deleting
+- `/gms cleanup-project` - Run all maintenance at once
+- `/gms smart-refactor` - Rename with reference updates
+- `/gms setup-object` - Scaffold complete objects
+
+### TCP Bridge (Live Game Communication)
+Two-way communication with running games:
+- Real-time log streaming to AI chat
+- Execute GML commands mid-game
+- Spawn instances, change variables, switch rooms
+- No need to restart to test changes
 
 ## Topics to Avoid
 
@@ -72,7 +97,7 @@ When Claude generates tweets automatically (3x daily):
 
 ### Topic Rotation
 - Never tweet about the same tool category twice in a row
-- Categories: Code Intelligence, Asset Creation, Maintenance, Runtime/Build, Room Operations, Events, Introspection, Diagnostics, Workflow, Integration
+- Categories: Code Intelligence, Asset Creation, Maintenance, Runtime/Build, Room Operations, Events, Introspection, Diagnostics, Workflow, Integration, Claude Code Plugin, Skills & Workflows, TCP Bridge, AI-Assisted Workflows
 - The system tracks coverage and picks the least-recently-covered topic
 
 ### Content Rules
@@ -103,6 +128,30 @@ The system rotates through these 6 formats independently of topic:
 6. **Workflow Story**: Describe a quick workflow win
 
 This ensures tweets feel different even when covering similar features.
+
+### Opening Pattern Rotation (Automatic)
+The system rotates through 20 opening styles to ensure variety:
+
+1. **Statement**: Direct feature statement ("gms-mcp indexes your entire codebase...")
+2. **Scenario**: When/If framing ("When you need to refactor a 200-script project...")
+3. **Discovery**: TIL/Found that ("TIL gm_find_references traces through parent objects...")
+4. **Comparison**: Before/after ("Used to grep through .yy files manually...")
+5. **Question**: Question opener ("Need to find where a function is called?")
+6. **Workflow**: Process description ("My workflow: describe the object, get events set up...")
+7. **Tip**: Quick tip format ("Quick tip: gm_maintenance_auto catches most project issues...")
+8. **Result**: Outcome focus ("Just ran gm_maintenance_auto - found 12 orphaned scripts...")
+9. **Capability**: Feature announcement ("You can now trace asset dependencies...")
+10. **Pain Point**: Relatable frustration ("Hate searching for where a function is defined?...")
+11. **Speed**: Speed emphasis ("Index 200 scripts in seconds...")
+12. **Count**: Concrete numbers ("Found 40 orphaned scripts in our jam project...")
+13. **Tool Spotlight**: Tool-first framing ("gm_find_references is my most-used tool...")
+14. **Use Case**: Audience targeting ("For large team projects...")
+15. **Contrast**: Alternative approach ("Instead of manually checking each .yy file...")
+16. **Confession**: Relatable admission ("I used to rename assets and pray nothing broke...")
+17. **Command**: Imperative/instructional ("Run gm_maintenance_auto before your next commit...")
+18. **Hypothetical**: Possibilities ("Imagine if your AI could see your game logs...")
+19. **Observation**: Casual insight ("Noticed our project had 50 unused sprites...")
+20. **Shortcut**: Efficiency angle ("Skip the menu diving - create assets from your chat...")
 
 ### Opening Patterns to Avoid
 The system tracks recent tweet openings and explicitly tells Claude what patterns to avoid.

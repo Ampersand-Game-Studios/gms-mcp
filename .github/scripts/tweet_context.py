@@ -63,6 +63,8 @@ TOPIC_CATEGORIES = {
             "Refactoring a function? See every place it's called before you break something",
             "Onboarding to someone else's GameMaker project? Index it and explore the symbol tree",
             "Your AI assistant can actually understand your GML codebase structure now",
+            "Jump from function call to definition without leaving your conversation",
+            "Reviewing a PR? Index the branch and trace any function's usage",
         ],
     },
     "asset_creation": {
@@ -74,10 +76,12 @@ TOPIC_CATEGORIES = {
             "gm_create_timeline", "gm_create_sequence", "gm_create_note",
         ],
         "angles": [
-            "Prototyping a game jam entry? Scaffold all your base objects in one conversation",
+            "Describe an enemy type, get a working object with events and variables set up",
             "The .yy boilerplate GameMaker generates is handled for you - correct GUIDs, paths, everything",
-            "Setting up shaders, fonts, and tilesets used to mean navigating 5 different menus",
+            "Batch-create 10 item objects with different stats from a single description",
             "Your AI can now spawn game objects that actually work in GameMaker - events, variables, sprite assignments",
+            "Need a particle system object? Describe the effect, get the code and events",
+            "Shader scaffolding: vertex and fragment files, object setup, one conversation",
         ],
     },
     "maintenance": {
@@ -92,6 +96,8 @@ TOPIC_CATEGORIES = {
             "Project file got corrupted after a merge conflict? Lint and auto-fix it",
             "Duplicate resource entries in your .yyp silently causing issues? Dedupe them",
             "Clean up a messy inherited project - find orphans, validate JSON, fix paths",
+            "Weekly maintenance: one command catches JSON errors, orphaned assets, duplicate entries",
+            "Team project getting bloated? List all unreferenced scripts before your next cleanup",
         ],
     },
     "runtime_build": {
@@ -102,6 +108,8 @@ TOPIC_CATEGORIES = {
             "CI/CD for GameMaker? Now your build server can compile without the IDE",
             "Test your game directly from your AI chat - compile, run, iterate",
             "Switching between runtime versions for different projects is actually manageable now",
+            "Headless builds for your GameMaker project - perfect for automated testing",
+            "List available runtimes, pick one, pin it - version management sorted",
         ],
     },
     "room_operations": {
@@ -115,6 +123,8 @@ TOPIC_CATEGORIES = {
             "Duplicate a room template and batch-modify instances - level design at scale",
             "Room editor crashed and you need to add a layer? There's a tool for that",
             "Your AI can now understand and modify room layouts - add instances, layers, backgrounds",
+            "Generate a test room with specific instance placements from a description",
+            "Clone your hub room, swap the tileset layer, instant biome variant",
         ],
     },
     "events": {
@@ -125,6 +135,8 @@ TOPIC_CATEGORIES = {
             "Add Draw GUI events to every UI object in your project programmatically",
             "Event files out of sync with your .yy? Validate and fix the mismatch",
             "Audit which objects have Alarm events - useful for debugging timing issues",
+            "List all Step events across objects to understand your game loop",
+            "Duplicate Create event logic from one object family to another",
         ],
     },
     "introspection": {
@@ -138,6 +150,8 @@ TOPIC_CATEGORIES = {
             "Quick project stats: how many scripts, objects, rooms? No IDE needed",
             "Search for every place a variable name appears across all your GML",
             "Asset dependency graph shows the real structure of your project",
+            "Export your project structure for documentation or onboarding",
+            "Find all objects using a specific parent - inheritance tree at a glance",
         ],
     },
     "diagnostics": {
@@ -148,6 +162,8 @@ TOPIC_CATEGORIES = {
             "Something's wrong but you don't know what - run diagnostics first",
             "Verify your runtimes, licenses, and dependencies are all in order",
             "Quick sanity check before starting a long dev session",
+            "New machine setup? Diagnostics tells you what's missing",
+            "CI pipeline failing? Run diagnostics to check the build environment",
         ],
     },
     "workflow": {
@@ -157,6 +173,9 @@ TOPIC_CATEGORIES = {
             "Rename spr_player to spr_hero and update every reference automatically",
             "Duplicate an entire object with all its events and properties intact",
             "Safe delete: see what would break before you commit to removing an asset",
+            "Refactor asset names across the project - all references update automatically",
+            "Clone your player object as an NPC variant, keeping the core structure",
+            "Batch rename with pattern: spr_enemy_* to spr_boss_* in one operation",
         ],
     },
     "integration": {
@@ -167,12 +186,87 @@ TOPIC_CATEGORIES = {
             "MCP protocol means any AI tool can understand your .yyp project",
             "Describe what you want in plain English, get valid GameMaker assets",
             "Your AI assistant finally has context about your actual project structure",
+            "Pair programming with AI that understands GameMaker asset relationships",
+            "Natural language to GML: describe behavior, get working code in context",
+        ],
+    },
+    # New categories for Claude Code plugin features
+    "claude_code_plugin": {
+        "name": "Claude Code Plugin",
+        "tools": [],
+        "angles": [
+            "Install gms-mcp as a Claude Code plugin - skills, hooks, and MCP server all bundled",
+            "SessionStart hooks auto-load GameMaker context when you open a project",
+            "PostToolUseFailure hooks notify you when builds fail",
+            "One plugin.json gives Claude Code full GameMaker superpowers",
+            "Plugin hooks catch build errors before they waste your time",
+            "Open a .yyp folder in Claude Code, context loads automatically",
+        ],
+    },
+    "skills_system": {
+        "name": "Skills & Workflows",
+        "tools": [],
+        "angles": [
+            "Type /gms debug-live to start live debugging - send commands to your running game",
+            "/gms safe-delete shows what would break before you delete an asset",
+            "/gms cleanup-project runs maintenance, finds orphans, validates JSON in one command",
+            "14 workflow skills turn complex multi-step tasks into single commands",
+            "/gms smart-refactor renames assets and updates every reference",
+            "/gms setup-object scaffolds a complete object with events and variables",
+        ],
+    },
+    "tcp_bridge": {
+        "name": "Live Game Bridge",
+        "tools": ["gm_bridge_install", "gm_bridge_status", "gm_run_command", "gm_run_logs"],
+        "angles": [
+            "TCP bridge lets AI see your game logs in real-time while it's running",
+            "Spawn test instances mid-game: gm_run_command('instance_create_layer(...)')",
+            "Debug without restarts - change variables, switch rooms, all from your editor",
+            "Two-way communication: game sends logs, AI sends commands back",
+            "Live log streaming: see debug output in your AI chat as it happens",
+            "Test enemy spawns without recompiling - inject instances directly",
+        ],
+    },
+    "ai_workflows": {
+        "name": "AI-Assisted Workflows",
+        "tools": [],
+        "angles": [
+            "Describe a feature, AI scaffolds the objects/scripts/rooms to build it",
+            "Refactor a function and AI updates every reference across the project",
+            "AI understands your actual project structure, not just generic GML",
+            "From idea to playable prototype without leaving your AI chat",
+            "Ask 'what uses this sprite?' - get a complete dependency analysis",
+            "Code review with context: AI knows your object hierarchy and event flow",
         ],
     },
 }
 
 # Hashtags to use (will pick 1-2)
 HASHTAGS = ["#gamedev", "#GameMaker", "#indiedev", "#GML", "#GameMakerStudio2"]
+
+# Opening pattern types to encourage variety (20 options)
+OPENING_PATTERNS = [
+    "statement",      # Direct statement about a feature: "gms-mcp can X"
+    "scenario",       # "When X happens, you can Y"
+    "discovery",      # "TIL: ...", "Discovered that..."
+    "comparison",     # "Used to X, now Y"
+    "question",       # "Need to X? Here's how"
+    "workflow",       # "My workflow: ..."
+    "tip",            # "Quick tip: ..."
+    "result",         # "Just X'd and Y happened" - outcome focus
+    "capability",     # "You can now X" - feature announcement style
+    "pain_point",     # "Hate when X? Y fixes that" - relatable frustration
+    "speed",          # "X in seconds" - emphasize speed
+    "count",          # "Found 40 orphaned scripts" - concrete numbers
+    "tool_spotlight", # "gm_find_references is..." - tool-first framing
+    "use_case",       # "For large projects..." - audience targeting
+    "contrast",       # "Instead of X, just Y" - alternative approach
+    "confession",     # "I used to X manually..." - relatable admission
+    "command",        # "Run gm_maintenance_auto..." - imperative/instructional
+    "hypothetical",   # "Imagine if your AI could..." - possibilities
+    "observation",    # "Noticed that X..." - casual insight
+    "shortcut",       # "Skip the menu diving..." - efficiency angle
+]
 
 
 def parse_changelog_released() -> list[dict]:
@@ -328,12 +422,32 @@ def extract_opening_pattern(text: str) -> str:
     return " ".join(text.split()[:4])
 
 
+def initialize_opening_coverage() -> dict[str, Optional[str]]:
+    """Track when each opening pattern was last used."""
+    return {pattern: None for pattern in OPENING_PATTERNS}
+
+
+def select_opening_pattern(opening_coverage: dict) -> str:
+    """Select the least recently used opening pattern."""
+    # Ensure all patterns exist in coverage
+    for pattern in OPENING_PATTERNS:
+        if pattern not in opening_coverage:
+            opening_coverage[pattern] = None
+
+    sorted_patterns = sorted(
+        opening_coverage.items(),
+        key=lambda x: x[1] if x[1] else "1970-01-01T00:00:00Z"
+    )
+    return sorted_patterns[0][0]
+
+
 def build_context_for_claude(
     topic: str,
     tweet_format: str,
     selected_angle: str,
     recent_tweets: list[dict],
     changelog_entries: list[dict],
+    suggested_opening: Optional[str] = None,
 ) -> str:
     """Build context for Claude to generate a tweet with specific topic and format."""
     category = TOPIC_CATEGORIES.get(topic, TOPIC_CATEGORIES["integration"])
@@ -378,6 +492,31 @@ def build_context_for_claude(
     # Format topic details
     topic_tools = ", ".join(category["tools"][:5]) if category["tools"] else "General features"
 
+    # Opening pattern descriptions for guidance (20 patterns)
+    opening_descriptions = {
+        "statement": "Direct statement (e.g., 'gms-mcp indexes your entire codebase...')",
+        "scenario": "When/If scenario (e.g., 'When you need to refactor a 200-script project...')",
+        "discovery": "Discovery framing (e.g., 'TIL gm_find_references traces through parent objects...')",
+        "comparison": "Before/after (e.g., 'Used to grep through .yy files manually...')",
+        "question": "Question opener (e.g., 'Need to find where a function is called?')",
+        "workflow": "Workflow description (e.g., 'My workflow: describe the object, get events set up...')",
+        "tip": "Quick tip (e.g., 'Quick tip: gm_maintenance_auto catches most project issues...')",
+        "result": "Outcome focus (e.g., 'Just ran gm_maintenance_auto - found 12 orphaned scripts...')",
+        "capability": "Feature announcement (e.g., 'You can now trace asset dependencies across your whole project...')",
+        "pain_point": "Relatable frustration (e.g., 'Hate searching for where a function is defined?...')",
+        "speed": "Speed emphasis (e.g., 'Index 200 scripts in seconds...')",
+        "count": "Concrete numbers (e.g., 'Found 40 orphaned scripts in our jam project...')",
+        "tool_spotlight": "Tool-first (e.g., 'gm_find_references is my most-used tool...')",
+        "use_case": "Audience targeting (e.g., 'For large team projects...')",
+        "contrast": "Alternative approach (e.g., 'Instead of manually checking each .yy file...')",
+        "confession": "Relatable admission (e.g., 'I used to rename assets and pray nothing broke...')",
+        "command": "Imperative/instructional (e.g., 'Run gm_maintenance_auto before your next commit...')",
+        "hypothetical": "Possibilities (e.g., 'Imagine if your AI could see your game logs in real-time...')",
+        "observation": "Casual insight (e.g., 'Noticed our project had 50 unused sprites...')",
+        "shortcut": "Efficiency angle (e.g., 'Skip the menu diving - create assets from your chat...')",
+    }
+    opening_guidance = opening_descriptions.get(suggested_opening, "") if suggested_opening else ""
+
     return f"""PROJECT: gms-mcp - GameMaker CLI and MCP server for AI-assisted game development
 
 TOPIC: {category['name']}
@@ -387,6 +526,9 @@ Angle to explore: {selected_angle}
 TWEET FORMAT TO USE: {format_info['name']}
 How to write it: {format_info['template']}
 Example of this format: "{format_info['example']}"
+
+SUGGESTED OPENING STYLE: {suggested_opening or "any"}
+{opening_guidance}
 
 CRITICAL - DO NOT START WITH THESE PATTERNS (recently used):
 {openings_to_avoid}

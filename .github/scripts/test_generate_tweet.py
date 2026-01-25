@@ -140,18 +140,22 @@ class TestContextBuilding(unittest.TestCase):
     def test_context_contains_topic(self):
         """Context should mention the target topic."""
         context = tweet_context.build_context_for_claude(
-            "code_intelligence",
-            [],
-            []
+            topic="code_intelligence",
+            tweet_format="problem_solution",
+            selected_angle="Test angle",
+            recent_tweets=[],
+            changelog_entries=[]
         )
         self.assertIn("Code Intelligence", context)
 
     def test_context_contains_tools(self):
         """Context should list tools for the topic."""
         context = tweet_context.build_context_for_claude(
-            "code_intelligence",
-            [],
-            []
+            topic="code_intelligence",
+            tweet_format="problem_solution",
+            selected_angle="Test angle",
+            recent_tweets=[],
+            changelog_entries=[]
         )
         self.assertIn("gm_build_index", context)
 
@@ -159,11 +163,26 @@ class TestContextBuilding(unittest.TestCase):
         """Context should include recent tweet previews."""
         recent = [{"preview": "Previous tweet about testing"}]
         context = tweet_context.build_context_for_claude(
-            "code_intelligence",
-            recent,
-            []
+            topic="code_intelligence",
+            tweet_format="problem_solution",
+            selected_angle="Test angle",
+            recent_tweets=recent,
+            changelog_entries=[]
         )
         self.assertIn("Previous tweet", context)
+
+    def test_context_includes_opening_pattern(self):
+        """Context should include suggested opening pattern."""
+        context = tweet_context.build_context_for_claude(
+            topic="code_intelligence",
+            tweet_format="problem_solution",
+            selected_angle="Test angle",
+            recent_tweets=[],
+            changelog_entries=[],
+            suggested_opening="discovery"
+        )
+        self.assertIn("SUGGESTED OPENING STYLE: discovery", context)
+        self.assertIn("TIL", context)  # Example text for discovery pattern
 
 
 class TestHistoryManagement(unittest.TestCase):
@@ -216,6 +235,118 @@ class TestTimeSlot(unittest.TestCase):
         self.assertIn(slot, ["morning", "afternoon", "evening"])
 
 
+class TestSemanticDuplicateDetection(unittest.TestCase):
+    def test_word_overlap_identical(self):
+        """Identical texts should have 100% overlap."""
+        overlap = generate_tweet.compute_word_overlap(
+            "This is a test tweet about GameMaker",
+            "This is a test tweet about GameMaker"
+        )
+        self.assertEqual(overlap, 1.0)
+
+    def test_word_overlap_different(self):
+        """Completely different texts should have low overlap."""
+        overlap = generate_tweet.compute_word_overlap(
+            "GameMaker sprites objects rooms",
+            "Python functions classes modules"
+        )
+        self.assertLess(overlap, 0.3)
+
+    def test_word_overlap_partial(self):
+        """Partially similar texts should have medium overlap."""
+        overlap = generate_tweet.compute_word_overlap(
+            "gm_find_references traces function calls across your project",
+            "gm_find_definition locates function definitions across your codebase"
+        )
+        self.assertGreater(overlap, 0.3)
+        self.assertLess(overlap, 0.8)
+
+    def test_word_overlap_ignores_hashtags(self):
+        """Hashtags should not count toward overlap."""
+        overlap = generate_tweet.compute_word_overlap(
+            "Great feature #gamedev #GameMaker",
+            "Great feature #indiedev #coding"
+        )
+        # Only "great" and "feature" should count
+        self.assertGreater(overlap, 0.5)
+
+    def test_semantic_duplicate_detected(self):
+        """Should detect semantic duplicates with >60% overlap."""
+        history = {
+            "posted": [
+                {"content": "gm_find_references traces every usage of a symbol across your GameMaker project"}
+            ]
+        }
+        is_dup, reason = generate_tweet.is_semantic_duplicate(
+            "gm_find_references traces symbol usage across your entire GameMaker project",
+            history,
+            threshold=0.6
+        )
+        self.assertTrue(is_dup)
+        self.assertIn("semantic_duplicate", reason)
+
+    def test_semantic_duplicate_not_detected(self):
+        """Should not flag genuinely different tweets."""
+        history = {
+            "posted": [
+                {"content": "gm_find_references traces function calls"}
+            ]
+        }
+        is_dup, reason = generate_tweet.is_semantic_duplicate(
+            "TCP bridge lets your AI see game logs in real-time",
+            history,
+            threshold=0.6
+        )
+        self.assertFalse(is_dup)
+
+
+class TestOpeningPatternSelection(unittest.TestCase):
+    def test_select_uncovered_pattern(self):
+        """Should select pattern that has never been used."""
+        coverage = {
+            "statement": "2026-01-09T08:00:00Z",
+            "scenario": "2026-01-08T14:00:00Z",
+            "discovery": None,  # Never used
+            "comparison": "2026-01-07T08:00:00Z",
+        }
+        pattern = tweet_context.select_opening_pattern(coverage)
+        self.assertEqual(pattern, "discovery")
+
+    def test_select_oldest_pattern(self):
+        """Should select least recently used pattern when all are used."""
+        # Must include ALL patterns or missing ones will be added with None
+        coverage = tweet_context.initialize_opening_coverage()
+        # Set all to recent except one
+        for p in coverage:
+            coverage[p] = "2026-01-09T08:00:00Z"
+        coverage["discovery"] = "2026-01-07T08:00:00Z"  # Oldest
+        pattern = tweet_context.select_opening_pattern(coverage)
+        self.assertEqual(pattern, "discovery")
+
+    def test_initialize_opening_coverage(self):
+        """Should create coverage dict for all 20 patterns."""
+        coverage = tweet_context.initialize_opening_coverage()
+        self.assertEqual(len(coverage), 20)
+        self.assertIn("statement", coverage)
+        self.assertIn("shortcut", coverage)
+        for pattern, timestamp in coverage.items():
+            self.assertIsNone(timestamp)
+
+    def test_all_opening_patterns_have_descriptions(self):
+        """All patterns should have descriptions in build_context_for_claude."""
+        # Build context with each pattern and verify it includes guidance
+        for pattern in tweet_context.OPENING_PATTERNS:
+            context = tweet_context.build_context_for_claude(
+                topic="code_intelligence",
+                tweet_format="problem_solution",
+                selected_angle="Test angle",
+                recent_tweets=[],
+                changelog_entries=[],
+                suggested_opening=pattern
+            )
+            self.assertIn(f"SUGGESTED OPENING STYLE: {pattern}", context)
+
+
 def run_tests():
     """Run all tests and print summary."""
     print("=" * 60)
@@ -232,6 +363,8 @@ def run_tests():
     suite.addTests(loader.loadTestsFromTestCase(TestHistoryManagement))
     suite.addTests(loader.loadTestsFromTestCase(TestChangelogParsing))
     suite.addTests(loader.loadTestsFromTestCase(TestTimeSlot))
+    suite.addTests(loader.loadTestsFromTestCase(TestSemanticDuplicateDetection))
+    suite.addTests(loader.loadTestsFromTestCase(TestOpeningPatternSelection))
 
     runner = unittest.TextTestRunner(verbosity=2)
     result = runner.run(suite)

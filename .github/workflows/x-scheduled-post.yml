@@ -28,7 +28,9 @@ jobs:
         id: cache-restore
         with:
           path: .github/tweet_history.json
-          key: tweet-history-${{ github.run_id }}
+          # Static key ensures history persists across runs (overwrites same entry)
+          # Cache accessed 3x/day so it never expires (7-day limit is for non-accessed)
+          key: tweet-history-v1
           restore-keys: |
             tweet-history-
 
@@ -73,4 +75,4 @@ jobs:
         if: always()
         with:
           path: .github/tweet_history.json
-          key: tweet-history-${{ github.run_id }}
+          key: tweet-history-v1

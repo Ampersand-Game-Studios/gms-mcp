@@ -42,14 +42,17 @@ sys.path.insert(0, str(Path(__file__).parent))
 from tweet_context import (
     TOPIC_CATEGORIES,
     TWEET_FORMATS,
+    OPENING_PATTERNS,
     build_context_for_claude,
     get_personality_guide,
     initialize_angle_coverage,
     initialize_format_coverage,
+    initialize_opening_coverage,
     initialize_topic_coverage,
     parse_changelog_released,
     select_angle,
     select_format,
+    select_opening_pattern,
     select_topic,
 )
 
@@ -123,6 +126,48 @@ def is_duplicate(content: str, history: dict) -> bool:
     return any(entry.get("hash") == content_hash for entry in history.get("posted", []))
 
 
+def compute_word_overlap(text1: str, text2: str) -> float:
+    """Compute word overlap percentage between two texts."""
+    # Normalize: lowercase, remove hashtags, split into words
+    def normalize(text: str) -> set[str]:
+        text = re.sub(r'#\w+', '', text.lower())  # Remove hashtags
+        text = re.sub(r'[^\w\s]', ' ', text)  # Remove punctuation
+        words = set(text.split())
+        # Remove common stop words
+        stop_words = {'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been',
+                      'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
+                      'would', 'could', 'should', 'may', 'might', 'must', 'to',
+                      'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'it',
+                      'this', 'that', 'and', 'or', 'but', 'if', 'your', 'you'}
+        return words - stop_words
+
+    words1 = normalize(text1)
+    words2 = normalize(text2)
+
+    if not words1 or not words2:
+        return 0.0
+
+    overlap = len(words1 & words2)
+    min_len = min(len(words1), len(words2))
+    return overlap / min_len if min_len > 0 else 0.0
+
+
+def is_semantic_duplicate(content: str, history: dict, threshold: float = 0.6) -> tuple[bool, str]:
+    """Check if tweet content is semantically similar to recent tweets."""
+    recent_tweets = history.get("posted", [])[-10:]  # Check last 10 tweets
+
+    for tweet in recent_tweets:
+        prev_content = tweet.get('content') or tweet.get('preview', '')
+        if not prev_content:
+            continue
+
+        overlap = compute_word_overlap(content, prev_content)
+        if overlap >= threshold:
+            return True, f"semantic_duplicate ({overlap:.0%} overlap with recent tweet)"
+
+    return False, ""
+
+
 def validate_tweet(content: str, history: dict) -> tuple[bool, str]:
     """Validate generated tweet meets requirements."""
     content = content.strip()
@@ -134,9 +179,14 @@ def validate_tweet(content: str, history: dict) -> tuple[bool, str]:
     if len(content) < MIN_TWEET_LENGTH:
         return False, f"too_short ({len(content)} chars)"
 
-    # Duplicate check
+    # Exact duplicate check
     if is_duplicate(content, history):
         return False, "duplicate"
+
+    # Semantic duplicate check (>60% word overlap with recent tweets)
+    is_sem_dup, sem_reason = is_semantic_duplicate(content, history, threshold=0.6)
+    if is_sem_dup:
+        return False, sem_reason
 
     # Hashtag count (max 3)
     hashtag_count = content.count("#")
@@ -268,10 +318,10 @@ Requirements:
 Generate the tweet now:"""
 
 
-def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str, str, int]:
+def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str, str, int, str]:
     """Generate a tweet using Claude API.
 
-    Returns: (tweet_content, topic, format, angle_idx)
+    Returns: (tweet_content, topic, format, angle_idx, opening_pattern)
     """
     # Select topic based on coverage
     topic_coverage = history.get("topic_coverage", initialize_topic_coverage())
@@ -288,11 +338,19 @@ def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str, str,
     angle_idx, selected_angle = select_angle(topic, angle_coverage)
     print(f"Selected angle: {angle_idx} - {selected_angle[:50]}...")
 
+    # Select opening pattern based on coverage
+    opening_coverage = history.get("opening_coverage", initialize_opening_coverage())
+    opening_pattern = select_opening_pattern(opening_coverage)
+    print(f"Selected opening pattern: {opening_pattern}")
+
     # Load context
     changelog = parse_changelog_released()
     recent_tweets = history.get("posted", [])[-15:]  # Expanded from 10 to 15
 
-    context = build_context_for_claude(topic, tweet_format, selected_angle, recent_tweets, changelog)
+    context = build_context_for_claude(
+        topic, tweet_format, selected_angle, recent_tweets, changelog,
+        suggested_opening=opening_pattern
+    )
     personality = get_personality_guide()
 
     system_prompt = build_system_prompt(personality)
@@ -302,7 +360,7 @@ def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str, str,
 
     if dry_run and not os.environ.get("ANTHROPIC_API_KEY"):
         # Return a placeholder for dry-run without API key
-        return f"[DRY RUN] Would generate tweet about {topic}", topic, tweet_format, angle_idx
+        return f"[DRY RUN] Would generate tweet about {topic}", topic, tweet_format, angle_idx, opening_pattern
 
     # Generate with validation loop
     for attempt in range(3):
@@ -315,7 +373,7 @@ def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str, str,
         valid, reason = validate_tweet(tweet, history)
         if valid:
             print(f"Generated valid tweet ({len(tweet)} chars)")
-            return tweet, topic, tweet_format, angle_idx
+            return tweet, topic, tweet_format, angle_idx, opening_pattern
 
         print(f"Attempt {attempt + 1}: Invalid tweet ({reason}), retrying...")
 
@@ -324,7 +382,7 @@ def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str, str,
 
     # If all attempts fail, return last attempt anyway
     print("Warning: Could not generate valid tweet after 3 attempts")
-    return tweet, topic, tweet_format, angle_idx
+    return tweet, topic, tweet_format, angle_idx, opening_pattern
 
 
 def set_github_output(name: str, value: str) -> None:
@@ -350,7 +408,7 @@ def main():
 
     # Generate tweet
     try:
-        tweet, topic, tweet_format, angle_idx = generate_tweet(history, dry_run=args.dry_run)
+        tweet, topic, tweet_format, angle_idx, opening_pattern = generate_tweet(history, dry_run=args.dry_run)
     except Exception as e:
         print(f"Generation failed: {e}")
         history["generation_stats"]["failures"] = history["generation_stats"].get("failures", 0) + 1
@@ -367,6 +425,7 @@ def main():
     print(f"Topic: {topic}")
     print(f"Format: {tweet_format}")
     print(f"Angle: {angle_idx}")
+    print(f"Opening: {opening_pattern}")
 
     if args.dry_run:
         print("\n[DRY RUN] Would write to next_tweet.txt")
@@ -394,6 +453,11 @@ def main():
     if topic not in history["angle_coverage"]:
         history["angle_coverage"][topic] = {str(i): None for i in range(len(TOPIC_CATEGORIES[topic]["angles"]))}
     history["angle_coverage"][topic][str(angle_idx)] = now
+
+    # Update opening pattern coverage
+    if "opening_coverage" not in history:
+        history["opening_coverage"] = initialize_opening_coverage()
+    history["opening_coverage"][opening_pattern] = now
 
     save_history(history)
     set_github_output("tweet_generated", "true")
