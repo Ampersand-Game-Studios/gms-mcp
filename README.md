@@ -24,7 +24,7 @@ pipx install gms-mcp
 For Claude Code users, install the plugin for the best experience:
 
 ```
-/install-plugin github:Ampersand-AI/gms-mcp
+/install-plugin github:Ampersand-Game-Studios/gms-mcp
 ```
 
 This provides:

@@ -5,6 +5,7 @@ __pycache__/
 .venv/
 venv/
 .gms-mcp/
+.gms_mcp/
 
 .pytest_cache/
 .mypy_cache/

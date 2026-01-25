@@ -190,7 +190,7 @@ git commit -m "refactor: update skills source location for plugin architecture"
   "version": "0.2.0",
   "description": "GameMaker development tools for Claude Code - MCP server, skills, and hooks",
   "author": "Callum Lory",
-  "repository": "github:Ampersand-AI/gms-mcp",
+  "repository": "github:Ampersand-Game-Studios/gms-mcp",
   "requirements": {
     "uv": true
   }
@@ -424,7 +424,7 @@ Add Claude Code plugin section:
 For Claude Code users, install the plugin for the best experience:
 
 ```
-/install-plugin github:Ampersand-AI/gms-mcp
+/install-plugin github:Ampersand-Game-Studios/gms-mcp
 ```
 
 This provides:
@@ -446,7 +446,7 @@ Add under [Unreleased]:
 
 ```markdown
 - **Claude Code Plugin**: Restructured as a Claude Code plugin with skills, hooks, and auto-configured MCP:
-    - Install via `/install-plugin github:Ampersand-AI/gms-mcp`
+    - Install via `/install-plugin github:Ampersand-Game-Studios/gms-mcp`
     - Session-start hook checks for updates and bridge status
     - Error notification hook surfaces compile failures
     - Skills moved to plugin directory (pip package unchanged for other tools)

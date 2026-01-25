@@ -1,0 +1,12 @@
+{
+  "name": "gms-mcp-marketplace",
+  "version": "1.0.0",
+  "description": "GameMaker development tools for Claude Code",
+  "plugins": [
+    {
+      "name": "gms-mcp",
+      "path": "..",
+      "description": "GameMaker MCP server, skills, and hooks for Claude Code"
+    }
+  ]
+}
