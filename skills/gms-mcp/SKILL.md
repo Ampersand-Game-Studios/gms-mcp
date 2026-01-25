@@ -36,6 +36,7 @@ Task-focused guides for common GameMaker development tasks.
 | Workflow | Task |
 |----------|------|
 | [find-code](workflows/find-code.md) | Find definitions and references |
+| [lookup-docs](workflows/lookup-docs.md) | Look up GML function documentation |
 | [analyze-logic](workflows/analyze-logic.md) | Understand script behavior |
 | [generate-jsdoc](workflows/generate-jsdoc.md) | Document functions |
 
@@ -68,6 +69,7 @@ Comprehensive command documentation for when you need syntax details.
 | [maintenance-commands](reference/maintenance-commands.md) | All maintenance operations |
 | [runtime-options](reference/runtime-options.md) | Platforms, VM/YYC, bridge |
 | [symbol-commands](reference/symbol-commands.md) | Index, find, list operations |
+| [doc-commands](reference/doc-commands.md) | GML documentation lookup, search, cache |
 
 ---
 
@@ -86,6 +88,11 @@ gms run stop
 # Find
 gms symbol find-definition name
 gms symbol find-references name
+
+# Docs
+gms doc lookup draw_sprite
+gms doc search collision
+gms doc list --category Drawing
 
 # Health
 gms diagnostics --depth quick

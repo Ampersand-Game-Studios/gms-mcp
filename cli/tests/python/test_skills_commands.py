@@ -230,6 +230,7 @@ class TestSkillsSourceFiles(unittest.TestCase):
             "manage-events.md",
             "safe-delete.md",
             "find-code.md",
+            "lookup-docs.md",
             "analyze-logic.md",
             "generate-jsdoc.md",
             "run-game.md",
@@ -256,7 +257,8 @@ class TestSkillsSourceFiles(unittest.TestCase):
             "workflow-commands.md",
             "maintenance-commands.md",
             "runtime-options.md",
-            "symbol-commands.md"
+            "symbol-commands.md",
+            "doc-commands.md"
         ]
         for ref in expected_references:
             ref_file = reference_dir / ref

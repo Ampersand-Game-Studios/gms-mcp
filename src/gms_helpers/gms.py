@@ -48,6 +48,7 @@ Examples:
     setup_diagnostics_commands(subparsers)
     setup_symbol_commands(subparsers)
     setup_skills_commands(subparsers)
+    setup_doc_commands(subparsers)
 
     return parser
 
@@ -77,6 +78,54 @@ def setup_skills_commands(subparsers):
     uninstall_parser.add_argument('--project', action='store_true',
                                   help='Remove from ./.claude/skills/ instead of ~/.claude/skills/')
     uninstall_parser.set_defaults(func=handle_skills_uninstall)
+
+
+def setup_doc_commands(subparsers):
+    """Set up GML documentation commands."""
+    doc_parser = subparsers.add_parser('doc', help='GML documentation lookup and search')
+    doc_subparsers = doc_parser.add_subparsers(dest='doc_action', help='Documentation actions')
+    doc_subparsers.required = True
+
+    # Lookup command
+    lookup_parser = doc_subparsers.add_parser('lookup', help='Look up a specific GML function')
+    lookup_parser.add_argument('function_name', help='Name of the GML function (e.g., draw_sprite)')
+    lookup_parser.add_argument('--refresh', action='store_true',
+                               help='Bypass cache and fetch fresh documentation')
+    lookup_parser.set_defaults(func=handle_doc_lookup)
+
+    # Search command
+    search_parser = doc_subparsers.add_parser('search', help='Search for GML functions')
+    search_parser.add_argument('query', help='Search query')
+    search_parser.add_argument('--category', help='Filter by category (e.g., Drawing, Strings)')
+    search_parser.add_argument('--limit', type=int, default=20, help='Maximum results (default: 20)')
+    search_parser.set_defaults(func=handle_doc_search)
+
+    # List command
+    list_parser = doc_subparsers.add_parser('list', help='List GML functions')
+    list_parser.add_argument('--category', help='Filter by category')
+    list_parser.add_argument('--pattern', help='Filter by regex pattern')
+    list_parser.add_argument('--limit', type=int, default=100, help='Maximum results (default: 100)')
+    list_parser.set_defaults(func=handle_doc_list)
+
+    # Categories command
+    categories_parser = doc_subparsers.add_parser('categories', help='List all GML categories')
+    categories_parser.set_defaults(func=handle_doc_categories)
+
+    # Cache subcommands
+    cache_parser = doc_subparsers.add_parser('cache', help='Manage documentation cache')
+    cache_subparsers = cache_parser.add_subparsers(dest='cache_action', help='Cache actions')
+    cache_subparsers.required = True
+
+    # Cache stats
+    stats_parser = cache_subparsers.add_parser('stats', help='Show cache statistics')
+    stats_parser.set_defaults(func=handle_doc_cache_stats)
+
+    # Cache clear
+    clear_parser = cache_subparsers.add_parser('clear', help='Clear the documentation cache')
+    clear_parser.add_argument('--functions-only', action='store_true',
+                              help='Only clear cached functions, keep the index')
+    clear_parser.set_defaults(func=handle_doc_cache_clear)
+
 
 def setup_diagnostics_commands(subparsers):
     """Set up diagnostics commands."""
@@ -684,6 +733,10 @@ from .commands.symbol_commands import (
 )
 from .commands.skills_commands import (
     handle_skills_install, handle_skills_list, handle_skills_uninstall
+)
+from .commands.doc_commands import (
+    handle_doc_lookup, handle_doc_search, handle_doc_list,
+    handle_doc_categories, handle_doc_cache_stats, handle_doc_cache_clear
 )
 
 

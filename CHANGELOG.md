@@ -5,6 +5,14 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **GML Documentation Lookup**: Built-in documentation for GameMaker functions fetched on-demand from manual.gamemaker.io:
+    - `gms doc lookup <function>`: Look up specific GML function documentation (description, syntax, parameters, return value, examples)
+    - `gms doc search <query>`: Search for GML functions by name
+    - `gms doc list`: List functions by category or regex pattern
+    - `gms doc categories`: Show all documentation categories
+    - `gms doc cache stats/clear`: Manage local documentation cache
+    - MCP tools: `gm_doc_lookup`, `gm_doc_search`, `gm_doc_list`, `gm_doc_categories`, `gm_doc_cache_stats`, `gm_doc_cache_clear`
+    - Indexes 1000+ GML functions with TTL-based caching (30 days for functions, 7 days for index)
 - **Claude Code Plugin**: Restructured as a Claude Code plugin with skills, hooks, and auto-configured MCP:
     - Install via `/install-plugin github:Ampersand-Game-Studios/gms-mcp`
     - Session-start hook checks for updates and bridge status
