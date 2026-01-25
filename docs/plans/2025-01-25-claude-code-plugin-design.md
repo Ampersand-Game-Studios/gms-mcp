@@ -12,107 +12,138 @@ Add a Claude Code plugin to gms-mcp that provides skills, hooks, and auto-config
 
 ## Repository Structure
 
+Following the official Claude Code plugin specification:
+
 ```
 gms-mcp/
+├── .claude-plugin/           # Plugin manifest (required location)
+│   └── plugin.json
+├── skills/                   # Skills at repo root
+│   └── gms-mcp/
+│       ├── SKILL.md
+│       ├── workflows/        # 18 workflow files
+│       └── reference/        # 7 reference files
+├── hooks/                    # Hook scripts at repo root
+│   ├── session-start.sh
+│   └── notify-errors.sh
 ├── src/
 │   ├── gms_helpers/          # CLI library
-│   ├── gms_mcp/              # MCP server
-│   └── ...
-├── plugin/                    # Claude Code plugin
-│   ├── skills/
-│   │   └── gms-mcp/
-│   │       ├── SKILL.md
-│   │       ├── workflows/    # 18 workflow files
-│   │       └── reference/    # 7 reference files
-│   ├── hooks/
-│   │   ├── session-start.sh  # Update check + bridge status
-│   │   └── notify-errors.sh  # Surface compile errors
-│   ├── mcp.json              # MCP server config (uvx)
-│   └── plugin.json           # Plugin manifest
-├── pyproject.toml            # pip package config
-└── ...
+│   └── gms_mcp/              # MCP server
+└── pyproject.toml
 ```
 
-## MCP Configuration
+## Plugin Manifest
 
-The plugin's `mcp.json` uses `uvx` for zero-friction setup:
+Located at `.claude-plugin/plugin.json`:
 
 ```json
 {
+  "name": "gms-mcp",
+  "version": "0.2.0",
+  "description": "GameMaker development tools for Claude Code - MCP server, skills, and hooks",
+  "author": {
+    "name": "Callum Lory",
+    "url": "https://github.com/Ampersand-AI"
+  },
+  "repository": "https://github.com/Ampersand-AI/gms-mcp",
+  "license": "MIT",
+  "keywords": ["gamemaker", "gms", "mcp", "game-development"],
+  "skills": "./skills/",
   "mcpServers": {
     "gms-mcp": {
       "command": "uvx",
       "args": ["gms-mcp"],
       "env": {}
     }
+  },
+  "hooks": {
+    "SessionStart": [...],
+    "PostToolUseFailure": [...]
   }
 }
 ```
+
+### MCP Server Configuration
+
+Inline in plugin.json using `uvx` for zero-friction setup - auto-installs from PyPI.
 
 ### Project Root Detection
 
 1. On MCP server startup, scan working directory for `.yyp` files
 2. If exactly one found: use its parent as `GM_PROJECT_ROOT`
-3. If multiple found: server returns error listing them, session-start hook prompts user to choose
-4. If none found: server operates in "no project" mode, hook notifies user
+3. If multiple found: server returns error listing them
+4. If none found: server operates in "no project" mode
 
 ## Hooks
 
-### Session Start Check (`hooks/session-start.sh`)
+Using official Claude Code hook events:
 
-Triggers when: A `.yyp` file exists in the workspace
+### SessionStart Hook
 
-Actions:
-- Check for gms-mcp updates via `uvx gms-mcp --check-updates`
-- If bridge installed, report connection status
-- Output brief status message
-
-Example output:
-```
-[gms-mcp] v0.2.0 available (you have v0.1.1)
-[gms-mcp] Bridge: not installed
-```
-
-### Error Notification (`hooks/notify-errors.sh`)
-
-Triggers when: `gm_run_start` or `gm_compile` tool returns errors
-
-Actions:
-- Parse compiler output for errors/warnings
-- Surface in user-friendly format
-
-Example output:
-```
-[gms-mcp] Compile failed:
-  objects/o_player/Create_0.gml:15 - variable 'speed' not declared
-```
-
-## Plugin Manifest
+Triggers: When Claude Code session starts
 
 ```json
 {
-  "name": "gms-mcp",
-  "version": "0.2.0",
-  "description": "GameMaker development tools for Claude Code",
-  "author": "your-name",
-  "repository": "github:your-username/gms-mcp",
-  "requirements": {
-    "uv": true
-  }
+  "SessionStart": [
+    {
+      "hooks": [
+        {
+          "type": "command",
+          "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh",
+          "timeout": 30
+        }
+      ]
+    }
+  ]
 }
 ```
+
+Actions:
+- Check if GameMaker project exists (.yyp file)
+- Check for gms-mcp updates
+- Report bridge installation status
+
+### PostToolUseFailure Hook
+
+Triggers: When gm_run_start or gm_compile fails
+
+```json
+{
+  "PostToolUseFailure": [
+    {
+      "matcher": "gm_run_start|gm_compile",
+      "hooks": [
+        {
+          "type": "command",
+          "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify-errors.sh",
+          "timeout": 10
+        }
+      ]
+    }
+  ]
+}
+```
+
+Actions:
+- Parse compiler output for errors
+- Surface in user-friendly format
 
 ## Installation Flows
 
 ### Claude Code Users
 
 ```
-/install-plugin github:your-username/gms-mcp
+/install-plugin github:Ampersand-AI/gms-mcp
+```
+
+Or via CLI:
+```bash
+claude plugin install github:Ampersand-AI/gms-mcp
 ```
 
 Result:
 - Skills immediately available
-- MCP server auto-configured
+- MCP server auto-configured via uvx
 - Hooks activate for GameMaker workspaces
 
 ### Non-Claude Users (Cursor, VSCode, etc.)
@@ -126,29 +157,22 @@ Unchanged from current behavior.
 
 ## Migration
 
-### What Moves
-- `src/gms_helpers/skills/gms-mcp/` → `plugin/skills/gms-mcp/`
-
-### What Stays
-- `gms skills install/list/uninstall` commands (now copy from `plugin/skills/`)
+### What Moved
+- `src/gms_helpers/skills/gms-mcp/` → `skills/gms-mcp/`
 
 ### What's New
-- `plugin/` directory with hooks, mcp.json, plugin.json
-
-### Version Sync
-- `plugin.json` version matches `pyproject.toml` version
+- `.claude-plugin/plugin.json` - Plugin manifest with inline MCP and hooks config
+- `hooks/` directory with shell scripts
 
 ### Breaking Changes
 None. Existing pip users unaffected.
 
-## Implementation Steps
+## Key Specifications
 
-1. Create `plugin/` directory structure
-2. Move skills from `src/gms_helpers/skills/` to `plugin/skills/`
-3. Update `gms skills` commands to reference new location
-4. Create `plugin/mcp.json` with uvx configuration
-5. Create `plugin/plugin.json` manifest
-6. Implement `hooks/session-start.sh`
-7. Implement `hooks/notify-errors.sh`
-8. Update documentation (README, CHANGELOG)
-9. Test plugin installation via `/install-plugin`
+Based on official Claude Code plugin documentation:
+
+- Plugin manifest must be at `.claude-plugin/plugin.json`
+- Hook events use PascalCase: `SessionStart`, `PostToolUseFailure`
+- Use `${CLAUDE_PLUGIN_ROOT}` for paths in hooks
+- MCP config can be inline in plugin.json under `mcpServers`
+- Skills directory referenced via `"skills": "./skills/"`
