@@ -28,6 +28,12 @@ def compute_hash(content: str) -> str:
     return hashlib.sha256(normalized.encode()).hexdigest()[:16]
 
 
+def extract_tools_mentioned(content: str) -> list[str]:
+    """Extract gm_* tool names from tweet content."""
+    import re
+    return re.findall(r'\bgm_\w+\b', content)
+
+
 def load_history() -> dict:
     """Load tweet history from JSON file."""
     if not HISTORY_FILE.exists():
@@ -53,7 +59,7 @@ def save_history(history: dict) -> None:
 def add_to_history(
     history: dict,
     tweet_hash: str,
-    tweet_preview: str,
+    tweet_content: str,
     status: str,
     tweet_id: str = None,
     topic: str = None,
@@ -63,12 +69,14 @@ def add_to_history(
     """Add a tweet to the history."""
     entry = {
         "hash": tweet_hash,
-        "preview": tweet_preview[:50] + "..." if len(tweet_preview) > 50 else tweet_preview,
+        "content": tweet_content,  # Full content for deduplication
+        "preview": tweet_content[:50] + "..." if len(tweet_content) > 50 else tweet_content,
         "status": status,
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "topic": topic,
         "format": tweet_format,
         "generated_by": generated_by,
+        "tools_mentioned": extract_tools_mentioned(tweet_content),
     }
     if tweet_id:
         entry["tweet_id"] = tweet_id

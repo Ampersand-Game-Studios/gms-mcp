@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "gms-mcp": {
+      "command": "uvx",
+      "args": ["gms-mcp"],
+      "env": {}
+    }
+  }
+}

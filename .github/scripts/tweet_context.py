@@ -283,6 +283,29 @@ def initialize_format_coverage() -> dict[str, Optional[str]]:
     return {fmt: None for fmt in TWEET_FORMATS.keys()}
 
 
+def initialize_angle_coverage() -> dict[str, dict[str, Optional[str]]]:
+    """Track when each angle within each topic was last used."""
+    return {
+        topic: {str(i): None for i in range(len(cat["angles"]))}
+        for topic, cat in TOPIC_CATEGORIES.items()
+    }
+
+
+def select_angle(topic: str, angle_coverage: dict) -> tuple[int, str]:
+    """Select least recently used angle for a topic."""
+    topic_angles = angle_coverage.get(topic, {})
+    # Default to all None if topic not in coverage
+    if not topic_angles:
+        topic_angles = {str(i): None for i in range(len(TOPIC_CATEGORIES[topic]["angles"]))}
+
+    sorted_angles = sorted(
+        topic_angles.items(),
+        key=lambda x: x[1] if x[1] else "1970-01-01T00:00:00Z"
+    )
+    angle_idx = int(sorted_angles[0][0])
+    return angle_idx, TOPIC_CATEGORIES[topic]["angles"][angle_idx]
+
+
 def get_time_slot() -> str:
     """Get current time slot (morning/afternoon/evening) in UTC."""
     hour = datetime.now(timezone.utc).hour
@@ -294,9 +317,21 @@ def get_time_slot() -> str:
         return "evening"
 
 
+def extract_opening_pattern(text: str) -> str:
+    """Extract opening clause up to first punctuation or 8 words."""
+    # Match up to first sentence-ending punctuation
+    match = re.match(r'^([^.?!]+[.?!]?)', text)
+    if match:
+        opening = match.group(1).strip()
+        words = opening.split()[:8]
+        return " ".join(words)
+    return " ".join(text.split()[:4])
+
+
 def build_context_for_claude(
     topic: str,
     tweet_format: str,
+    selected_angle: str,
     recent_tweets: list[dict],
     changelog_entries: list[dict],
 ) -> str:
@@ -307,7 +342,7 @@ def build_context_for_claude(
     # Format recent tweets with their patterns to avoid
     recent_text = ""
     if recent_tweets:
-        for t in recent_tweets[-10:]:
+        for t in recent_tweets[-15:]:
             preview = t.get('preview', 'No preview')
             recent_text += f"- {preview}\n"
     else:
@@ -315,15 +350,21 @@ def build_context_for_claude(
 
     # Extract opening patterns from recent tweets to avoid
     recent_openings = []
-    for t in recent_tweets[-5:]:
-        preview = t.get('preview', '')
-        if preview:
-            # Get first 3-4 words
-            words = preview.split()[:4]
-            if words:
-                recent_openings.append(" ".join(words))
+    for t in recent_tweets[-10:]:
+        content = t.get('content') or t.get('preview', '')
+        if content:
+            opening = extract_opening_pattern(content)
+            if opening and opening not in recent_openings:
+                recent_openings.append(opening)
 
     openings_to_avoid = ", ".join(f'"{o}..."' for o in recent_openings) if recent_openings else "None"
+
+    # Extract recently featured tools
+    recent_tools = set()
+    for t in recent_tweets[-10:]:
+        recent_tools.update(t.get('tools_mentioned', []))
+
+    tools_to_avoid = ", ".join(sorted(recent_tools)) if recent_tools else "None"
 
     # Format changelog highlights
     changelog_text = ""
@@ -334,10 +375,8 @@ def build_context_for_claude(
             items = "\n".join(f"  - {h['title']}" for h in highlights)
             changelog_text += f"Version {version}:\n{items}\n"
 
-    # Format topic details - pick ONE random angle to focus on
-    import random
+    # Format topic details
     topic_tools = ", ".join(category["tools"][:5]) if category["tools"] else "General features"
-    selected_angle = random.choice(category["angles"])
 
     return f"""PROJECT: gms-mcp - GameMaker CLI and MCP server for AI-assisted game development
 
@@ -351,6 +390,9 @@ Example of this format: "{format_info['example']}"
 
 CRITICAL - DO NOT START WITH THESE PATTERNS (recently used):
 {openings_to_avoid}
+
+TOOLS FEATURED RECENTLY (prefer different ones):
+{tools_to_avoid}
 
 RECENT TWEETS (your tweet must feel distinctly different):
 {recent_text}
