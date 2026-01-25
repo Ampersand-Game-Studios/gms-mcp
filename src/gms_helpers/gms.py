@@ -47,8 +47,36 @@ Examples:
     setup_runner_commands(subparsers)
     setup_diagnostics_commands(subparsers)
     setup_symbol_commands(subparsers)
-    
+    setup_skills_commands(subparsers)
+
     return parser
+
+
+def setup_skills_commands(subparsers):
+    """Set up skills management commands."""
+    skills_parser = subparsers.add_parser('skills', help='Manage Claude Code skills for gms-mcp')
+    skills_subparsers = skills_parser.add_subparsers(dest='skills_action', help='Skills actions')
+    skills_subparsers.required = True
+
+    # Install command
+    install_parser = skills_subparsers.add_parser('install', help='Install skills to Claude Code skills directory')
+    install_parser.add_argument('--project', action='store_true',
+                                help='Install to ./.claude/skills/ instead of ~/.claude/skills/')
+    install_parser.add_argument('--force', action='store_true',
+                                help='Overwrite existing skill files')
+    install_parser.set_defaults(func=handle_skills_install)
+
+    # List command
+    list_parser = skills_subparsers.add_parser('list', help='List available and installed skills')
+    list_parser.add_argument('--installed', action='store_true',
+                             help='Only show installed skills')
+    list_parser.set_defaults(func=handle_skills_list)
+
+    # Uninstall command
+    uninstall_parser = skills_subparsers.add_parser('uninstall', help='Remove installed skills')
+    uninstall_parser.add_argument('--project', action='store_true',
+                                  help='Remove from ./.claude/skills/ instead of ~/.claude/skills/')
+    uninstall_parser.set_defaults(func=handle_skills_uninstall)
 
 def setup_diagnostics_commands(subparsers):
     """Set up diagnostics commands."""
@@ -654,6 +682,9 @@ from .commands.runner_commands import (
 from .commands.symbol_commands import (
     handle_build_index, handle_find_definition, handle_find_references, handle_list_symbols
 )
+from .commands.skills_commands import (
+    handle_skills_install, handle_skills_list, handle_skills_uninstall
+)
 
 
 
@@ -668,6 +699,18 @@ def main():
             return True
         except SystemExit as e:
             return int(getattr(e, "code", 1) or 0) == 0
+
+    # Skills commands don't require a GameMaker project
+    if len(sys.argv) > 1 and sys.argv[1] == 'skills':
+        args = parser.parse_args()
+        try:
+            result = args.func(args)
+            if isinstance(result, dict):
+                return result.get("success", True)
+            return result
+        except Exception as e:
+            print(f"[ERROR] {e}")
+            return False
 
     # Resolve project directory before parsing full args (subparsers are required).
     pre_parser = argparse.ArgumentParser(add_help=False)
