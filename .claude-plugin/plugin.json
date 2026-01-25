@@ -1,0 +1,45 @@
+{
+  "name": "gms-mcp",
+  "version": "0.2.0",
+  "description": "GameMaker development tools for Claude Code - MCP server, skills, and hooks",
+  "author": {
+    "name": "Callum Lory",
+    "url": "https://github.com/Ampersand-AI"
+  },
+  "repository": "https://github.com/Ampersand-AI/gms-mcp",
+  "license": "MIT",
+  "keywords": ["gamemaker", "gms", "mcp", "game-development"],
+  "skills": "./skills/",
+  "mcpServers": {
+    "gms-mcp": {
+      "command": "uvx",
+      "args": ["gms-mcp"],
+      "env": {}
+    }
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/session-start.sh",
+            "timeout": 30
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "gm_run_start|gm_compile",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "${CLAUDE_PLUGIN_ROOT}/hooks/notify-errors.sh",
+            "timeout": 10
+          }
+        ]
+      }
+    ]
+  }
+}

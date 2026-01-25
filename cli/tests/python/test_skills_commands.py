@@ -191,8 +191,8 @@ class TestSkillsSourceFiles(unittest.TestCase):
     def setUp(self):
         """Set up test environment."""
         repo_root = Path(__file__).resolve().parents[3]
-        # Skills are now in plugin/ directory
-        self.skills_dir = repo_root / "plugin" / "skills" / "gms-mcp"
+        # Skills are at repo root (Claude Code plugin structure)
+        self.skills_dir = repo_root / "skills" / "gms-mcp"
 
     def test_skills_source_exists(self):
         """Test that skills source directory exists."""
