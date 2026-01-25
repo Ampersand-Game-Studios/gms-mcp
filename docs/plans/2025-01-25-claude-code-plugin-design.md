@@ -43,9 +43,9 @@ Located at `.claude-plugin/plugin.json`:
   "description": "GameMaker development tools for Claude Code - MCP server, skills, and hooks",
   "author": {
     "name": "Callum Lory",
-    "url": "https://github.com/Ampersand-AI"
+    "url": "https://github.com/Ampersand-Game-Studios"
   },
-  "repository": "https://github.com/Ampersand-AI/gms-mcp",
+  "repository": "https://github.com/Ampersand-Game-Studios/gms-mcp",
   "license": "MIT",
   "keywords": ["gamemaker", "gms", "mcp", "game-development"],
   "skills": "./skills/",
@@ -133,12 +133,12 @@ Actions:
 ### Claude Code Users
 
 ```
-/install-plugin github:Ampersand-AI/gms-mcp
+/install-plugin github:Ampersand-Game-Studios/gms-mcp
 ```
 
 Or via CLI:
 ```bash
-claude plugin install github:Ampersand-AI/gms-mcp
+claude plugin install github:Ampersand-Game-Studios/gms-mcp
 ```
 
 Result:

@@ -6,7 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Added
 - **Claude Code Plugin**: Restructured as a Claude Code plugin with skills, hooks, and auto-configured MCP:
-    - Install via `/install-plugin github:Ampersand-AI/gms-mcp`
+    - Install via `/install-plugin github:Ampersand-Game-Studios/gms-mcp`
     - Session-start hook checks for updates and bridge status
     - Error notification hook surfaces compile failures
     - Skills moved to plugin directory (pip package unchanged for other tools)
