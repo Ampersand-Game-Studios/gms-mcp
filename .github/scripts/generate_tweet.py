@@ -44,9 +44,11 @@ from tweet_context import (
     TWEET_FORMATS,
     build_context_for_claude,
     get_personality_guide,
+    initialize_angle_coverage,
     initialize_format_coverage,
     initialize_topic_coverage,
     parse_changelog_released,
+    select_angle,
     select_format,
     select_topic,
 )
@@ -161,6 +163,21 @@ def validate_tweet(content: str, history: dict) -> tuple[bool, str]:
         if re.search(pattern, content, re.IGNORECASE):
             return False, f"bad_pattern: {reason}"
 
+    # Overused opening patterns
+    overused_openings = [
+        (r"^your ai (can|now)", "your_ai_opener"),
+        (r"^finally[,!]", "finally_opener"),
+        (r"^no more ", "no_more_opener"),
+        (r"^tired of ", "tired_of_opener"),
+        (r"^just (describe|tell|ask)", "just_verb_opener"),
+        (r"^ever (wanted|wished|needed)", "ever_wanted_opener"),
+        (r"^imagine ", "imagine_opener"),
+    ]
+
+    for pattern, reason in overused_openings:
+        if re.search(pattern, content, re.IGNORECASE):
+            return False, f"overused_opening: {reason}"
+
     return True, "valid"
 
 
@@ -251,10 +268,10 @@ Requirements:
 Generate the tweet now:"""
 
 
-def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str, str]:
+def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str, str, int]:
     """Generate a tweet using Claude API.
 
-    Returns: (tweet_content, topic, format)
+    Returns: (tweet_content, topic, format, angle_idx)
     """
     # Select topic based on coverage
     topic_coverage = history.get("topic_coverage", initialize_topic_coverage())
@@ -266,11 +283,16 @@ def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str, str]
     tweet_format = select_format(format_coverage)
     print(f"Selected format: {tweet_format} ({TWEET_FORMATS[tweet_format]['name']})")
 
+    # Select angle based on coverage
+    angle_coverage = history.get("angle_coverage", initialize_angle_coverage())
+    angle_idx, selected_angle = select_angle(topic, angle_coverage)
+    print(f"Selected angle: {angle_idx} - {selected_angle[:50]}...")
+
     # Load context
     changelog = parse_changelog_released()
-    recent_tweets = history.get("posted", [])[-10:]
+    recent_tweets = history.get("posted", [])[-15:]  # Expanded from 10 to 15
 
-    context = build_context_for_claude(topic, tweet_format, recent_tweets, changelog)
+    context = build_context_for_claude(topic, tweet_format, selected_angle, recent_tweets, changelog)
     personality = get_personality_guide()
 
     system_prompt = build_system_prompt(personality)
@@ -280,7 +302,7 @@ def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str, str]
 
     if dry_run and not os.environ.get("ANTHROPIC_API_KEY"):
         # Return a placeholder for dry-run without API key
-        return f"[DRY RUN] Would generate tweet about {topic}", topic, tweet_format
+        return f"[DRY RUN] Would generate tweet about {topic}", topic, tweet_format, angle_idx
 
     # Generate with validation loop
     for attempt in range(3):
@@ -293,7 +315,7 @@ def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str, str]
         valid, reason = validate_tweet(tweet, history)
         if valid:
             print(f"Generated valid tweet ({len(tweet)} chars)")
-            return tweet, topic, tweet_format
+            return tweet, topic, tweet_format, angle_idx
 
         print(f"Attempt {attempt + 1}: Invalid tweet ({reason}), retrying...")
 
@@ -302,7 +324,7 @@ def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str, str]
 
     # If all attempts fail, return last attempt anyway
     print("Warning: Could not generate valid tweet after 3 attempts")
-    return tweet, topic, tweet_format
+    return tweet, topic, tweet_format, angle_idx
 
 
 def set_github_output(name: str, value: str) -> None:
@@ -328,7 +350,7 @@ def main():
 
     # Generate tweet
     try:
-        tweet, topic, tweet_format = generate_tweet(history, dry_run=args.dry_run)
+        tweet, topic, tweet_format, angle_idx = generate_tweet(history, dry_run=args.dry_run)
     except Exception as e:
         print(f"Generation failed: {e}")
         history["generation_stats"]["failures"] = history["generation_stats"].get("failures", 0) + 1
@@ -344,6 +366,7 @@ def main():
     print("-" * 50)
     print(f"Topic: {topic}")
     print(f"Format: {tweet_format}")
+    print(f"Angle: {angle_idx}")
 
     if args.dry_run:
         print("\n[DRY RUN] Would write to next_tweet.txt")
@@ -364,6 +387,13 @@ def main():
     if "format_coverage" not in history:
         history["format_coverage"] = initialize_format_coverage()
     history["format_coverage"][tweet_format] = now
+
+    # Update angle coverage
+    if "angle_coverage" not in history:
+        history["angle_coverage"] = initialize_angle_coverage()
+    if topic not in history["angle_coverage"]:
+        history["angle_coverage"][topic] = {str(i): None for i in range(len(TOPIC_CATEGORIES[topic]["angles"]))}
+    history["angle_coverage"][topic][str(angle_idx)] = now
 
     save_history(history)
     set_github_output("tweet_generated", "true")
