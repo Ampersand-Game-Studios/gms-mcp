@@ -5,6 +5,17 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Added
+- **Claude Code Plugin**: Restructured as a Claude Code plugin with skills, hooks, and auto-configured MCP:
+    - Install via `/install-plugin github:Ampersand-AI/gms-mcp`
+    - Session-start hook checks for updates and bridge status
+    - Error notification hook surfaces compile failures
+    - Skills moved to plugin directory (pip package unchanged for other tools)
+- **Claude Code Skills**: Introduced a comprehensive skills system for Claude Code with 18 workflow guides and 7 reference documents:
+    - `gms skills install`: Install skills to user or project directory.
+    - `gms skills list`: List available skills and installation status.
+    - `gms skills uninstall`: Remove installed skills.
+    - Workflows include: asset creation, event management, refactoring, project maintenance, game running/debugging, and code intelligence.
+    - Reference docs cover: asset types, event types, room/layer commands, maintenance operations, runtime options, and symbol commands.
 - **GML Symbol Indexing & Code Intelligence**: Implemented a core GML parsing and indexing engine for advanced code analysis:
     - `gm_build_index`: Scan the entire project and build a high-performance cache of symbols (functions, enums, macros, globalvars, constructors) and their references.
     - `gm_find_definition`: Instantly jump to the definition of any GML symbol.
