@@ -23,6 +23,20 @@ jobs:
           token: ${{ secrets.GITHUB_TOKEN }}
           fetch-depth: 0
 
+      - name: Restore tweet history from cache
+        uses: actions/cache/restore@v4
+        id: cache-restore
+        with:
+          path: .github/tweet_history.json
+          key: tweet-history-${{ github.run_id }}
+          restore-keys: |
+            tweet-history-
+
+      - name: Initialize history if not cached
+        if: steps.cache-restore.outputs.cache-hit != 'true'
+        run: |
+          echo '{"posted":[],"topic_coverage":{},"format_coverage":{},"angle_coverage":{},"generation_stats":{}}' > .github/tweet_history.json
+
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
@@ -54,11 +68,9 @@ jobs:
           TWEET_GENERATED_BY: claude-api
         run: python .github/scripts/post_tweet.py
 
-      - name: Commit history updates
+      - name: Save tweet history to cache
+        uses: actions/cache/save@v4
         if: always()
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .github/next_tweet.txt .github/tweet_history.json
-          git diff --staged --quiet || git commit -m "chore: update tweet history [skip ci]"
-          git push || echo "Push failed - may need manual intervention"
+        with:
+          path: .github/tweet_history.json
+          key: tweet-history-${{ github.run_id }}

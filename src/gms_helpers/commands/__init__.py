@@ -50,3 +50,8 @@ from .workflow_commands import (
     handle_workflow_delete,
     handle_workflow_swap_sprite,
 )
+from .skills_commands import (
+    handle_skills_install,
+    handle_skills_list,
+    handle_skills_uninstall,
+)

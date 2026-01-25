@@ -21,3 +21,4 @@ gamemaker/
 
 # Local environment (API keys, secrets)
 .env
+.claude/settings.local.json

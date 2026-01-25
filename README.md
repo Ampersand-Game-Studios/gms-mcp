@@ -19,6 +19,26 @@
 pipx install gms-mcp
 ```
 
+## Claude Code Plugin
+
+For Claude Code users, install the plugin for the best experience:
+
+```
+/install-plugin github:Ampersand-AI/gms-mcp
+```
+
+This provides:
+- **Skills**: 18 workflow guides + 7 reference docs
+- **Hooks**: Automatic update checks and error notifications
+- **MCP Server**: Auto-configured via uvx (no pip install needed)
+
+### For Other Tools (Cursor, VSCode, etc.)
+
+```bash
+pip install gms-mcp
+gms-mcp-init --cursor  # or --vscode, --windsurf, etc.
+```
+
 ## Local Development Setup
 
 If you are working on the `gms-mcp` codebase itself, follow these steps to set up a local development environment:
