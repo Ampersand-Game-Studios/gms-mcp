@@ -85,10 +85,10 @@ def load_history() -> dict:
     try:
         with open(HISTORY_FILE, "r", encoding="utf-8") as f:
             data = json.load(f)
-            # Ensure all required fields exist
-            if "topic_coverage" not in data:
+            # Ensure all required fields exist AND are not empty
+            if "topic_coverage" not in data or not data["topic_coverage"]:
                 data["topic_coverage"] = initialize_topic_coverage()
-            if "format_coverage" not in data:
+            if "format_coverage" not in data or not data["format_coverage"]:
                 data["format_coverage"] = initialize_format_coverage()
             if "generation_stats" not in data:
                 data["generation_stats"] = {
