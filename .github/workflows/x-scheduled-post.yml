@@ -10,6 +10,7 @@ on:
 
 permissions:
   contents: read
+  actions: write  # Needed to delete old cache
 
 jobs:
   generate-and-post:
@@ -26,7 +27,7 @@ jobs:
         id: cache-restore
         with:
           path: .github/tweet_history.json
-          key: tweet-history-v2
+          key: tweet-history-${{ github.run_id }}
           restore-keys: |
             tweet-history-
 
@@ -60,9 +61,16 @@ jobs:
           TWEET_GENERATED_BY: claude-api
         run: python .github/scripts/post_tweet.py
 
+      - name: Delete old cache
+        if: always() && steps.cache-restore.outputs.cache-matched-key
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh cache delete "${{ steps.cache-restore.outputs.cache-matched-key }}" --repo ${{ github.repository }} || true
+
       - name: Save tweet history to cache
         uses: actions/cache/save@v4
         if: always()
         with:
           path: .github/tweet_history.json
-          key: tweet-history-v2
+          key: tweet-history-${{ github.run_id }}
