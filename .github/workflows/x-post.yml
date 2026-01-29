@@ -5,7 +5,7 @@ on:
     branches: [main]
 
 permissions:
-  contents: write
+  contents: read
 
 jobs:
   post:
@@ -14,9 +14,15 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+
+      - name: Restore tweet history from cache
+        uses: actions/cache/restore@v4
+        id: cache-restore
         with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-          fetch-depth: 0
+          path: .github/tweet_history.json
+          key: tweet-history-v2
+          restore-keys: |
+            tweet-history-
 
       - name: Set up Python
         uses: actions/setup-python@v5
@@ -33,14 +39,11 @@ jobs:
           X_APP_SECRET: ${{ secrets.X_APP_SECRET }}
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
-        run: |
-          python .github/scripts/post_tweet.py
+        run: python .github/scripts/post_tweet.py
 
-      - name: Commit changes
-        if: always() && steps.post.outputs.should_commit == 'true'
-        run: |
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add .github/next_tweet.txt .github/tweet_history.json
-          git diff --staged --quiet || git commit -m "chore: update tweet status [skip ci]"
-          git push || echo "Push failed - may need manual intervention"
+      - name: Save tweet history to cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .github/tweet_history.json
+          key: tweet-history-v2
