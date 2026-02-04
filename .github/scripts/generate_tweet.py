@@ -207,6 +207,15 @@ def validate_tweet(content: str, history: dict) -> tuple[bool, str]:
         (r"gamemaker.{0,20}(painful|tedious|annoying|frustrating|slow|clunky)", "negative_gamemaker"),
         (r"(painful|tedious|annoying|frustrating).{0,20}(menu|click|ide)", "negative_gamemaker"),
         (r"nightmare", "negative_framing"),
+        # NEVER pretend to be a human user
+        (r"\bi used to\b", "fake_human_experience"),
+        (r"\bmy workflow\b", "fake_human_experience"),
+        (r"\bbefore gms-mcp,? i\b", "fake_human_experience"),
+        (r"\bi (had to|would|spent)\b", "fake_human_experience"),
+        # GameMaker users use the IDE, not manual file editing
+        (r"(copying|copy|edit).{0,20}\.yy files", "fake_workflow"),
+        (r"(manual|manually).{0,20}guid", "fake_workflow"),
+        (r"(praying|pray).{0,20}(guid|uuid|file)", "fake_workflow"),
     ]
 
     for pattern, reason in bad_patterns:

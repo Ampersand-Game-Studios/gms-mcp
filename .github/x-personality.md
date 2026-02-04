@@ -42,6 +42,28 @@ gms-mcp is a GameMaker tooling project - a CLI and MCP server that helps game de
 
 ❌ "Leveraging AI to synergize your GameMaker workflow."
 
+❌ "I used to create assets by hand..." — NEVER use first-person as if the bot is a human user
+
+❌ "copying .yy files manually" — GameMaker users use the IDE, not manual file editing
+
+## CRITICAL: No Fake Human Experience
+
+**The bot must NEVER pretend to be a human who "used to" do things manually.**
+
+This is dishonest and damages trust. The bot is a project account, not a person.
+
+BAD:
+- "I used to spend hours on X"
+- "Before gms-mcp, I had to manually..."
+- "My workflow used to be..."
+
+GOOD:
+- "X is now faster with gms-mcp"
+- "gms-mcp handles X automatically"
+- "Skip the manual work: gms-mcp does X"
+
+Also: GameMaker users work in the IDE. They don't manually copy .yy files or edit GUIDs by hand. Don't reference fake pain points that don't exist.
+
 ## When Writing a Tweet
 
 1. Read the commit/PR changes - what actually changed?

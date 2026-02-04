@@ -32,8 +32,8 @@ TWEET_FORMATS = {
     },
     "comparison": {
         "name": "Before/After Comparison",
-        "template": "Show how AI assistance speeds up the workflow. Focus on the speed gain, not criticizing the normal way.",
-        "example": "Setting up 5 enemy variants with different stats used to take a while. Now I just describe them to Claude and they're ready to test.",
+        "template": "Show how AI assistance speeds up the workflow. Focus on the speed gain, not criticizing the normal way. NEVER use first-person 'I used to' framing.",
+        "example": "Setting up 5 enemy variants with different stats? Describe them to Claude and they're ready to test in seconds.",
     },
     "tip_discovery": {
         "name": "Tip or Discovery",
@@ -77,7 +77,7 @@ TOPIC_CATEGORIES = {
         ],
         "angles": [
             "Describe an enemy type, get a working object with events and variables set up",
-            "The .yy boilerplate GameMaker generates is handled for you - correct GUIDs, paths, everything",
+            "Asset creation from your AI chat - objects, sprites, rooms with correct structure and dependencies",
             "Batch-create 10 item objects with different stats from a single description",
             "Your AI can now spawn game objects that actually work in GameMaker - events, variables, sprite assignments",
             "Need a particle system object? Describe the effect, get the code and events",
@@ -261,11 +261,11 @@ OPENING_PATTERNS = [
     "tool_spotlight", # "gm_find_references is..." - tool-first framing
     "use_case",       # "For large projects..." - audience targeting
     "contrast",       # "Instead of X, just Y" - alternative approach
-    "confession",     # "I used to X manually..." - relatable admission
     "command",        # "Run gm_maintenance_auto..." - imperative/instructional
     "hypothetical",   # "Imagine if your AI could..." - possibilities
     "observation",    # "Noticed that X..." - casual insight
     "shortcut",       # "Skip the menu diving..." - efficiency angle
+    # NOTE: Removed "confession" pattern - it encouraged fake human experience framing
 ]
 
 
@@ -492,27 +492,26 @@ def build_context_for_claude(
     # Format topic details
     topic_tools = ", ".join(category["tools"][:5]) if category["tools"] else "General features"
 
-    # Opening pattern descriptions for guidance (20 patterns)
+    # Opening pattern descriptions for guidance (19 patterns - confession removed)
     opening_descriptions = {
         "statement": "Direct statement (e.g., 'gms-mcp indexes your entire codebase...')",
         "scenario": "When/If scenario (e.g., 'When you need to refactor a 200-script project...')",
         "discovery": "Discovery framing (e.g., 'TIL gm_find_references traces through parent objects...')",
-        "comparison": "Before/after (e.g., 'Used to grep through .yy files manually...')",
+        "comparison": "Before/after (e.g., 'Standard workflow: click through menus. With gms-mcp: one tool call.')",
         "question": "Question opener (e.g., 'Need to find where a function is called?')",
-        "workflow": "Workflow description (e.g., 'My workflow: describe the object, get events set up...')",
+        "workflow": "Workflow description (e.g., 'Describe the object, get events set up automatically...')",
         "tip": "Quick tip (e.g., 'Quick tip: gm_maintenance_auto catches most project issues...')",
-        "result": "Outcome focus (e.g., 'Just ran gm_maintenance_auto - found 12 orphaned scripts...')",
+        "result": "Outcome focus (e.g., 'Ran gm_maintenance_auto - found 12 orphaned scripts...')",
         "capability": "Feature announcement (e.g., 'You can now trace asset dependencies across your whole project...')",
-        "pain_point": "Relatable frustration (e.g., 'Hate searching for where a function is defined?...')",
+        "pain_point": "Relatable frustration (e.g., 'Searching for where a function is defined?...')",
         "speed": "Speed emphasis (e.g., 'Index 200 scripts in seconds...')",
-        "count": "Concrete numbers (e.g., 'Found 40 orphaned scripts in our jam project...')",
-        "tool_spotlight": "Tool-first (e.g., 'gm_find_references is my most-used tool...')",
+        "count": "Concrete numbers (e.g., 'Found 40 orphaned scripts in a jam project...')",
+        "tool_spotlight": "Tool-first (e.g., 'gm_find_references: see every call site for any function...')",
         "use_case": "Audience targeting (e.g., 'For large team projects...')",
-        "contrast": "Alternative approach (e.g., 'Instead of manually checking each .yy file...')",
-        "confession": "Relatable admission (e.g., 'I used to rename assets and pray nothing broke...')",
+        "contrast": "Alternative approach (e.g., 'Instead of clicking through menus, describe what you need...')",
         "command": "Imperative/instructional (e.g., 'Run gm_maintenance_auto before your next commit...')",
         "hypothetical": "Possibilities (e.g., 'Imagine if your AI could see your game logs in real-time...')",
-        "observation": "Casual insight (e.g., 'Noticed our project had 50 unused sprites...')",
+        "observation": "Casual insight (e.g., 'That project had 50 unused sprites nobody knew about...')",
         "shortcut": "Efficiency angle (e.g., 'Skip the menu diving - create assets from your chat...')",
     }
     opening_guidance = opening_descriptions.get(suggested_opening, "") if suggested_opening else ""
