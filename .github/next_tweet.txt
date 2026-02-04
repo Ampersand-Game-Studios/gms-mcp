@@ -1,5 +1,5 @@
-Live game capture just landed! 📡
+Multi-frame sprite support just landed 🎬
 
-The new TCP bridge lets AI assistants see your GameMaker logs in real-time and send commands back into your game while it's running. 
+Create animated sprites with --frame-count, add/remove frames, or import entire spritesheets automatically.
 
-Spawning test objects or switching rooms is now just a single tool call away. #GameMaker #gamedev
+gm_sprite_add_frame, gm_sprite_import_strip, and more. #GameMaker #gamedev
