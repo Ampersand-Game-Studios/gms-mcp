@@ -278,8 +278,11 @@ def create_sprite(args):
         from pathlib import Path
         project_root = Path('.')
         
+        # Multi-frame support: pass frame_count to create_files
+        frame_count = getattr(args, 'frame_count', 1)
+        
         # Create the asset files
-        relative_path = asset.create_files(project_root, args.name, args.parent_path)
+        relative_path = asset.create_files(project_root, args.name, args.parent_path, frame_count=frame_count)
         
         # Create resource entry for .yyp file
         resource_entry = {
@@ -293,7 +296,8 @@ def create_sprite(args):
         success = update_yyp_file(resource_entry)
         
         if success:
-            print(f"[OK] Sprite '{args.name}' created successfully")
+            frame_msg = f" with {frame_count} frames" if frame_count > 1 else ""
+            print(f"[OK] Sprite '{args.name}' created successfully{frame_msg}")
             
             # Run post-creation maintenance
             if not getattr(args, 'skip_maintenance', False):

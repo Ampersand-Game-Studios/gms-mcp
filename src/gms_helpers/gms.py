@@ -42,6 +42,7 @@ Examples:
     setup_asset_commands(subparsers)
     setup_event_commands(subparsers)
     setup_workflow_commands(subparsers)
+    setup_sprite_commands(subparsers)
     setup_room_commands(subparsers)
     setup_maintenance_commands(subparsers)
     setup_runner_commands(subparsers)
@@ -209,6 +210,7 @@ def setup_sprite_parser(subparsers):
         default="",
         help='Optional parent folder path (e.g. "folders/Sprites.yy"). If omitted, asset is created at project root.',
     )
+    parser.add_argument('--frame-count', type=int, default=1, help='Number of animation frames (default: 1)')
     parser.add_argument('--skip-maintenance', action='store_true', help='Skip pre/post validation')
     parser.add_argument('--no-auto-fix', action='store_true', help='Do not automatically fix issues')
     parser.add_argument('--maintenance-verbose', action=argparse.BooleanOptionalAction, default=True, help='Show verbose maintenance output')
@@ -474,7 +476,53 @@ def setup_workflow_commands(subparsers):
     swap_parser = workflow_subparsers.add_parser('swap-sprite', help="Replace sprite's PNG source")
     swap_parser.add_argument('asset_path', help='Sprite .yy path relative to project root')
     swap_parser.add_argument('png', help='Path to replacement PNG file')
+    swap_parser.add_argument('--frame', type=int, default=0, help='Frame index to replace (0-indexed, default: 0)')
     swap_parser.set_defaults(func=handle_workflow_swap_sprite)
+
+
+def setup_sprite_commands(subparsers):
+    """Set up sprite frame manipulation commands."""
+    sprite_cmd_parser = subparsers.add_parser('sprite-frames', help='Sprite frame manipulation')
+    sprite_subparsers = sprite_cmd_parser.add_subparsers(dest='sprite_action', help='Sprite frame actions')
+    sprite_subparsers.required = True
+    
+    # Add frame
+    add_parser = sprite_subparsers.add_parser('add', help='Add a frame to a sprite')
+    add_parser.add_argument('sprite_path', help='Sprite .yy path relative to project root')
+    add_parser.add_argument('--position', type=int, default=-1, help='Insert position (-1 = append at end)')
+    add_parser.add_argument('--source', help='Source PNG path (creates blank if omitted)')
+    add_parser.set_defaults(func=handle_sprite_add_frame)
+    
+    # Remove frame
+    remove_parser = sprite_subparsers.add_parser('remove', help='Remove a frame from a sprite')
+    remove_parser.add_argument('sprite_path', help='Sprite .yy path relative to project root')
+    remove_parser.add_argument('position', type=int, help='Frame position to remove (0-indexed)')
+    remove_parser.set_defaults(func=handle_sprite_remove_frame)
+    
+    # Duplicate frame
+    dup_parser = sprite_subparsers.add_parser('duplicate', help='Duplicate a frame within a sprite')
+    dup_parser.add_argument('sprite_path', help='Sprite .yy path relative to project root')
+    dup_parser.add_argument('source_position', type=int, help='Frame index to duplicate')
+    dup_parser.add_argument('--target', type=int, default=-1, help='Target position (-1 = after source)')
+    dup_parser.set_defaults(func=handle_sprite_duplicate_frame)
+    
+    # Import strip
+    import_parser = sprite_subparsers.add_parser('import-strip', help='Import sprite strip/sheet as new sprite')
+    import_parser.add_argument('name', help='Sprite name to create')
+    import_parser.add_argument('source', help='Path to source PNG strip/sheet')
+    import_parser.add_argument('--parent-path', default='', help='Parent folder path')
+    import_parser.add_argument('--layout', choices=['horizontal', 'vertical', 'grid'], default='horizontal',
+                              help='Strip layout (default: horizontal)')
+    import_parser.add_argument('--frame-width', type=int, help='Frame width in pixels')
+    import_parser.add_argument('--frame-height', type=int, help='Frame height in pixels')
+    import_parser.add_argument('--columns', type=int, help='Number of columns (for grid layout)')
+    import_parser.set_defaults(func=handle_sprite_import_strip)
+    
+    # Get frame count
+    count_parser = sprite_subparsers.add_parser('count', help='Get frame count for a sprite')
+    count_parser.add_argument('sprite_path', help='Sprite .yy path relative to project root')
+    count_parser.set_defaults(func=handle_sprite_frame_count)
+
 
 def setup_room_commands(subparsers):
     """Set up room management commands."""
@@ -737,6 +785,11 @@ from .commands.skills_commands import (
 from .commands.doc_commands import (
     handle_doc_lookup, handle_doc_search, handle_doc_list,
     handle_doc_categories, handle_doc_cache_stats, handle_doc_cache_clear
+)
+from .commands.sprite_commands import (
+    handle_sprite_add_frame, handle_sprite_remove_frame,
+    handle_sprite_duplicate_frame, handle_sprite_import_strip,
+    handle_sprite_frame_count
 )
 
 

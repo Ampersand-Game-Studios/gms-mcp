@@ -25,5 +25,6 @@ def handle_workflow_delete(args):
 def handle_workflow_swap_sprite(args):
     """Handle sprite PNG swapping."""
     project_root = Path(args.project_root).resolve()
-    result = swap_sprite_png(project_root, args.asset_path, Path(args.png))
+    frame_index = getattr(args, 'frame', 0)
+    result = swap_sprite_png(project_root, args.asset_path, Path(args.png), frame_index=frame_index)
     return result

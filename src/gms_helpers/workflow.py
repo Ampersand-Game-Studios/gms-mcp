@@ -351,7 +351,15 @@ def delete_asset(project_root: Path, asset_path: str, *, dry_run: bool = False) 
 # C-4: Swap Sprite PNG
 # ---------------------------------------------------------------------------
 
-def swap_sprite_png(project_root: Path, sprite_asset_path: str, png_source: Path) -> OperationResult:
+def swap_sprite_png(project_root: Path, sprite_asset_path: str, png_source: Path, frame_index: int = 0) -> OperationResult:
+    """Replace a sprite frame's PNG source.
+    
+    Args:
+        project_root: Project root directory
+        sprite_asset_path: Sprite asset path (e.g., "sprites/spr_player/spr_player.yy")
+        png_source: Path to new PNG file
+        frame_index: Frame index to replace (0-indexed, default: 0 for backwards compat)
+    """
     project_root = Path(project_root)
     asset_type, folder_path, sprite_name = _asset_from_path(project_root, sprite_asset_path)
     if asset_type != "sprite":
@@ -361,9 +369,19 @@ def swap_sprite_png(project_root: Path, sprite_asset_path: str, png_source: Path
     yy_data = load_json_loose(yy_path)
     if yy_data is None:
         raise JSONParseError(f"Could not load {yy_path}")
+    
+    # Validate frame_index
+    frame_count = len(yy_data["frames"])
+    if frame_index < 0 or frame_index >= frame_count:
+        raise ValueError(
+            f"Invalid frame_index {frame_index}: sprite '{sprite_name}' has "
+            f"{frame_count} frame(s) (valid: 0-{frame_count-1})"
+        )
         
-    frame_uuid = yy_data["frames"][0]["name"]
+    frame_uuid = yy_data["frames"][frame_index]["name"]
+    layer_uuid = yy_data["layers"][0]["name"]
     target_png = folder_path / f"{frame_uuid}.png"
+    layer_png = folder_path / "layers" / frame_uuid / f"{layer_uuid}.png"
 
     png_source = Path(png_source)
     if not png_source.is_absolute():
@@ -375,7 +393,7 @@ def swap_sprite_png(project_root: Path, sprite_asset_path: str, png_source: Path
     # If the user accidentally points at the current sprite frame PNG, treat as a no-op.
     try:
         if png_source.resolve() == target_png.resolve():
-            message = f"[OK] Sprite image for {sprite_name} already matches the provided PNG (no-op)"
+            message = f"[OK] Sprite image for {sprite_name} frame {frame_index} already matches the provided PNG (no-op)"
             print(_c(message, "green"))
             return OperationResult(success=True, message=message)
     except Exception:
@@ -397,7 +415,13 @@ def swap_sprite_png(project_root: Path, sprite_asset_path: str, png_source: Path
                         tmp_png.unlink()
                     except Exception:
                         pass
-            message = f"[OK] Replaced sprite image for {sprite_name}"
+            
+            # Also update the layer PNG if it exists
+            if layer_png.parent.exists():
+                shutil.copy2(png_source, layer_png)
+            
+            frame_msg = f" frame {frame_index}" if frame_count > 1 else ""
+            message = f"[OK] Replaced sprite image for {sprite_name}{frame_msg}"
             print(_c(message, "green"))
             return OperationResult(success=True, message=message)
         except PermissionError as e:

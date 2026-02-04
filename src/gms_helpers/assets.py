@@ -179,34 +179,78 @@ class SpriteAsset(BaseAsset):
     gm_tag = "GMSprite"
     
     def create_yy_data(self, name: str, parent_path: str, **kwargs) -> Dict[str, Any]:
+        # Multi-frame support: get frame_count, default to 1 for backwards compat
+        frame_count = kwargs.get('frame_count', 1)
+        if frame_count < 1:
+            frame_count = 1
+        
+        # Custom dimensions (used by sprite import)
+        width = kwargs.get('width', 1)
+        height = kwargs.get('height', 1)
+        
+        # Generate UUIDs - one layer shared across all frames
         layer_uuid = generate_uuid()
-        image_uuid = generate_uuid()
+        
+        # Generate frame UUIDs and keyframe UUIDs
+        frame_uuids = [generate_uuid() for _ in range(frame_count)]
+        keyframe_uuids = [generate_uuid() for _ in range(frame_count)]
+        
+        # Build frames array
+        frames = [
+            {
+                "$GMSpriteFrame": "",
+                "%Name": frame_uuid,
+                "name": frame_uuid,
+                "resourceType": "GMSpriteFrame",
+                "resourceVersion": "2.0"
+            }
+            for frame_uuid in frame_uuids
+        ]
+        
+        # Build keyframes array
+        keyframes = [
+            {
+                "$Keyframe<SpriteFrameKeyframe>": "",
+                "Channels": {
+                    "0": {
+                        "$SpriteFrameKeyframe": "",
+                        "Id": {
+                            "name": frame_uuids[i],
+                            "path": f"sprites/{name.lower()}/{name}.yy"
+                        },
+                        "resourceType": "SpriteFrameKeyframe",
+                        "resourceVersion": "2.0"
+                    }
+                },
+                "Disabled": False,
+                "id": keyframe_uuids[i],
+                "IsCreationKey": False,
+                "Key": float(i),
+                "Length": 1.0,
+                "resourceType": "Keyframe<SpriteFrameKeyframe>",
+                "resourceVersion": "2.0",
+                "Stretch": False
+            }
+            for i in range(frame_count)
+        ]
         
         return {
             "$GMSprite": "",
             "%Name": name,
             "bboxMode": 0,
-            "bbox_bottom": 0,
+            "bbox_bottom": height - 1 if height > 1 else 0,
             "bbox_left": 0,
-            "bbox_right": 0,
+            "bbox_right": width - 1 if width > 1 else 0,
             "bbox_top": 0,
             "collisionKind": 1,
             "collisionTolerance": 0,
             "DynamicTexturePage": False,
             "edgeFiltering": False,
             "For3D": False,
-            "frames": [
-                {
-                    "$GMSpriteFrame": "",
-                    "%Name": image_uuid,
-                    "name": image_uuid,
-                    "resourceType": "GMSpriteFrame",
-                    "resourceVersion": "2.0"
-                }
-            ],
+            "frames": frames,
             "gridX": 0,
             "gridY": 0,
-            "height": 1,
+            "height": height,
             "HTile": False,
             "layers": [
                 {
@@ -249,7 +293,7 @@ class SpriteAsset(BaseAsset):
                 },
                 "eventStubScript": None,
                 "eventToFunction": {},
-                "length": 1.0,
+                "length": float(frame_count),
                 "lockOrigin": False,
                 "moments": {
                     "resourceType": "KeyframeStore<MomentsEventKeyframe>",
@@ -276,30 +320,7 @@ class SpriteAsset(BaseAsset):
                         "keyframes": {
                             "resourceType": "KeyframeStore<SpriteFrameKeyframe>",
                             "resourceVersion": "2.0",
-                            "Keyframes": [
-                                {
-                                    "$Keyframe<SpriteFrameKeyframe>": "",
-                                    "Channels": {
-                                        "0": {
-                                            "$SpriteFrameKeyframe": "",
-                                            "Id": {
-                                                "name": image_uuid,
-                                                "path": f"sprites/{name.lower()}/{name}.yy"
-                                            },
-                                            "resourceType": "SpriteFrameKeyframe",
-                                            "resourceVersion": "2.0"
-                                        }
-                                    },
-                                    "Disabled": False,
-                                    "id": generate_uuid(),
-                                    "IsCreationKey": False,
-                                    "Key": 0.0,
-                                    "Length": 1.0,
-                                    "resourceType": "Keyframe<SpriteFrameKeyframe>",
-                                    "resourceVersion": "2.0",
-                                    "Stretch": False
-                                }
-                            ]
+                            "Keyframes": keyframes
                         },
                         "modifiers": [],
                         "name": "frames",
@@ -324,7 +345,7 @@ class SpriteAsset(BaseAsset):
             },
             "type": 0,
             "VTile": False,
-            "width": 1
+            "width": width
         }
     
     def create_stub_files(self, asset_folder: Path, name: str, **kwargs):
@@ -337,26 +358,32 @@ class SpriteAsset(BaseAsset):
                 from .utils import load_json_loose
             yy_data = load_json_loose(yy_path)
             
-            # Extract UUIDs
+            # Extract layer UUID (shared across all frames)
             layer_uuid = yy_data["layers"][0]["name"]
-            image_uuid = yy_data["frames"][0]["name"]
             
-            # Create main image
-            main_image_path = asset_folder / f"{image_uuid}.png"
-            if not main_image_path.exists():
-                create_dummy_png(main_image_path)
-                print(f"Created {main_image_path.name} (dummy image)")
+            # Create PNG files for each frame
+            for frame in yy_data["frames"]:
+                frame_uuid = frame["name"]
+                
+                # Create main image
+                main_image_path = asset_folder / f"{frame_uuid}.png"
+                if not main_image_path.exists():
+                    create_dummy_png(main_image_path)
+                    print(f"Created {main_image_path.name} (dummy image)")
+                
+                # Create layer directory and image
+                # Directory structure: layers/[frame_uuid]/[layer_uuid].png
+                layer_dir = asset_folder / "layers" / frame_uuid
+                ensure_directory(layer_dir)
+                
+                layer_image_path = layer_dir / f"{layer_uuid}.png"
+                if not layer_image_path.exists():
+                    create_dummy_png(layer_image_path)
+                    print(f"Created layers/{frame_uuid}/{layer_uuid}.png (dummy image)")
             
-            # Create layer directory and image
-            # NOTE: Directory structure should be layers/[frame_uuid]/[layer_uuid].png
-            layer_dir = asset_folder / "layers" / image_uuid
-            ensure_directory(layer_dir)
-            
-            layer_image_path = layer_dir / f"{layer_uuid}.png"
-            if not layer_image_path.exists():
-                create_dummy_png(layer_image_path)
-                print(f"Created layers/{image_uuid}/{layer_uuid}.png (dummy image)")
-            
+            frame_count = len(yy_data["frames"])
+            if frame_count > 1:
+                print(f"[OK] Created {frame_count}-frame sprite with dummy images")
             print(f"[WARN]  Replace dummy PNG files with actual artwork before using in GameMaker!")
     
     def validate_name(self, name: str) -> bool:

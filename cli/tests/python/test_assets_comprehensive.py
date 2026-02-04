@@ -499,10 +499,11 @@ class TestSpriteAsset(TestAssetsComprehensive):
             "spr_custom", self.parent_path, width=128, height=256
         )
         
-        # Sprite dimensions are hardcoded to 1x1 in the current implementation
-        # Custom dimensions would need to be set later in GameMaker IDE
-        self.assertEqual(yy_data["width"], 1)
-        self.assertEqual(yy_data["height"], 1)
+        # Custom dimensions are now supported
+        self.assertEqual(yy_data["width"], 128)
+        self.assertEqual(yy_data["height"], 256)
+        self.assertEqual(yy_data["bbox_right"], 127)  # width - 1
+        self.assertEqual(yy_data["bbox_bottom"], 255)  # height - 1
     
     def test_sprite_create_yy_data_frame_count(self):
         """Test sprite creation with custom frame count."""
@@ -510,15 +511,22 @@ class TestSpriteAsset(TestAssetsComprehensive):
             "spr_animated", self.parent_path, frame_count=5
         )
         
-        # Verify frames structure - sprite always creates exactly 1 frame
+        # Verify frames structure - multi-frame support
         self.assertIn("frames", yy_data)
         frames = yy_data["frames"]
-        self.assertEqual(len(frames), 1)
+        self.assertEqual(len(frames), 5)
         
-        # Verify frame has correct structure
-        frame = frames[0]
-        self.assertEqual(frame["$GMSpriteFrame"], "")
-        self.assertIn("name", frame)
+        # Verify each frame has correct structure
+        for frame in frames:
+            self.assertEqual(frame["$GMSpriteFrame"], "")
+            self.assertIn("name", frame)
+        
+        # Verify keyframes match frames
+        keyframes = yy_data["sequence"]["tracks"][0]["keyframes"]["Keyframes"]
+        self.assertEqual(len(keyframes), 5)
+        
+        # Verify sequence length matches frame count
+        self.assertEqual(yy_data["sequence"]["length"], 5.0)
     
     def test_sprite_create_stub_files(self):
         """Test sprite stub file creation."""
@@ -905,9 +913,10 @@ class TestErrorConditions(TestAssetsComprehensive):
             "spr_test", parent_path, width=-10, height=-20
         )
         
-        # Sprite dimensions are hardcoded, not affected by kwargs
-        self.assertEqual(yy_data["width"], 1)  # Hardcoded default
-        self.assertEqual(yy_data["height"], 1)  # Hardcoded default
+        # Negative dimensions are passed through (validation should happen elsewhere)
+        # This tests that the function doesn't crash with invalid input
+        self.assertEqual(yy_data["width"], -10)
+        self.assertEqual(yy_data["height"], -20)
     
     def test_object_creation_with_nonexistent_sprite(self):
         """Test object creation with reference to nonexistent sprite."""
