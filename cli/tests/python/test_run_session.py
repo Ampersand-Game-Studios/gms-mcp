@@ -303,10 +303,10 @@ class TestRunSessionManagerProcessChecks(unittest.TestCase):
         result = self.manager.is_process_alive(12345)
         self.assertFalse(result)
 
-    @patch("os.kill")
-    @patch("os.killpg")
-    @patch("os.getpgrp", return_value=900)
-    @patch("os.getpgid", return_value=1000)
+    @patch("gms_helpers.run_session.os.kill")
+    @patch("gms_helpers.run_session.os.killpg", create=True)
+    @patch("gms_helpers.run_session.os.getpgrp", return_value=900, create=True)
+    @patch("gms_helpers.run_session.os.getpgid", return_value=1000, create=True)
     @patch("gms_helpers.run_session.platform.system", return_value="Darwin")
     def test_kill_process_uses_process_group(
         self, mock_system, mock_getpgid, mock_getpgrp, mock_killpg, mock_kill
