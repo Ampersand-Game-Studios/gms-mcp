@@ -197,7 +197,10 @@ class TestClaudeCodeSupport(unittest.TestCase):
 
         self.assertIn("[mcp_servers.gms-codex]", config)
         self.assertIn('command = "gms-mcp"', config)
-        self.assertIn(f'GM_PROJECT_ROOT = "{workspace_root}"', config)
+        self.assertIn(
+            f"GM_PROJECT_ROOT = {_make_codex_toml_value(str(workspace_root))}",
+            config,
+        )
         self.assertIn("[mcp_servers.gms-codex.env]", config)
 
     def test_make_codex_mcp_config_env_autodetect(self):
@@ -217,7 +220,10 @@ class TestClaudeCodeSupport(unittest.TestCase):
             )
             self.assertIn('GMS_MCP_GMS_PATH = "/path/to/gms"', config)
             self.assertIn('GMS_MCP_ENABLE_DIRECT = "1"', config)
-            self.assertIn(f'GM_PROJECT_ROOT = "{gm_root}"', config)
+            self.assertIn(
+                f"GM_PROJECT_ROOT = {_make_codex_toml_value(str(gm_root))}",
+                config,
+            )
         finally:
             del os.environ["GMS_MCP_GMS_PATH"]
             del os.environ["GMS_MCP_ENABLE_DIRECT"]
