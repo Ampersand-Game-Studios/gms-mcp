@@ -595,40 +595,133 @@ def _read_codex_server_entry(
     return None, str(config_path)
 
 
-def _print_codex_check(*, workspace_root: Path, server_name: str) -> int:
+def _collect_codex_check_state(*, workspace_root: Path, server_name: str) -> dict:
     """
-    Print Codex config discovery status and the active server entry.
+    Collect Codex config discovery state for text and JSON check outputs.
     Active precedence: workspace .codex/mcp.toml, then ~/.codex/config.toml.
     """
     local_path = workspace_root / ".codex" / "mcp.toml"
     global_path = Path.home() / ".codex" / "config.toml"
 
+    local_entry, _ = _read_codex_server_entry(config_path=local_path, server_name=server_name)
+    global_entry, _ = _read_codex_server_entry(config_path=global_path, server_name=server_name)
+
+    active_scope = "none"
+    active_path: str | None = None
+    active_entry = None
+    if local_entry is not None:
+        active_scope = "workspace"
+        active_path = str(local_path)
+        active_entry = local_entry
+    elif global_entry is not None:
+        active_scope = "global"
+        active_path = str(global_path)
+        active_entry = global_entry
+
+    return {
+        "server_name": server_name,
+        "workspace": {
+            "path": str(local_path),
+            "exists": local_path.exists(),
+            "entry": local_entry,
+        },
+        "global": {
+            "path": str(global_path),
+            "exists": global_path.exists(),
+            "entry": global_entry,
+        },
+        "active": {
+            "scope": active_scope,
+            "path": active_path,
+            "entry": active_entry,
+        },
+    }
+
+
+def _codex_entry_readiness(entry: object) -> tuple[bool, list[str]]:
+    """Validate that an active Codex MCP server entry has required fields."""
+    problems: list[str] = []
+
+    if not isinstance(entry, dict):
+        return False, ["Active server entry is missing or not a table/object."]
+
+    command = entry.get("command")
+    if not isinstance(command, str) or not command.strip():
+        problems.append("`command` must be a non-empty string.")
+
+    args = entry.get("args")
+    if not isinstance(args, list):
+        problems.append("`args` must be a list.")
+
+    env = entry.get("env")
+    if not isinstance(env, dict):
+        problems.append("`env` must be a table/object.")
+    elif env.get("PYTHONUNBUFFERED") != "1":
+        problems.append("`env.PYTHONUNBUFFERED` should be \"1\" for unbuffered logs.")
+
+    return len(problems) == 0, problems
+
+
+def _print_codex_check(*, workspace_root: Path, server_name: str) -> int:
+    """
+    Print Codex config discovery status and the active server entry.
+    Active precedence: workspace .codex/mcp.toml, then ~/.codex/config.toml.
+    """
     try:
-        local_entry, _ = _read_codex_server_entry(config_path=local_path, server_name=server_name)
-        global_entry, _ = _read_codex_server_entry(config_path=global_path, server_name=server_name)
+        state = _collect_codex_check_state(workspace_root=workspace_root, server_name=server_name)
     except (RuntimeError, ValueError) as exc:
         print(f"[ERROR] Codex config check failed: {exc}")
         return 2
 
-    print(f"[INFO] Codex workspace config: {local_path} ({'exists' if local_path.exists() else 'missing'})")
-    print(f"[INFO] Codex global config: {global_path} ({'exists' if global_path.exists() else 'missing'})")
+    print(
+        f"[INFO] Codex workspace config: {state['workspace']['path']} "
+        f"({'exists' if state['workspace']['exists'] else 'missing'})"
+    )
+    print(
+        f"[INFO] Codex global config: {state['global']['path']} "
+        f"({'exists' if state['global']['exists'] else 'missing'})"
+    )
 
-    active_source = None
-    active_entry = None
-    if local_entry is not None:
-        active_source = local_path
-        active_entry = local_entry
-    elif global_entry is not None:
-        active_source = global_path
-        active_entry = global_entry
-
+    active_entry = state["active"]["entry"]
     if active_entry is None:
         print(f"[INFO] Active server entry '{server_name}': not found")
         return 0
 
-    print(f"[INFO] Active server entry '{server_name}' source: {active_source}")
+    print(f"[INFO] Active server entry '{server_name}' source: {state['active']['path']}")
     print("[INFO] Active server entry payload:")
     print(json.dumps(active_entry, indent=2, sort_keys=True))
+    return 0
+
+
+def _print_codex_check_json(*, workspace_root: Path, server_name: str) -> int:
+    """Print Codex config discovery + active server entry as machine-readable JSON."""
+    try:
+        state = _collect_codex_check_state(workspace_root=workspace_root, server_name=server_name)
+    except (RuntimeError, ValueError) as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
+        return 2
+
+    state["ok"] = True
+    print(json.dumps(state, indent=2, sort_keys=True))
+    return 0
+
+
+def _print_codex_app_setup_summary(*, workspace_root: Path, server_name: str) -> int:
+    """Print a compact readiness summary for Codex app usage."""
+    try:
+        state = _collect_codex_check_state(workspace_root=workspace_root, server_name=server_name)
+    except (RuntimeError, ValueError) as exc:
+        print(f"[ERROR] Codex app setup summary failed: {exc}")
+        return 2
+
+    ready, problems = _codex_entry_readiness(state["active"]["entry"])
+    print("[INFO] Codex app readiness summary:")
+    print(f"[INFO] Active scope: {state['active']['scope']}")
+    if state["active"]["path"]:
+        print(f"[INFO] Active config path: {state['active']['path']}")
+    print(f"[INFO] Ready for Codex app: {'yes' if ready else 'no'}")
+    for problem in problems:
+        print(f"[WARN] {problem}")
     return 0
 
 
@@ -830,6 +923,16 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="Print detected Codex config paths and the active server entry.",
     )
+    parser.add_argument(
+        "--codex-check-json",
+        action="store_true",
+        help="Print detected Codex config paths and active server entry as JSON.",
+    )
+    parser.add_argument(
+        "--codex-app-setup",
+        action="store_true",
+        help="One-shot Codex app setup: write workspace config, preview global merge, then run check + readiness summary.",
+    )
     parser.add_argument("--vscode", action="store_true", help="Write a VS Code example config to mcp-configs/vscode.mcp.json.")
     parser.add_argument("--windsurf", action="store_true", help="Write a Windsurf example config to mcp-configs/windsurf.mcp.json.")
     parser.add_argument("--antigravity", action="store_true", help="Write an Antigravity example config to mcp-configs/antigravity.mcp.json.")
@@ -861,11 +964,15 @@ def main(argv: list[str] | None = None) -> int:
         args.cursor or args.cursor_global or
         args.claude_code or args.claude_code_global or
         args.codex or args.codex_global or
-        args.codex_dry_run_only or args.codex_check or
+        args.codex_dry_run_only or args.codex_check or args.codex_check_json or args.codex_app_setup or
         args.vscode or args.windsurf or args.antigravity or args.all
     )
     if not requested_any:
         args.cursor = True
+
+    if args.codex_app_setup:
+        args.codex = True
+        args.codex_check = True
 
     if args.codex_dry_run_only:
         # Explicit preview mode: show Codex final merged payloads only.
@@ -881,18 +988,31 @@ def main(argv: list[str] | None = None) -> int:
         args.all = False
         dry_run = True
 
+    def _run_requested_codex_checks() -> int:
+        check_exit = 0
+        if args.codex_check:
+            code = _print_codex_check(workspace_root=workspace_root, server_name=args.server_name)
+            if code != 0:
+                check_exit = code
+        if args.codex_check_json:
+            code = _print_codex_check_json(workspace_root=workspace_root, server_name=args.server_name)
+            if code != 0 and check_exit == 0:
+                check_exit = code
+        return check_exit
+
     only_codex_check = (
-        args.codex_check
+        (args.codex_check or args.codex_check_json)
         and not (
             args.cursor or args.cursor_global or
             args.claude_code or args.claude_code_global or
             args.codex or args.codex_global or
             args.codex_dry_run_only or
+            args.codex_app_setup or
             args.vscode or args.windsurf or args.antigravity or args.all
         )
     )
     if only_codex_check:
-        return _print_codex_check(workspace_root=workspace_root, server_name=args.server_name)
+        return _run_requested_codex_checks()
 
     if args.all:
         args.cursor = True
@@ -1045,6 +1165,27 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[INFO] Codex global config updated: {codex_global_path}")
             print("       Server entry is merged into [mcp_servers] without a fixed GM_PROJECT_ROOT.")
 
+    codex_global_preview_only = args.codex_app_setup and not args.codex_global and not args.codex_dry_run_only
+    if codex_global_preview_only:
+        codex_global_path = Path.home() / ".codex" / "config.toml"
+        try:
+            _, _, codex_global_preview = _generate_codex_config(
+                workspace_root=workspace_root,
+                output_path=codex_global_path,
+                server_name=args.server_name,
+                command=command,
+                args_prefix=args_prefix,
+                gm_project_root=gm_project_root,
+                dry_run=True,
+                include_project_root=False,
+            )
+        except (RuntimeError, ValueError) as exc:
+            print(f"[ERROR] Could not preview Codex global config merge: {exc}")
+            return 2
+        print(f"[INFO] Codex app setup global preview target: {codex_global_path}")
+        print("[INFO] Codex app setup global final merged payload (preview):")
+        print(codex_global_preview.rstrip())
+
     example_clients: list[str] = []
     if args.vscode:
         example_clients.append("vscode")
@@ -1101,8 +1242,11 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps(mcp_config, indent=2))
             print()
-        if args.codex_check:
-            return _print_codex_check(workspace_root=workspace_root, server_name=args.server_name)
+        check_exit = _run_requested_codex_checks()
+        if check_exit != 0:
+            return check_exit
+        if args.codex_app_setup:
+            return _print_codex_app_setup_summary(workspace_root=workspace_root, server_name=args.server_name)
         return 0
 
     gm_note = str(gm_project_root) if gm_project_root else "(not selected; defaults to ${workspaceFolder})"
@@ -1127,8 +1271,11 @@ def main(argv: list[str] | None = None) -> int:
         if config_path:
             written.append(config_path)
 
-    if args.codex_check:
-        return _print_codex_check(workspace_root=workspace_root, server_name=args.server_name)
+    check_exit = _run_requested_codex_checks()
+    if check_exit != 0:
+        return check_exit
+    if args.codex_app_setup:
+        return _print_codex_app_setup_summary(workspace_root=workspace_root, server_name=args.server_name)
     
     return 0
 

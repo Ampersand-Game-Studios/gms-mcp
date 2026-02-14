@@ -16,6 +16,7 @@ from gms_mcp.install import (
     _make_codex_mcp_config,
     _parse_toml_or_raise,
     _validate_codex_sections,
+    _collect_codex_check_state,
     _toml_parser,
     _upsert_codex_server_config,
     _generate_codex_config,
@@ -456,6 +457,53 @@ class TestClaudeCodeSupport(unittest.TestCase):
         parsed = _parse_toml_or_raise(text=text, source_label="inline")
         _validate_codex_sections(parsed=parsed, source_label="inline", server_name="gms")
 
+    def test_collect_codex_check_state_prefers_workspace_entry(self):
+        """Codex check state should prefer workspace entry over global entry."""
+        self._require_toml_parser()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            home_dir = Path(tmpdir) / "home"
+            with temporary_home(home_dir):
+                local_codex = workspace / ".codex" / "mcp.toml"
+                local_codex.parent.mkdir(parents=True, exist_ok=True)
+                local_codex.write_text(
+                    "\n".join(
+                        [
+                            "[mcp_servers.gms-check]",
+                            'command = "local-cmd"',
+                            "args = []",
+                            "",
+                            "[mcp_servers.gms-check.env]",
+                            'PYTHONUNBUFFERED = "1"',
+                        ]
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                global_codex = home_dir / ".codex" / "config.toml"
+                global_codex.parent.mkdir(parents=True, exist_ok=True)
+                global_codex.write_text(
+                    "\n".join(
+                        [
+                            "[mcp_servers.gms-check]",
+                            'command = "global-cmd"',
+                            "args = []",
+                            "",
+                            "[mcp_servers.gms-check.env]",
+                            'PYTHONUNBUFFERED = "1"',
+                        ]
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                state = _collect_codex_check_state(workspace_root=workspace, server_name="gms-check")
+
+            self.assertEqual(state["active"]["scope"], "workspace")
+            self.assertEqual(state["active"]["entry"]["command"], "local-cmd")
+            self.assertTrue(state["workspace"]["exists"])
+            self.assertTrue(state["global"]["exists"])
+
     def test_main_codex_dry_run(self):
         """CLI dry-run for --codex reports payload and does not write files."""
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -601,6 +649,78 @@ class TestClaudeCodeSupport(unittest.TestCase):
             self.assertIn("[INFO] Codex workspace config:", output)
             self.assertIn("[INFO] Active server entry 'gms-check' source:", output)
             self.assertIn('"command": "gms-mcp"', output)
+
+    def test_main_codex_check_json_reports_active_entry(self):
+        """--codex-check-json should return machine-readable active entry details."""
+        self._require_toml_parser()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            (workspace / "project.yyp").touch()
+            local_codex = workspace / ".codex" / "mcp.toml"
+            local_codex.parent.mkdir(parents=True, exist_ok=True)
+            local_codex.write_text(
+                "\n".join(
+                    [
+                        "[mcp_servers.gms-check-json]",
+                        'command = "gms-mcp"',
+                        "args = []",
+                        "",
+                        "[mcp_servers.gms-check-json.env]",
+                        'PYTHONUNBUFFERED = "1"',
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                ret = main(
+                    [
+                        "--workspace-root",
+                        str(workspace),
+                        "--non-interactive",
+                        "--server-name",
+                        "gms-check-json",
+                        "--codex-check-json",
+                    ]
+                )
+            self.assertEqual(ret, 0)
+            parsed = json.loads(buffer.getvalue())
+            self.assertTrue(parsed["ok"])
+            self.assertEqual(parsed["active"]["scope"], "workspace")
+            self.assertEqual(parsed["active"]["entry"]["command"], "gms-mcp")
+
+    def test_main_codex_app_setup_writes_workspace_and_prints_readiness(self):
+        """--codex-app-setup should write workspace config, preview global merge, and print readiness."""
+        self._require_toml_parser()
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            (workspace / "project.yyp").touch()
+            home_dir = Path(tmpdir) / "home"
+            with temporary_home(home_dir):
+                buffer = io.StringIO()
+                with redirect_stdout(buffer):
+                    ret = main(
+                        [
+                            "--workspace-root",
+                            str(workspace),
+                            "--non-interactive",
+                            "--server-name",
+                            "gms-app",
+                            "--codex-app-setup",
+                        ]
+                    )
+                output = buffer.getvalue()
+
+            self.assertEqual(ret, 0)
+            self.assertTrue((workspace / ".codex" / "mcp.toml").exists())
+            self.assertIn("[INFO] Codex config written to:", output)
+            self.assertIn("[INFO] Codex app setup global preview target:", output)
+            self.assertIn("[INFO] Active server entry 'gms-app' source:", output)
+            self.assertIn("[INFO] Codex app readiness summary:", output)
+            self.assertIn("[INFO] Ready for Codex app: yes", output)
 
     def test_generate_claude_code_plugin_dry_run(self):
         """Dry run should not create files but return paths."""

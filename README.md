@@ -61,7 +61,9 @@ Use the printed command directly, or copy `.codex/mcp.toml` content into the `[m
 
 Codex helpers:
 - `gms-mcp-init --codex-check` prints detected Codex config paths and active server entry.
+- `gms-mcp-init --codex-check-json` prints the same check output in machine-readable JSON.
 - `gms-mcp-init --codex-dry-run-only` prints final merged payloads for workspace + global Codex config without writing files.
+- `gms-mcp-init --codex-app-setup` runs one-shot Codex app setup: writes workspace config, previews global merge, then prints check + readiness summary.
 
 ## Local Development Setup
 
@@ -172,6 +174,25 @@ Preview final merged Codex payloads for local + global without writing:
 ```bash
 gms-mcp-init --codex-dry-run-only
 ```
+
+Print Codex check output as JSON (useful for app automation):
+
+```bash
+gms-mcp-init --codex-check-json
+```
+
+One-shot Codex app setup (recommended for new workspaces):
+
+```bash
+gms-mcp-init --codex-app-setup
+```
+
+### Codex App Quickstart
+
+1. Run `gms-mcp-init --codex-app-setup` in your GameMaker workspace.
+2. Confirm the output says `Ready for Codex app: yes`.
+3. If needed, run `gms-mcp-init --codex-check-json` and verify `active.scope` is `workspace`.
+4. Use `gms-mcp-init --codex-dry-run-only` before changing global config to preview merged TOML safely.
 
 Generate example configs for other MCP-capable clients:
 
