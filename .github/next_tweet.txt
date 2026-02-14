@@ -1,5 +1,1 @@
-macOS support got tighter in gms-mcp 🍎
-
-gm_run/gm_compile now default to your host platform, temp-run launch now resolves .app bundles, and CI now runs runner/session tests on macOS (Py 3.11-3.13).
-
-#GameMaker #gamedev
+Codex setup in gms-mcp just got safer. gms-mcp-init now validates TOML before merges, adds --codex-check to show active config, and --codex-dry-run-only to preview final local/global payloads before writing. #GameMaker #gamedev

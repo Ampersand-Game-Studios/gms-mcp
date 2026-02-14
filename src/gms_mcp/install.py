@@ -14,8 +14,17 @@ import json
 import os
 import shutil
 import sys
+import shlex
 from pathlib import Path
 from typing import Iterable, Optional
+
+try:
+    import tomllib as _toml_parser  # Python 3.11+
+except ModuleNotFoundError:
+    try:
+        import tomli as _toml_parser  # Python 3.10 fallback
+    except ModuleNotFoundError:
+        _toml_parser = None
 
 # Import naming config for project setup
 try:
@@ -349,6 +358,280 @@ def _make_claude_code_mcp_config(
     }
 
 
+def _build_codex_env(
+    gm_project_root: Optional[Path],
+    workspace_root: Path,
+    *,
+    include_project_root: bool = True,
+) -> dict[str, str]:
+    env: dict[str, str] = {
+        "PYTHONUNBUFFERED": "1",
+    }
+
+    if include_project_root:
+        resolved_root = str(
+            gm_project_root if gm_project_root is not None else workspace_root
+        )
+        env["GM_PROJECT_ROOT"] = resolved_root
+
+    for env_var in [
+        "GMS_MCP_GMS_PATH",
+        "GMS_MCP_DEFAULT_TIMEOUT_SECONDS",
+        "GMS_MCP_ENABLE_DIRECT",
+    ]:
+        val = os.environ.get(env_var)
+        if val:
+            env[env_var] = val
+
+    return env
+
+
+def _build_codex_env_args(env: dict[str, str]) -> str:
+    if not env:
+        return ""
+    return " " + " ".join(
+        f"--env {shlex.quote(f'{key}={value}')}" for key, value in env.items()
+    )
+
+
+def _parse_toml_or_raise(*, text: str, source_label: str) -> dict:
+    """Parse TOML text and return a dictionary; raise a descriptive error on failure."""
+    if _toml_parser is None:
+        raise RuntimeError(
+            "TOML parser unavailable. Install Python 3.11+ or add dependency 'tomli' for Python 3.10."
+        )
+    try:
+        parsed = _toml_parser.loads(text)
+    except Exception as exc:
+        raise ValueError(f"Malformed TOML in {source_label}: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"Malformed TOML in {source_label}: root must be a table/object.")
+    return parsed
+
+
+def _validate_codex_sections(
+    *,
+    parsed: dict,
+    source_label: str,
+    server_name: str,
+) -> None:
+    """Validate only the Codex MCP sections we need for safe merges/checks."""
+    mcp_servers = parsed.get("mcp_servers")
+    if mcp_servers is None:
+        return
+    if not isinstance(mcp_servers, dict):
+        raise ValueError(f"Malformed TOML in {source_label}: [mcp_servers] must be a table.")
+
+    target_entry = mcp_servers.get(server_name)
+    if target_entry is None:
+        return
+    if not isinstance(target_entry, dict):
+        raise ValueError(f"Malformed TOML in {source_label}: [mcp_servers.{server_name}] must be a table.")
+
+    env = target_entry.get("env")
+    if env is not None and not isinstance(env, dict):
+        raise ValueError(
+            f"Malformed TOML in {source_label}: [mcp_servers.{server_name}.env] must be a table."
+        )
+
+
+def _render_codex_merged_config(
+    *,
+    output_path: Path,
+    server_name: str,
+    server_block: str,
+) -> str:
+    """
+    Return the final merged Codex TOML payload without writing to disk.
+    Validates existing TOML and section types before merging.
+    """
+    if not output_path.exists():
+        return server_block + "\n" if not server_block.endswith("\n") else server_block
+
+    existing_text = output_path.read_text(encoding="utf-8")
+    parsed = _parse_toml_or_raise(text=existing_text, source_label=str(output_path))
+    _validate_codex_sections(parsed=parsed, source_label=str(output_path), server_name=server_name)
+    return _upsert_codex_server_config(
+        existing_text=existing_text,
+        server_name=server_name,
+        server_block=server_block,
+    )
+
+
+def _upsert_codex_server_config(
+    existing_text: str,
+    *,
+    server_name: str,
+    server_block: str,
+) -> str:
+    """Return TOML text with the target server block inserted or replaced."""
+    server_header = f"[mcp_servers.{server_name}]"
+    block_lines = server_block.splitlines()
+
+    if not existing_text.strip():
+        return "\n".join(block_lines) + "\n"
+
+    lines = existing_text.splitlines()
+    start: int | None = None
+    for idx, line in enumerate(lines):
+        if line.strip() == server_header:
+            start = idx
+            break
+
+    if start is None:
+        if lines and lines[-1].strip() != "":
+            return "\n".join(lines + ["", *block_lines]) + "\n"
+        return "\n".join(lines + block_lines) + "\n"
+
+    section_prefix = f"[mcp_servers.{server_name}."
+    end = len(lines)
+    for idx in range(start + 1, len(lines)):
+        candidate = lines[idx].strip()
+        if (
+            candidate.startswith("[")
+            and candidate.endswith("]")
+            and candidate.startswith("[mcp_servers.")
+            and not candidate.startswith(section_prefix)
+        ):
+            end = idx
+            break
+
+    merged = lines[:start] + block_lines + lines[end:]
+    return "\n".join(merged) + "\n"
+
+
+def _make_codex_toml_value(value: object) -> str:
+    """Serialize a Python value for inclusion in Codex TOML config."""
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_make_codex_toml_value(v) for v in value) + "]"
+    return json.dumps(value)
+
+
+def _make_codex_mcp_config(
+    *,
+    server_name: str,
+    command: str,
+    args: list[str],
+    gm_project_root: Optional[Path],
+    workspace_root: Path,
+    include_project_root: bool = True,
+) -> str:
+    """Create a Codex MCP config block in TOML format."""
+    env: dict[str, str] = _build_codex_env(
+        gm_project_root=gm_project_root,
+        workspace_root=workspace_root,
+        include_project_root=include_project_root,
+    )
+
+    lines = [
+        "[mcp_servers.{}]".format(server_name),
+        f"command = {_make_codex_toml_value(command)}",
+        f"args = {_make_codex_toml_value(args)}",
+        "",
+        f"[mcp_servers.{server_name}.env]",
+    ]
+
+    for key, value in env.items():
+        lines.append(f"{key} = {_make_codex_toml_value(value)}")
+
+    return "\n".join(lines)
+
+
+def _generate_codex_config(
+    *,
+    workspace_root: Path,
+    output_path: Path,
+    server_name: str,
+    command: str,
+    args_prefix: list[str],
+    gm_project_root: Optional[Path],
+    dry_run: bool,
+    include_project_root: bool = True,
+) -> tuple[Path, str, str]:
+    """Generate a Codex config entry for the target server."""
+    resolved_root = gm_project_root if gm_project_root is not None else workspace_root
+    payload = _make_codex_mcp_config(
+        server_name=server_name,
+        command=command,
+        args=args_prefix,
+        gm_project_root=resolved_root,
+        workspace_root=workspace_root,
+        include_project_root=include_project_root,
+    )
+    merged = _render_codex_merged_config(
+        output_path=output_path,
+        server_name=server_name,
+        server_block=payload,
+    )
+    if not dry_run:
+        output_path.parent.mkdir(parents=True, exist_ok=True)
+        output_path.write_text(merged, encoding="utf-8")
+
+    return output_path, payload, merged
+
+
+def _read_codex_server_entry(
+    *,
+    config_path: Path,
+    server_name: str,
+) -> tuple[dict | None, str | None]:
+    """Read and validate a Codex config, returning the server entry if present."""
+    if not config_path.exists():
+        return None, None
+
+    text = config_path.read_text(encoding="utf-8")
+    parsed = _parse_toml_or_raise(text=text, source_label=str(config_path))
+    _validate_codex_sections(parsed=parsed, source_label=str(config_path), server_name=server_name)
+    mcp_servers = parsed.get("mcp_servers", {})
+    if not isinstance(mcp_servers, dict):
+        return None, None
+    entry = mcp_servers.get(server_name)
+    if isinstance(entry, dict):
+        return entry, str(config_path)
+    return None, str(config_path)
+
+
+def _print_codex_check(*, workspace_root: Path, server_name: str) -> int:
+    """
+    Print Codex config discovery status and the active server entry.
+    Active precedence: workspace .codex/mcp.toml, then ~/.codex/config.toml.
+    """
+    local_path = workspace_root / ".codex" / "mcp.toml"
+    global_path = Path.home() / ".codex" / "config.toml"
+
+    try:
+        local_entry, _ = _read_codex_server_entry(config_path=local_path, server_name=server_name)
+        global_entry, _ = _read_codex_server_entry(config_path=global_path, server_name=server_name)
+    except (RuntimeError, ValueError) as exc:
+        print(f"[ERROR] Codex config check failed: {exc}")
+        return 2
+
+    print(f"[INFO] Codex workspace config: {local_path} ({'exists' if local_path.exists() else 'missing'})")
+    print(f"[INFO] Codex global config: {global_path} ({'exists' if global_path.exists() else 'missing'})")
+
+    active_source = None
+    active_entry = None
+    if local_entry is not None:
+        active_source = local_path
+        active_entry = local_entry
+    elif global_entry is not None:
+        active_source = global_path
+        active_entry = global_entry
+
+    if active_entry is None:
+        print(f"[INFO] Active server entry '{server_name}': not found")
+        return 0
+
+    print(f"[INFO] Active server entry '{server_name}' source: {active_source}")
+    print("[INFO] Active server entry payload:")
+    print(json.dumps(active_entry, indent=2, sort_keys=True))
+    return 0
+
+
 def _generate_claude_code_plugin(
     *,
     plugin_dir: Path,
@@ -527,6 +810,26 @@ def main(argv: list[str] | None = None) -> int:
         help="Install plugin for Claude Desktop GUI (NOT Claude Code CLI) to ~/.claude/plugins/gms-mcp/. "
              "This is for the desktop app only. For the CLI, use --claude-code per-project instead.",
     )
+    parser.add_argument(
+        "--codex",
+        action="store_true",
+        help="Write a Codex configuration snippet to .codex/mcp.toml in the workspace root.",
+    )
+    parser.add_argument(
+        "--codex-global",
+        action="store_true",
+        help="Write Codex server config into ~/.codex/config.toml (global merge).",
+    )
+    parser.add_argument(
+        "--codex-dry-run-only",
+        action="store_true",
+        help="Print final merged Codex payloads for workspace and global targets without writing files.",
+    )
+    parser.add_argument(
+        "--codex-check",
+        action="store_true",
+        help="Print detected Codex config paths and the active server entry.",
+    )
     parser.add_argument("--vscode", action="store_true", help="Write a VS Code example config to mcp-configs/vscode.mcp.json.")
     parser.add_argument("--windsurf", action="store_true", help="Write a Windsurf example config to mcp-configs/windsurf.mcp.json.")
     parser.add_argument("--antigravity", action="store_true", help="Write an Antigravity example config to mcp-configs/antigravity.mcp.json.")
@@ -557,10 +860,39 @@ def main(argv: list[str] | None = None) -> int:
     requested_any = (
         args.cursor or args.cursor_global or
         args.claude_code or args.claude_code_global or
+        args.codex or args.codex_global or
+        args.codex_dry_run_only or args.codex_check or
         args.vscode or args.windsurf or args.antigravity or args.all
     )
     if not requested_any:
         args.cursor = True
+
+    if args.codex_dry_run_only:
+        # Explicit preview mode: show Codex final merged payloads only.
+        args.codex = True
+        args.codex_global = True
+        args.cursor = False
+        args.cursor_global = False
+        args.claude_code = False
+        args.claude_code_global = False
+        args.vscode = False
+        args.windsurf = False
+        args.antigravity = False
+        args.all = False
+        dry_run = True
+
+    only_codex_check = (
+        args.codex_check
+        and not (
+            args.cursor or args.cursor_global or
+            args.claude_code or args.claude_code_global or
+            args.codex or args.codex_global or
+            args.codex_dry_run_only or
+            args.vscode or args.windsurf or args.antigravity or args.all
+        )
+    )
+    if only_codex_check:
+        return _print_codex_check(workspace_root=workspace_root, server_name=args.server_name)
 
     if args.all:
         args.cursor = True
@@ -643,6 +975,76 @@ def main(argv: list[str] | None = None) -> int:
             print("       The plugin will be available after restarting Claude Desktop.")
             print("       For Claude Code CLI, use --claude-code (per-project) instead.")
 
+    if args.codex:
+        try:
+            codex_path, codex_payload, codex_merged = _generate_codex_config(
+                workspace_root=workspace_root,
+                output_path=workspace_root / ".codex" / "mcp.toml",
+                server_name=args.server_name,
+                command=command,
+                args_prefix=args_prefix,
+                gm_project_root=gm_project_root,
+                dry_run=dry_run,
+                include_project_root=True,
+            )
+        except (RuntimeError, ValueError) as exc:
+            print(f"[ERROR] Could not generate Codex workspace config: {exc}")
+            return 2
+        written.append(codex_path)
+
+        if dry_run:
+            print(f"[DRY-RUN] Codex config would be written to: {codex_path}")
+            print("[DRY-RUN] Codex config payload:")
+            print(codex_payload)
+            if args.codex_dry_run_only:
+                print("[DRY-RUN] Codex final merged payload:")
+                print(codex_merged.rstrip())
+        else:
+            print(f"[INFO] Codex config written to: {codex_path}")
+            print("       This is a workspace-scoped config file.")
+            command_line = " ".join(
+                [
+                    "codex mcp add",
+                    shlex.quote(args.server_name),
+                    "--",
+                    shlex.quote(command),
+                ]
+                + [shlex.quote(item) for item in args_prefix]
+            )
+            command_line += _build_codex_env_args(
+                _build_codex_env(gm_project_root, workspace_root)
+            )
+            print(f"[INFO] Registering command: {command_line}")
+
+    if args.codex_global:
+        codex_global_path = Path.home() / ".codex" / "config.toml"
+        try:
+            codex_global_path, codex_global_payload, codex_global_merged = _generate_codex_config(
+                workspace_root=workspace_root,
+                output_path=codex_global_path,
+                server_name=args.server_name,
+                command=command,
+                args_prefix=args_prefix,
+                gm_project_root=gm_project_root,
+                dry_run=dry_run,
+                include_project_root=False,
+            )
+        except (RuntimeError, ValueError) as exc:
+            print(f"[ERROR] Could not generate Codex global config: {exc}")
+            return 2
+        written.append(codex_global_path)
+
+        if dry_run:
+            print(f"[DRY-RUN] Codex global config would be merged into: {codex_global_path}")
+            print("[DRY-RUN] Codex global payload:")
+            print(codex_global_payload)
+            if args.codex_dry_run_only:
+                print("[DRY-RUN] Codex global final merged payload:")
+                print(codex_global_merged.rstrip())
+        else:
+            print(f"[INFO] Codex global config updated: {codex_global_path}")
+            print("       Server entry is merged into [mcp_servers] without a fixed GM_PROJECT_ROOT.")
+
     example_clients: list[str] = []
     if args.vscode:
         example_clients.append("vscode")
@@ -664,6 +1066,9 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     if dry_run:
+        if args.codex_dry_run_only:
+            print("[DRY-RUN] Codex dry-run-only mode complete. No files were written.")
+            return 0
         print("[DRY-RUN] No files were written.")
         print("[DRY-RUN] Target paths:")
         for p in written:
@@ -696,6 +1101,8 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(json.dumps(mcp_config, indent=2))
             print()
+        if args.codex_check:
+            return _print_codex_check(workspace_root=workspace_root, server_name=args.server_name)
         return 0
 
     gm_note = str(gm_project_root) if gm_project_root else "(not selected; defaults to ${workspaceFolder})"
@@ -719,6 +1126,9 @@ def main(argv: list[str] | None = None) -> int:
         )
         if config_path:
             written.append(config_path)
+
+    if args.codex_check:
+        return _print_codex_check(workspace_root=workspace_root, server_name=args.server_name)
     
     return 0
 

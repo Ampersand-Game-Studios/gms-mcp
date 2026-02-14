@@ -47,6 +47,22 @@ pip install gms-mcp
 gms-mcp-init --cursor  # or --vscode, --windsurf, etc.
 ```
 
+### For Codex
+
+```bash
+gms-mcp-init --codex
+```
+
+This writes a workspace `.codex/mcp.toml` file and prints the `codex mcp add` registration command.
+
+Global config mode writes directly to `~/.codex/config.toml` (merging server entries).
+
+Use the printed command directly, or copy `.codex/mcp.toml` content into the `[mcp_servers]` section of your `~/.codex/config.toml`.
+
+Codex helpers:
+- `gms-mcp-init --codex-check` prints detected Codex config paths and active server entry.
+- `gms-mcp-init --codex-dry-run-only` prints final merged payloads for workspace + global Codex config without writing files.
+
 ## Local Development Setup
 
 If you are working on the `gms-mcp` codebase itself, follow these steps to set up a local development environment:
@@ -129,6 +145,32 @@ For a one-time setup that works across many projects, write Cursor's global conf
 
 ```bash
 gms-mcp-init --cursor-global
+```
+
+Generate a Codex config from the current workspace:
+
+```bash
+gms-mcp-init --codex
+```
+
+Generate a global Codex entry in `~/.codex/config.toml`:
+
+```bash
+gms-mcp-init --codex-global
+```
+
+Global mode merges with existing entries so it is safe to keep multiple MCP servers in the same file.
+
+Inspect current Codex config resolution:
+
+```bash
+gms-mcp-init --codex-check
+```
+
+Preview final merged Codex payloads for local + global without writing:
+
+```bash
+gms-mcp-init --codex-dry-run-only
 ```
 
 Generate example configs for other MCP-capable clients:
