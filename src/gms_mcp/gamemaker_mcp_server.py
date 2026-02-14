@@ -506,6 +506,47 @@ def _default_timeout_seconds_for_cli_args(cli_args: List[str]) -> int:
     return 60 * 10  # 10 min
 
 
+def _env_flag(name: str, default: str = "0") -> bool:
+    value = os.environ.get(name, default).strip().lower()
+    return value in ("1", "true", "yes", "on")
+
+
+def _requires_dry_run_for_destructive_tools() -> bool:
+    return _env_flag("GMS_MCP_REQUIRE_DRY_RUN")
+
+
+def _dry_run_policy_allowlist() -> set[str]:
+    raw = os.environ.get("GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST", "")
+    if not raw:
+        return set()
+    normalized = raw.replace(";", ",")
+    allowlist: set[str] = set()
+    for token in normalized.split(","):
+        value = token.strip().lower()
+        if value:
+            allowlist.add(value)
+    return allowlist
+
+
+def _requires_dry_run_for_tool(tool_name: str) -> bool:
+    if not _requires_dry_run_for_destructive_tools():
+        return False
+    return tool_name.strip().lower() not in _dry_run_policy_allowlist()
+
+
+def _dry_run_policy_blocked_result(tool_name: str, override_hint: str) -> Dict[str, Any]:
+    return {
+        "ok": False,
+        "error": (
+            f"{tool_name} blocked by safety policy "
+            "(GMS_MCP_REQUIRE_DRY_RUN=1)."
+        ),
+        "blocked_by_policy": True,
+        "policy": "require_dry_run",
+        "hint": override_hint,
+    }
+
+
 def _ensure_log_dir(project_directory: Path) -> Path:
     # Keep logs in-project so users can attach them to bug reports.
     log_dir = project_directory / ".gms_mcp" / "logs"
@@ -1895,6 +1936,11 @@ def build_server():
         cli_args = ["asset", "delete", asset_type, name]
         if dry_run:
             cli_args.append("--dry-run")
+        if not dry_run and _requires_dry_run_for_tool("gm_asset_delete"):
+            return _dry_run_policy_blocked_result(
+                "gm_asset_delete",
+                "Use dry_run=true, add gm_asset_delete to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
+            )
 
         return await _run_with_fallback(
             direct_handler=handle_asset_delete,
@@ -1936,6 +1982,11 @@ def build_server():
         if fix:
             cli_args.append("--fix")
         cli_args.append("--verbose" if verbose else "--no-verbose")
+        if fix and _requires_dry_run_for_tool("gm_maintenance_auto"):
+            return _dry_run_policy_blocked_result(
+                "gm_maintenance_auto",
+                "Use fix=false, add gm_maintenance_auto to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
+            )
 
         return await _run_with_fallback(
             direct_handler=handle_maintenance_auto,
@@ -1968,6 +2019,11 @@ def build_server():
         cli_args = ["maintenance", "lint"]
         if fix:
             cli_args.append("--fix")
+        if fix and _requires_dry_run_for_tool("gm_maintenance_lint"):
+            return _dry_run_policy_blocked_result(
+                "gm_maintenance_lint",
+                "Use fix=false, add gm_maintenance_lint to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
+            )
 
         return await _run_with_fallback(
             direct_handler=handle_maintenance_lint,
@@ -2058,6 +2114,11 @@ def build_server():
         cli_args = ["maintenance", "prune-missing"]
         if dry_run:
             cli_args.append("--dry-run")
+        if not dry_run and _requires_dry_run_for_tool("gm_maintenance_prune_missing"):
+            return _dry_run_policy_blocked_result(
+                "gm_maintenance_prune_missing",
+                "Use dry_run=true, add gm_maintenance_prune_missing to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
+            )
 
         return await _run_with_fallback(
             direct_handler=handle_maintenance_prune_missing,
@@ -2132,6 +2193,11 @@ def build_server():
             cli_args.append("--auto")
         if dry_run:
             cli_args.append("--dry-run")
+        if not dry_run and _requires_dry_run_for_tool("gm_maintenance_dedupe_resources"):
+            return _dry_run_policy_blocked_result(
+                "gm_maintenance_dedupe_resources",
+                "Use dry_run=true, add gm_maintenance_dedupe_resources to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
+            )
 
         return await _run_with_fallback(
             direct_handler=handle_maintenance_dedupe_resources,
@@ -2167,6 +2233,11 @@ def build_server():
             cli_args.append("--fix")
         if object:
             cli_args.extend(["--object", object])
+        if fix and _requires_dry_run_for_tool("gm_maintenance_sync_events"):
+            return _dry_run_policy_blocked_result(
+                "gm_maintenance_sync_events",
+                "Use fix=false, add gm_maintenance_sync_events to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
+            )
 
         return await _run_with_fallback(
             direct_handler=handle_maintenance_sync_events,
@@ -2199,6 +2270,11 @@ def build_server():
         cli_args = ["maintenance", "clean-old-files"]
         if delete:
             cli_args.append("--delete")
+        if delete and _requires_dry_run_for_tool("gm_maintenance_clean_old_files"):
+            return _dry_run_policy_blocked_result(
+                "gm_maintenance_clean_old_files",
+                "Use delete=false (dry-run), add gm_maintenance_clean_old_files to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
+            )
 
         return await _run_with_fallback(
             direct_handler=handle_maintenance_clean_old_files,
@@ -2236,6 +2312,11 @@ def build_server():
         if skip_types is not None:
             cli_args.append("--skip-types")
             cli_args.extend(skip_types_value)
+        if delete and _requires_dry_run_for_tool("gm_maintenance_clean_orphans"):
+            return _dry_run_policy_blocked_result(
+                "gm_maintenance_clean_orphans",
+                "Use delete=false (dry-run), add gm_maintenance_clean_orphans to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
+            )
 
         return await _run_with_fallback(
             direct_handler=handle_maintenance_clean_orphans,
@@ -2268,6 +2349,11 @@ def build_server():
         cli_args = ["maintenance", "fix-issues"]
         if verbose:
             cli_args.append("--verbose")
+        if _requires_dry_run_for_tool("gm_maintenance_fix_issues"):
+            return _dry_run_policy_blocked_result(
+                "gm_maintenance_fix_issues",
+                "Run diagnostics/lint without fixes, add gm_maintenance_fix_issues to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
+            )
 
         return await _run_with_fallback(
             direct_handler=handle_maintenance_fix_issues,
@@ -3156,6 +3242,11 @@ def build_server():
         cli_args = ["workflow", "delete", asset_path]
         if dry_run:
             cli_args.append("--dry-run")
+        if not dry_run and _requires_dry_run_for_tool("gm_workflow_delete"):
+            return _dry_run_policy_blocked_result(
+                "gm_workflow_delete",
+                "Use dry_run=true, add gm_workflow_delete to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
+            )
 
         return await _run_with_fallback(
             direct_handler=handle_workflow_delete,
@@ -3521,6 +3612,11 @@ def build_server():
         cli_args = ["room", "ops", "delete", room_name]
         if dry_run:
             cli_args.append("--dry-run")
+        if not dry_run and _requires_dry_run_for_tool("gm_room_ops_delete"):
+            return _dry_run_policy_blocked_result(
+                "gm_room_ops_delete",
+                "Use dry_run=true, add gm_room_ops_delete to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
+            )
 
         return await _run_with_fallback(
             direct_handler=handle_room_delete,

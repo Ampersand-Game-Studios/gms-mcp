@@ -10,11 +10,13 @@ Multi-project model:
 from __future__ import annotations
 
 import argparse
+import datetime as _dt
 import json
 import os
 import shutil
 import sys
 import shlex
+import tempfile
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -80,6 +82,13 @@ _DEFAULT_IGNORED_DIRS = {
     "__pycache__",
     "node_modules",
 }
+
+_FORWARDED_ENV_VARS = [
+    "GMS_MCP_GMS_PATH",
+    "GMS_MCP_DEFAULT_TIMEOUT_SECONDS",
+    "GMS_MCP_ENABLE_DIRECT",
+]
+_SAFE_PROFILE_TIMEOUT_SECONDS = 600
 
 
 def _as_posix_path(path: Path) -> str:
@@ -223,7 +232,7 @@ def _make_server_config(
 
     # Polish: Auto-detect and write relevant environment variables from current process
     # This helps when running gms-mcp-init from a shell where these are already set.
-    for env_var in ["GMS_MCP_GMS_PATH", "GMS_MCP_DEFAULT_TIMEOUT_SECONDS", "GMS_MCP_ENABLE_DIRECT"]:
+    for env_var in _FORWARDED_ENV_VARS:
         val = os.environ.get(env_var)
         if val:
             env[env_var] = val
@@ -234,6 +243,66 @@ def _make_server_config(
                 "command": command,
                 "args": args,
                 "cwd": workspace_var,
+                "env": env,
+            }
+        }
+    }
+
+
+def _default_antigravity_config_path() -> Path:
+    return Path.home() / ".gemini" / "antigravity" / "mcp_config.json"
+
+
+def _resolve_antigravity_config_path(config_path: str | None) -> Path:
+    if not config_path:
+        return _default_antigravity_config_path()
+    path = Path(config_path).expanduser()
+    if not path.is_absolute():
+        path = (Path.cwd() / path).resolve()
+    return path
+
+
+def _apply_safe_profile_env(env: dict[str, str], *, enabled: bool) -> None:
+    if not enabled:
+        return
+    env["GMS_MCP_ENABLE_DIRECT"] = "0"
+    env["GMS_MCP_REQUIRE_DRY_RUN"] = "1"
+    timeout = env.get("GMS_MCP_DEFAULT_TIMEOUT_SECONDS", "").strip()
+    if timeout:
+        try:
+            parsed_timeout = int(timeout)
+            if parsed_timeout <= 0 or parsed_timeout > _SAFE_PROFILE_TIMEOUT_SECONDS:
+                env["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"] = str(_SAFE_PROFILE_TIMEOUT_SECONDS)
+        except ValueError:
+            env["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"] = str(_SAFE_PROFILE_TIMEOUT_SECONDS)
+    else:
+        env["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"] = str(_SAFE_PROFILE_TIMEOUT_SECONDS)
+
+
+def _make_antigravity_server_config(
+    *,
+    server_name: str,
+    command: str,
+    args: list[str],
+    workspace_root: Path,
+    gm_project_root: Path | None,
+    safe_profile: bool,
+) -> dict:
+    env: dict[str, str] = {
+        "GM_PROJECT_ROOT": str(gm_project_root if gm_project_root is not None else workspace_root),
+        "PYTHONUNBUFFERED": "1",
+    }
+    for env_var in _FORWARDED_ENV_VARS:
+        val = os.environ.get(env_var)
+        if val:
+            env[env_var] = val
+    _apply_safe_profile_env(env, enabled=safe_profile)
+
+    return {
+        "mcpServers": {
+            server_name: {
+                "command": command,
+                "args": args,
                 "env": env,
             }
         }
@@ -319,19 +388,30 @@ def _generate_example_configs(
     gm_project_root: Path | None,
     clients: Iterable[str],
     dry_run: bool,
+    safe_profile: bool = False,
 ) -> list[Path]:
     gm_rel_posix = _relpath_posix_or_none(gm_project_root, workspace_root)
 
     out_paths: list[Path] = []
     out_dir = workspace_root / "mcp-configs"
     for client in clients:
-        config = _make_server_config(
-            client=client,
-            server_name=server_name,
-            command=command,
-            args=args_prefix,
-            gm_project_root_rel_posix=gm_rel_posix,
-        )
+        if client == "antigravity":
+            config = _make_antigravity_server_config(
+                server_name=server_name,
+                command=command,
+                args=args_prefix,
+                workspace_root=workspace_root,
+                gm_project_root=gm_project_root,
+                safe_profile=safe_profile,
+            )
+        else:
+            config = _make_server_config(
+                client=client,
+                server_name=server_name,
+                command=command,
+                args=args_prefix,
+                gm_project_root_rel_posix=gm_rel_posix,
+            )
         out_path = out_dir / f"{client}.mcp.json"
         _write_json(out_path, config, dry_run=dry_run)
         out_paths.append(out_path)
@@ -381,7 +461,7 @@ def _make_claude_code_mcp_config(
     }
 
     # Include relevant environment variables from current process
-    for env_var in ["GMS_MCP_GMS_PATH", "GMS_MCP_DEFAULT_TIMEOUT_SECONDS", "GMS_MCP_ENABLE_DIRECT"]:
+    for env_var in _FORWARDED_ENV_VARS:
         val = os.environ.get(env_var)
         if val:
             env[env_var] = val
@@ -411,11 +491,7 @@ def _build_codex_env(
         )
         env["GM_PROJECT_ROOT"] = resolved_root
 
-    for env_var in [
-        "GMS_MCP_GMS_PATH",
-        "GMS_MCP_DEFAULT_TIMEOUT_SECONDS",
-        "GMS_MCP_ENABLE_DIRECT",
-    ]:
+    for env_var in _FORWARDED_ENV_VARS:
         val = os.environ.get(env_var)
         if val:
             env[env_var] = val
@@ -609,6 +685,255 @@ def _generate_codex_config(
         output_path.write_text(merged, encoding="utf-8")
 
     return output_path, payload, merged
+
+
+def _parse_json_object_or_raise(*, text: str, source_label: str) -> dict:
+    try:
+        parsed = json.loads(text)
+    except Exception as exc:
+        raise ValueError(f"Malformed JSON in {source_label}: {exc}") from exc
+    if not isinstance(parsed, dict):
+        raise ValueError(f"Malformed JSON in {source_label}: root must be an object.")
+    return parsed
+
+
+def _validate_antigravity_sections(
+    *,
+    parsed: dict,
+    source_label: str,
+    server_name: str,
+) -> None:
+    mcp_servers = parsed.get("mcpServers")
+    if mcp_servers is None:
+        return
+    if not isinstance(mcp_servers, dict):
+        raise ValueError(f"Malformed JSON in {source_label}: `mcpServers` must be an object.")
+
+    target_entry = mcp_servers.get(server_name)
+    if target_entry is None:
+        return
+    if not isinstance(target_entry, dict):
+        raise ValueError(f"Malformed JSON in {source_label}: `mcpServers.{server_name}` must be an object.")
+
+    env = target_entry.get("env")
+    if env is not None and not isinstance(env, dict):
+        raise ValueError(
+            f"Malformed JSON in {source_label}: `mcpServers.{server_name}.env` must be an object."
+        )
+
+
+def _render_antigravity_merged_config(
+    *,
+    output_path: Path,
+    server_name: str,
+    server_entry: dict,
+) -> dict:
+    if output_path.exists():
+        existing_text = output_path.read_text(encoding="utf-8")
+        parsed = _parse_json_object_or_raise(text=existing_text, source_label=str(output_path))
+        _validate_antigravity_sections(parsed=parsed, source_label=str(output_path), server_name=server_name)
+        merged = dict(parsed)
+    else:
+        merged = {}
+
+    mcp_servers = merged.get("mcpServers")
+    if mcp_servers is None:
+        mcp_servers = {}
+    if not isinstance(mcp_servers, dict):
+        raise ValueError(f"Malformed JSON in {output_path}: `mcpServers` must be an object.")
+    mcp_servers = dict(mcp_servers)
+    mcp_servers[server_name] = server_entry
+    merged["mcpServers"] = mcp_servers
+    return merged
+
+
+def _make_backup_path(output_path: Path) -> Path:
+    timestamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
+    base_name = f"{output_path.name}.bak.{timestamp}.{os.getpid()}"
+    candidate = output_path.with_name(base_name)
+    suffix = 1
+    while candidate.exists():
+        candidate = output_path.with_name(f"{base_name}.{suffix}")
+        suffix += 1
+    return candidate
+
+
+def _write_json_atomic_with_backup(*, output_path: Path, payload: dict) -> Path | None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    backup_path: Path | None = None
+    if output_path.exists():
+        backup_path = _make_backup_path(output_path)
+        shutil.copy2(output_path, backup_path)
+
+    temp_path: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=str(output_path.parent),
+            prefix=f".{output_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            json.dump(payload, handle, indent=2)
+            handle.write("\n")
+            temp_path = Path(handle.name)
+        os.replace(temp_path, output_path)
+    finally:
+        if temp_path is not None and temp_path.exists():
+            temp_path.unlink(missing_ok=True)
+
+    return backup_path
+
+
+def _generate_antigravity_config(
+    *,
+    workspace_root: Path,
+    output_path: Path,
+    server_name: str,
+    command: str,
+    args_prefix: list[str],
+    gm_project_root: Path | None,
+    safe_profile: bool,
+    dry_run: bool,
+) -> tuple[Path, dict, dict, Path | None]:
+    payload = _make_antigravity_server_config(
+        server_name=server_name,
+        command=command,
+        args=args_prefix,
+        workspace_root=workspace_root,
+        gm_project_root=gm_project_root,
+        safe_profile=safe_profile,
+    )
+    server_entry = payload["mcpServers"][server_name]
+    merged = _render_antigravity_merged_config(
+        output_path=output_path,
+        server_name=server_name,
+        server_entry=server_entry,
+    )
+
+    backup_path: Path | None = None
+    if not dry_run:
+        backup_path = _write_json_atomic_with_backup(output_path=output_path, payload=merged)
+
+    return output_path, payload, merged, backup_path
+
+
+def _read_antigravity_server_entry(
+    *,
+    config_path: Path,
+    server_name: str,
+) -> tuple[dict | None, str | None]:
+    if not config_path.exists():
+        return None, None
+    text = config_path.read_text(encoding="utf-8")
+    parsed = _parse_json_object_or_raise(text=text, source_label=str(config_path))
+    _validate_antigravity_sections(parsed=parsed, source_label=str(config_path), server_name=server_name)
+    mcp_servers = parsed.get("mcpServers", {})
+    if not isinstance(mcp_servers, dict):
+        return None, str(config_path)
+    entry = mcp_servers.get(server_name)
+    if isinstance(entry, dict):
+        return entry, str(config_path)
+    return None, str(config_path)
+
+
+def _collect_antigravity_check_state(*, config_path: Path, server_name: str) -> dict:
+    entry, _ = _read_antigravity_server_entry(config_path=config_path, server_name=server_name)
+    return {
+        "server_name": server_name,
+        "config": {
+            "path": str(config_path),
+            "exists": config_path.exists(),
+            "entry": entry,
+        },
+    }
+
+
+def _antigravity_entry_readiness(entry: object) -> tuple[bool, list[str]]:
+    problems: list[str] = []
+    if not isinstance(entry, dict):
+        return False, ["Active server entry is missing or not an object."]
+
+    command = entry.get("command")
+    if not isinstance(command, str) or not command.strip():
+        problems.append("`command` must be a non-empty string.")
+
+    args = entry.get("args")
+    if not isinstance(args, list):
+        problems.append("`args` must be a list.")
+
+    env = entry.get("env")
+    if not isinstance(env, dict):
+        problems.append("`env` must be an object.")
+    else:
+        gm_project_root = env.get("GM_PROJECT_ROOT")
+        if not isinstance(gm_project_root, str) or not gm_project_root.strip():
+            problems.append("`env.GM_PROJECT_ROOT` must be a non-empty string.")
+        if env.get("PYTHONUNBUFFERED") != "1":
+            problems.append("`env.PYTHONUNBUFFERED` should be \"1\" for unbuffered logs.")
+
+    return len(problems) == 0, problems
+
+
+def _print_antigravity_check(*, config_path: Path, server_name: str) -> int:
+    try:
+        state = _collect_antigravity_check_state(config_path=config_path, server_name=server_name)
+    except ValueError as exc:
+        print(f"[ERROR] Antigravity config check failed: {exc}")
+        return 2
+
+    print(
+        f"[INFO] Antigravity config: {state['config']['path']} "
+        f"({'exists' if state['config']['exists'] else 'missing'})"
+    )
+    entry = state["config"]["entry"]
+    if entry is None:
+        print(f"[INFO] Active server entry '{server_name}': not found")
+        return 0
+
+    ready, problems = _antigravity_entry_readiness(entry)
+    print(f"[INFO] Active server entry '{server_name}' source: {state['config']['path']}")
+    print("[INFO] Active server entry payload:")
+    print(json.dumps(entry, indent=2, sort_keys=True))
+    print(f"[INFO] Ready for Antigravity: {'yes' if ready else 'no'}")
+    for problem in problems:
+        print(f"[WARN] {problem}")
+    return 0
+
+
+def _print_antigravity_check_json(*, config_path: Path, server_name: str) -> int:
+    """Print Antigravity config discovery + active server entry as machine-readable JSON."""
+    try:
+        state = _collect_antigravity_check_state(config_path=config_path, server_name=server_name)
+    except ValueError as exc:
+        print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
+        return 2
+
+    ready, problems = _antigravity_entry_readiness(state["config"]["entry"])
+    state["ok"] = True
+    state["ready"] = ready
+    state["problems"] = problems
+    print(json.dumps(state, indent=2, sort_keys=True))
+    return 0
+
+
+def _print_antigravity_app_setup_summary(*, config_path: Path, server_name: str) -> int:
+    """Print a compact readiness summary for Antigravity usage."""
+    try:
+        state = _collect_antigravity_check_state(config_path=config_path, server_name=server_name)
+    except ValueError as exc:
+        print(f"[ERROR] Antigravity app setup summary failed: {exc}")
+        return 2
+
+    ready, problems = _antigravity_entry_readiness(state["config"]["entry"])
+    print("[INFO] Antigravity app readiness summary:")
+    print(f"[INFO] Config path: {state['config']['path']}")
+    print(f"[INFO] Ready for Antigravity: {'yes' if ready else 'no'}")
+    for problem in problems:
+        print(f"[WARN] {problem}")
+    return 0
 
 
 def _read_codex_server_entry(
@@ -973,6 +1298,36 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--vscode", action="store_true", help="Write a VS Code example config to mcp-configs/vscode.mcp.json.")
     parser.add_argument("--windsurf", action="store_true", help="Write a Windsurf example config to mcp-configs/windsurf.mcp.json.")
     parser.add_argument("--antigravity", action="store_true", help="Write an Antigravity example config to mcp-configs/antigravity.mcp.json.")
+    parser.add_argument(
+        "--antigravity-setup",
+        action="store_true",
+        help="Merge server config into Antigravity global config (~/.gemini/antigravity/mcp_config.json).",
+    )
+    parser.add_argument(
+        "--antigravity-check",
+        action="store_true",
+        help="Print detected Antigravity config path and active server entry readiness.",
+    )
+    parser.add_argument(
+        "--antigravity-check-json",
+        action="store_true",
+        help="Print detected Antigravity config path and active server entry as JSON.",
+    )
+    parser.add_argument(
+        "--antigravity-app-setup",
+        action="store_true",
+        help="One-shot Antigravity setup: merge global config, then run check + readiness summary.",
+    )
+    parser.add_argument(
+        "--antigravity-config-path",
+        default=None,
+        help="Override Antigravity config path (used by --antigravity-setup and --antigravity-check).",
+    )
+    parser.add_argument(
+        "--safe-profile",
+        action="store_true",
+        help="Apply conservative env defaults to generated Antigravity configs (disable direct mode, require dry-run for destructive tools).",
+    )
     parser.add_argument("--openclaw", action="store_true", help="Write an OpenClaw example config to mcp-configs/openclaw.mcp.json.")
     parser.add_argument("--all", action="store_true", help="Generate Cursor config + all example configs (excludes Claude Code global).")
     
@@ -1003,7 +1358,9 @@ def main(argv: list[str] | None = None) -> int:
         args.claude_code or args.claude_code_global or
         args.codex or args.codex_global or
         args.codex_dry_run_only or args.codex_check or args.codex_check_json or args.codex_app_setup or
-        args.vscode or args.windsurf or args.antigravity or args.openclaw or args.all
+        args.vscode or args.windsurf or args.antigravity or args.antigravity_setup or args.antigravity_check or
+        args.antigravity_check_json or args.antigravity_app_setup or
+        args.openclaw or args.all
     )
     if not requested_any:
         args.cursor = True
@@ -1011,6 +1368,10 @@ def main(argv: list[str] | None = None) -> int:
     if args.codex_app_setup:
         args.codex = True
         args.codex_check = True
+
+    if args.antigravity_app_setup:
+        args.antigravity_setup = True
+        args.antigravity_check = True
 
     if args.codex_dry_run_only:
         # Explicit preview mode: show Codex final merged payloads only.
@@ -1023,6 +1384,10 @@ def main(argv: list[str] | None = None) -> int:
         args.vscode = False
         args.windsurf = False
         args.antigravity = False
+        args.antigravity_setup = False
+        args.antigravity_check = False
+        args.antigravity_check_json = False
+        args.antigravity_app_setup = False
         args.openclaw = False
         args.all = False
         dry_run = True
@@ -1039,19 +1404,45 @@ def main(argv: list[str] | None = None) -> int:
                 check_exit = code
         return check_exit
 
-    only_codex_check = (
-        (args.codex_check or args.codex_check_json)
+    antigravity_config_path = _resolve_antigravity_config_path(args.antigravity_config_path)
+    antigravity_safe_profile = bool(args.safe_profile or args.antigravity_setup)
+
+    def _run_requested_antigravity_checks() -> int:
+        check_exit = 0
+        if args.antigravity_check:
+            code = _print_antigravity_check(
+                config_path=antigravity_config_path,
+                server_name=args.server_name,
+            )
+            if code != 0:
+                check_exit = code
+        if args.antigravity_check_json:
+            code = _print_antigravity_check_json(
+                config_path=antigravity_config_path,
+                server_name=args.server_name,
+            )
+            if code != 0 and check_exit == 0:
+                check_exit = code
+        return check_exit
+
+    only_checks = (
+        (args.codex_check or args.codex_check_json or args.antigravity_check or args.antigravity_check_json)
         and not (
             args.cursor or args.cursor_global or
             args.claude_code or args.claude_code_global or
             args.codex or args.codex_global or
             args.codex_dry_run_only or
             args.codex_app_setup or
-            args.vscode or args.windsurf or args.antigravity or args.openclaw or args.all
+            args.antigravity_app_setup or
+            args.vscode or args.windsurf or args.antigravity or args.antigravity_setup or args.openclaw or args.all
         )
     )
-    if only_codex_check:
-        return _run_requested_codex_checks()
+    if only_checks:
+        codex_exit = _run_requested_codex_checks()
+        antigravity_exit = _run_requested_antigravity_checks()
+        if codex_exit != 0:
+            return codex_exit
+        return antigravity_exit
 
     if args.all:
         args.cursor = True
@@ -1228,6 +1619,38 @@ def main(argv: list[str] | None = None) -> int:
         print("[INFO] Codex app setup global final merged payload (preview):")
         print(codex_global_preview.rstrip())
 
+    if args.antigravity_setup:
+        try:
+            antigravity_path, antigravity_payload, antigravity_merged, antigravity_backup = _generate_antigravity_config(
+                workspace_root=workspace_root,
+                output_path=antigravity_config_path,
+                server_name=args.server_name,
+                command=command,
+                args_prefix=args_prefix,
+                gm_project_root=gm_project_root,
+                safe_profile=antigravity_safe_profile,
+                dry_run=dry_run,
+            )
+        except ValueError as exc:
+            print(f"[ERROR] Could not generate Antigravity config: {exc}")
+            return 2
+        written.append(antigravity_path)
+        if dry_run:
+            print(f"[DRY-RUN] Antigravity config would be merged into: {antigravity_path}")
+            print("[DRY-RUN] Antigravity payload:")
+            print(json.dumps(antigravity_payload, indent=2, sort_keys=True))
+            print("[DRY-RUN] Antigravity final merged payload:")
+            print(json.dumps(antigravity_merged, indent=2, sort_keys=True))
+        else:
+            print(f"[INFO] Antigravity config updated: {antigravity_path}")
+            if antigravity_backup is not None:
+                print(f"[INFO] Antigravity backup created: {antigravity_backup}")
+            if antigravity_safe_profile:
+                print(
+                    "[INFO] Applied conservative safety profile: "
+                    "GMS_MCP_ENABLE_DIRECT=0, GMS_MCP_REQUIRE_DRY_RUN=1."
+                )
+
     example_clients: list[str] = []
     if args.vscode:
         example_clients.append("vscode")
@@ -1247,6 +1670,7 @@ def main(argv: list[str] | None = None) -> int:
                 gm_project_root=gm_project_root,
                 clients=example_clients,
                 dry_run=dry_run,
+                safe_profile=bool(args.safe_profile),
             )
         )
 
@@ -1289,8 +1713,18 @@ def main(argv: list[str] | None = None) -> int:
         check_exit = _run_requested_codex_checks()
         if check_exit != 0:
             return check_exit
+        antigravity_check_exit = _run_requested_antigravity_checks()
+        if antigravity_check_exit != 0:
+            return antigravity_check_exit
         if args.codex_app_setup:
-            return _print_codex_app_setup_summary(workspace_root=workspace_root, server_name=args.server_name)
+            summary_code = _print_codex_app_setup_summary(workspace_root=workspace_root, server_name=args.server_name)
+            if summary_code != 0:
+                return summary_code
+        if args.antigravity_app_setup:
+            return _print_antigravity_app_setup_summary(
+                config_path=antigravity_config_path,
+                server_name=args.server_name,
+            )
         return 0
 
     gm_note = str(gm_project_root) if gm_project_root else "(not selected; defaults to ${workspaceFolder})"
@@ -1318,8 +1752,18 @@ def main(argv: list[str] | None = None) -> int:
     check_exit = _run_requested_codex_checks()
     if check_exit != 0:
         return check_exit
+    antigravity_check_exit = _run_requested_antigravity_checks()
+    if antigravity_check_exit != 0:
+        return antigravity_check_exit
     if args.codex_app_setup:
-        return _print_codex_app_setup_summary(workspace_root=workspace_root, server_name=args.server_name)
+        summary_code = _print_codex_app_setup_summary(workspace_root=workspace_root, server_name=args.server_name)
+        if summary_code != 0:
+            return summary_code
+    if args.antigravity_app_setup:
+        return _print_antigravity_app_setup_summary(
+            config_path=antigravity_config_path,
+            server_name=args.server_name,
+        )
     
     return 0
 
