@@ -1,1 +1,1 @@
-gms-mcp now supports OpenClaw out of the box: generate openclaw.mcp.json via gms-mcp-init --openclaw and install skills with gms skills install --openclaw. Plus Python interpreter fallback is more robust across macOS/Linux/Windows. #GameMaker #gamedev
+Antigravity setup just got safer in gms-mcp: use `gms-mcp-init --antigravity-app-setup` for atomic config updates, automatic backups, and JSON readiness checks. We also added per-tool dry-run allowlists and hardened full-suite test execution. #GameMaker #gamedev
