@@ -4,6 +4,7 @@ from pathlib import Path
 import tempfile
 import json
 import os
+import platform
 from gms_helpers.runtime_manager import RuntimeManager, RuntimeInfo
 
 class TestRuntimeManager(unittest.TestCase):
@@ -67,6 +68,21 @@ class TestRuntimeManager(unittest.TestCase):
                 mock_pin.return_value = "1.0.0.0"
                 selected = self.manager.select()
                 self.assertEqual(selected.version, "1.0.0.0")
+
+    def test_list_installed_discovers_apple_silicon_igor(self):
+        runtime_root = self.project_root / "Library/Application Support/GameMakerStudio2/Cache/runtimes/runtime-2026.1.1.0.1"
+        igor_file = runtime_root / "bin/igor/osx/arm64/Igor"
+        igor_file.parent.mkdir(parents=True, exist_ok=True)
+        igor_file.write_text("binary")
+
+        with (
+            mock.patch.object(platform, "system", return_value="Darwin"),
+            mock.patch.object(Path, "home", return_value=self.project_root),
+        ):
+            manager = RuntimeManager(self.project_root)
+            runtimes = manager.list_installed()
+
+        self.assertTrue(any(runtime.version == "2026.1.1.0.1" and runtime.is_valid for runtime in runtimes))
 
 if __name__ == '__main__':
     unittest.main()

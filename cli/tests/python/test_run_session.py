@@ -12,6 +12,7 @@ Tests cover:
 import json
 import os
 import subprocess
+import signal
 import sys
 import tempfile
 import time
@@ -301,6 +302,22 @@ class TestRunSessionManagerProcessChecks(unittest.TestCase):
         
         result = self.manager.is_process_alive(12345)
         self.assertFalse(result)
+
+    @patch("os.kill")
+    @patch("os.killpg")
+    @patch("os.getpgrp", return_value=900)
+    @patch("os.getpgid", return_value=1000)
+    @patch("gms_helpers.run_session.platform.system", return_value="Darwin")
+    def test_kill_process_uses_process_group(
+        self, mock_system, mock_getpgid, mock_getpgrp, mock_killpg, mock_kill
+    ):
+        """Test Unix kill_process targets the process group when available."""
+        self.manager.kill_process(12345, force=True)
+
+        mock_getpgid.assert_called_once_with(12345)
+        mock_getpgrp.assert_called_once_with()
+        mock_killpg.assert_called_once_with(1000, signal.SIGKILL)
+        mock_kill.assert_not_called()
 
 
 class TestRunSessionManagerStatus(unittest.TestCase):

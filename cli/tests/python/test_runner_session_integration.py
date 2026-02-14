@@ -55,6 +55,31 @@ class TestRunnerSessionIntegration(unittest.TestCase):
             runner._session_manager.project_root,
             self.project_root.resolve()
         )
+
+
+class TestRunnerLicenseDiscovery(unittest.TestCase):
+    """Tests for license file discovery on macOS."""
+
+    def setUp(self):
+        self.tmp_dir = tempfile.mkdtemp()
+        self.project_root = Path(self.tmp_dir)
+        (self.project_root / "test_project.yyp").write_text('{"name": "test_project", "resources": []}')
+
+    def tearDown(self):
+        import shutil
+        shutil.rmtree(self.tmp_dir, ignore_errors=True)
+
+    @patch("gms_helpers.runner.platform.system", return_value="Darwin")
+    def test_find_license_file_prefers_license_plist(self, _mock_system):
+        runner = GameMakerRunner(self.project_root)
+        license_root = Path(self.project_root) / "Library/Application Support/GameMakerStudio2/0"
+        license_root.mkdir(parents=True, exist_ok=True)
+        license_file = license_root / "license.plist"
+        license_file.write_text("<plist></plist>")
+
+        with patch.object(Path, "home", return_value=Path(self.tmp_dir)):
+            found = runner.find_license_file()
+            self.assertEqual(found, license_file)
         
 
 class TestRunnerStopGame(unittest.TestCase):

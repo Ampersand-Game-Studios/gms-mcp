@@ -31,6 +31,11 @@ All notable changes to this project will be documented in this file.
     - `gm_list_symbols`: Filtered listing of all project symbols by type, name, or file.
 - **Improved MCP Logging**: Updated the MCP server to suppress informational SDK logs that were previously sent to `stderr`, preventing Cursor from incorrectly flagging them as `[error]` markers.
 - **Enhanced Asset Compatibility**: Standardized object (`.yy`) and event (`.gml`) generation formats to ensure 100% compatibility with GameMaker's **Igor** compiler (fixing "No version changes" and JSON schema errors).
+- **macOS Reliability Improvements**:
+  - Added Apple Silicon runtime discovery for `bin/igor/osx/arm64/Igor`.
+  - Added session-safe game process launch and cleanup so macOS child processes are properly tracked/terminated.
+  - Improved GameMaker license discovery for newer and legacy filename spellings (`license.plist` and `licence.plist`) with recursive fallbacks.
+  - Normalized path comparison behavior to avoid case-related mismatches on macOS case-insensitive volumes.
 
 ### Fixed
 - **Spurious `.gms_mcp` Folder Creation**: Fixed an issue where the MCP server would create a `.gms_mcp/logs/` folder in the current working directory even when no GameMaker project was present. Debug logging now only activates when a valid project is detected.

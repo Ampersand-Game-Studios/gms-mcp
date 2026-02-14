@@ -226,7 +226,22 @@ class RunSessionManager:
                 # On Unix, use signals
                 import signal
                 sig = signal.SIGKILL if force else signal.SIGTERM
-                os.kill(pid, sig)
+
+                try:
+                    parent_pgid = os.getpgid(pid)
+                    current_pgid = os.getpgrp()
+
+                    # Only kill the process group if it is not our own shell/group.
+                    if parent_pgid and parent_pgid != current_pgid:
+                        os.killpg(parent_pgid, sig)
+                    else:
+                        os.kill(pid, sig)
+                except ProcessLookupError:
+                    # Process may have already exited.
+                    return False
+                except AttributeError:
+                    # Some platforms may not support process groups; fallback to direct kill.
+                    os.kill(pid, sig)
                 return True
         except Exception as e:
             print(f"[SESSION] Failed to kill process {pid}: {e}")

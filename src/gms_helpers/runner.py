@@ -144,6 +144,27 @@ class GameMakerRunner:
 
     def find_license_file(self) -> Optional[Path]:
         """Find GameMaker license file."""
+        valid_filenames = ("license.plist", "licence.plist")
+
+        def _find_in_directory(search_root: Path) -> Optional[Path]:
+            if not search_root.is_dir():
+                return None
+
+            for filename in valid_filenames:
+                direct_match = search_root / filename
+                if direct_match.exists():
+                    return direct_match
+
+            matches = []
+            for filename in valid_filenames:
+                matches.extend(search_root.rglob(filename))
+
+            if not matches:
+                return None
+
+            matches.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+            return matches[0]
+
         system = platform.system()
         
         if system == "Windows":
@@ -153,7 +174,9 @@ class GameMakerRunner:
             ]
         elif system == "Darwin":
             base_paths = [
-                Path.home() / "Library/Application Support/GameMakerStudio2"
+                Path.home() / "Library/Application Support/GameMakerStudio2",
+                Path("/Library/Application Support/GameMakerStudio2"),
+                Path("/Users/Shared/GameMakerStudio2"),
             ]
         else:  # Linux
             base_paths = [
@@ -168,11 +191,37 @@ class GameMakerRunner:
             user_dirs = [d for d in base_path.iterdir() if d.is_dir()]
             
             for user_dir in user_dirs:
-                license_file = user_dir / "licence.plist"
-                if license_file.exists():
+                license_file = _find_in_directory(user_dir)
+                if license_file:
                     return license_file
+
+            # Some installs store licence directly under the base path or nested subfolder.
+            license_file = _find_in_directory(base_path)
+            if license_file:
+                return license_file
         
         return None
+
+    def _normalize_path_for_popen(self) -> dict:
+        """Return platform-safe keyword args for launching subprocesses."""
+        process_kwargs = {}
+        if platform.system() != "Windows":
+            process_kwargs["start_new_session"] = True
+
+        return process_kwargs
+
+    def _start_game_process(self, launch_path: Path) -> subprocess.Popen:
+        """Start a game process with OS-appropriate process-group settings."""
+        return subprocess.Popen(
+            [str(launch_path)],
+            **self._normalize_path_for_popen()
+        )
+
+    def _run_igor_command(self, cmd: List[str]) -> subprocess.Popen:
+        """Start an Igor command with shared process settings."""
+        process_kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "text": True, "bufsize": 1, "universal_newlines": True}
+        process_kwargs.update(self._normalize_path_for_popen())
+        return subprocess.Popen(cmd, **process_kwargs)
     
     def _find_macos_app_binary(self, app_bundle: Path) -> Optional[Path]:
         """Return the first executable inside a macOS .app bundle."""
@@ -338,14 +387,7 @@ class GameMakerRunner:
             print(f"[CMD] Command: {' '.join(cmd)}")
             
             # Run compilation
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
+            process = self._run_igor_command(cmd)
             
             # Stream output in real-time
             if process.stdout:
@@ -466,14 +508,7 @@ class GameMakerRunner:
             print(f"[CMD] Package command: {' '.join(cmd)}")
             
             # Run packaging
-            process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
+            process = self._run_igor_command(cmd)
             
             # Stream compilation output
             if process.stdout:
@@ -516,7 +551,7 @@ class GameMakerRunner:
             try:
                 os.chdir(ide_temp_dir)
                 
-                self.game_process = subprocess.Popen([str(launch_path)])
+                self.game_process = self._start_game_process(launch_path)
                 
                 print(f"[OK] Game started! PID: {self.game_process.pid}")
                 
@@ -629,14 +664,7 @@ class GameMakerRunner:
             print(f"[CMD] Run command: {' '.join(cmd)}")
             
             # Run the game using Igor Run command
-            self.game_process = subprocess.Popen(
-                cmd,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                text=True,
-                bufsize=1,
-                universal_newlines=True
-            )
+            self.game_process = self._run_igor_command(cmd)
             
             # Create a persistent session so stop/status can find this process later
             project_file = self.find_project_file()

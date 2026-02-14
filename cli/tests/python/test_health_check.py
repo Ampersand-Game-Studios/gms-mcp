@@ -39,7 +39,7 @@ class TestHealthCheck(unittest.TestCase):
         self.assertTrue(result.success, f"Health check failed: {result.message}\nDetails: {result.details}")
         self.assertEqual(result.issues_found, 0)
         self.assertTrue(any("[OK] Project found: test.yyp" in d for d in result.details))
-        self.assertTrue(any("Igor.exe found:" in d and "igor.exe" in d.lower() for d in result.details))
+        self.assertTrue(any("Igor found:" in d and "igor" in d.lower() for d in result.details))
         self.assertTrue(any("GameMaker license found:" in d and "license.plist" in d.lower() for d in result.details))
 
     @patch("gms_helpers.health.GameMakerRunner")
@@ -61,7 +61,7 @@ class TestHealthCheck(unittest.TestCase):
         self.assertFalse(result.success)
         self.assertGreater(result.issues_found, 0)
         self.assertTrue(any("Project not found" in d for d in result.details))
-        self.assertTrue(any("GameMaker runtime or Igor.exe not found" in d for d in result.details))
+        self.assertTrue(any("GameMaker runtime or Igor" in d for d in result.details))
         self.assertTrue(any("GameMaker license file not found" in d for d in result.details))
         self.assertTrue(any("Missing dependencies: mcp" in d for d in result.details))
 

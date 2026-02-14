@@ -24,7 +24,7 @@ def mock_validate_gamemaker_context():
     Mock version that ONLY looks in the current temp directory structure
     This prevents interference from real .yyp files on the user's system
     """
-    cwd = Path.cwd()
+    cwd = Path.cwd().resolve()
     
     # Only search within our controlled test environment
     # Stop at the first parent that doesn't exist or reaches system root
@@ -39,7 +39,7 @@ def mock_validate_gamemaker_context():
         # Check if this directory contains a .yyp file
         yyp_files = list(current_dir.glob("*.yyp"))
         if yyp_files:
-            gamemaker_root = current_dir
+            gamemaker_root = current_dir.resolve()
             break
         current_dir = current_dir.parent
     
@@ -68,7 +68,7 @@ def mock_validate_asset_directory_structure():
         gamemaker_root = mock_validate_gamemaker_context()
         
         # Ensure we're not creating assets outside the project structure
-        cwd = Path.cwd()
+        cwd = Path.cwd().resolve()
         if not str(cwd).startswith(str(gamemaker_root)):
             raise GameMakerContextError(
                 f"ERROR: Current directory '{cwd}' is outside GameMaker project '{gamemaker_root}'"
@@ -86,11 +86,11 @@ class TestDirectoryValidation(unittest.TestCase):
     
     def setUp(self):
         """Set up isolated test environment"""
-        self.temp_root = Path(tempfile.mkdtemp())
+        self.temp_root = Path(tempfile.mkdtemp()).resolve()
         self.original_cwd = os.getcwd()
         
         # Create a proper GameMaker project structure
-        self.gamemaker_project = self.temp_root / "gamemaker_project"
+        self.gamemaker_project = (self.temp_root / "gamemaker_project").resolve()
         self.gamemaker_project.mkdir()
         
         # Create GameMaker directories
@@ -107,7 +107,7 @@ class TestDirectoryValidation(unittest.TestCase):
             json.dump(yyp_content, f, indent=2)
         
         # Create a non-GameMaker directory  
-        self.non_gamemaker_dir = self.temp_root / "non_gamemaker"
+        self.non_gamemaker_dir = (self.temp_root / "non_gamemaker").resolve()
         self.non_gamemaker_dir.mkdir()
     
     def tearDown(self):
@@ -223,14 +223,14 @@ class TestSocialTabScenario(unittest.TestCase):
     
     def setUp(self):
         """Set up test environment matching the actual project structure"""
-        self.temp_root = Path(tempfile.mkdtemp())
+        self.temp_root = Path(tempfile.mkdtemp()).resolve()
         self.original_cwd = os.getcwd()
         
         # Recreate the exact structure from the issue
-        self.project_root = self.temp_root / "gms2-template"
+        self.project_root = (self.temp_root / "gms2-template").resolve()
         self.project_root.mkdir()
         
-        self.gamemaker_dir = self.project_root / "gamemaker"
+        self.gamemaker_dir = (self.project_root / "gamemaker").resolve()
         self.gamemaker_dir.mkdir()
         
         # Create gamemaker structure

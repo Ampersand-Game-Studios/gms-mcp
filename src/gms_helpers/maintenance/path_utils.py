@@ -1,17 +1,39 @@
 import os
 import platform
+import tempfile
+from functools import lru_cache
 from pathlib import Path
 from typing import Set, Dict, List, Optional
+
+
+@lru_cache(maxsize=1)
+def _is_macos_case_sensitive() -> bool:
+    """Detect if the current macOS filesystem is case-sensitive."""
+    if platform.system().lower() != "darwin":
+        return False
+
+    try:
+        with tempfile.TemporaryDirectory() as tmpdir:
+            lower = Path(tmpdir) / "gms_case_probe"
+            upper = Path(tmpdir) / "GMS_CASE_PROBE"
+            lower.write_text("probe")
+            return not upper.exists()
+    except Exception:
+        # Conservative fallback: assume case-insensitive for compatibility
+        return False
 
 def normalize_path(path: str) -> str:
     """
     Normalize a path for cross-platform comparison.
-    On Windows/macOS, converts to lowercase for case-insensitive comparison.
+    On Windows, or case-insensitive macOS filesystems, convert to lowercase
+    for case-insensitive comparison.
     """
     normalized = str(Path(path)).replace('\\', '/')
     
-    # Case-insensitive on Windows and macOS
-    if platform.system().lower() in ['windows', 'darwin']:
+    # macOS can be case-sensitive or case-insensitive depending on volume format.
+    if platform.system().lower() == 'windows' or (
+        platform.system().lower() == 'darwin' and not _is_macos_case_sensitive()
+    ):
         normalized = normalized.lower()
     
     return normalized

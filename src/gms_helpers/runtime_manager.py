@@ -77,7 +77,11 @@ class RuntimeManager:
                 if system == "Windows":
                     patterns = ["bin/igor/windows/x64/Igor.exe", "bin/igor/windows/Igor.exe"]
                 elif system == "Darwin":
-                    patterns = ["bin/igor/osx/x64/Igor", "bin/igor/osx/Igor"]
+                    patterns = [
+                        "bin/igor/osx/arm64/Igor",
+                        "bin/igor/osx/x64/Igor",
+                        "bin/igor/osx/Igor",
+                    ]
                 else:
                     patterns = ["bin/igor/linux/x64/Igor", "bin/igor/linux/Igor"]
                     
