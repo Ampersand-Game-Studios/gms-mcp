@@ -51,7 +51,7 @@ This repo includes a small installer that generates **shareable, user-agnostic**
 
 - Generate Cursor config (primary example): `gms-mcp-init --cursor`
 - Generate Cursor global config (multi-project): `gms-mcp-init --cursor-global`
-- Generate other client examples (written to `mcp-configs/*.mcp.json`): `gms-mcp-init --vscode --windsurf --antigravity`
+- Generate other client examples (written to `mcp-configs/*.mcp.json`): `gms-mcp-init --vscode --windsurf --antigravity --openclaw`
 - Generate everything: `gms-mcp-init --all`
 
 **Environment Auto-detection**: `gms-mcp-init` now automatically detects and writes the following environment variables into the generated config if they are set in your current shell:
