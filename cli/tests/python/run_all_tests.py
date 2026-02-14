@@ -81,6 +81,41 @@ def find_python_executable():
     # Fallback to sys.executable
     return sys.executable
 
+def _test_requires_pytest(test_file_path: Path) -> bool:
+    """Best-effort detection for tests that need pytest collection/runtime."""
+    try:
+        content = test_file_path.read_text(encoding="utf-8", errors="ignore")
+    except Exception:
+        return False
+    markers = ("import pytest", "from pytest", "@pytest.")
+    return any(marker in content for marker in markers)
+
+def _python_has_pytest(python_exe: str) -> bool:
+    try:
+        result = subprocess.run(
+            [python_exe, "-c", "import pytest"],
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+def _build_test_command(test_file_path: Path, python_exe: str):
+    """Build the command used to execute a test file."""
+    test_path = str(test_file_path.resolve())
+    if not _test_requires_pytest(test_file_path):
+        return [python_exe, test_path], "python"
+
+    if _python_has_pytest(python_exe):
+        return [python_exe, "-m", "pytest", test_path, "-q"], "pytest"
+
+    uv_exe = shutil.which("uv")
+    if uv_exe:
+        return [uv_exe, "run", "--with", "pytest", "python", "-m", "pytest", test_path, "-q"], "uv+pytest"
+
+    return None, "pytest-missing"
+
 def run_test_file(test_file_path):
     """Run a single test file and return results"""
     print(f"\n{'='*60}")
@@ -100,13 +135,23 @@ def run_test_file(test_file_path):
                 with open(yyp_file, "w") as f:
                     f.write('{"resources":[], "MetaData":{"name":"minimal"}}')
 
-        # Run the test from gamemaker directory so CLI tools find the .yyp file
-        # Use absolute path for the test file since we're changing working directory
-        result = subprocess.run([
-            python_exe, str(test_file_path.resolve())
-        ], cwd=str(gamemaker_dir),
-        capture_output=False, text=True,
-        env=os.environ.copy())
+        command, mode = _build_test_command(test_file_path, python_exe)
+        if command is None:
+            print(
+                f"[ERROR] {test_file_path.name} requires pytest, but pytest is unavailable "
+                "and uv is not installed."
+            )
+            return False, 1
+
+        print(f"[MODE] {mode}")
+        # Run from gamemaker directory so CLI tools find the .yyp file.
+        result = subprocess.run(
+            command,
+            cwd=str(gamemaker_dir),
+            capture_output=False,
+            text=True,
+            env=os.environ.copy(),
+        )
 
         return result.returncode == 0, result.returncode
     except Exception as e:

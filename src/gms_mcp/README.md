@@ -52,6 +52,10 @@ This repo includes a small installer that generates **shareable, user-agnostic**
 - Generate Cursor config (primary example): `gms-mcp-init --cursor`
 - Generate Cursor global config (multi-project): `gms-mcp-init --cursor-global`
 - Generate other client examples (written to `mcp-configs/*.mcp.json`): `gms-mcp-init --vscode --windsurf --antigravity --openclaw`
+- Set up Antigravity global config (recommended): `gms-mcp-init --antigravity-setup`
+- Check Antigravity config readiness: `gms-mcp-init --antigravity-check`
+- Check Antigravity config as JSON: `gms-mcp-init --antigravity-check-json`
+- One-shot Antigravity app setup: `gms-mcp-init --antigravity-app-setup`
 - Generate everything: `gms-mcp-init --all`
 
 **Environment Auto-detection**: `gms-mcp-init` now automatically detects and writes the following environment variables into the generated config if they are set in your current shell:
@@ -80,6 +84,8 @@ After changing `.cursor/mcp.json`, **Reload Window** in Cursor to pick up MCP co
   - Every invocation writes a complete diagnostic log file under **`.gms_mcp/logs/`** in the resolved project directory.
   - Tools apply **category-aware default max runtimes** (overrideable) to prevent indefinite blocking. Override globally with `GMS_MCP_DEFAULT_TIMEOUT_SECONDS`.
   - To bypass subprocess overhead and use faster **in-process execution**, set `GMS_MCP_ENABLE_DIRECT=1`. This is faster but less resilient to hangs in library code.
+  - To require dry-run mode for destructive operations, set `GMS_MCP_REQUIRE_DRY_RUN=1` (enabled by default for `--antigravity-setup`).
+  - To allow specific destructive tools while this policy is enabled, set `GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST` to a comma-separated list (for example: `gm_asset_delete,gm_workflow_delete`).
 
 - **Picking the `gms` executable (Windows shims)**:
   - The server prefers a "real" `gms` when multiple are present on Windows (avoids the WindowsApps shim when possible).

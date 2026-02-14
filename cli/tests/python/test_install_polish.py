@@ -7,6 +7,8 @@ from contextlib import redirect_stdout, contextmanager
 from pathlib import Path
 from gms_mcp.install import (
     _make_server_config,
+    _make_antigravity_server_config,
+    _resolve_antigravity_config_path,
     _workspace_folder_var,
     _resolve_python_command,
     _make_claude_code_plugin_manifest,
@@ -18,9 +20,11 @@ from gms_mcp.install import (
     _parse_toml_or_raise,
     _validate_codex_sections,
     _collect_codex_check_state,
+    _collect_antigravity_check_state,
     _toml_parser,
     _upsert_codex_server_config,
     _generate_codex_config,
+    _generate_antigravity_config,
     _generate_claude_code_plugin,
     main,
 )
@@ -117,6 +121,10 @@ class TestClaudeCodeSupport(unittest.TestCase):
     def test_workspace_folder_var_openclaw(self):
         """OpenClaw should use ${workspaceFolder} in JSON example configs."""
         self.assertEqual(_workspace_folder_var("openclaw"), "${workspaceFolder}")
+
+    def test_workspace_folder_var_antigravity_examples(self):
+        """Antigravity example generation does not use template workspace vars directly."""
+        self.assertEqual(_workspace_folder_var("antigravity"), "${workspaceFolder}")
 
     def test_workspace_folder_var_claude_code(self):
         """Claude Code should use ${CLAUDE_PROJECT_DIR}."""
@@ -270,6 +278,109 @@ class TestClaudeCodeSupport(unittest.TestCase):
                 self.assertIn("GMS_MCP_DEFAULT_TIMEOUT_SECONDS=45", env_args)
             finally:
                 del os.environ["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"]
+
+    def test_resolve_antigravity_config_path_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            home_dir = Path(tmpdir) / "home"
+            with temporary_home(home_dir):
+                resolved = _resolve_antigravity_config_path(None)
+            self.assertEqual(
+                resolved,
+                home_dir / ".gemini" / "antigravity" / "mcp_config.json",
+            )
+
+    def test_make_antigravity_server_config_safe_profile(self):
+        workspace_root = Path("/tmp/workspace")
+        gm_root = workspace_root / "gamemaker"
+        config = _make_antigravity_server_config(
+            server_name="gms",
+            command="gms-mcp",
+            args=[],
+            workspace_root=workspace_root,
+            gm_project_root=gm_root,
+            safe_profile=True,
+        )
+        entry = config["mcpServers"]["gms"]
+        self.assertNotIn("cwd", entry)
+        env = entry["env"]
+        self.assertEqual(env["GM_PROJECT_ROOT"], str(gm_root))
+        self.assertEqual(env["PYTHONUNBUFFERED"], "1")
+        self.assertEqual(env["GMS_MCP_ENABLE_DIRECT"], "0")
+        self.assertEqual(env["GMS_MCP_REQUIRE_DRY_RUN"], "1")
+        self.assertEqual(env["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"], "600")
+
+    def test_generate_antigravity_config_merges_existing_file(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir(parents=True, exist_ok=True)
+            gm_project = workspace / "gamemaker"
+            gm_project.mkdir()
+            config_path = workspace / "antigravity.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "mcpServers": {
+                            "existing": {
+                                "command": "existing-cmd",
+                                "args": [],
+                                "env": {"GM_PROJECT_ROOT": "/tmp"},
+                            }
+                        }
+                    },
+                    indent=2,
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            before_text = config_path.read_text(encoding="utf-8")
+
+            path, _, merged, backup = _generate_antigravity_config(
+                workspace_root=workspace,
+                output_path=config_path,
+                server_name="gms",
+                command="gms-mcp",
+                args_prefix=[],
+                gm_project_root=gm_project,
+                safe_profile=True,
+                dry_run=False,
+            )
+
+            self.assertEqual(path, config_path)
+            self.assertIsNotNone(backup)
+            self.assertTrue(backup.exists())
+            self.assertEqual(backup.read_text(encoding="utf-8"), before_text)
+            self.assertIn("existing", merged["mcpServers"])
+            self.assertIn("gms", merged["mcpServers"])
+            on_disk = json.loads(path.read_text(encoding="utf-8"))
+            self.assertIn("existing", on_disk["mcpServers"])
+            self.assertIn("gms", on_disk["mcpServers"])
+
+    def test_collect_antigravity_check_state(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            config_path = Path(tmpdir) / "antigravity.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "mcpServers": {
+                            "gms-check": {
+                                "command": "gms-mcp",
+                                "args": [],
+                                "env": {
+                                    "GM_PROJECT_ROOT": "/tmp/workspace",
+                                    "PYTHONUNBUFFERED": "1",
+                                },
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = _collect_antigravity_check_state(
+                config_path=config_path,
+                server_name="gms-check",
+            )
+            self.assertTrue(state["config"]["exists"])
+            self.assertEqual(state["config"]["entry"]["command"], "gms-mcp")
 
     def test_generate_codex_config_dry_run(self):
         """Dry run should not create files."""
@@ -561,6 +672,154 @@ class TestClaudeCodeSupport(unittest.TestCase):
             self.assertEqual(ret, 0)
             self.assertIn("openclaw.mcp.json", output)
             self.assertFalse((workspace / "mcp-configs" / "openclaw.mcp.json").exists())
+
+    def test_main_antigravity_setup_writes_global_config(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            (workspace / "project.yyp").touch()
+            home_dir = Path(tmpdir) / "home"
+            with temporary_home(home_dir):
+                buffer = io.StringIO()
+                with redirect_stdout(buffer):
+                    ret = main(
+                        [
+                            "--workspace-root",
+                            str(workspace),
+                            "--non-interactive",
+                            "--antigravity-setup",
+                            "--server-name",
+                            "gms-ag",
+                        ]
+                    )
+                output = buffer.getvalue()
+                config_path = home_dir / ".gemini" / "antigravity" / "mcp_config.json"
+                self.assertEqual(ret, 0)
+                self.assertTrue(config_path.exists())
+                on_disk = json.loads(config_path.read_text(encoding="utf-8"))
+                self.assertIn("gms-ag", on_disk["mcpServers"])
+                env = on_disk["mcpServers"]["gms-ag"]["env"]
+                self.assertEqual(env["GMS_MCP_ENABLE_DIRECT"], "0")
+                self.assertEqual(env["GMS_MCP_REQUIRE_DRY_RUN"], "1")
+                self.assertIn("[INFO] Antigravity config updated:", output)
+
+    def test_main_antigravity_check_only(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            (workspace / "project.yyp").touch()
+            home_dir = Path(tmpdir) / "home"
+            with temporary_home(home_dir):
+                config_path = home_dir / ".gemini" / "antigravity" / "mcp_config.json"
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                config_path.write_text(
+                    json.dumps(
+                        {
+                            "mcpServers": {
+                                "gms-check": {
+                                    "command": "gms-mcp",
+                                    "args": [],
+                                    "env": {
+                                        "GM_PROJECT_ROOT": "/tmp/workspace",
+                                        "PYTHONUNBUFFERED": "1",
+                                    },
+                                }
+                            }
+                        },
+                        indent=2,
+                    )
+                    + "\n",
+                    encoding="utf-8",
+                )
+                buffer = io.StringIO()
+                with redirect_stdout(buffer):
+                    ret = main(
+                        [
+                            "--workspace-root",
+                            str(workspace),
+                            "--non-interactive",
+                            "--server-name",
+                            "gms-check",
+                            "--antigravity-check",
+                        ]
+                    )
+                output = buffer.getvalue()
+                self.assertEqual(ret, 0)
+                self.assertIn("[INFO] Antigravity config:", output)
+                self.assertIn("[INFO] Ready for Antigravity: yes", output)
+
+    def test_main_antigravity_check_json_only(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            (workspace / "project.yyp").touch()
+            home_dir = Path(tmpdir) / "home"
+            with temporary_home(home_dir):
+                config_path = home_dir / ".gemini" / "antigravity" / "mcp_config.json"
+                config_path.parent.mkdir(parents=True, exist_ok=True)
+                config_path.write_text(
+                    json.dumps(
+                        {
+                            "mcpServers": {
+                                "gms-check-json": {
+                                    "command": "gms-mcp",
+                                    "args": [],
+                                    "env": {
+                                        "GM_PROJECT_ROOT": "/tmp/workspace",
+                                        "PYTHONUNBUFFERED": "1",
+                                    },
+                                }
+                            }
+                        }
+                    ),
+                    encoding="utf-8",
+                )
+                buffer = io.StringIO()
+                with redirect_stdout(buffer):
+                    ret = main(
+                        [
+                            "--workspace-root",
+                            str(workspace),
+                            "--non-interactive",
+                            "--server-name",
+                            "gms-check-json",
+                            "--antigravity-check-json",
+                        ]
+                    )
+
+            self.assertEqual(ret, 0)
+            parsed = json.loads(buffer.getvalue())
+            self.assertTrue(parsed["ok"])
+            self.assertTrue(parsed["ready"])
+            self.assertEqual(parsed["config"]["entry"]["command"], "gms-mcp")
+
+    def test_main_antigravity_app_setup_writes_and_prints_readiness(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            (workspace / "project.yyp").touch()
+            home_dir = Path(tmpdir) / "home"
+            with temporary_home(home_dir):
+                buffer = io.StringIO()
+                with redirect_stdout(buffer):
+                    ret = main(
+                        [
+                            "--workspace-root",
+                            str(workspace),
+                            "--non-interactive",
+                            "--server-name",
+                            "gms-app",
+                            "--antigravity-app-setup",
+                        ]
+                    )
+                output = buffer.getvalue()
+
+                config_path = home_dir / ".gemini" / "antigravity" / "mcp_config.json"
+                self.assertEqual(ret, 0)
+                self.assertTrue(config_path.exists())
+                self.assertIn("[INFO] Antigravity config updated:", output)
+                self.assertIn("[INFO] Antigravity app readiness summary:", output)
+                self.assertIn("[INFO] Ready for Antigravity: yes", output)
 
     def test_main_codex_dry_run_only_prints_final_payloads(self):
         """--codex-dry-run-only should print final merged payloads for local + global targets."""
