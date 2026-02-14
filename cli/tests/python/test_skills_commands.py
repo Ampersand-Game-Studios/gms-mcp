@@ -117,7 +117,7 @@ class TestSkillsCommands(unittest.TestCase):
         self.assertTrue((skills_dir / "reference").is_dir())
 
     def test_skills_install_openclaw_project(self):
-        """Test skills install --openclaw --project writes to .openclaw."""
+        """Test skills install --openclaw --project writes to ./skills."""
         returncode, stdout, stderr = self.run_gms_command(
             ["skills", "install", "--openclaw", "--project"],
             cwd=self.temp_project
@@ -126,11 +126,27 @@ class TestSkillsCommands(unittest.TestCase):
         self.assertIn("[OK]", stdout)
         self.assertIn("Installed", stdout)
 
-        skills_dir = self.temp_project / ".openclaw" / "skills" / "gms-mcp"
+        skills_dir = self.temp_project / "skills" / "gms-mcp"
         self.assertTrue(skills_dir.exists())
         self.assertTrue((skills_dir / "SKILL.md").exists())
         self.assertTrue((skills_dir / "workflows").is_dir())
         self.assertTrue((skills_dir / "reference").is_dir())
+
+    def test_skills_list_openclaw_shows_legacy_project_installs(self):
+        """Test skills list --openclaw surfaces legacy workspace installs."""
+        legacy_dir = self.temp_project / ".openclaw" / "skills" / "gms-mcp"
+        legacy_dir.mkdir(parents=True)
+
+        source_skill = self.repo_root / "skills" / "gms-mcp" / "SKILL.md"
+        shutil.copy2(source_skill, legacy_dir / "SKILL.md")
+
+        returncode, stdout, stderr = self.run_gms_command(
+            ["skills", "list", "--openclaw", "--installed"],
+            cwd=self.temp_project
+        )
+        self.assertEqual(returncode, 0)
+        self.assertIn("legacy-project", stdout)
+        self.assertIn("Legacy OpenClaw workspace skills detected", stdout)
 
     def test_skills_install_skip_existing(self):
         """Test that install skips existing files without --force."""
@@ -200,7 +216,7 @@ class TestSkillsCommands(unittest.TestCase):
             cwd=self.temp_project
         )
 
-        skills_dir = self.temp_project / ".openclaw" / "skills" / "gms-mcp"
+        skills_dir = self.temp_project / "skills" / "gms-mcp"
         self.assertTrue(skills_dir.exists())
 
         returncode, stdout, stderr = self.run_gms_command(
@@ -211,6 +227,29 @@ class TestSkillsCommands(unittest.TestCase):
         self.assertIn("[OK]", stdout)
         self.assertIn("Removed", stdout)
         self.assertFalse(skills_dir.exists())
+
+    def test_skills_uninstall_openclaw_project_removes_legacy_dir(self):
+        """Test uninstall removes both current and legacy OpenClaw project dirs."""
+        self.run_gms_command(
+            ["skills", "install", "--openclaw", "--project"],
+            cwd=self.temp_project
+        )
+        current_dir = self.temp_project / "skills" / "gms-mcp"
+        legacy_dir = self.temp_project / ".openclaw" / "skills" / "gms-mcp"
+        legacy_dir.mkdir(parents=True)
+        (legacy_dir / "legacy.md").write_text("legacy", encoding="utf-8")
+
+        self.assertTrue(current_dir.exists())
+        self.assertTrue(legacy_dir.exists())
+
+        returncode, stdout, stderr = self.run_gms_command(
+            ["skills", "uninstall", "--openclaw", "--project"],
+            cwd=self.temp_project
+        )
+        self.assertEqual(returncode, 0)
+        self.assertIn("both current and legacy OpenClaw workspace skill paths", stdout)
+        self.assertFalse(current_dir.exists())
+        self.assertFalse(legacy_dir.exists())
 
     def test_skills_uninstall_not_installed(self):
         """Test skills uninstall when nothing is installed."""
