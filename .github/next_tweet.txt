@@ -1,1 +1,1 @@
-Codex setup in gms-mcp just got safer. gms-mcp-init now validates TOML before merges, adds --codex-check to show active config, and --codex-dry-run-only to preview final local/global payloads before writing. #GameMaker #gamedev
+Codex config support in gms-mcp is now cross-platform solid: Windows CI caught edge cases around path rendering and home-dir detection, and the test suite now validates codex merge/check flows cleanly across OS + Python versions. #GameMaker #gamedev

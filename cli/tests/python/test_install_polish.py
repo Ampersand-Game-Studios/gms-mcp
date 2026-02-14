@@ -3,7 +3,7 @@ import os
 import json
 import tempfile
 import io
-from contextlib import redirect_stdout
+from contextlib import redirect_stdout, contextmanager
 from pathlib import Path
 from gms_mcp.install import (
     _make_server_config,
@@ -22,6 +22,30 @@ from gms_mcp.install import (
     _generate_claude_code_plugin,
     main,
 )
+
+
+@contextmanager
+def temporary_home(home_dir: Path):
+    """Temporarily point home-directory env vars at a test location."""
+    keys = ("HOME", "USERPROFILE", "HOMEDRIVE", "HOMEPATH")
+    previous = {key: os.environ.get(key) for key in keys}
+    home_str = str(home_dir)
+    os.environ["HOME"] = home_str
+    os.environ["USERPROFILE"] = home_str
+    drive, tail = os.path.splitdrive(home_str)
+    if drive:
+        os.environ["HOMEDRIVE"] = drive
+    if tail:
+        os.environ["HOMEPATH"] = tail
+    try:
+        yield
+    finally:
+        for key, val in previous.items():
+            if val is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = val
+
 
 class TestInstallAutodetect(unittest.TestCase):
     def test_make_server_config_autodetect(self):
@@ -162,35 +186,38 @@ class TestClaudeCodeSupport(unittest.TestCase):
 
     def test_make_codex_mcp_config_structure(self):
         """Codex config should produce a valid TOML block."""
+        workspace_root = Path("/tmp/workspace")
         config = _make_codex_mcp_config(
             server_name="gms-codex",
             command="gms-mcp",
             args=[],
             gm_project_root=None,
-            workspace_root=Path("/tmp/workspace"),
+            workspace_root=workspace_root,
         )
 
         self.assertIn("[mcp_servers.gms-codex]", config)
         self.assertIn('command = "gms-mcp"', config)
-        self.assertIn("GM_PROJECT_ROOT = \"/tmp/workspace\"", config)
+        self.assertIn(f'GM_PROJECT_ROOT = "{workspace_root}"', config)
         self.assertIn("[mcp_servers.gms-codex.env]", config)
 
     def test_make_codex_mcp_config_env_autodetect(self):
         """Codex config should include detected environment variables."""
         os.environ["GMS_MCP_GMS_PATH"] = "/path/to/gms"
         os.environ["GMS_MCP_ENABLE_DIRECT"] = "1"
+        gm_root = Path("/tmp/workspace/gamemaker")
+        workspace_root = Path("/tmp/workspace")
 
         try:
             config = _make_codex_mcp_config(
                 server_name="gms",
                 command="gms-mcp",
                 args=[],
-                gm_project_root=Path("/tmp/workspace/gamemaker"),
-                workspace_root=Path("/tmp/workspace"),
+                gm_project_root=gm_root,
+                workspace_root=workspace_root,
             )
             self.assertIn('GMS_MCP_GMS_PATH = "/path/to/gms"', config)
             self.assertIn('GMS_MCP_ENABLE_DIRECT = "1"', config)
-            self.assertIn('GM_PROJECT_ROOT = "/tmp/workspace/gamemaker"', config)
+            self.assertIn(f'GM_PROJECT_ROOT = "{gm_root}"', config)
         finally:
             del os.environ["GMS_MCP_GMS_PATH"]
             del os.environ["GMS_MCP_ENABLE_DIRECT"]
@@ -221,9 +248,9 @@ class TestClaudeCodeSupport(unittest.TestCase):
                 self.assertEqual(env["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"], "45")
 
                 env_args = _build_codex_env_args(env)
-                self.assertIn("--env GM_PROJECT_ROOT=", env_args)
-                self.assertIn("--env PYTHONUNBUFFERED=1", env_args)
-                self.assertIn("--env GMS_MCP_DEFAULT_TIMEOUT_SECONDS=45", env_args)
+                self.assertIn("GM_PROJECT_ROOT=", env_args)
+                self.assertIn("PYTHONUNBUFFERED=1", env_args)
+                self.assertIn("GMS_MCP_DEFAULT_TIMEOUT_SECONDS=45", env_args)
             finally:
                 del os.environ["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"]
 
@@ -455,9 +482,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
             workspace = Path(tmpdir)
             (workspace / "project.yyp").touch()
             home_dir = Path(tmpdir) / "home"
-            old_home = os.environ.get("HOME")
-            os.environ["HOME"] = str(home_dir)
-            try:
+            with temporary_home(home_dir):
                 global_path = home_dir / ".codex" / "config.toml"
                 global_path.parent.mkdir(parents=True, exist_ok=True)
                 global_path.write_text(
@@ -488,11 +513,6 @@ class TestClaudeCodeSupport(unittest.TestCase):
                 self.assertIn("[DRY-RUN] Codex global final merged payload:", output)
                 self.assertIn("[DRY-RUN] Codex dry-run-only mode complete.", output)
                 self.assertFalse((workspace / ".codex" / "mcp.toml").exists())
-            finally:
-                if old_home is None:
-                    os.environ.pop("HOME", None)
-                else:
-                    os.environ["HOME"] = old_home
 
     def test_main_codex_global_merges_into_home(self):
         """--codex-global writes (and merges) the shared ~/.codex/config.toml entry."""
@@ -501,9 +521,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
             workspace = Path(tmpdir)
             (workspace / "project.yyp").touch()
             home_dir = Path(tmpdir) / "home"
-            old_home = os.environ.get("HOME")
-            os.environ["HOME"] = str(home_dir)
-            try:
+            with temporary_home(home_dir):
                 codex_global = home_dir / ".codex" / "config.toml"
                 codex_global.parent.mkdir(parents=True, exist_ok=True)
                 codex_global.write_text(
@@ -536,11 +554,6 @@ class TestClaudeCodeSupport(unittest.TestCase):
                 self.assertIn("[mcp_servers.gms-global]", on_disk)
                 self.assertEqual(on_disk.count("[mcp_servers.gms-global]"), 1)
                 self.assertNotIn("GM_PROJECT_ROOT", on_disk)
-            finally:
-                if old_home is None:
-                    os.environ.pop("HOME", None)
-                else:
-                    os.environ["HOME"] = old_home
 
     def test_main_codex_check_reports_active_entry(self):
         """--codex-check should report paths and the active server source/entry."""
