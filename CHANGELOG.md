@@ -45,6 +45,7 @@ All notable changes to this project will be documented in this file.
 - **Event Creation Schema**: Updated the event management system to use `resourceVersion: "2.0"` and required `%Name` fields, ensuring modern GameMaker compatibility.
 - **CLI Subcommand Registration**: Resolved an issue where `symbol` commands were not correctly registered in the main `gms` CLI entry point.
 - **Test Suite assertions**: Updated 371-test suite to reflect the new standardized asset versioning requirements.
+- **Run Session process termination on Windows**: Fixed `RunSessionManager.kill_process` to use fallback signal values when platform `signal` constants are unavailable, preventing Windows-only failures in process teardown and ensuring CI reliability across `test_run_session`.
 
 ### Changed
 - **Diagnostic output**: Refined tool outputs to be cleaner and more consistent across the code intelligence suite.
