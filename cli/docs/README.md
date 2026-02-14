@@ -8,6 +8,12 @@ Welcome to the comprehensive documentation for the GameMaker Studio CLI helper t
 
 From the repo root, set `PYTHONPATH=src` so module invocations resolve:
 
+```bash
+export PYTHONPATH="$PWD/src"
+```
+
+PowerShell equivalent:
+
 ```powershell
 $Env:PYTHONPATH = "$PWD\src"
 ```
@@ -31,6 +37,13 @@ This repo includes an **MCP server** (`gms-mcp`) that exposes GameMaker operatio
 - Cursor (workspace): `gms-mcp-init --cursor` (writes `.cursor/mcp.json`)
 - Cursor (global, multi-project): `gms-mcp-init --cursor-global` (writes `~/.cursor/mcp.json`)
 - Other clients (examples): `gms-mcp-init --vscode --windsurf --antigravity` (writes `mcp-configs/*.mcp.json`)
+
+### Runner platform defaults
+
+When `run compile` or `run start` is called without `--platform`, the default target now follows the host OS:
+- macOS host -> `macOS`
+- Linux host -> `Linux`
+- Windows host -> `Windows`
 
 ## Core Documentation
 

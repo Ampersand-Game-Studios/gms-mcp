@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Dict, Any, Union
 
-from ..runner import GameMakerRunner
+from ..runner import GameMakerRunner, detect_default_target_platform
 
 
 def handle_runner_compile(args) -> bool:
@@ -20,7 +20,7 @@ def handle_runner_compile(args) -> bool:
         runtime_version = getattr(args, 'runtime_version', None)
         runner = GameMakerRunner(project_root, runtime_version=runtime_version)
         
-        platform = getattr(args, 'platform', 'Windows')
+        platform = getattr(args, 'platform', None) or detect_default_target_platform()
         runtime = getattr(args, 'runtime', 'VM')
         
         success = runner.compile_project(platform, runtime)
@@ -57,7 +57,7 @@ def handle_runner_run(args) -> Union[bool, Dict[str, Any]]:
         runtime_version = getattr(args, 'runtime_version', None)
         runner = GameMakerRunner(project_root, runtime_version=runtime_version)
         
-        platform = getattr(args, 'platform', 'Windows')
+        platform = getattr(args, 'platform', None) or detect_default_target_platform()
         runtime = getattr(args, 'runtime', 'VM')
         background = getattr(args, 'background', False)
         output_location = getattr(args, 'output_location', 'temp')

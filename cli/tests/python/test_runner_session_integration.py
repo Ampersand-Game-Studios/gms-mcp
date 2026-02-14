@@ -18,7 +18,11 @@ from unittest.mock import patch, MagicMock, PropertyMock
 # Add source to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent.parent.parent / "src"))
 
-from gms_helpers.runner import GameMakerRunner
+from gms_helpers.runner import (
+    GameMakerRunner,
+    detect_default_target_platform,
+    normalize_platform_target,
+)
 from gms_helpers.run_session import RunSessionManager
 
 
@@ -302,6 +306,77 @@ class TestRunnerBackgroundMode(unittest.TestCase):
         
         # Should call the method and return its result
         mock_run.assert_called_once()
+
+
+class TestRunnerLaunchTargetDetection(unittest.TestCase):
+    """Tests for platform-specific launch artifact detection."""
+
+    def setUp(self):
+        """Create a temporary directory for test project."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.project_root = Path(self.temp_dir)
+        yyp_path = self.project_root / "test_project.yyp"
+        yyp_path.write_text('{"name": "test_project", "resources": []}')
+        self.runner = GameMakerRunner(self.project_root)
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def test_find_launch_target_windows_exe(self):
+        """Windows target should select the generated .exe."""
+        build_dir = self.project_root / "build_windows"
+        build_dir.mkdir()
+        exe_path = build_dir / "MyGame.exe"
+        exe_path.write_text("binary")
+
+        launch = self.runner._find_launch_target(build_dir, "MyGame", "Windows")
+        self.assertEqual(launch, exe_path)
+
+    def test_find_launch_target_macos_app_binary(self):
+        """macOS target should resolve executable inside .app bundle."""
+        build_dir = self.project_root / "build_macos"
+        app_bin = build_dir / "MyGame.app" / "Contents" / "MacOS"
+        app_bin.mkdir(parents=True)
+        binary_path = app_bin / "MyGame"
+        binary_path.write_text("#!/bin/sh\necho ok\n")
+        binary_path.chmod(0o755)
+
+        launch = self.runner._find_launch_target(build_dir, "MyGame", "macOS")
+        self.assertEqual(launch, binary_path)
+
+    def test_find_launch_target_macos_fallback_any_app(self):
+        """macOS target should fall back to any .app when project-named app is absent."""
+        build_dir = self.project_root / "build_macos_fallback"
+        app_bin = build_dir / "Runner.app" / "Contents" / "MacOS"
+        app_bin.mkdir(parents=True)
+        binary_path = app_bin / "Runner"
+        binary_path.write_text("#!/bin/sh\necho runner\n")
+        binary_path.chmod(0o755)
+
+        launch = self.runner._find_launch_target(build_dir, "NotTheProjectName", "macOS")
+        self.assertEqual(launch, binary_path)
+
+
+class TestRunnerPlatformDefaults(unittest.TestCase):
+    """Tests for platform default/normalization helpers."""
+
+    @patch("gms_helpers.runner.platform.system", return_value="Darwin")
+    def test_detect_default_target_platform_macos(self, _mock_system):
+        self.assertEqual(detect_default_target_platform(), "macOS")
+
+    @patch("gms_helpers.runner.platform.system", return_value="Linux")
+    def test_detect_default_target_platform_linux(self, _mock_system):
+        self.assertEqual(detect_default_target_platform(), "Linux")
+
+    @patch("gms_helpers.runner.platform.system", return_value="Windows")
+    def test_detect_default_target_platform_windows(self, _mock_system):
+        self.assertEqual(detect_default_target_platform(), "Windows")
+
+    def test_normalize_platform_target_alias(self):
+        self.assertEqual(normalize_platform_target("macos"), "macOS")
+        self.assertEqual(normalize_platform_target("ios"), "iOS")
 
 
 

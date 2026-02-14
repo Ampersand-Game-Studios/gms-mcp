@@ -49,17 +49,50 @@ jobs:
       - name: Run final verification
         run: python -m pytest cli/tests/python/test_final_verification.py
 
+  mac_runner_session:
+    name: macOS Runner/Session (Py${{ matrix.python-version }})
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python ${{ matrix.python-version }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+          cache: pip
+          cache-dependency-path: pyproject.toml
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install -e ".[dev]"
+
+      - name: Run runner/session tests
+        run: |
+          python -m pytest -q \
+            cli/tests/python/test_run_session.py \
+            cli/tests/python/test_runner_session_integration.py \
+            cli/tests/python/test_runtime_manager.py
+
   # Summary job - this is the ONE check you require in branch protection
   ci:
     name: ci
     runs-on: ubuntu-latest
-    needs: [test]
+    needs: [test, mac_runner_session]
     if: always()
     steps:
       - name: Check test results
         run: |
           if [ "${{ needs.test.result }}" != "success" ]; then
             echo "Tests failed or were cancelled"
+            exit 1
+          fi
+          if [ "${{ needs.mac_runner_session.result }}" != "success" ]; then
+            echo "macOS runner/session tests failed or were cancelled"
             exit 1
           fi
           echo "All tests passed!"

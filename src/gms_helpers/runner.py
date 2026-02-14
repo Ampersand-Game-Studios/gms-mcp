@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """
 GameMaker Runner Module
-Provides functionality to compile and run GameMaker projects using Igor.exe
+Provides functionality to compile and run GameMaker projects using Igor
 """
 
 import os
@@ -17,6 +17,32 @@ from .utils import find_yyp
 from .exceptions import RuntimeNotFoundError, LicenseNotFoundError
 from .runtime_manager import RuntimeManager
 from .run_session import RunSessionManager, get_session_manager
+
+
+def detect_default_target_platform() -> str:
+    """Map host OS to the matching GameMaker target platform name."""
+    system = platform.system()
+    if system == "Darwin":
+        return "macOS"
+    if system == "Linux":
+        return "Linux"
+    return "Windows"
+
+
+def normalize_platform_target(platform_target: Optional[str]) -> str:
+    """Normalize user input and provide an OS-appropriate default."""
+    if not platform_target:
+        return detect_default_target_platform()
+
+    aliases = {
+        "windows": "Windows",
+        "html5": "HTML5",
+        "macos": "macOS",
+        "linux": "Linux",
+        "android": "Android",
+        "ios": "iOS",
+    }
+    return aliases.get(platform_target.strip().lower(), platform_target)
 
 
 class GameMakerRunner:
@@ -58,7 +84,7 @@ class GameMakerRunner:
         raise FileNotFoundError(f"No .yyp file found in {self.project_root} or {self.project_root}/gamemaker")
     
     def find_gamemaker_runtime(self) -> Optional[Path]:
-        """Locate GameMaker runtime and Igor.exe using RuntimeManager."""
+        """Locate GameMaker runtime and Igor binary using RuntimeManager."""
         if self.igor_path:
             return self.igor_path
             
@@ -148,9 +174,69 @@ class GameMakerRunner:
         
         return None
     
-    def build_igor_command(self, action: str = "Run", platform_target: str = "Windows", 
+    def _find_macos_app_binary(self, app_bundle: Path) -> Optional[Path]:
+        """Return the first executable inside a macOS .app bundle."""
+        macos_dir = app_bundle / "Contents" / "MacOS"
+        if not macos_dir.exists() or not macos_dir.is_dir():
+            return None
+
+        for candidate in sorted(macos_dir.iterdir()):
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate
+        return None
+
+    def _find_launch_target(self, build_dir: Path, project_name: str, platform_target: str) -> Optional[Path]:
+        """Locate a runnable output artifact for the selected platform."""
+        target = normalize_platform_target(platform_target)
+
+        if target == "Windows":
+            candidates = [
+                build_dir / f"{project_name}.exe",
+                build_dir / "template.exe",
+                build_dir / "runner.exe",
+            ]
+            for candidate in candidates:
+                if candidate.exists() and candidate.is_file():
+                    return candidate
+            return None
+
+        if target == "macOS":
+            app_candidates = [
+                build_dir / f"{project_name}.app",
+                build_dir / "Mac_Runner.app",
+                build_dir / "Runner.app",
+            ]
+            for app_candidate in app_candidates:
+                exe_path = self._find_macos_app_binary(app_candidate)
+                if exe_path:
+                    return exe_path
+
+            for app_candidate in sorted(build_dir.glob("*.app")):
+                exe_path = self._find_macos_app_binary(app_candidate)
+                if exe_path:
+                    return exe_path
+            return None
+
+        candidates = [
+            build_dir / project_name,
+            build_dir / "runner",
+            build_dir / "Runner",
+        ]
+        for candidate in candidates:
+            if candidate.exists() and candidate.is_file():
+                return candidate
+
+        for candidate in sorted(build_dir.iterdir()):
+            if candidate.is_file() and os.access(candidate, os.X_OK):
+                return candidate
+
+        return None
+
+    def build_igor_command(self, action: str = "Run", platform_target: Optional[str] = None,
                           runtime_type: str = "VM", **kwargs) -> List[str]:
-        """Build Igor.exe command line."""
+        """Build Igor command line."""
+        platform_target = normalize_platform_target(platform_target)
+
         igor_path = self.find_gamemaker_runtime()
         if not igor_path:
             raise RuntimeNotFoundError("GameMaker runtime not found. Please install GameMaker Studio.")
@@ -198,8 +284,10 @@ class GameMakerRunner:
         
         return cmd
     
-    def compile_project(self, platform_target: str = "Windows", runtime_type: str = "VM") -> bool:
+    def compile_project(self, platform_target: Optional[str] = None, runtime_type: str = "VM") -> bool:
         """Compile the GameMaker project."""
+        platform_target = normalize_platform_target(platform_target)
+
         try:
             print(f"[BUILD] Compiling project for {platform_target} ({runtime_type})...")
 
@@ -287,16 +375,18 @@ class GameMakerRunner:
             print(f"[ERROR] Compilation error: {e}")
             return False
     
-    def run_project_direct(self, platform_target="Windows", runtime_type="VM", background=False, output_location="temp"):
+    def run_project_direct(self, platform_target: Optional[str] = None, runtime_type="VM", background=False, output_location="temp"):
         """
         Run the project directly.
         
         Args:
-            platform_target: Target platform (default: Windows)
+            platform_target: Target platform (default: host OS)
             runtime_type: Runtime type VM or YYC (default: VM)
             background: Run in background (default: False)
             output_location: Where to output files - 'temp' (IDE-style, AppData) or 'project' (classic output folder)
         """
+        platform_target = normalize_platform_target(platform_target)
+
         if output_location == "temp":
             return self._run_project_ide_temp_approach(platform_target, runtime_type, background)
         else:  # output_location == "project"
@@ -307,8 +397,10 @@ class GameMakerRunner:
         Run the project using IDE-temp approach:
         1. Package to zip in IDE temp directory
         2. Extract zip contents
-        3. Run Runner.exe manually from extracted location
+        3. Run the generated game artifact from the temp location
         """
+        platform_target = normalize_platform_target(platform_target)
+
         try:
             import tempfile
             import os
@@ -404,33 +496,19 @@ class GameMakerRunner:
                 print(f"[WARN] Igor PackageZip returned exit code {process.returncode}, checking if executable was created...")
                 # Don't return False immediately - check if files were created successfully
             
-            # Step 2: Check if the executable was created (PackageZip creates files directly, not a zip)
-            exe_name = f"{project_name}.exe"
-            exe_path = ide_temp_dir / exe_name
-            
-            # Check for common executable names
-            possible_exes = [
-                ide_temp_dir / f"{project_name}.exe",
-                ide_temp_dir / "template.exe",  # Default name GameMaker uses
-                ide_temp_dir / "runner.exe"
-            ]
-            
-            exe_path = None
-            for possible_exe in possible_exes:
-                if possible_exe.exists():
-                    exe_path = possible_exe
-                    break
-                    
-            if not exe_path:
-                print(f"[ERROR] Executable not found in: {ide_temp_dir}")
+            # Step 2: Find the runnable artifact from PackageZip output.
+            launch_path = self._find_launch_target(ide_temp_dir, project_name, platform_target)
+
+            if not launch_path:
+                print(f"[ERROR] Launch target not found in: {ide_temp_dir}")
                 print("Available files:")
-                for file in ide_temp_dir.iterdir():
+                for file in sorted(ide_temp_dir.iterdir()):
                     print(f"  - {file.name}")
                 return False
                 
-            print(f"[OK] Game packaged successfully: {exe_path}")
+            print(f"[OK] Game packaged successfully: {launch_path}")
             
-            # Step 3: Run the executable directly
+            # Step 3: Run the game binary directly.
             print("[RUN] Starting game...")
             
             # Change to the game directory and run the executable
@@ -438,15 +516,14 @@ class GameMakerRunner:
             try:
                 os.chdir(ide_temp_dir)
                 
-                # Run the game executable directly
-                self.game_process = subprocess.Popen([str(exe_path)])
+                self.game_process = subprocess.Popen([str(launch_path)])
                 
                 print(f"[OK] Game started! PID: {self.game_process.pid}")
                 
                 # Create a persistent session so stop/status can find this process later
                 session = self._session_manager.create_session(
                     pid=self.game_process.pid,
-                    exe_path=str(exe_path),
+                    exe_path=str(launch_path),
                     platform_target=platform_target,
                     runtime_type=runtime_type,
                 )
@@ -462,7 +539,7 @@ class GameMakerRunner:
                         "background": True,
                         "pid": self.game_process.pid,
                         "run_id": session.run_id,
-                        "exe_path": str(exe_path),
+                        "exe_path": str(launch_path),
                         "message": f"Game started in background (PID: {self.game_process.pid})",
                     }
                 
@@ -495,6 +572,8 @@ class GameMakerRunner:
         1. Use Igor Run command (creates output folder in project directory)
         2. Game runs directly from Igor
         """
+        platform_target = normalize_platform_target(platform_target)
+
         try:
             import tempfile
             import os
@@ -667,14 +746,14 @@ class GameMakerRunner:
 
 
 # Convenience functions for command-line usage
-def compile_project(project_root: str = ".", platform: str = "Windows", 
+def compile_project(project_root: str = ".", platform: Optional[str] = None,
                    runtime: str = "VM", runtime_version: Optional[str] = None) -> bool:
     """Compile GameMaker project."""
     runner = GameMakerRunner(Path(project_root), runtime_version=runtime_version)
     return runner.compile_project(platform, runtime)
 
 
-def run_project(project_root: str = ".", platform: str = "Windows", 
+def run_project(project_root: str = ".", platform: Optional[str] = None,
                runtime: str = "VM", background: bool = False, output_location: str = "temp",
                runtime_version: Optional[str] = None):
     """
@@ -682,7 +761,7 @@ def run_project(project_root: str = ".", platform: str = "Windows",
     
     Args:
         project_root: Path to project root
-        platform: Target platform (default: Windows)
+        platform: Target platform (default: host OS)
         runtime: Runtime type VM or YYC (default: VM)
         background: If True, return immediately without waiting for game to exit
         output_location: 'temp' (IDE-style) or 'project' (classic output folder)

@@ -17,7 +17,7 @@ def gm_mcp_health(project_root: Optional[str] = None) -> MaintenanceResult:
     
     Verifies:
     1. Project validity (.yyp, directory structure)
-    2. GameMaker Runtimes & Igor.exe
+    2. GameMaker runtimes & Igor binary
     3. GameMaker License
     4. Python environment & dependencies
     """
@@ -39,11 +39,11 @@ def gm_mcp_health(project_root: Optional[str] = None) -> MaintenanceResult:
     runner = GameMakerRunner(resolved_root)
     igor_path = runner.find_gamemaker_runtime()
     if igor_path:
-        details.append(f"[OK] Igor.exe found: {igor_path}")
+        details.append(f"[OK] Igor found: {igor_path}")
         details.append(f"[INFO] Runtime: {runner.runtime_path.name if runner.runtime_path else 'Unknown'}")
     else:
         issues_found += 1
-        details.append("[ERROR] GameMaker runtime or Igor.exe not found.")
+        details.append("[ERROR] GameMaker runtime or Igor not found.")
         details.append("[INFO] Ensure GameMaker is installed and runtimes are downloaded.")
 
     # 3. License Check

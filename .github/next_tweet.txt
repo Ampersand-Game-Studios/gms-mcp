@@ -1,5 +1,5 @@
-Multi-frame sprite support just landed 🎬
+macOS support got tighter in gms-mcp 🍎
 
-Create animated sprites with --frame-count, add/remove frames, or import entire spritesheets automatically.
+gm_run/gm_compile now default to your host platform, temp-run launch now resolves .app bundles, and CI now runs runner/session tests on macOS (Py 3.11-3.13).
 
-gm_sprite_add_frame, gm_sprite_import_strip, and more. #GameMaker #gamedev
+#GameMaker #gamedev

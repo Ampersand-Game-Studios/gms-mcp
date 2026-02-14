@@ -7,10 +7,20 @@ Unified interface for all GameMaker development tools.
 import argparse
 import sys
 import os
+import platform
 
 # Import utilities for directory validation
 from .utils import validate_working_directory, resolve_project_directory
 from .exceptions import GMSError
+
+def _default_runner_platform() -> str:
+    """Choose a platform default that matches the host OS."""
+    system = platform.system()
+    if system == "Darwin":
+        return "macOS"
+    if system == "Linux":
+        return "Linux"
+    return "Windows"
 
 def create_parser():
     """Create the master argument parser with all subcommands."""
@@ -683,15 +693,17 @@ def setup_maintenance_commands(subparsers):
 
 def setup_runner_commands(subparsers):
     """Set up runner commands."""
+    default_platform = _default_runner_platform()
+
     runner_parser = subparsers.add_parser('run', help='Compile and run GameMaker projects')
     runner_subparsers = runner_parser.add_subparsers(dest='runner_action', help='Runner actions')
     runner_subparsers.required = True
     
     # Compile command
     compile_parser = runner_subparsers.add_parser('compile', help='Compile the GameMaker project')
-    compile_parser.add_argument('--platform', default='Windows', 
+    compile_parser.add_argument('--platform', default=default_platform,
                                choices=['Windows', 'HTML5', 'macOS', 'Linux', 'Android', 'iOS'],
-                               help='Target platform (default: Windows)')
+                               help=f'Target platform (default: {default_platform})')
     compile_parser.add_argument('--runtime', default='VM', choices=['VM', 'YYC'],
                                help='Runtime type (default: VM)')
     compile_parser.add_argument('--runtime-version', help='Specific runtime version to use (e.g. 2024.1100.0.625)')
@@ -699,9 +711,9 @@ def setup_runner_commands(subparsers):
     
     # Run command 
     run_parser = runner_subparsers.add_parser('start', help='Compile and run the GameMaker project')
-    run_parser.add_argument('--platform', default='Windows',
+    run_parser.add_argument('--platform', default=default_platform,
                            choices=['Windows', 'HTML5', 'macOS', 'Linux', 'Android', 'iOS'], 
-                           help='Target platform (default: Windows)')
+                           help=f'Target platform (default: {default_platform})')
     run_parser.add_argument('--runtime', default='VM', choices=['VM', 'YYC'],
                            help='Runtime type (default: VM)')
     run_parser.add_argument('--runtime-version', help='Specific runtime version to use')

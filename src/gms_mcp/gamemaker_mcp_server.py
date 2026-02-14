@@ -19,6 +19,7 @@ import datetime as _dt
 import io
 import json
 import os
+import platform
 import shlex
 import shutil
 import signal
@@ -177,6 +178,16 @@ def _resolve_repo_root(project_root: str | None) -> Path:
     if project_root:
         return Path(project_root).resolve()
     return Path.cwd()
+
+
+def _default_target_platform() -> str:
+    """Choose the GameMaker target platform that matches the host OS."""
+    system = platform.system()
+    if system == "Darwin":
+        return "macOS"
+    if system == "Linux":
+        return "Linux"
+    return "Windows"
 
 
 def _ensure_cli_on_sys_path(_repo_root: Path) -> None:
@@ -2365,7 +2376,7 @@ def build_server():
     # -----------------------------
     @mcp.tool()
     async def gm_compile(
-        platform: str = "Windows",
+        platform: str | None = None,
         runtime: str = "VM",
         runtime_version: str | None = None,
         project_root: str = ".",
@@ -2376,17 +2387,18 @@ def build_server():
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Compile the project using Igor."""
+        selected_platform = platform or _default_target_platform()
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.runner_commands import handle_runner_compile
 
         args = argparse.Namespace(
-            platform=platform,
+            platform=selected_platform,
             runtime=runtime,
             runtime_version=runtime_version,
             project_root=project_root,
         )
-        cli_args = ["run", "compile", "--platform", platform, "--runtime", runtime]
+        cli_args = ["run", "compile", "--platform", selected_platform, "--runtime", runtime]
         if runtime_version:
             cli_args.extend(["--runtime-version", runtime_version])
 
@@ -2404,7 +2416,7 @@ def build_server():
 
     @mcp.tool()
     async def gm_run(
-        platform: str = "Windows",
+        platform: str | None = None,
         runtime: str = "VM",
         runtime_version: str | None = None,
         background: bool = False,
@@ -2421,7 +2433,7 @@ def build_server():
         Run the project using Igor.
         
         Args:
-            platform: Target platform (default: Windows)
+            platform: Target platform (default: host OS)
             runtime: Runtime type VM or YYC (default: VM)
             runtime_version: Specific runtime version to use
             background: If True, launch game and return immediately without waiting.
@@ -2441,12 +2453,13 @@ def build_server():
             If background=True: Dict with session info (ok, pid, run_id, message, bridge_enabled)
             If background=False: Dict with full execution result including stdout
         """
+        selected_platform = platform or _default_target_platform()
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.runner_commands import handle_runner_run
 
         args = argparse.Namespace(
-            platform=platform,
+            platform=selected_platform,
             runtime=runtime,
             runtime_version=runtime_version,
             background=background,
@@ -2512,7 +2525,7 @@ def build_server():
             "run",
             "start",
             "--platform",
-            platform,
+            selected_platform,
             "--runtime",
             runtime,
             "--output-location",

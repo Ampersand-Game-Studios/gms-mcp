@@ -8,12 +8,20 @@
 - **Reliability-First Architecture**: Custom exception hierarchy, typed result objects, and an execution policy manager replace monolithic exit calls and raw dictionaries. This enables structured error handling, consistent tool integration, and optimized performance (Fast assets, Resilient runner).
 - **Health & Diagnostics**: `gm_mcp_health` provides a one-click diagnostic tool to verify the local GameMaker environment. `gm_diagnostics` provides structured, machine-readable project diagnostics (JSON, naming, orphans, references) compatible with IDE problem panels.
 - **Runtime Management**: `gm_runtime_list`, `gm_runtime_pin`, and `gm_runtime_verify` allow precise control over which GameMaker runtime version is used for builds and execution.
+- **Cross-Platform Runner Defaults**: `gm_run` / `gm_compile` now default to the host OS target platform (`macOS`, `Linux`, or `Windows`) when not explicitly provided.
+- **macOS Runner Launch Support**: temp-output runs now detect and launch macOS `.app` bundles by resolving the executable in `Contents/MacOS/`.
 - **GML Symbol Indexing & Code Intelligence**: `gm_build_index`, `gm_find_definition`, `gm_find_references`, and `gm_list_symbols` provide deep, fast, and filtered code analysis (definitions and cross-file references).
 - **Introspection**: complete project inspection with support for all asset types (including extensions and datafiles).
 - **MCP Resources**: addressable project index and asset graph for high-performance agent context loading.
 - `gms-mcp-init`: generates shareable MCP config files for a workspace. Now auto-detects environment variables like `GMS_MCP_GMS_PATH` to include in the generated config.
 
 ## Install (recommended: pipx)
+
+```bash
+pipx install gms-mcp
+```
+
+PowerShell equivalent:
 
 ```powershell
 pipx install gms-mcp
@@ -44,9 +52,9 @@ gms-mcp-init --cursor  # or --vscode, --windsurf, etc.
 If you are working on the `gms-mcp` codebase itself, follow these steps to set up a local development environment:
 
 1.  **Clone and install in editable mode**:
-    ```powershell
+    ```bash
     git checkout dev
-    pip install -e .
+    python3 -m pip install -e ".[dev]"
     ```
 
 2.  **Initialize local and global MCP servers for testing**:
@@ -55,7 +63,17 @@ If you are working on the `gms-mcp` codebase itself, follow these steps to set u
     *   **Global (`gms-global`)**: For general use across all your GameMaker projects.
     *   **Local (`gms-local`)**: Specifically for testing your current changes to the server.
 
-    Run these commands from the project root:
+    Run these commands from the project root (zsh/bash):
+    ```bash
+    # Global setup (names it 'gms-global' in Cursor)
+    gms-mcp-init --cursor-global --server-name gms-global --mode python-module --python python3 --non-interactive
+
+    # Local setup (names it 'gms-local' in Cursor)
+    gms-mcp-init --cursor --server-name gms-local --mode python-module --python python3 --non-interactive
+    ```
+
+    PowerShell equivalent:
+
     ```powershell
     # Global setup (names it 'gms-global' in Cursor)
     gms-mcp-init --cursor-global --server-name gms-global --mode python-module --python python --non-interactive
@@ -71,6 +89,11 @@ If you are working on the `gms-mcp` codebase itself, follow these steps to set u
 
 Publishing is automated via GitHub Actions (PyPI Trusted Publishing) on every push to `main` and on tags `v*`.
 See `RELEASING.md` for the one-time PyPI setup and the first manual upload helper scripts.
+
+## CI Coverage
+
+- Core CI runs on Ubuntu and Windows across Python `3.11`-`3.13`.
+- Runner/session regression tests also run on macOS across Python `3.11`-`3.13`.
 
 ## X (Twitter) posting on `main`
 
@@ -96,7 +119,7 @@ Because this repo promotes changes `dev` -> `pre-release` -> `main`, prepare the
 
 Run this inside each GameMaker project workspace (or repo) to generate config:
 
-```powershell
+```bash
 gms-mcp-init --cursor
 ```
 
@@ -104,19 +127,19 @@ This writes `.cursor/mcp.json` and attempts to auto-detect the `.yyp` location t
 
 For a one-time setup that works across many projects, write Cursor's global config instead:
 
-```powershell
+```bash
 gms-mcp-init --cursor-global
 ```
 
 Generate example configs for other MCP-capable clients:
 
-```powershell
+```bash
 gms-mcp-init --vscode --windsurf --antigravity
 ```
 
 Or generate everything at once:
 
-```powershell
+```bash
 gms-mcp-init --all
 ```
 
@@ -128,13 +151,13 @@ If multiple `.yyp` projects are detected in a workspace:
 
 Force a specific project root:
 
-```powershell
-gms-mcp-init --cursor --gm-project-root path\\to\\project
+```bash
+gms-mcp-init --cursor --gm-project-root path/to/project
 ```
 
 Preview output without writing files:
 
-```powershell
+```bash
 gms-mcp-init --cursor --dry-run
 ```
 
@@ -188,7 +211,7 @@ The server automatically checks for updates on startup and during common operati
 
 Run from a project directory (or pass `--project-root`):
 
-```powershell
+```bash
 gms --version
 gms --project-root . asset create script my_function --parent-path "folders/Scripts.yy"
 ```
