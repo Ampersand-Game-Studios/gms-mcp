@@ -203,6 +203,43 @@ gms-mcp-init --codex-app-setup
 3. If needed, run `gms-mcp-init --codex-check-json` and verify `active.scope` is `workspace`.
 4. Use `gms-mcp-init --codex-dry-run-only` before changing global config to preview merged TOML safely.
 
+## Canonical Client Workflow
+
+All clients now support the same canonical action surface:
+
+```bash
+gms-mcp-init \
+  --client <cursor|codex|claude-code|claude-desktop|antigravity|gemini|vscode|windsurf|openclaw|generic> \
+  --scope <workspace|global> \
+  --action <setup|check|check-json|app-setup>
+```
+
+Optional:
+- `--config-path /custom/path` to override default config location
+- `--safe-profile` to enforce conservative env defaults
+
+Examples:
+
+```bash
+# Cursor setup + readiness check
+gms-mcp-init --client cursor --scope workspace --action app-setup
+
+# Codex machine-readable readiness
+gms-mcp-init --client codex --scope workspace --action check-json
+
+# Claude Desktop global plugin sync
+gms-mcp-init --client claude-desktop --scope global --action setup
+
+# Gemini alias (Antigravity path)
+gms-mcp-init --client gemini --scope global --action app-setup
+
+# OpenClaw app setup + workspace skills install
+gms-mcp-init --client openclaw --scope workspace --action app-setup \
+  --openclaw-install-skills --openclaw-skills-project
+```
+
+For parity status and supported defaults, see `documentation/CLIENT_SUPPORT_MATRIX.md`.
+
 Generate example configs for other MCP-capable clients:
 
 ```bash

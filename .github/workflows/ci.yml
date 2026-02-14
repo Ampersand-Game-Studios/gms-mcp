@@ -78,6 +78,12 @@ jobs:
             cli/tests/python/test_runner_session_integration.py \
             cli/tests/python/test_runtime_manager.py
 
+      - name: Run install parity tests
+        run: |
+          python -m pytest -q \
+            cli/tests/python/test_install_polish.py \
+            cli/tests/python/test_install_parity.py
+
   # Summary job - this is the ONE check you require in branch protection
   ci:
     name: ci
