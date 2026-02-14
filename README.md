@@ -209,6 +209,52 @@ Generate example configs for other MCP-capable clients:
 gms-mcp-init --vscode --windsurf --antigravity --openclaw
 ```
 
+Set up Antigravity global config (recommended):
+
+```bash
+gms-mcp-init --antigravity-setup
+```
+
+This merges into `~/.gemini/antigravity/mcp_config.json`, writes atomically, creates a timestamped backup on overwrite, and enables a conservative safety profile by default:
+- `GMS_MCP_ENABLE_DIRECT=0`
+- `GMS_MCP_REQUIRE_DRY_RUN=1`
+
+Check Antigravity readiness:
+
+```bash
+gms-mcp-init --antigravity-check
+```
+
+Print Antigravity check output as JSON:
+
+```bash
+gms-mcp-init --antigravity-check-json
+```
+
+One-shot Antigravity app setup:
+
+```bash
+gms-mcp-init --antigravity-app-setup
+```
+
+Use a custom Antigravity config path:
+
+```bash
+gms-mcp-init --antigravity-setup --antigravity-config-path /path/to/mcp_config.json
+```
+
+Opt in to the conservative safety profile for Antigravity example configs too:
+
+```bash
+gms-mcp-init --antigravity --safe-profile
+```
+
+When `GMS_MCP_REQUIRE_DRY_RUN=1` is set, you can allow specific destructive tools with:
+
+```bash
+export GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST=gm_asset_delete,gm_workflow_delete
+```
+
 Or generate everything at once:
 
 ```bash

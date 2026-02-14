@@ -37,6 +37,9 @@ This repo includes an **MCP server** (`gms-mcp`) that exposes GameMaker operatio
 - Cursor (workspace): `gms-mcp-init --cursor` (writes `.cursor/mcp.json`)
 - Cursor (global, multi-project): `gms-mcp-init --cursor-global` (writes `~/.cursor/mcp.json`)
 - Other clients (examples): `gms-mcp-init --vscode --windsurf --antigravity --openclaw` (writes `mcp-configs/*.mcp.json`)
+- Antigravity (global merge): `gms-mcp-init --antigravity-setup` (writes/merges `~/.gemini/antigravity/mcp_config.json`)
+- Antigravity diagnostics: `gms-mcp-init --antigravity-check` or `gms-mcp-init --antigravity-check-json`
+- Antigravity one-shot setup: `gms-mcp-init --antigravity-app-setup`
 - Codex: `gms-mcp-init --codex` (writes `.codex/mcp.toml` and prints `codex mcp add` command), or `--codex-global` (merges into `~/.codex/config.toml` and omits a hardcoded `GM_PROJECT_ROOT`).
 - Codex diagnostics: `gms-mcp-init --codex-check` (show detected config paths + active entry), `gms-mcp-init --codex-dry-run-only` (print final merged local/global payloads without writing).
 
