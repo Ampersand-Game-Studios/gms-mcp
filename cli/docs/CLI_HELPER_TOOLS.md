@@ -25,7 +25,7 @@ This repo includes an MCP server (`gms-mcp`) that mirrors the `gms` CLI as tools
 - **Runner**: compile/run + stop/status
 - **Escape hatch**: `gm_cli` (shell-out to `gms.py` with arbitrary args)
 
-MCP setup/notes: `README.md` (Cursor config: `gms-mcp-init --cursor`; other client examples: `gms-mcp-init --vscode --windsurf --antigravity --openclaw`; Codex: `gms-mcp-init --codex` / `--codex-global`, plus `--codex-check` and `--codex-dry-run-only`).
+MCP setup/notes: `README.md` (Cursor config: `gms-mcp-init --cursor`; other client examples: `gms-mcp-init --vscode --windsurf --antigravity --openclaw`; Antigravity global setup/check: `--antigravity-setup` / `--antigravity-check` / `--antigravity-check-json` and one-shot `--antigravity-app-setup`; Codex: `gms-mcp-init --codex` / `--codex-global`, plus `--codex-check` and `--codex-dry-run-only`).
 
 ## **CRITICAL PREREQUISITE: Python Installation**
 
