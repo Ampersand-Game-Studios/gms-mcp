@@ -58,6 +58,14 @@ This repo includes a small installer that generates **shareable, user-agnostic**
 - One-shot Antigravity app setup: `gms-mcp-init --antigravity-app-setup`
 - Generate everything: `gms-mcp-init --all`
 
+Canonical parity interface (all supported clients):
+
+```bash
+gms-mcp-init --client <client> --scope <workspace|global> --action <setup|check|check-json|app-setup>
+```
+
+See `documentation/CLIENT_SUPPORT_MATRIX.md` for the maintained capability matrix.
+
 **Environment Auto-detection**: `gms-mcp-init` now automatically detects and writes the following environment variables into the generated config if they are set in your current shell:
 - `GMS_MCP_GMS_PATH`
 - `GMS_MCP_DEFAULT_TIMEOUT_SECONDS`
