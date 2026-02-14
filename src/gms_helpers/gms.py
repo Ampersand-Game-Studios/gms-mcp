@@ -66,20 +66,24 @@ Examples:
 
 def setup_skills_commands(subparsers):
     """Set up skills management commands."""
-    skills_parser = subparsers.add_parser('skills', help='Manage Claude Code skills for gms-mcp')
+    skills_parser = subparsers.add_parser('skills', help='Manage Claude/OpenClaw skills for gms-mcp')
     skills_subparsers = skills_parser.add_subparsers(dest='skills_action', help='Skills actions')
     skills_subparsers.required = True
 
     # Install command
-    install_parser = skills_subparsers.add_parser('install', help='Install skills to Claude Code skills directory')
+    install_parser = skills_subparsers.add_parser('install', help='Install skills to Claude (default) or OpenClaw directories')
     install_parser.add_argument('--project', action='store_true',
-                                help='Install to ./.claude/skills/ instead of ~/.claude/skills/')
+                                help='Install to workspace scope (./.claude or ./.openclaw) instead of home scope')
+    install_parser.add_argument('--openclaw', action='store_true',
+                                help='Install to OpenClaw skills directories (./.openclaw or ~/.openclaw)')
     install_parser.add_argument('--force', action='store_true',
                                 help='Overwrite existing skill files')
     install_parser.set_defaults(func=handle_skills_install)
 
     # List command
     list_parser = skills_subparsers.add_parser('list', help='List available and installed skills')
+    list_parser.add_argument('--openclaw', action='store_true',
+                             help='Inspect OpenClaw skills directories instead of Claude directories')
     list_parser.add_argument('--installed', action='store_true',
                              help='Only show installed skills')
     list_parser.set_defaults(func=handle_skills_list)
@@ -87,7 +91,9 @@ def setup_skills_commands(subparsers):
     # Uninstall command
     uninstall_parser = skills_subparsers.add_parser('uninstall', help='Remove installed skills')
     uninstall_parser.add_argument('--project', action='store_true',
-                                  help='Remove from ./.claude/skills/ instead of ~/.claude/skills/')
+                                  help='Remove from workspace scope (./.claude or ./.openclaw) instead of home scope')
+    uninstall_parser.add_argument('--openclaw', action='store_true',
+                                  help='Remove from OpenClaw skills directories (./.openclaw or ~/.openclaw)')
     uninstall_parser.set_defaults(func=handle_skills_uninstall)
 
 

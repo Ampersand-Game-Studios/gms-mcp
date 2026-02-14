@@ -244,6 +244,14 @@ class TestAgentSetupFullCoverage(unittest.TestCase):
                     result = setup_powershell_function()
                     self.assertFalse(result)
 
+    def test_preferred_python_command_returns_string(self):
+        """Preferred python command helper should always return a non-empty string."""
+        from gms_helpers.agent_setup import _preferred_python_command
+
+        cmd = _preferred_python_command()
+        self.assertTrue(isinstance(cmd, str))
+        self.assertTrue(len(cmd) > 0)
+
     def test_main_execution_success(self):
         """Test main execution path with a mocked successful setup."""
         test_script = f"""

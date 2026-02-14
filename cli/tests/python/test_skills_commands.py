@@ -59,12 +59,14 @@ class TestSkillsCommands(unittest.TestCase):
         returncode, stdout, stderr = self.run_gms_command(["skills", "install", "--help"])
         self.assertEqual(returncode, 0)
         self.assertIn("--project", stdout)
+        self.assertIn("--openclaw", stdout)
         self.assertIn("--force", stdout)
 
     def test_skills_list_help(self):
         """Test skills list --help command."""
         returncode, stdout, stderr = self.run_gms_command(["skills", "list", "--help"])
         self.assertEqual(returncode, 0)
+        self.assertIn("--openclaw", stdout)
         self.assertIn("--installed", stdout)
 
     def test_skills_uninstall_help(self):
@@ -72,6 +74,7 @@ class TestSkillsCommands(unittest.TestCase):
         returncode, stdout, stderr = self.run_gms_command(["skills", "uninstall", "--help"])
         self.assertEqual(returncode, 0)
         self.assertIn("--project", stdout)
+        self.assertIn("--openclaw", stdout)
 
     def test_skills_list_shows_available(self):
         """Test that skills list shows available skills."""
@@ -108,6 +111,22 @@ class TestSkillsCommands(unittest.TestCase):
 
         # Verify files were created
         skills_dir = self.temp_project / ".claude" / "skills" / "gms-mcp"
+        self.assertTrue(skills_dir.exists())
+        self.assertTrue((skills_dir / "SKILL.md").exists())
+        self.assertTrue((skills_dir / "workflows").is_dir())
+        self.assertTrue((skills_dir / "reference").is_dir())
+
+    def test_skills_install_openclaw_project(self):
+        """Test skills install --openclaw --project writes to .openclaw."""
+        returncode, stdout, stderr = self.run_gms_command(
+            ["skills", "install", "--openclaw", "--project"],
+            cwd=self.temp_project
+        )
+        self.assertEqual(returncode, 0)
+        self.assertIn("[OK]", stdout)
+        self.assertIn("Installed", stdout)
+
+        skills_dir = self.temp_project / ".openclaw" / "skills" / "gms-mcp"
         self.assertTrue(skills_dir.exists())
         self.assertTrue((skills_dir / "SKILL.md").exists())
         self.assertTrue((skills_dir / "workflows").is_dir())
@@ -172,6 +191,25 @@ class TestSkillsCommands(unittest.TestCase):
         self.assertIn("Removed", stdout)
 
         # Verify removed
+        self.assertFalse(skills_dir.exists())
+
+    def test_skills_uninstall_openclaw_project(self):
+        """Test skills uninstall --openclaw --project works."""
+        self.run_gms_command(
+            ["skills", "install", "--openclaw", "--project"],
+            cwd=self.temp_project
+        )
+
+        skills_dir = self.temp_project / ".openclaw" / "skills" / "gms-mcp"
+        self.assertTrue(skills_dir.exists())
+
+        returncode, stdout, stderr = self.run_gms_command(
+            ["skills", "uninstall", "--openclaw", "--project"],
+            cwd=self.temp_project
+        )
+        self.assertEqual(returncode, 0)
+        self.assertIn("[OK]", stdout)
+        self.assertIn("Removed", stdout)
         self.assertFalse(skills_dir.exists())
 
     def test_skills_uninstall_not_installed(self):

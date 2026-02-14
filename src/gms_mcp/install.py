@@ -247,8 +247,45 @@ def _resolve_launcher(*, mode: str, python_command: str) -> tuple[str, list[str]
     if mode == "command":
         return "gms-mcp", []
     if mode == "python-module":
-        return python_command, ["-m", "gms_mcp.bootstrap_server"]
+        resolved_python = _resolve_python_command(python_command)
+        return resolved_python, ["-m", "gms_mcp.bootstrap_server"]
     raise ValueError(f"Unknown mode: {mode}")
+
+
+def _default_python_command() -> str:
+    """
+    Return a practical Python command default per host OS.
+
+    On Unix-like systems `python3` is often available while `python` may not be.
+    """
+    if os.name == "nt":
+        return "python"
+    if shutil.which("python3"):
+        return "python3"
+    return "python"
+
+
+def _resolve_python_command(python_command: str) -> str:
+    """
+    Resolve a usable Python command for --mode=python-module.
+
+    Keeps caller-provided values when available and falls back to common
+    interpreter commands if needed.
+    """
+    requested = (python_command or "").strip() or _default_python_command()
+    if shutil.which(requested):
+        return requested
+
+    fallback_candidates: list[str] = []
+    if sys.executable:
+        fallback_candidates.append(sys.executable)
+    fallback_candidates.extend(["python3", "python"])
+
+    for candidate in fallback_candidates:
+        if candidate and shutil.which(candidate):
+            return candidate
+
+    return requested
 
 
 def _generate_cursor_config(
@@ -869,8 +906,8 @@ def main(argv: list[str] | None = None) -> int:
     )
     parser.add_argument(
         "--python",
-        default="python",
-        help="Python command to use when --mode=python-module (default: python).",
+        default=_default_python_command(),
+        help="Python command to use when --mode=python-module (default: python3 on Unix, python on Windows).",
     )
     parser.add_argument(
         "--gm-project-root",
@@ -936,6 +973,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--vscode", action="store_true", help="Write a VS Code example config to mcp-configs/vscode.mcp.json.")
     parser.add_argument("--windsurf", action="store_true", help="Write a Windsurf example config to mcp-configs/windsurf.mcp.json.")
     parser.add_argument("--antigravity", action="store_true", help="Write an Antigravity example config to mcp-configs/antigravity.mcp.json.")
+    parser.add_argument("--openclaw", action="store_true", help="Write an OpenClaw example config to mcp-configs/openclaw.mcp.json.")
     parser.add_argument("--all", action="store_true", help="Generate Cursor config + all example configs (excludes Claude Code global).")
     
     # Naming convention config options
@@ -965,7 +1003,7 @@ def main(argv: list[str] | None = None) -> int:
         args.claude_code or args.claude_code_global or
         args.codex or args.codex_global or
         args.codex_dry_run_only or args.codex_check or args.codex_check_json or args.codex_app_setup or
-        args.vscode or args.windsurf or args.antigravity or args.all
+        args.vscode or args.windsurf or args.antigravity or args.openclaw or args.all
     )
     if not requested_any:
         args.cursor = True
@@ -985,6 +1023,7 @@ def main(argv: list[str] | None = None) -> int:
         args.vscode = False
         args.windsurf = False
         args.antigravity = False
+        args.openclaw = False
         args.all = False
         dry_run = True
 
@@ -1008,7 +1047,7 @@ def main(argv: list[str] | None = None) -> int:
             args.codex or args.codex_global or
             args.codex_dry_run_only or
             args.codex_app_setup or
-            args.vscode or args.windsurf or args.antigravity or args.all
+            args.vscode or args.windsurf or args.antigravity or args.openclaw or args.all
         )
     )
     if only_codex_check:
@@ -1019,9 +1058,12 @@ def main(argv: list[str] | None = None) -> int:
         args.vscode = True
         args.windsurf = True
         args.antigravity = True
+        args.openclaw = True
         # Note: --all does NOT include claude-code-global since it's a global install
 
     command, args_prefix = _resolve_launcher(mode=args.mode, python_command=args.python)
+    if args.mode == "python-module" and command != args.python:
+        print(f"[WARN] Python command '{args.python}' not found; using '{command}' instead.")
 
     if args.mode == "command":
         if shutil.which(command) is None:
@@ -1193,6 +1235,8 @@ def main(argv: list[str] | None = None) -> int:
         example_clients.append("windsurf")
     if args.antigravity:
         example_clients.append("antigravity")
+    if args.openclaw:
+        example_clients.append("openclaw")
     if example_clients:
         written.extend(
             _generate_example_configs(

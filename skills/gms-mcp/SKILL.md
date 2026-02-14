@@ -1,6 +1,11 @@
 ---
 name: gms-mcp
 description: GameMaker MCP workflow skills and command reference
+metadata:
+  openclaw:
+    requires:
+      anyBins:
+        - gms
 ---
 
 # GMS-MCP Skills
@@ -108,7 +113,9 @@ gms asset delete type name
 ## Installation
 
 ```bash
-gms skills install            # Install to ~/.claude/skills/
-gms skills install --project  # Install to ./.claude/skills/
-gms skills list               # Show installed skills
+gms skills install                       # Install to ~/.claude/skills/
+gms skills install --project             # Install to ./.claude/skills/
+gms skills install --openclaw            # Install to ~/.openclaw/skills/
+gms skills install --openclaw --project  # Install to ./.openclaw/skills/
+gms skills list                          # Show installed skills
 ```
