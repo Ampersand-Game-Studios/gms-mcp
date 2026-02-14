@@ -116,6 +116,6 @@ gms asset delete type name
 gms skills install                       # Install to ~/.claude/skills/
 gms skills install --project             # Install to ./.claude/skills/
 gms skills install --openclaw            # Install to ~/.openclaw/skills/
-gms skills install --openclaw --project  # Install to ./.openclaw/skills/
+gms skills install --openclaw --project  # Install to ./skills/
 gms skills list                          # Show installed skills
 ```

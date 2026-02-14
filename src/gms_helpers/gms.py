@@ -73,9 +73,9 @@ def setup_skills_commands(subparsers):
     # Install command
     install_parser = skills_subparsers.add_parser('install', help='Install skills to Claude (default) or OpenClaw directories')
     install_parser.add_argument('--project', action='store_true',
-                                help='Install to workspace scope (./.claude or ./.openclaw) instead of home scope')
+                                help='Install to workspace scope (./.claude or ./skills for OpenClaw) instead of home scope')
     install_parser.add_argument('--openclaw', action='store_true',
-                                help='Install to OpenClaw skills directories (./.openclaw or ~/.openclaw)')
+                                help='Install to OpenClaw skills directories (./skills for --project, ~/.openclaw/skills for user scope)')
     install_parser.add_argument('--force', action='store_true',
                                 help='Overwrite existing skill files')
     install_parser.set_defaults(func=handle_skills_install)
@@ -91,9 +91,9 @@ def setup_skills_commands(subparsers):
     # Uninstall command
     uninstall_parser = skills_subparsers.add_parser('uninstall', help='Remove installed skills')
     uninstall_parser.add_argument('--project', action='store_true',
-                                  help='Remove from workspace scope (./.claude or ./.openclaw) instead of home scope')
+                                  help='Remove from workspace scope (./.claude or ./skills for OpenClaw) instead of home scope')
     uninstall_parser.add_argument('--openclaw', action='store_true',
-                                  help='Remove from OpenClaw skills directories (./.openclaw or ~/.openclaw)')
+                                  help='Remove from OpenClaw skills directories (./skills for --project, ~/.openclaw/skills for user scope)')
     uninstall_parser.set_defaults(func=handle_skills_uninstall)
 
 
