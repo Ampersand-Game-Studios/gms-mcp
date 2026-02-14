@@ -47,11 +47,14 @@ pip install gms-mcp
 gms-mcp-init --cursor  # or --vscode, --windsurf, --openclaw, etc.
 ```
 
-For skill packs, OpenClaw users can install to `~/.openclaw/skills/` with:
+For skill packs, OpenClaw users can install to user or workspace scope:
 
 ```bash
-gms skills install --openclaw
+gms skills install --openclaw            # user scope: ~/.openclaw/skills/
+gms skills install --openclaw --project  # workspace scope: ./skills/
 ```
+
+Note: `.openclaw/openclaw.json` is for settings. Workspace skills are loaded from `./skills/`.
 
 ### For Codex
 

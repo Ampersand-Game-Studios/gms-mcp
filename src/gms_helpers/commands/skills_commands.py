@@ -34,11 +34,21 @@ def get_target_dir(project: bool = False, *, openclaw: bool = False) -> Path:
                  If False, install in the user's home config directory.
         openclaw: If True, target OpenClaw skill directories instead of Claude.
     """
+    if openclaw and project:
+        # OpenClaw loads workspace skills from ./skills/
+        return Path.cwd() / "skills" / "gms-mcp"
     dot_dir = ".openclaw" if openclaw else ".claude"
     if project:
         return Path.cwd() / dot_dir / "skills" / "gms-mcp"
     else:
         return Path.home() / dot_dir / "skills" / "gms-mcp"
+
+
+def _legacy_openclaw_project_dir(*, openclaw: bool, project: bool) -> Path | None:
+    """Return legacy OpenClaw workspace path if this invocation targets it."""
+    if openclaw and project:
+        return Path.cwd() / ".openclaw" / "skills" / "gms-mcp"
+    return None
 
 
 def handle_skills_install(args) -> Dict[str, Any]:
@@ -47,11 +57,13 @@ def handle_skills_install(args) -> Dict[str, Any]:
 
     Copies all skills from the package to either:
     - ~/.claude/skills/gms-mcp/ or ./.claude/skills/gms-mcp/ (default)
-    - ~/.openclaw/skills/gms-mcp/ or ./.openclaw/skills/gms-mcp/ (--openclaw)
+    - ~/.openclaw/skills/gms-mcp/ or ./skills/gms-mcp/ (--openclaw)
     """
     source_dir = get_skills_source_dir() / "gms-mcp"
     openclaw = bool(getattr(args, "openclaw", False))
-    target_dir = get_target_dir(project=getattr(args, 'project', False), openclaw=openclaw)
+    project = bool(getattr(args, "project", False))
+    target_dir = get_target_dir(project=project, openclaw=openclaw)
+    legacy_dir = _legacy_openclaw_project_dir(openclaw=openclaw, project=project)
     force = getattr(args, 'force', False)
 
     if not source_dir.exists():
@@ -90,6 +102,10 @@ def handle_skills_install(args) -> Dict[str, Any]:
         for f in skipped:
             print(f"        - {f}")
 
+    if legacy_dir and legacy_dir.exists():
+        print(f"[INFO]  Legacy OpenClaw workspace skills path detected: {legacy_dir}")
+        print(f"        New installs use: {target_dir}")
+
     if not copied and not skipped:
         print("[WARN]  No skill files found to install")
 
@@ -109,6 +125,7 @@ def handle_skills_list(args) -> Dict[str, Any]:
     openclaw = bool(getattr(args, "openclaw", False))
     user_dir = get_target_dir(project=False, openclaw=openclaw)
     project_dir = get_target_dir(project=True, openclaw=openclaw)
+    legacy_project_dir = _legacy_openclaw_project_dir(openclaw=openclaw, project=True)
 
     installed_only = getattr(args, 'installed', False)
 
@@ -124,14 +141,20 @@ def handle_skills_list(args) -> Dict[str, Any]:
 
         user_installed = (user_dir / relative_path).exists()
         project_installed = (project_dir / relative_path).exists()
+        legacy_project_installed = bool(
+            legacy_project_dir and (legacy_project_dir / relative_path).exists()
+        )
 
         skill_info = {
             "name": str(relative_path),
             "user_installed": user_installed,
-            "project_installed": project_installed
+            "project_installed": project_installed,
+            "legacy_project_installed": legacy_project_installed,
         }
 
-        if installed_only and not (user_installed or project_installed):
+        if installed_only and not (
+            user_installed or project_installed or legacy_project_installed
+        ):
             continue
 
         skills.append(skill_info)
@@ -146,6 +169,8 @@ def handle_skills_list(args) -> Dict[str, Any]:
             status.append("user")
         if skill["project_installed"]:
             status.append("project")
+        if skill["legacy_project_installed"]:
+            status.append("legacy-project")
 
         status_str = f" [{', '.join(status)}]" if status else ""
         print(f"  {skill['name']}{status_str}")
@@ -156,12 +181,17 @@ def handle_skills_list(args) -> Dict[str, Any]:
     print()
     print(f"User skills dir:    {user_dir}")
     print(f"Project skills dir: {project_dir}")
+    if legacy_project_dir is not None:
+        print(f"Legacy skills dir:  {legacy_project_dir}")
+        if legacy_project_dir.exists():
+            print("[WARN]  Legacy OpenClaw workspace skills detected; migrate to ./skills/gms-mcp.")
 
     return {
         "success": True,
         "skills": skills,
         "user_dir": str(user_dir),
-        "project_dir": str(project_dir)
+        "project_dir": str(project_dir),
+        "legacy_project_dir": str(legacy_project_dir) if legacy_project_dir else None,
     }
 
 
@@ -170,23 +200,38 @@ def handle_skills_uninstall(args) -> Dict[str, Any]:
     Remove installed skills from the target directory.
     """
     openclaw = bool(getattr(args, "openclaw", False))
-    target_dir = get_target_dir(project=getattr(args, 'project', False), openclaw=openclaw)
+    project = bool(getattr(args, "project", False))
+    target_dir = get_target_dir(project=project, openclaw=openclaw)
+    legacy_dir = _legacy_openclaw_project_dir(openclaw=openclaw, project=project)
+    target_dirs = [target_dir]
+    if legacy_dir is not None:
+        target_dirs.append(legacy_dir)
+    existing_dirs = [d for d in target_dirs if d.exists()]
 
-    if not target_dir.exists():
-        print(f"[OK]    No skills installed at {target_dir}")
+    if not existing_dirs:
+        if legacy_dir is not None:
+            print(f"[OK]    No skills installed at {target_dir} or {legacy_dir}")
+        else:
+            print(f"[OK]    No skills installed at {target_dir}")
         return {"success": True, "removed": False}
 
-    # Count files before removal
-    file_count = sum(1 for _ in target_dir.rglob("*") if _.is_file())
+    file_count = 0
+    for directory in existing_dirs:
+        file_count += sum(1 for _ in directory.rglob("*") if _.is_file())
+        shutil.rmtree(directory)
 
-    # Remove the entire gms-mcp skills directory
-    shutil.rmtree(target_dir)
-
-    print(f"[OK]    Removed {file_count} {_platform_name(openclaw)} skill file(s) from {target_dir}")
+    if len(existing_dirs) == 1:
+        print(f"[OK]    Removed {file_count} {_platform_name(openclaw)} skill file(s) from {existing_dirs[0]}")
+    else:
+        print(f"[OK]    Removed {file_count} {_platform_name(openclaw)} skill file(s) from:")
+        for directory in existing_dirs:
+            print(f"        - {directory}")
+        print("[INFO]  Removed both current and legacy OpenClaw workspace skill paths.")
 
     return {
         "success": True,
         "removed": True,
         "target_dir": str(target_dir),
+        "removed_dirs": [str(d) for d in existing_dirs],
         "file_count": file_count
     }
