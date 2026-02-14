@@ -17,8 +17,16 @@ import shutil
 import sys
 import shlex
 import tempfile
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
+
+from .client_registry import (
+    CLIENT_ACTIONS,
+    CLIENT_SCOPES,
+    all_client_names,
+    resolve_client_spec,
+)
 
 try:
     import tomllib as _toml_parser  # Python 3.11+
@@ -221,6 +229,7 @@ def _make_server_config(
     command: str,
     args: list[str],
     gm_project_root_rel_posix: str | None,
+    safe_profile: bool = False,
 ) -> dict:
     workspace_var = _workspace_folder_var(client)
     env: dict[str, str] = {}
@@ -236,6 +245,7 @@ def _make_server_config(
         val = os.environ.get(env_var)
         if val:
             env[env_var] = val
+    _apply_safe_profile_env(env, enabled=safe_profile)
 
     return {
         "mcpServers": {
@@ -277,6 +287,182 @@ def _apply_safe_profile_env(env: dict[str, str], *, enabled: bool) -> None:
             env["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"] = str(_SAFE_PROFILE_TIMEOUT_SECONDS)
     else:
         env["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"] = str(_SAFE_PROFILE_TIMEOUT_SECONDS)
+
+
+@dataclass
+class ReadinessResult:
+    ready: bool
+    problems: list[str]
+    not_applicable: bool = False
+
+
+@dataclass
+class ConfigState:
+    client: str
+    scope: str
+    server_name: str
+    path: str
+    exists: bool
+    entry: dict | None
+    readiness: ReadinessResult
+
+    def as_dict(self) -> dict:
+        return {
+            "ok": True,
+            "client": self.client,
+            "scope": self.scope,
+            "server_name": self.server_name,
+            "config": {
+                "path": self.path,
+                "exists": self.exists,
+                "entry": self.entry,
+            },
+            "active": {
+                "scope": self.scope,
+                "path": self.path,
+                "entry": self.entry,
+            },
+            "ready": self.readiness.ready,
+            "problems": self.readiness.problems,
+            "not_applicable": self.readiness.not_applicable,
+        }
+
+
+def _validate_common_entry(
+    entry: object,
+    *,
+    require_project_root: bool = True,
+    env_required: bool = True,
+) -> ReadinessResult:
+    if not isinstance(entry, dict):
+        return ReadinessResult(ready=False, problems=["Active server entry is missing or not an object."])
+
+    problems: list[str] = []
+
+    command = entry.get("command")
+    if not isinstance(command, str) or not command.strip():
+        problems.append("`command` must be a non-empty string.")
+
+    args = entry.get("args")
+    if not isinstance(args, list):
+        problems.append("`args` must be a list.")
+
+    env = entry.get("env")
+    if env_required and not isinstance(env, dict):
+        problems.append("`env` must be an object.")
+    elif isinstance(env, dict):
+        if require_project_root:
+            gm_project_root = env.get("GM_PROJECT_ROOT")
+            if not isinstance(gm_project_root, str) or not gm_project_root.strip():
+                problems.append("`env.GM_PROJECT_ROOT` must be a non-empty string.")
+        if env.get("PYTHONUNBUFFERED") != "1":
+            problems.append("`env.PYTHONUNBUFFERED` should be \"1\" for unbuffered logs.")
+
+    return ReadinessResult(ready=len(problems) == 0, problems=problems)
+
+
+def _resolve_json_entry_root(parsed: dict, *, server_name: str, allow_plain_top_level: bool) -> dict | None:
+    mcp_servers = parsed.get("mcpServers")
+    if isinstance(mcp_servers, dict):
+        entry = mcp_servers.get(server_name)
+        return entry if isinstance(entry, dict) else None
+
+    if allow_plain_top_level:
+        plain_entry = parsed.get(server_name)
+        if isinstance(plain_entry, dict):
+            return plain_entry
+
+    return None
+
+
+def _read_json_server_entry(
+    *,
+    config_path: Path,
+    server_name: str,
+    allow_plain_top_level: bool,
+) -> tuple[dict | None, bool]:
+    if not config_path.exists():
+        return None, False
+
+    text = config_path.read_text(encoding="utf-8")
+    parsed = _parse_json_object_or_raise(text=text, source_label=str(config_path))
+    entry = _resolve_json_entry_root(parsed, server_name=server_name, allow_plain_top_level=allow_plain_top_level)
+    return entry, True
+
+
+def _collect_standard_check_state(
+    *,
+    client: str,
+    scope: str,
+    config_path: Path,
+    server_name: str,
+    allow_plain_top_level: bool = False,
+    require_project_root: bool = True,
+    env_required: bool = True,
+    not_applicable_reason: str | None = None,
+) -> ConfigState:
+    if not_applicable_reason is not None:
+        readiness = ReadinessResult(ready=False, problems=[not_applicable_reason], not_applicable=True)
+        return ConfigState(
+            client=client,
+            scope=scope,
+            server_name=server_name,
+            path=str(config_path),
+            exists=False,
+            entry=None,
+            readiness=readiness,
+        )
+
+    entry, exists = _read_json_server_entry(
+        config_path=config_path,
+        server_name=server_name,
+        allow_plain_top_level=allow_plain_top_level,
+    )
+    readiness = _validate_common_entry(
+        entry,
+        require_project_root=require_project_root,
+        env_required=env_required,
+    )
+    return ConfigState(
+        client=client,
+        scope=scope,
+        server_name=server_name,
+        path=str(config_path),
+        exists=exists,
+        entry=entry,
+        readiness=readiness,
+    )
+
+
+def _print_standard_check(state: ConfigState) -> int:
+    print(f"[INFO] {state.client} {state.scope} config: {state.path} ({'exists' if state.exists else 'missing'})")
+    if state.entry is None:
+        print(f"[INFO] Active server entry '{state.server_name}': not found")
+    else:
+        print(f"[INFO] Active server entry '{state.server_name}' source: {state.path}")
+        print("[INFO] Active server entry payload:")
+        print(json.dumps(state.entry, indent=2, sort_keys=True))
+    print(f"[INFO] Ready for {state.client}: {'yes' if state.readiness.ready else 'no'}")
+    for problem in state.readiness.problems:
+        level = "WARN" if not state.readiness.not_applicable else "INFO"
+        print(f"[{level}] {problem}")
+    return 0
+
+
+def _print_standard_check_json(state: ConfigState) -> int:
+    print(json.dumps(state.as_dict(), indent=2, sort_keys=True))
+    return 0
+
+
+def _print_standard_app_setup_summary(state: ConfigState) -> int:
+    print(f"[INFO] {state.client} app readiness summary:")
+    print(f"[INFO] Scope: {state.scope}")
+    print(f"[INFO] Config path: {state.path}")
+    print(f"[INFO] Ready for {state.client}: {'yes' if state.readiness.ready else 'no'}")
+    for problem in state.readiness.problems:
+        level = "WARN" if not state.readiness.not_applicable else "INFO"
+        print(f"[{level}] {problem}")
+    return 0
 
 
 def _make_antigravity_server_config(
@@ -366,6 +552,7 @@ def _generate_cursor_config(
     gm_project_root: Path | None,
     out_path: Path,
     dry_run: bool,
+    safe_profile: bool = False,
 ) -> Path:
     gm_rel_posix = _relpath_posix_or_none(gm_project_root, workspace_root)
     config = _make_server_config(
@@ -374,6 +561,7 @@ def _generate_cursor_config(
         command=command,
         args=args_prefix,
         gm_project_root_rel_posix=gm_rel_posix,
+        safe_profile=safe_profile,
     )
     _write_json(out_path, config, dry_run=dry_run)
     return out_path
@@ -411,6 +599,7 @@ def _generate_example_configs(
                 command=command,
                 args=args_prefix,
                 gm_project_root_rel_posix=gm_rel_posix,
+                safe_profile=safe_profile,
             )
         out_path = out_dir / f"{client}.mcp.json"
         _write_json(out_path, config, dry_run=dry_run)
@@ -448,6 +637,7 @@ def _make_claude_code_mcp_config(
     server_name: str,
     command: str,
     args: list[str],
+    safe_profile: bool = False,
 ) -> dict:
     """
     Create the .mcp.json config for Claude Code.
@@ -465,6 +655,7 @@ def _make_claude_code_mcp_config(
         val = os.environ.get(env_var)
         if val:
             env[env_var] = val
+    _apply_safe_profile_env(env, enabled=safe_profile)
 
     return {
         server_name: {
@@ -480,6 +671,7 @@ def _build_codex_env(
     workspace_root: Path,
     *,
     include_project_root: bool = True,
+    safe_profile: bool = False,
 ) -> dict[str, str]:
     env: dict[str, str] = {
         "PYTHONUNBUFFERED": "1",
@@ -495,6 +687,7 @@ def _build_codex_env(
         val = os.environ.get(env_var)
         if val:
             env[env_var] = val
+    _apply_safe_profile_env(env, enabled=safe_profile)
 
     return env
 
@@ -632,12 +825,14 @@ def _make_codex_mcp_config(
     gm_project_root: Optional[Path],
     workspace_root: Path,
     include_project_root: bool = True,
+    safe_profile: bool = False,
 ) -> str:
     """Create a Codex MCP config block in TOML format."""
     env: dict[str, str] = _build_codex_env(
         gm_project_root=gm_project_root,
         workspace_root=workspace_root,
         include_project_root=include_project_root,
+        safe_profile=safe_profile,
     )
 
     lines = [
@@ -664,6 +859,7 @@ def _generate_codex_config(
     gm_project_root: Optional[Path],
     dry_run: bool,
     include_project_root: bool = True,
+    safe_profile: bool = False,
 ) -> tuple[Path, str, str]:
     """Generate a Codex config entry for the target server."""
     resolved_root = gm_project_root if gm_project_root is not None else workspace_root
@@ -674,6 +870,7 @@ def _generate_codex_config(
         gm_project_root=resolved_root,
         workspace_root=workspace_root,
         include_project_root=include_project_root,
+        safe_profile=safe_profile,
     )
     merged = _render_codex_merged_config(
         output_path=output_path,
@@ -980,7 +1177,15 @@ def _collect_codex_check_state(*, workspace_root: Path, server_name: str) -> dic
         active_path = str(global_path)
         active_entry = global_entry
 
+    readiness = _validate_common_entry(
+        active_entry,
+        require_project_root=active_scope != "global",
+        env_required=True,
+    )
+
     return {
+        "ok": True,
+        "client": "codex",
         "server_name": server_name,
         "workspace": {
             "path": str(local_path),
@@ -997,31 +1202,16 @@ def _collect_codex_check_state(*, workspace_root: Path, server_name: str) -> dic
             "path": active_path,
             "entry": active_entry,
         },
+        "ready": readiness.ready,
+        "problems": readiness.problems,
+        "not_applicable": False,
     }
 
 
 def _codex_entry_readiness(entry: object) -> tuple[bool, list[str]]:
     """Validate that an active Codex MCP server entry has required fields."""
-    problems: list[str] = []
-
-    if not isinstance(entry, dict):
-        return False, ["Active server entry is missing or not a table/object."]
-
-    command = entry.get("command")
-    if not isinstance(command, str) or not command.strip():
-        problems.append("`command` must be a non-empty string.")
-
-    args = entry.get("args")
-    if not isinstance(args, list):
-        problems.append("`args` must be a list.")
-
-    env = entry.get("env")
-    if not isinstance(env, dict):
-        problems.append("`env` must be a table/object.")
-    elif env.get("PYTHONUNBUFFERED") != "1":
-        problems.append("`env.PYTHONUNBUFFERED` should be \"1\" for unbuffered logs.")
-
-    return len(problems) == 0, problems
+    result = _validate_common_entry(entry, require_project_root=False, env_required=True)
+    return result.ready, result.problems
 
 
 def _print_codex_check(*, workspace_root: Path, server_name: str) -> int:
@@ -1047,11 +1237,14 @@ def _print_codex_check(*, workspace_root: Path, server_name: str) -> int:
     active_entry = state["active"]["entry"]
     if active_entry is None:
         print(f"[INFO] Active server entry '{server_name}': not found")
-        return 0
+    else:
+        print(f"[INFO] Active server entry '{server_name}' source: {state['active']['path']}")
+        print("[INFO] Active server entry payload:")
+        print(json.dumps(active_entry, indent=2, sort_keys=True))
 
-    print(f"[INFO] Active server entry '{server_name}' source: {state['active']['path']}")
-    print("[INFO] Active server entry payload:")
-    print(json.dumps(active_entry, indent=2, sort_keys=True))
+    print(f"[INFO] Ready for Codex: {'yes' if state.get('ready') else 'no'}")
+    for problem in state.get("problems", []):
+        print(f"[WARN] {problem}")
     return 0
 
 
@@ -1063,7 +1256,6 @@ def _print_codex_check_json(*, workspace_root: Path, server_name: str) -> int:
         print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
         return 2
 
-    state["ok"] = True
     print(json.dumps(state, indent=2, sort_keys=True))
     return 0
 
@@ -1076,15 +1268,66 @@ def _print_codex_app_setup_summary(*, workspace_root: Path, server_name: str) ->
         print(f"[ERROR] Codex app setup summary failed: {exc}")
         return 2
 
-    ready, problems = _codex_entry_readiness(state["active"]["entry"])
     print("[INFO] Codex app readiness summary:")
     print(f"[INFO] Active scope: {state['active']['scope']}")
     if state["active"]["path"]:
         print(f"[INFO] Active config path: {state['active']['path']}")
-    print(f"[INFO] Ready for Codex app: {'yes' if ready else 'no'}")
-    for problem in problems:
+    print(f"[INFO] Ready for Codex app: {'yes' if state.get('ready') else 'no'}")
+    for problem in state.get("problems", []):
         print(f"[WARN] {problem}")
     return 0
+
+
+def _repo_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
+def _copy_tree(*, source: Path, destination: Path, dry_run: bool, written: list[Path]) -> None:
+    if not source.exists():
+        return
+    if source.resolve() == destination.resolve():
+        return
+
+    for item in source.rglob("*"):
+        rel = item.relative_to(source)
+        target = destination / rel
+        if item.is_dir():
+            if not dry_run:
+                target.mkdir(parents=True, exist_ok=True)
+            continue
+        if not dry_run:
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(item, target)
+        written.append(target)
+
+
+def _build_claude_plugin_manifest(
+    *,
+    server_name: str,
+    command: str,
+    args_prefix: list[str],
+) -> dict:
+    manifest = _make_claude_code_plugin_manifest()
+    template_path = _repo_root() / ".claude-plugin" / "plugin.json"
+    if template_path.exists():
+        try:
+            parsed = _parse_json_object_or_raise(
+                text=template_path.read_text(encoding="utf-8"),
+                source_label=str(template_path),
+            )
+            manifest.update(parsed)
+        except Exception:
+            pass
+
+    manifest["name"] = manifest.get("name") or "gms-mcp"
+    manifest["mcpServers"] = {
+        server_name: {
+            "command": command,
+            "args": args_prefix,
+            "env": {},
+        }
+    }
+    return manifest
 
 
 def _generate_claude_code_plugin(
@@ -1094,6 +1337,8 @@ def _generate_claude_code_plugin(
     command: str,
     args_prefix: list[str],
     dry_run: bool,
+    include_bundle_assets: bool = False,
+    safe_profile: bool = False,
 ) -> list[Path]:
     """
     Generate Claude plugin files with MCP server configuration.
@@ -1114,10 +1359,28 @@ def _generate_claude_code_plugin(
     """
     written: list[Path] = []
 
+    if include_bundle_assets:
+        _copy_tree(
+            source=_repo_root() / "hooks",
+            destination=plugin_dir / "hooks",
+            dry_run=dry_run,
+            written=written,
+        )
+        _copy_tree(
+            source=_repo_root() / "skills",
+            destination=plugin_dir / "skills",
+            dry_run=dry_run,
+            written=written,
+        )
+
     # Create plugin manifest
     manifest_dir = plugin_dir / ".claude-plugin"
     manifest_path = manifest_dir / "plugin.json"
-    manifest = _make_claude_code_plugin_manifest()
+    manifest = _build_claude_plugin_manifest(
+        server_name=server_name,
+        command=command,
+        args_prefix=args_prefix,
+    )
     _write_json(manifest_path, manifest, dry_run=dry_run)
     written.append(manifest_path)
 
@@ -1127,6 +1390,7 @@ def _generate_claude_code_plugin(
         server_name=server_name,
         command=command,
         args=args_prefix,
+        safe_profile=safe_profile,
     )
     _write_json(mcp_config_path, mcp_config, dry_run=dry_run)
     written.append(mcp_config_path)
@@ -1219,6 +1483,417 @@ def _setup_project_config(
         return None
 
 
+def _scope_not_applicable_reason(*, client: str, scope: str) -> str | None:
+    spec = resolve_client_spec(client)
+    if scope == "workspace" and not spec.workspace_supported:
+        return f"Client '{spec.key}' does not support workspace scope."
+    if scope == "global" and not spec.global_supported:
+        return f"Client '{spec.key}' does not support global scope."
+    return None
+
+
+def _collect_client_check_state(
+    *,
+    client: str,
+    scope: str,
+    workspace_root: Path,
+    server_name: str,
+    config_path_override: str | None,
+) -> ConfigState:
+    spec = resolve_client_spec(client)
+    not_applicable_reason = _scope_not_applicable_reason(client=spec.key, scope=scope)
+    if not_applicable_reason is not None:
+        fallback_path = str(workspace_root)
+        if config_path_override:
+            override_path = Path(config_path_override).expanduser()
+            if not override_path.is_absolute():
+                override_path = (workspace_root / override_path).resolve()
+            fallback_path = str(override_path)
+        elif scope == "workspace" and spec.workspace_relpath:
+            fallback_path = str(workspace_root / spec.workspace_relpath)
+        elif scope == "global" and spec.global_relpath:
+            fallback_path = str(Path.home() / spec.global_relpath)
+        return ConfigState(
+            client=spec.key,
+            scope=scope,
+            server_name=server_name,
+            path=fallback_path,
+            exists=False,
+            entry=None,
+            readiness=ReadinessResult(ready=False, problems=[not_applicable_reason], not_applicable=True),
+        )
+
+    target = spec.resolve_path(workspace_root=workspace_root, scope=scope, override=config_path_override)
+    try:
+        if spec.key == "codex":
+            entry, _ = _read_codex_server_entry(config_path=target, server_name=server_name)
+            readiness = _validate_common_entry(
+                entry,
+                require_project_root=scope != "global",
+                env_required=True,
+            )
+            return ConfigState(
+                client=spec.key,
+                scope=scope,
+                server_name=server_name,
+                path=str(target),
+                exists=target.exists(),
+                entry=entry,
+                readiness=readiness,
+            )
+
+        if spec.key == "claude-desktop":
+            plugin_dir = target
+            mcp_path = plugin_dir / ".mcp.json"
+            state = _collect_standard_check_state(
+                client=spec.key,
+                scope=scope,
+                config_path=mcp_path,
+                server_name=server_name,
+                allow_plain_top_level=True,
+                require_project_root=True,
+                env_required=True,
+                not_applicable_reason=not_applicable_reason,
+            )
+            if not state.readiness.not_applicable:
+                manifest_path = plugin_dir / ".claude-plugin" / "plugin.json"
+                hooks_dir = plugin_dir / "hooks"
+                skills_dir = plugin_dir / "skills"
+                if not manifest_path.exists():
+                    state.readiness.problems.append("Claude plugin manifest is missing (.claude-plugin/plugin.json).")
+                if not hooks_dir.exists():
+                    state.readiness.problems.append("Claude plugin hooks directory is missing.")
+                if not skills_dir.exists():
+                    state.readiness.problems.append("Claude plugin skills directory is missing.")
+                state.readiness.ready = len(state.readiness.problems) == 0
+                state.exists = mcp_path.exists() or manifest_path.exists()
+                state.path = str(plugin_dir)
+            return state
+
+        allow_plain = spec.key == "claude-code"
+        require_project_root = not (spec.key == "codex" and scope == "global")
+        return _collect_standard_check_state(
+            client=spec.key,
+            scope=scope,
+            config_path=target,
+            server_name=server_name,
+            allow_plain_top_level=allow_plain,
+            require_project_root=require_project_root,
+            env_required=True,
+            not_applicable_reason=not_applicable_reason,
+        )
+    except (RuntimeError, ValueError) as exc:
+        return ConfigState(
+            client=spec.key,
+            scope=scope,
+            server_name=server_name,
+            path=str(target),
+            exists=target.exists(),
+            entry=None,
+            readiness=ReadinessResult(ready=False, problems=[str(exc)]),
+        )
+
+
+def _run_setup_for_client(
+    *,
+    client: str,
+    scope: str,
+    workspace_root: Path,
+    gm_project_root: Path | None,
+    server_name: str,
+    command: str,
+    args_prefix: list[str],
+    dry_run: bool,
+    safe_profile: bool,
+    config_path_override: str | None,
+) -> int:
+    spec = resolve_client_spec(client)
+    not_applicable_reason = _scope_not_applicable_reason(client=spec.key, scope=scope)
+    if not_applicable_reason is not None:
+        print(f"[INFO] {not_applicable_reason}")
+        return 0
+
+    target = spec.resolve_path(workspace_root=workspace_root, scope=scope, override=config_path_override)
+
+    if spec.key == "cursor":
+        gm_rel_posix = _relpath_posix_or_none(gm_project_root if scope == "workspace" else None, workspace_root)
+        payload = _make_server_config(
+            client=spec.key,
+            server_name=server_name,
+            command=command,
+            args=args_prefix,
+            gm_project_root_rel_posix=gm_rel_posix,
+            safe_profile=safe_profile,
+        )
+        _generate_cursor_config(
+            workspace_root=workspace_root,
+            server_name=server_name,
+            command=command,
+            args_prefix=args_prefix,
+            gm_project_root=gm_project_root if scope == "workspace" else None,
+            out_path=target,
+            dry_run=dry_run,
+            safe_profile=safe_profile,
+        )
+        print(f"[{'DRY-RUN' if dry_run else 'INFO'}] Cursor config {'would be written to' if dry_run else 'written to'}: {target}")
+        if dry_run:
+            print(json.dumps(payload, indent=2, sort_keys=True))
+        return 0
+
+    if spec.key == "codex":
+        try:
+            _, payload, merged = _generate_codex_config(
+                workspace_root=workspace_root,
+                output_path=target,
+                server_name=server_name,
+                command=command,
+                args_prefix=args_prefix,
+                gm_project_root=gm_project_root,
+                dry_run=dry_run,
+                include_project_root=scope == "workspace",
+                safe_profile=safe_profile,
+            )
+        except (RuntimeError, ValueError) as exc:
+            print(f"[ERROR] Could not generate Codex config: {exc}")
+            return 2
+        if dry_run:
+            print(f"[DRY-RUN] Codex config would be {'merged into' if scope == 'global' else 'written to'}: {target}")
+            print(payload)
+            print("[DRY-RUN] Final merged payload:")
+            print(merged.rstrip())
+        else:
+            print(f"[INFO] Codex config updated: {target}")
+        return 0
+
+    if spec.key == "antigravity":
+        if scope == "global":
+            try:
+                _, payload, merged, _ = _generate_antigravity_config(
+                    workspace_root=workspace_root,
+                    output_path=target,
+                    server_name=server_name,
+                    command=command,
+                    args_prefix=args_prefix,
+                    gm_project_root=gm_project_root,
+                    safe_profile=safe_profile,
+                    dry_run=dry_run,
+                )
+            except ValueError as exc:
+                print(f"[ERROR] Could not generate Antigravity config: {exc}")
+                return 2
+            if dry_run:
+                print(f"[DRY-RUN] Antigravity config would be merged into: {target}")
+                print(json.dumps(payload, indent=2, sort_keys=True))
+                print(json.dumps(merged, indent=2, sort_keys=True))
+            else:
+                print(f"[INFO] Antigravity config updated: {target}")
+            return 0
+
+        payload = _make_antigravity_server_config(
+            server_name=server_name,
+            command=command,
+            args=args_prefix,
+            workspace_root=workspace_root,
+            gm_project_root=gm_project_root,
+            safe_profile=safe_profile,
+        )
+        _write_json(target, payload, dry_run=dry_run)
+        print(f"[{'DRY-RUN' if dry_run else 'INFO'}] Antigravity workspace config {'would be written to' if dry_run else 'written to'}: {target}")
+        return 0
+
+    if spec.key == "claude-code":
+        plugin_dir = target.parent if target.suffix == ".json" else target
+        manifest_payload = _build_claude_plugin_manifest(
+            server_name=server_name,
+            command=command,
+            args_prefix=args_prefix,
+        )
+        mcp_payload = _make_claude_code_mcp_config(
+            server_name=server_name,
+            command=command,
+            args=args_prefix,
+            safe_profile=safe_profile,
+        )
+        _generate_claude_code_plugin(
+            plugin_dir=plugin_dir,
+            server_name=server_name,
+            command=command,
+            args_prefix=args_prefix,
+            dry_run=dry_run,
+            include_bundle_assets=False,
+            safe_profile=safe_profile,
+        )
+        print(f"[{'DRY-RUN' if dry_run else 'INFO'}] Claude Code config {'would be written to' if dry_run else 'written to'}: {plugin_dir / '.mcp.json'}")
+        if dry_run:
+            print(json.dumps(manifest_payload, indent=2, sort_keys=True))
+            print(json.dumps(mcp_payload, indent=2, sort_keys=True))
+        return 0
+
+    if spec.key == "claude-desktop":
+        manifest_payload = _build_claude_plugin_manifest(
+            server_name=server_name,
+            command=command,
+            args_prefix=args_prefix,
+        )
+        mcp_payload = _make_claude_code_mcp_config(
+            server_name=server_name,
+            command=command,
+            args=args_prefix,
+            safe_profile=safe_profile,
+        )
+        _generate_claude_code_plugin(
+            plugin_dir=target,
+            server_name=server_name,
+            command=command,
+            args_prefix=args_prefix,
+            dry_run=dry_run,
+            include_bundle_assets=True,
+            safe_profile=safe_profile,
+        )
+        print(f"[{'DRY-RUN' if dry_run else 'INFO'}] Claude Desktop plugin {'would be synced to' if dry_run else 'synced to'}: {target}")
+        if dry_run:
+            print(json.dumps(manifest_payload, indent=2, sort_keys=True))
+            print(json.dumps(mcp_payload, indent=2, sort_keys=True))
+        return 0
+
+    # Generic JSON-style path for vscode/windsurf/openclaw/generic and future clients.
+    gm_rel_posix = _relpath_posix_or_none(gm_project_root, workspace_root)
+    payload = _make_server_config(
+        client=spec.key,
+        server_name=server_name,
+        command=command,
+        args=args_prefix,
+        gm_project_root_rel_posix=gm_rel_posix,
+        safe_profile=safe_profile,
+    )
+    _write_json(target, payload, dry_run=dry_run)
+    print(f"[{'DRY-RUN' if dry_run else 'INFO'}] {spec.key} config {'would be written to' if dry_run else 'written to'}: {target}")
+    if dry_run:
+        print(json.dumps(payload, indent=2, sort_keys=True))
+    return 0
+
+
+def _maybe_install_openclaw_skills(*, enable: bool, project_scope: bool, workspace_root: Path) -> int:
+    if not enable:
+        return 0
+    try:
+        from types import SimpleNamespace
+        from gms_helpers.commands.skills_commands import handle_skills_install
+    except Exception as exc:
+        print(f"[WARN] Could not load OpenClaw skills installer: {exc}")
+        return 0
+
+    previous_cwd = Path.cwd()
+    try:
+        os.chdir(workspace_root)
+        result = handle_skills_install(
+            SimpleNamespace(
+                openclaw=True,
+                project=project_scope,
+                force=False,
+            )
+        )
+    finally:
+        os.chdir(previous_cwd)
+    if not result.get("success", False):
+        print("[ERROR] OpenClaw skills install failed during app setup.")
+        return 2
+    return 0
+
+
+def _run_canonical_flow(
+    *,
+    client: str,
+    scope: str,
+    action: str,
+    workspace_root: Path,
+    gm_project_root: Path | None,
+    server_name: str,
+    command: str,
+    args_prefix: list[str],
+    dry_run: bool,
+    safe_profile: bool,
+    config_path_override: str | None,
+    openclaw_install_skills: bool,
+    openclaw_skills_project: bool,
+) -> int:
+    if action not in CLIENT_ACTIONS:
+        print(f"[ERROR] Unsupported action '{action}'.")
+        return 2
+    if scope not in CLIENT_SCOPES:
+        print(f"[ERROR] Unsupported scope '{scope}'.")
+        return 2
+
+    if action == "setup":
+        return _run_setup_for_client(
+            client=client,
+            scope=scope,
+            workspace_root=workspace_root,
+            gm_project_root=gm_project_root,
+            server_name=server_name,
+            command=command,
+            args_prefix=args_prefix,
+            dry_run=dry_run,
+            safe_profile=safe_profile,
+            config_path_override=config_path_override,
+        )
+
+    if action == "check":
+        state = _collect_client_check_state(
+            client=client,
+            scope=scope,
+            workspace_root=workspace_root,
+            server_name=server_name,
+            config_path_override=config_path_override,
+        )
+        return _print_standard_check(state)
+
+    if action == "check-json":
+        state = _collect_client_check_state(
+            client=client,
+            scope=scope,
+            workspace_root=workspace_root,
+            server_name=server_name,
+            config_path_override=config_path_override,
+        )
+        return _print_standard_check_json(state)
+
+    # app-setup
+    setup_code = _run_setup_for_client(
+        client=client,
+        scope=scope,
+        workspace_root=workspace_root,
+        gm_project_root=gm_project_root,
+        server_name=server_name,
+        command=command,
+        args_prefix=args_prefix,
+        dry_run=dry_run,
+        safe_profile=safe_profile,
+        config_path_override=config_path_override,
+    )
+    if setup_code != 0:
+        return setup_code
+
+    if resolve_client_spec(client).key == "openclaw":
+        skills_code = _maybe_install_openclaw_skills(
+            enable=openclaw_install_skills,
+            project_scope=openclaw_skills_project,
+            workspace_root=workspace_root,
+        )
+        if skills_code != 0:
+            return skills_code
+
+    state = _collect_client_check_state(
+        client=client,
+        scope=scope,
+        workspace_root=workspace_root,
+        server_name=server_name,
+        config_path_override=config_path_override,
+    )
+    _print_standard_check(state)
+    return _print_standard_app_setup_summary(state)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description="Generate MCP client configs for the GameMaker MCP server.")
     parser.add_argument("--workspace-root", default=".", help="Workspace root where configs should be written.")
@@ -1248,6 +1923,29 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run",
         action="store_true",
         help="Print what would be written, but do not write any files.",
+    )
+    parser.add_argument(
+        "--client",
+        choices=all_client_names(),
+        default=None,
+        help="Canonical client selector for parity workflows.",
+    )
+    parser.add_argument(
+        "--scope",
+        choices=CLIENT_SCOPES,
+        default="workspace",
+        help="Canonical scope selector: workspace or global.",
+    )
+    parser.add_argument(
+        "--action",
+        choices=CLIENT_ACTIONS,
+        default="setup",
+        help="Canonical action selector: setup/check/check-json/app-setup.",
+    )
+    parser.add_argument(
+        "--config-path",
+        default=None,
+        help="Optional explicit config path for canonical --client flows.",
     )
 
     parser.add_argument("--cursor", action="store_true", help="Write Cursor workspace config to .cursor/mcp.json.")
@@ -1326,7 +2024,17 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--safe-profile",
         action="store_true",
-        help="Apply conservative env defaults to generated Antigravity configs (disable direct mode, require dry-run for destructive tools).",
+        help="Apply conservative env defaults to generated configs (disable direct mode, require dry-run for destructive tools).",
+    )
+    parser.add_argument(
+        "--openclaw-install-skills",
+        action="store_true",
+        help="For canonical openclaw app-setup, also install bundled skills.",
+    )
+    parser.add_argument(
+        "--openclaw-skills-project",
+        action="store_true",
+        help="When --openclaw-install-skills is used, install OpenClaw skills at workspace scope.",
     )
     parser.add_argument("--openclaw", action="store_true", help="Write an OpenClaw example config to mcp-configs/openclaw.mcp.json.")
     parser.add_argument("--all", action="store_true", help="Generate Cursor config + all example configs (excludes Claude Code global).")
@@ -1352,6 +2060,38 @@ def main(argv: list[str] | None = None) -> int:
         requested_root=args.gm_project_root,
         non_interactive=bool(args.non_interactive),
     )
+
+    command, args_prefix = _resolve_launcher(mode=args.mode, python_command=args.python)
+    if args.mode == "python-module" and command != args.python:
+        print(f"[WARN] Python command '{args.python}' not found; using '{command}' instead.")
+
+    if args.mode == "command" and shutil.which(command) is None:
+        print(
+            "[WARN] 'gms-mcp' not found on PATH. Config will still be written, but the client may fail to start it.\n"
+            "       Recommended: `pipx install gms-mcp` (or use --mode=python-module)."
+        )
+
+    if args.client:
+        spec = resolve_client_spec(args.client)
+        canonical_safe_profile = bool(
+            args.safe_profile
+            or (spec.key == "antigravity" and args.scope == "global" and args.action in ("setup", "app-setup"))
+        )
+        return _run_canonical_flow(
+            client=spec.key,
+            scope=args.scope,
+            action=args.action,
+            workspace_root=workspace_root,
+            gm_project_root=gm_project_root,
+            server_name=args.server_name,
+            command=command,
+            args_prefix=args_prefix,
+            dry_run=dry_run,
+            safe_profile=canonical_safe_profile,
+            config_path_override=args.config_path,
+            openclaw_install_skills=bool(args.openclaw_install_skills),
+            openclaw_skills_project=bool(args.openclaw_skills_project),
+        )
 
     requested_any = (
         args.cursor or args.cursor_global or
@@ -1452,17 +2192,6 @@ def main(argv: list[str] | None = None) -> int:
         args.openclaw = True
         # Note: --all does NOT include claude-code-global since it's a global install
 
-    command, args_prefix = _resolve_launcher(mode=args.mode, python_command=args.python)
-    if args.mode == "python-module" and command != args.python:
-        print(f"[WARN] Python command '{args.python}' not found; using '{command}' instead.")
-
-    if args.mode == "command":
-        if shutil.which(command) is None:
-            print(
-                "[WARN] 'gms-mcp' not found on PATH. Config will still be written, but the client may fail to start it.\n"
-                "       Recommended: `pipx install gms-mcp` (or use --mode=python-module)."
-            )
-
     written: list[Path] = []
 
     if args.cursor:
@@ -1475,6 +2204,7 @@ def main(argv: list[str] | None = None) -> int:
                 gm_project_root=gm_project_root,
                 out_path=workspace_root / ".cursor" / "mcp.json",
                 dry_run=dry_run,
+                safe_profile=bool(args.safe_profile),
             )
         )
 
@@ -1490,6 +2220,7 @@ def main(argv: list[str] | None = None) -> int:
                 gm_project_root=None,
                 out_path=Path.home() / ".cursor" / "mcp.json",
                 dry_run=dry_run,
+                safe_profile=bool(args.safe_profile),
             )
         )
 
@@ -1502,6 +2233,8 @@ def main(argv: list[str] | None = None) -> int:
                 command=command,
                 args_prefix=args_prefix,
                 dry_run=dry_run,
+                include_bundle_assets=False,
+                safe_profile=bool(args.safe_profile),
             )
         )
         if not dry_run:
@@ -1520,6 +2253,8 @@ def main(argv: list[str] | None = None) -> int:
                 command=command,
                 args_prefix=args_prefix,
                 dry_run=dry_run,
+                include_bundle_assets=True,
+                safe_profile=bool(args.safe_profile),
             )
         )
         if not dry_run:
@@ -1539,6 +2274,7 @@ def main(argv: list[str] | None = None) -> int:
                 gm_project_root=gm_project_root,
                 dry_run=dry_run,
                 include_project_root=True,
+                safe_profile=bool(args.safe_profile),
             )
         except (RuntimeError, ValueError) as exc:
             print(f"[ERROR] Could not generate Codex workspace config: {exc}")
@@ -1565,7 +2301,11 @@ def main(argv: list[str] | None = None) -> int:
                 + [shlex.quote(item) for item in args_prefix]
             )
             command_line += _build_codex_env_args(
-                _build_codex_env(gm_project_root, workspace_root)
+                _build_codex_env(
+                    gm_project_root,
+                    workspace_root,
+                    safe_profile=bool(args.safe_profile),
+                )
             )
             print(f"[INFO] Registering command: {command_line}")
 
@@ -1581,6 +2321,7 @@ def main(argv: list[str] | None = None) -> int:
                 gm_project_root=gm_project_root,
                 dry_run=dry_run,
                 include_project_root=False,
+                safe_profile=bool(args.safe_profile),
             )
         except (RuntimeError, ValueError) as exc:
             print(f"[ERROR] Could not generate Codex global config: {exc}")
@@ -1611,6 +2352,7 @@ def main(argv: list[str] | None = None) -> int:
                 gm_project_root=gm_project_root,
                 dry_run=True,
                 include_project_root=False,
+                safe_profile=bool(args.safe_profile),
             )
         except (RuntimeError, ValueError) as exc:
             print(f"[ERROR] Could not preview Codex global config merge: {exc}")
@@ -1691,6 +2433,7 @@ def main(argv: list[str] | None = None) -> int:
                 command=command,
                 args=args_prefix,
                 gm_project_root_rel_posix=gm_rel_posix,
+                safe_profile=bool(args.safe_profile),
             )
             print(f"\n[DRY-RUN] {cursor_path}:\n{json.dumps(payload, indent=2)}\n")
         if args.claude_code or args.claude_code_global:
@@ -1701,12 +2444,22 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"\n[DRY-RUN] Claude Code plugin would be created at: {plugin_dir}")
             print(f"[DRY-RUN] {plugin_dir / '.claude-plugin' / 'plugin.json'}:")
-            print(json.dumps(_make_claude_code_plugin_manifest(), indent=2))
+            print(
+                json.dumps(
+                    _build_claude_plugin_manifest(
+                        server_name=args.server_name,
+                        command=command,
+                        args_prefix=args_prefix,
+                    ),
+                    indent=2,
+                )
+            )
             print(f"\n[DRY-RUN] {plugin_dir / '.mcp.json'}:")
             mcp_config = _make_claude_code_mcp_config(
                 server_name=args.server_name,
                 command=command,
                 args=args_prefix,
+                safe_profile=bool(args.safe_profile),
             )
             print(json.dumps(mcp_config, indent=2))
             print()
