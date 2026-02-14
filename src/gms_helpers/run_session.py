@@ -225,7 +225,9 @@ class RunSessionManager:
             else:
                 # On Unix, use signals
                 import signal
-                sig = signal.SIGKILL if force else signal.SIGTERM
+                sig_term = getattr(signal, "SIGTERM", 15)
+                sig_kill = getattr(signal, "SIGKILL", sig_term)
+                sig = sig_kill if force else sig_term
 
                 try:
                     parent_pgid = os.getpgid(pid)

@@ -313,10 +313,11 @@ class TestRunSessionManagerProcessChecks(unittest.TestCase):
     ):
         """Test Unix kill_process targets the process group when available."""
         self.manager.kill_process(12345, force=True)
+        expected_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
 
         mock_getpgid.assert_called_once_with(12345)
         mock_getpgrp.assert_called_once_with()
-        mock_killpg.assert_called_once_with(1000, signal.SIGKILL)
+        mock_killpg.assert_called_once_with(1000, expected_signal)
         mock_kill.assert_not_called()
 
 
