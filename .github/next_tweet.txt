@@ -1,1 +1,1 @@
-Codex config support in gms-mcp is now cross-platform solid: Windows CI caught edge cases around path rendering and home-dir detection, and the test suite now validates codex merge/check flows cleanly across OS + Python versions. #GameMaker #gamedev
+gms-mcp now supports OpenClaw out of the box: generate openclaw.mcp.json via gms-mcp-init --openclaw and install skills with gms skills install --openclaw. Plus Python interpreter fallback is more robust across macOS/Linux/Windows. #GameMaker #gamedev
