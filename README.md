@@ -40,11 +40,17 @@ This provides:
 - **Hooks**: Automatic update checks and error notifications
 - **MCP Server**: Auto-configured via uvx (no pip install needed)
 
-### For Other Tools (Cursor, VSCode, etc.)
+### For Other Tools (Cursor, VSCode, OpenClaw, etc.)
 
 ```bash
 pip install gms-mcp
-gms-mcp-init --cursor  # or --vscode, --windsurf, etc.
+gms-mcp-init --cursor  # or --vscode, --windsurf, --openclaw, etc.
+```
+
+For skill packs, OpenClaw users can install to `~/.openclaw/skills/` with:
+
+```bash
+gms skills install --openclaw
 ```
 
 ### For Codex
@@ -197,7 +203,7 @@ gms-mcp-init --codex-app-setup
 Generate example configs for other MCP-capable clients:
 
 ```bash
-gms-mcp-init --vscode --windsurf --antigravity
+gms-mcp-init --vscode --windsurf --antigravity --openclaw
 ```
 
 Or generate everything at once:

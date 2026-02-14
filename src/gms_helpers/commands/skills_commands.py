@@ -1,4 +1,4 @@
-"""Skills command implementations for installing Claude Code skills."""
+"""Skills command implementations for installing agent skills."""
 
 import shutil
 from pathlib import Path
@@ -21,30 +21,37 @@ def get_skills_source_dir() -> Path:
     raise FileNotFoundError("Skills directory not found")
 
 
-def get_target_dir(project: bool = False) -> Path:
+def _platform_name(openclaw: bool) -> str:
+    return "OpenClaw" if openclaw else "Claude Code"
+
+
+def get_target_dir(project: bool = False, *, openclaw: bool = False) -> Path:
     """
     Return the target directory for skills installation.
 
     Args:
-        project: If True, install to ./.claude/skills/gms-mcp/
-                 If False, install to ~/.claude/skills/gms-mcp/
+        project: If True, install in the current workspace.
+                 If False, install in the user's home config directory.
+        openclaw: If True, target OpenClaw skill directories instead of Claude.
     """
+    dot_dir = ".openclaw" if openclaw else ".claude"
     if project:
-        return Path.cwd() / ".claude" / "skills" / "gms-mcp"
+        return Path.cwd() / dot_dir / "skills" / "gms-mcp"
     else:
-        return Path.home() / ".claude" / "skills" / "gms-mcp"
+        return Path.home() / dot_dir / "skills" / "gms-mcp"
 
 
 def handle_skills_install(args) -> Dict[str, Any]:
     """
-    Install Claude Code skills to the user's skills directory.
+    Install skills to the selected agent's skills directory.
 
     Copies all skills from the package to either:
-    - ~/.claude/skills/gms-mcp/ (default)
-    - ./.claude/skills/gms-mcp/ (with --project flag)
+    - ~/.claude/skills/gms-mcp/ or ./.claude/skills/gms-mcp/ (default)
+    - ~/.openclaw/skills/gms-mcp/ or ./.openclaw/skills/gms-mcp/ (--openclaw)
     """
     source_dir = get_skills_source_dir() / "gms-mcp"
-    target_dir = get_target_dir(project=getattr(args, 'project', False))
+    openclaw = bool(getattr(args, "openclaw", False))
+    target_dir = get_target_dir(project=getattr(args, 'project', False), openclaw=openclaw)
     force = getattr(args, 'force', False)
 
     if not source_dir.exists():
@@ -74,7 +81,7 @@ def handle_skills_install(args) -> Dict[str, Any]:
 
     # Report results
     if copied:
-        print(f"[OK]    Installed {len(copied)} skill file(s) to {target_dir}")
+        print(f"[OK]    Installed {len(copied)} {_platform_name(openclaw)} skill file(s) to {target_dir}")
         for f in copied:
             print(f"        + {f}")
 
@@ -99,8 +106,9 @@ def handle_skills_list(args) -> Dict[str, Any]:
     List available skills and their installation status.
     """
     source_dir = get_skills_source_dir() / "gms-mcp"
-    user_dir = get_target_dir(project=False)
-    project_dir = get_target_dir(project=True)
+    openclaw = bool(getattr(args, "openclaw", False))
+    user_dir = get_target_dir(project=False, openclaw=openclaw)
+    project_dir = get_target_dir(project=True, openclaw=openclaw)
 
     installed_only = getattr(args, 'installed', False)
 
@@ -129,7 +137,7 @@ def handle_skills_list(args) -> Dict[str, Any]:
         skills.append(skill_info)
 
     # Print results
-    print("Available gms-mcp skills:")
+    print(f"Available gms-mcp skills ({_platform_name(openclaw)}):")
     print()
 
     for skill in sorted(skills, key=lambda s: s["name"]):
@@ -161,7 +169,8 @@ def handle_skills_uninstall(args) -> Dict[str, Any]:
     """
     Remove installed skills from the target directory.
     """
-    target_dir = get_target_dir(project=getattr(args, 'project', False))
+    openclaw = bool(getattr(args, "openclaw", False))
+    target_dir = get_target_dir(project=getattr(args, 'project', False), openclaw=openclaw)
 
     if not target_dir.exists():
         print(f"[OK]    No skills installed at {target_dir}")
@@ -173,7 +182,7 @@ def handle_skills_uninstall(args) -> Dict[str, Any]:
     # Remove the entire gms-mcp skills directory
     shutil.rmtree(target_dir)
 
-    print(f"[OK]    Removed {file_count} skill file(s) from {target_dir}")
+    print(f"[OK]    Removed {file_count} {_platform_name(openclaw)} skill file(s) from {target_dir}")
 
     return {
         "success": True,

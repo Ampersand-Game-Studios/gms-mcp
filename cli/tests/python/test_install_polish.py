@@ -8,6 +8,7 @@ from pathlib import Path
 from gms_mcp.install import (
     _make_server_config,
     _workspace_folder_var,
+    _resolve_python_command,
     _make_claude_code_plugin_manifest,
     _make_claude_code_mcp_config,
     _make_codex_toml_value,
@@ -112,6 +113,10 @@ class TestClaudeCodeSupport(unittest.TestCase):
     def test_workspace_folder_var_vscode(self):
         """VS Code should use ${workspaceFolder}."""
         self.assertEqual(_workspace_folder_var("vscode"), "${workspaceFolder}")
+
+    def test_workspace_folder_var_openclaw(self):
+        """OpenClaw should use ${workspaceFolder} in JSON example configs."""
+        self.assertEqual(_workspace_folder_var("openclaw"), "${workspaceFolder}")
 
     def test_workspace_folder_var_claude_code(self):
         """Claude Code should use ${CLAUDE_PROJECT_DIR}."""
@@ -228,6 +233,11 @@ class TestClaudeCodeSupport(unittest.TestCase):
         finally:
             del os.environ["GMS_MCP_GMS_PATH"]
             del os.environ["GMS_MCP_ENABLE_DIRECT"]
+
+    def test_resolve_python_command_prefers_working_fallback(self):
+        """Resolver should return a runnable fallback when requested interpreter is missing."""
+        resolved = _resolve_python_command("python-nonexistent-for-test")
+        self.assertTrue(isinstance(resolved, str) and len(resolved) > 0)
 
     def test_build_codex_toml_value(self):
         """Serializer should produce TOML-compatible scalar output."""
@@ -528,6 +538,29 @@ class TestClaudeCodeSupport(unittest.TestCase):
             self.assertEqual(ret, 0)
             self.assertIn("[DRY-RUN] Codex config would be written to:", output)
             self.assertFalse((workspace / ".codex" / "mcp.toml").exists())
+
+    def test_main_openclaw_dry_run(self):
+        """CLI dry-run for --openclaw reports target path and does not write files."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            (workspace / "project.yyp").touch()
+            buffer = io.StringIO()
+
+            with redirect_stdout(buffer):
+                ret = main(
+                    [
+                        "--workspace-root",
+                        str(workspace),
+                        "--non-interactive",
+                        "--openclaw",
+                        "--dry-run",
+                    ]
+                )
+
+            output = buffer.getvalue()
+            self.assertEqual(ret, 0)
+            self.assertIn("openclaw.mcp.json", output)
+            self.assertFalse((workspace / "mcp-configs" / "openclaw.mcp.json").exists())
 
     def test_main_codex_dry_run_only_prints_final_payloads(self):
         """--codex-dry-run-only should print final merged payloads for local + global targets."""

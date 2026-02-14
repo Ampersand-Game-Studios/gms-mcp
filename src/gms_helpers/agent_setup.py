@@ -8,6 +8,8 @@ import os
 import sys
 import subprocess
 import platform
+import shlex
+import shutil
 from pathlib import Path
 from .exceptions import GMSError
 
@@ -39,6 +41,17 @@ def test_gms_command():
     print("[ERROR] gms command not found or not working")
     return False
 
+
+def _preferred_python_command() -> str:
+    """Return a usable Python command/path for the current environment."""
+    candidates = [sys.executable, "python3", "python"]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        if Path(candidate).exists() or shutil.which(candidate):
+            return candidate
+    return "python"
+
 def setup_powershell_function():
     """Set up PowerShell function for gms command."""
     # Find the gms.py script relative to this script's location
@@ -49,8 +62,9 @@ def setup_powershell_function():
         print(f"[ERROR] {gms_script} not found")
         return False
     
+    py_cmd = _preferred_python_command()
     # Create the PowerShell function (session-scoped)
-    function_def = f'function gms {{ python "{gms_script}" $args }}'
+    function_def = f'function gms {{ & "{py_cmd}" "{gms_script}" $args }}'
     
     print("[SETUP] For agents: Use this PowerShell function definition:")
     print(f"   {function_def}")
@@ -62,12 +76,12 @@ def setup_powershell_function():
     # Test direct script execution as fallback
     print("[TEST] Testing direct script execution...")
     try:
-        test_direct = subprocess.run(['python', str(gms_script), '--version'], 
+        test_direct = subprocess.run([py_cmd, str(gms_script), '--version'],
                                    capture_output=True, text=True)
         
         if test_direct.returncode == 0 and 'GMS Tools' in test_direct.stdout:
             print("[OK] Direct script execution works")
-            print(f"   Agents can use: python \"{gms_script}\" [commands]")
+            print(f"   Agents can use: {py_cmd} \"{gms_script}\" [commands]")
             return True
         else:
             print("[ERROR] Direct script execution failed")
@@ -94,8 +108,9 @@ def setup_bash_alias():
             print(f"[ERROR] {gms_script} not found")
         return False
     
+    py_cmd = _preferred_python_command()
     # Create the alias
-    alias_def = f'alias gms="python3 \\"{gms_script}\\""'
+    alias_def = f"alias gms='{shlex.quote(py_cmd)} {shlex.quote(str(gms_script))}'"
     
     print("[SETUP] Setting up bash alias...")
     print(f"   {alias_def}")
