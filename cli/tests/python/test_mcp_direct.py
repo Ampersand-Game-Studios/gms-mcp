@@ -104,5 +104,36 @@ class TestRunWithFallbackDefaults(unittest.TestCase):
         self.assertFalse(mock_cli.called)
 
 
+class TestDryRunPolicyAllowlist(unittest.TestCase):
+    def test_require_dry_run_enforced_without_allowlist(self):
+        with patch.dict(os.environ, {"GMS_MCP_REQUIRE_DRY_RUN": "1"}, clear=True):
+            self.assertTrue(server._requires_dry_run_for_tool("gm_asset_delete"))
+
+    def test_require_dry_run_allowlist_bypasses_named_tool(self):
+        with patch.dict(
+            os.environ,
+            {
+                "GMS_MCP_REQUIRE_DRY_RUN": "1",
+                "GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST": "gm_asset_delete, gm_workflow_delete",
+            },
+            clear=True,
+        ):
+            self.assertFalse(server._requires_dry_run_for_tool("gm_asset_delete"))
+            self.assertFalse(server._requires_dry_run_for_tool("gm_workflow_delete"))
+            self.assertTrue(server._requires_dry_run_for_tool("gm_room_ops_delete"))
+
+    def test_require_dry_run_allowlist_semicolon_and_case_insensitive(self):
+        with patch.dict(
+            os.environ,
+            {
+                "GMS_MCP_REQUIRE_DRY_RUN": "1",
+                "GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST": "GM_ASSET_DELETE;GM_WORKFLOW_DELETE",
+            },
+            clear=True,
+        ):
+            self.assertFalse(server._requires_dry_run_for_tool("gm_asset_delete"))
+            self.assertFalse(server._requires_dry_run_for_tool("gm_workflow_delete"))
+
+
 if __name__ == "__main__":
     unittest.main()
