@@ -10,6 +10,8 @@ Tests cover:
 """
 
 import sys
+import platform
+import errno
 import tempfile
 import unittest
 from pathlib import Path
@@ -382,6 +384,70 @@ class TestRunnerLaunchTargetDetection(unittest.TestCase):
 
         launch = self.runner._find_launch_target(build_dir, "NotTheProjectName", "macOS")
         self.assertEqual(launch, binary_path)
+
+    @unittest.skipUnless(platform.system() == "Darwin", "macOS required for real .app launch smoke test")
+    def test_macos_app_bundle_smoke_launch(self):
+        """Smoke test validates real .app launch path resolution and execution."""
+        build_dir = self.project_root / "build_macos_smoke"
+        app_dir = build_dir / "SmokeGame.app" / "Contents" / "MacOS"
+        app_dir.mkdir(parents=True)
+
+        launch_marker = self.project_root / "smoke_launch.marker"
+        binary_path = app_dir / "SmokeGame"
+        binary_path.write_text(
+            "#!/bin/sh\n"
+            f"printf 'ok' > \"{launch_marker}\"\n"
+        )
+        binary_path.chmod(0o755)
+
+        resolved_launch = self.runner._find_launch_target(build_dir, "SmokeGame", "macOS")
+        self.assertEqual(resolved_launch, binary_path)
+
+        process = self.runner._start_game_process(binary_path)
+        process.wait(timeout=2)
+
+        self.assertEqual(process.returncode, 0)
+        self.assertTrue(launch_marker.exists())
+
+
+class TestRunnerLaunchGuards(unittest.TestCase):
+    """Tests for explicit macOS launch and runtime permission guard paths."""
+
+    def setUp(self):
+        """Create a temporary directory for test project."""
+        self.temp_dir = tempfile.mkdtemp()
+        self.project_root = Path(self.temp_dir)
+        yyp_path = self.project_root / "test_project.yyp"
+        yyp_path.write_text('{"name": "test_project", "resources": []}')
+        self.runner = GameMakerRunner(self.project_root)
+
+    def tearDown(self):
+        """Clean up temporary directory."""
+        import shutil
+        shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    @patch("gms_helpers.runner.platform.system", return_value="Darwin")
+    @patch("gms_helpers.runner.subprocess.Popen")
+    def test_start_game_process_guidance_for_permission_error(self, mock_popen, _mock_system):
+        mock_popen.side_effect = OSError(errno.EACCES, "Permission denied")
+        with self.assertRaises(RuntimeError) as context:
+            self.runner._start_game_process(Path("/tmp/denied.app/Contents/MacOS/Game"))
+
+        message = str(context.exception)
+        self.assertIn("macOS permission/sandbox restriction", message)
+        self.assertIn("chmod +x", message)
+        self.assertIn("xattr -dr com.apple.quarantine", message)
+
+    @patch("gms_helpers.runner.platform.system", return_value="Darwin")
+    @patch("gms_helpers.runner.subprocess.Popen")
+    def test_run_igor_command_guidance_for_permission_error(self, mock_popen, _mock_system):
+        mock_popen.side_effect = OSError(errno.EACCES, "Permission denied")
+        with self.assertRaises(RuntimeError) as context:
+            self.runner._run_igor_command(["/tmp/igor"])
+
+        message = str(context.exception)
+        self.assertIn("Runtime execution failed", message)
+        self.assertIn("Reinstall or trust the GameMaker runtime", message)
 
 
 class TestRunnerPlatformDefaults(unittest.TestCase):

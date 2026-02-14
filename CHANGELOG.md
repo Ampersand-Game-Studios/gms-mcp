@@ -36,6 +36,8 @@ All notable changes to this project will be documented in this file.
   - Added session-safe game process launch and cleanup so macOS child processes are properly tracked/terminated.
   - Improved GameMaker license discovery for newer and legacy filename spellings (`license.plist` and `licence.plist`) with recursive fallbacks.
   - Normalized path comparison behavior to avoid case-related mismatches on macOS case-insensitive volumes.
+  - Added a dedicated mockless macOS smoke test for real `.app` bundle launch path resolution.
+  - Added macOS-specific launch/runtime permission diagnostics for sandbox blocks and unsigned binaries, including actionable remediation guidance.
 
 ### Fixed
 - **Spurious `.gms_mcp` Folder Creation**: Fixed an issue where the MCP server would create a `.gms_mcp/logs/` folder in the current working directory even when no GameMaker project was present. Debug logging now only activates when a valid project is detected.

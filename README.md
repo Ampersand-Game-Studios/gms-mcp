@@ -93,7 +93,7 @@ See `RELEASING.md` for the one-time PyPI setup and the first manual upload helpe
 ## CI Coverage
 
 - Core CI runs on Ubuntu and Windows across Python `3.11`-`3.13`.
-- Runner/session regression tests also run on macOS across Python `3.11`-`3.13`.
+- Runner/session regression tests also run on macOS across Python `3.11`-`3.13`, including a mockless smoke test that builds a real `.app` bundle structure and validates executable path resolution.
 
 ## X (Twitter) posting on `main`
 
