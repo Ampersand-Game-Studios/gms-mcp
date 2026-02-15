@@ -11,7 +11,7 @@ sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from gms_helpers.results import OperationResult, AssetResult, MaintenanceResult, RunnerResult
 from gms_helpers.workflow import duplicate_asset, rename_asset, delete_asset, lint_project
-from gms_mcp.gamemaker_mcp_server import _capture_output
+from gms_mcp.server.direct import _capture_output
 
 class TestGMSResults(unittest.TestCase):
     def test_operation_result_to_dict(self):

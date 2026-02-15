@@ -36,6 +36,10 @@ dev = [
   "pytest>=9.0.0",
   "pytest-cov>=6.0.0",
   "Pillow>=10.0.0",
+  "ruff>=0.9.0",
+  "pyright>=1.1.390",
+  # Needed for type-checking on Python 3.11+ where the runtime uses tomllib.
+  "tomli>=2.0.1",
 ]
 import = [
   "Pillow>=10.0.0",
@@ -73,3 +77,13 @@ local_scheme = "no-local-version"
 testpaths = ["cli/tests/python"]
 python_files = ["test_*.py"]
 pythonpath = ["src"]
+
+[tool.ruff]
+target-version = "py310"
+line-length = 120
+exclude = [".venv", "build", "dist"]
+
+[tool.ruff.lint]
+# Keep this lightweight: focus on undefined names/exports to catch real breakages early
+# without forcing a style cleanup across the repo.
+select = ["F821", "F822", "F823"]

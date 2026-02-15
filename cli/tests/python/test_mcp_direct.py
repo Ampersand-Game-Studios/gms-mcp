@@ -10,8 +10,10 @@ from unittest.mock import patch
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from gms_mcp import gamemaker_mcp_server as server
-from gms_mcp.gamemaker_mcp_server import _capture_output
+from gms_mcp.server import dispatch as server
+from gms_mcp.server.direct import _capture_output
+from gms_mcp.server.dry_run_policy import _requires_dry_run_for_tool
+from gms_mcp.server.results import ToolRunResult
 
 
 class TestCaptureOutputSystemExit(unittest.TestCase):
@@ -49,15 +51,15 @@ class TestCaptureOutputSystemExit(unittest.TestCase):
 
 class TestRunWithFallbackDefaults(unittest.TestCase):
     def test_default_uses_cli_when_direct_disabled(self):
-        direct_result = server.ToolRunResult(ok=True, stdout="", stderr="", direct_used=True)
-        cli_result = server.ToolRunResult(ok=True, stdout="", stderr="", direct_used=False)
+        direct_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=True)
+        cli_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=False)
 
         async def _fake_cli(*_args, **_kwargs):
             return cli_result
 
         with patch.dict(os.environ, {}, clear=True):
-            with patch("gms_mcp.gamemaker_mcp_server._run_direct", return_value=direct_result) as mock_direct:
-                with patch("gms_mcp.gamemaker_mcp_server._run_cli_async", side_effect=_fake_cli) as mock_cli:
+            with patch("gms_mcp.server.dispatch._run_direct", return_value=direct_result) as mock_direct:
+                with patch("gms_mcp.server.dispatch._run_cli_async", side_effect=_fake_cli) as mock_cli:
                     result = asyncio.run(
                         server._run_with_fallback(
                             direct_handler=lambda _args: True,
@@ -75,8 +77,8 @@ class TestRunWithFallbackDefaults(unittest.TestCase):
         self.assertFalse(mock_direct.called)
 
     def test_opt_in_direct_via_env(self):
-        direct_result = server.ToolRunResult(ok=True, stdout="", stderr="", direct_used=True)
-        cli_result = server.ToolRunResult(ok=True, stdout="", stderr="", direct_used=False)
+        direct_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=True)
+        cli_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=False)
 
         async def _fake_cli(*_args, **_kwargs):
             return cli_result
@@ -84,9 +86,9 @@ class TestRunWithFallbackDefaults(unittest.TestCase):
         with patch.dict(os.environ, {"GMS_MCP_ENABLE_DIRECT": "1"}, clear=True):
             # Re-initialize policy manager to pick up env var
             from gms_mcp.execution_policy import PolicyManager
-            with patch("gms_mcp.gamemaker_mcp_server.policy_manager", PolicyManager()):
-                with patch("gms_mcp.gamemaker_mcp_server._run_direct", return_value=direct_result) as mock_direct:
-                    with patch("gms_mcp.gamemaker_mcp_server._run_cli_async", side_effect=_fake_cli) as mock_cli:
+            with patch("gms_mcp.server.dispatch.policy_manager", PolicyManager()):
+                with patch("gms_mcp.server.dispatch._run_direct", return_value=direct_result) as mock_direct:
+                    with patch("gms_mcp.server.dispatch._run_cli_async", side_effect=_fake_cli) as mock_cli:
                         result = asyncio.run(
                             server._run_with_fallback(
                                 direct_handler=lambda _args: True,
@@ -107,7 +109,7 @@ class TestRunWithFallbackDefaults(unittest.TestCase):
 class TestDryRunPolicyAllowlist(unittest.TestCase):
     def test_require_dry_run_enforced_without_allowlist(self):
         with patch.dict(os.environ, {"GMS_MCP_REQUIRE_DRY_RUN": "1"}, clear=True):
-            self.assertTrue(server._requires_dry_run_for_tool("gm_asset_delete"))
+            self.assertTrue(_requires_dry_run_for_tool("gm_asset_delete"))
 
     def test_require_dry_run_allowlist_bypasses_named_tool(self):
         with patch.dict(
@@ -118,9 +120,9 @@ class TestDryRunPolicyAllowlist(unittest.TestCase):
             },
             clear=True,
         ):
-            self.assertFalse(server._requires_dry_run_for_tool("gm_asset_delete"))
-            self.assertFalse(server._requires_dry_run_for_tool("gm_workflow_delete"))
-            self.assertTrue(server._requires_dry_run_for_tool("gm_room_ops_delete"))
+            self.assertFalse(_requires_dry_run_for_tool("gm_asset_delete"))
+            self.assertFalse(_requires_dry_run_for_tool("gm_workflow_delete"))
+            self.assertTrue(_requires_dry_run_for_tool("gm_room_ops_delete"))
 
     def test_require_dry_run_allowlist_semicolon_and_case_insensitive(self):
         with patch.dict(
@@ -131,8 +133,8 @@ class TestDryRunPolicyAllowlist(unittest.TestCase):
             },
             clear=True,
         ):
-            self.assertFalse(server._requires_dry_run_for_tool("gm_asset_delete"))
-            self.assertFalse(server._requires_dry_run_for_tool("gm_workflow_delete"))
+            self.assertFalse(_requires_dry_run_for_tool("gm_asset_delete"))
+            self.assertFalse(_requires_dry_run_for_tool("gm_workflow_delete"))
 
 
 if __name__ == "__main__":
