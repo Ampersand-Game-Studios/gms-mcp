@@ -3,6 +3,8 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from ..mcp_types import Context
+from ..project import _resolve_project_directory
+from ..direct import _pushd
 
 
 def register(mcp: Any, ContextType: Any) -> None:
@@ -119,6 +121,141 @@ def register(mcp: Any, ContextType: Any) -> None:
             }
         except Exception as e:
             return {"ok": False, "error": str(e), "message": f"Status check failed: {e}"}
+
+    @mcp.tool()
+    async def gm_bridge_enable_one_shot(
+        port: int = 6502,
+        room_name: str = "",
+        layer: str = "Instances",
+        x: float = 0,
+        y: float = 0,
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """
+        One-shot bridge enable:
+        - Install bridge assets (if missing)
+        - Ensure __mcp_bridge instance exists in the startup room
+        - Ensure the instance is present in instanceCreationOrder[]
+
+        Args:
+            port: Bridge server port (default: 6502)
+            room_name: Optional explicit room name. If empty, uses first RoomOrderNodes entry (startup room)
+            layer: Instance layer name (default: "Instances")
+            x, y: Placement coordinates for the bridge instance (default: 0,0)
+            project_root: Path to project root
+
+        Returns:
+            Dict with ok, room_name, instance_id, and validation details.
+        """
+        _ = ctx
+        project_directory = _resolve_project_directory(project_root)
+
+        from gms_helpers.utils import load_json_loose
+        from gms_helpers.bridge_installer import install_bridge, BRIDGE_OBJECT_NAME
+        from gms_helpers.room_layer_helper import add_layer
+        from gms_helpers.room_instance_helper import add_instance
+
+        yyp_files = sorted(project_directory.glob("*.yyp"))
+        if not yyp_files:
+            return {"ok": False, "error": f"No .yyp found in {project_directory}"}
+        yyp_path = yyp_files[0]
+        yyp_data = load_json_loose(yyp_path) or {}
+
+        def _detect_startup_room() -> str:
+            for node in yyp_data.get("RoomOrderNodes", []) or []:
+                room_id = (node or {}).get("roomId", {}) if isinstance(node, dict) else {}
+                if isinstance(room_id, dict) and room_id.get("name"):
+                    return str(room_id["name"])
+            for res in yyp_data.get("resources", []) or []:
+                res_id = (res or {}).get("id", {}) if isinstance(res, dict) else {}
+                path = res_id.get("path") if isinstance(res_id, dict) else None
+                name = res_id.get("name") if isinstance(res_id, dict) else None
+                if isinstance(path, str) and path.startswith("rooms/") and isinstance(name, str) and name:
+                    return name
+            return ""
+
+        target_room = room_name.strip() if room_name else _detect_startup_room()
+        if not target_room:
+            return {
+                "ok": False,
+                "error": "Could not determine startup room (missing RoomOrderNodes/resources room entry).",
+                "hint": "Pass room_name explicitly, or add the startup room to RoomOrderNodes in the .yyp.",
+                "yyp": str(yyp_path),
+            }
+
+        room_file = project_directory / "rooms" / target_room / f"{target_room}.yy"
+        if not room_file.exists():
+            return {
+                "ok": False,
+                "error": f"Startup room file not found: {room_file}",
+                "hint": "Create the room first (gm_create_room) or ensure RoomOrderNodes points at an existing room.",
+            }
+
+        install_result = install_bridge(str(project_directory), port)
+        if not install_result.get("ok"):
+            return {"ok": False, "error": install_result.get("error") or install_result, "install": install_result}
+
+        # All room helpers are path-relative; operate from project_directory.
+        with _pushd(project_directory):
+            # Ensure the target layer exists (create instance layer if missing).
+            room_data = load_json_loose(room_file) or {}
+            layers = room_data.get("layers", []) if isinstance(room_data, dict) else []
+            layer_exists = any(isinstance(l, dict) and l.get("name") == layer for l in (layers or []))
+            if not layer_exists:
+                add_layer(target_room, layer, "instance", 0)
+
+            # Idempotent instance placement: reuse existing __mcp_bridge instance if present.
+            room_data = load_json_loose(room_file) or {}
+            existing_instance_id = None
+            for lyr in room_data.get("layers", []) or []:
+                if not isinstance(lyr, dict) or lyr.get("resourceType") != "GMRInstanceLayer":
+                    continue
+                for inst in lyr.get("instances", []) or []:
+                    if not isinstance(inst, dict):
+                        continue
+                    obj = inst.get("objectId") or {}
+                    if isinstance(obj, dict) and obj.get("name") == BRIDGE_OBJECT_NAME:
+                        existing_instance_id = inst.get("name")
+                        break
+                if existing_instance_id:
+                    break
+
+            instance_id = existing_instance_id or add_instance(target_room, BRIDGE_OBJECT_NAME, x, y, layer)
+
+            # Validate instanceCreationOrder includes instance_id; if not, patch it in.
+            room_data = load_json_loose(room_file) or {}
+            creation_order = room_data.get("instanceCreationOrder")
+            if not isinstance(creation_order, list):
+                creation_order = []
+                room_data["instanceCreationOrder"] = creation_order
+
+            def _has(entry: Any) -> bool:
+                if isinstance(entry, str):
+                    return entry == instance_id
+                if isinstance(entry, dict):
+                    return entry.get("name") == instance_id or entry.get("%Name") == instance_id
+                return False
+
+            if not any(_has(e) for e in creation_order):
+                if creation_order and isinstance(creation_order[0], str):
+                    creation_order.append(instance_id)
+                else:
+                    creation_order.append({"name": instance_id, "path": f"rooms/{target_room}/{target_room}.yy"})
+
+                from gms_helpers.utils import save_json_loose
+
+                save_json_loose(room_file, room_data)
+
+        return {
+            "ok": True,
+            "project_directory": str(project_directory),
+            "room_name": target_room,
+            "layer": layer,
+            "instance_id": instance_id,
+            "install": install_result,
+            "instance_creation_order_ok": True,
+        }
 
     @mcp.tool()
     async def gm_run_logs(

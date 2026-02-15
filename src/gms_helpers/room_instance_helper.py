@@ -93,6 +93,32 @@ def add_instance(room_name: str, object_name: str, x: float, y: float, layer_nam
     if "instances" not in layer:
         layer["instances"] = []
     layer["instances"].append(new_instance)
+
+    # Ensure the instance is also present in instanceCreationOrder.
+    # The GameMaker IDE/compiler relies on this list, not just layers[].instances[].
+    creation_order = room_data.get("instanceCreationOrder")
+    if not isinstance(creation_order, list):
+        creation_order = []
+        room_data["instanceCreationOrder"] = creation_order
+
+    def _in_creation_order(entry: Any) -> bool:
+        if isinstance(entry, str):
+            return entry == instance_id
+        if isinstance(entry, dict):
+            return entry.get("name") == instance_id or entry.get("%Name") == instance_id
+        return False
+
+    if not any(_in_creation_order(e) for e in creation_order):
+        # Preserve existing style if possible (string vs dict entries).
+        if creation_order and isinstance(creation_order[0], str):
+            creation_order.append(instance_id)
+        else:
+            creation_order.append(
+                {
+                    "name": instance_id,
+                    "path": f"rooms/{room_name}/{room_name}.yy",
+                }
+            )
     
     _save_room_data(room_path, room_data)
     print(f"[OK] Added instance of '{object_name}' to layer '{layer_name}' at ({x}, {y})")
@@ -116,6 +142,17 @@ def remove_instance(room_name: str, instance_id: str):
     
     if not found:
         raise AssetNotFoundError(f"Instance '{instance_id}' not found in room '{room_name}'")
+
+    # Also remove from instanceCreationOrder if present.
+    creation_order = room_data.get("instanceCreationOrder")
+    if isinstance(creation_order, list) and creation_order:
+        def _keep(entry: Any) -> bool:
+            if isinstance(entry, str):
+                return entry != instance_id
+            if isinstance(entry, dict):
+                return not (entry.get("name") == instance_id or entry.get("%Name") == instance_id)
+            return True
+        room_data["instanceCreationOrder"] = [e for e in creation_order if _keep(e)]
     
     # Check for and remove creation code file if it exists
     creation_code_path = Path("rooms") / room_name / f"{instance_id}.gml"
