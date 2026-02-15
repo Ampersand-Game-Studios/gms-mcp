@@ -66,6 +66,21 @@ class BaseAsset(ABC):
         yy_path = self.get_yy_path(asset_folder, name)
         if not yy_path.exists():
             yy_data = self.create_yy_data(name, parent_path, **kwargs)
+
+            # Match existing project conventions for $GM* version strings.
+            # Many projects use "" or "v1" depending on the GameMaker version / migration history.
+            try:
+                from .utils import detect_asset_format_version
+
+                detected = detect_asset_format_version(project_root, self.folder_prefix)
+                if detected is not None:
+                    gm_key = f"${self.gm_tag}"
+                    if isinstance(yy_data, dict) and gm_key in yy_data:
+                        # Preserve dict key order by updating the existing key in-place.
+                        yy_data[gm_key] = detected
+            except Exception:
+                # Best-effort only: never block asset creation.
+                pass
             save_pretty_json_gm(yy_path, yy_data)
             print(f"Created {yy_path.relative_to(project_root)}")
         else:

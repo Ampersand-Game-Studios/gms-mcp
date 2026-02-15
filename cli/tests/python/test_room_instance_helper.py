@@ -150,6 +150,18 @@ class TestRoomInstanceHelper(unittest.TestCase):
         self.assertIsNotNone(instances_layer)
         self.assertGreater(len(instances_layer.get("instances", [])), 0)
 
+        # Verify instanceCreationOrder was updated
+        creation_order = room_data.get("instanceCreationOrder", [])
+        self.assertIsInstance(creation_order, list)
+        self.assertTrue(
+            any(
+                (isinstance(e, str) and e == result)
+                or (isinstance(e, dict) and e.get("name") == result)
+                for e in creation_order
+            ),
+            msg=str(creation_order),
+        )
+
     def test_remove_instance_success(self):
         """Test successfully removing an instance from a room."""
         # First add an instance to remove
@@ -166,6 +178,17 @@ class TestRoomInstanceHelper(unittest.TestCase):
         instances_layer = _find_layer_by_name(room_data, "Instances")
         instance_ids = [inst.get("name") for inst in instances_layer.get("instances", [])]
         self.assertNotIn(instance_id, instance_ids)
+
+        # Verify instanceCreationOrder was updated
+        creation_order = room_data.get("instanceCreationOrder", [])
+        self.assertFalse(
+            any(
+                (isinstance(e, str) and e == instance_id)
+                or (isinstance(e, dict) and e.get("name") == instance_id)
+                for e in creation_order
+            ),
+            msg=str(creation_order),
+        )
 
     def test_list_instances_success(self):
         """Test successfully listing instances in a room."""
