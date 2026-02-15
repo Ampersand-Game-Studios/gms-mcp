@@ -350,6 +350,34 @@ function cached_func() {}
         stats2 = index2.build(force=False)
         self.assertEqual(stats2["status"], "cached")
 
+    def test_incremental_update_on_change_and_delete(self):
+        """Index should incrementally update when a file changes or is removed."""
+        from gms_helpers.gml_index import GMLIndex
+
+        self._write_gml("scripts/a.gml", "function a() {}\n")
+        self._write_gml("scripts/b.gml", "function b() {}\n")
+
+        index = GMLIndex(Path(self.temp_dir))
+        stats1 = index.build(force=True)
+        self.assertEqual(stats1["status"], "built")
+
+        # Change one file: only that file should be rescanned.
+        self._write_gml("scripts/a.gml", "function a() {}\nfunction a2() {}\n")
+        index2 = GMLIndex(Path(self.temp_dir))
+        stats2 = index2.build(force=False)
+        self.assertEqual(stats2["status"], "incremental")
+        self.assertEqual(stats2["files"], 1)
+        self.assertGreaterEqual(stats2.get("changed_files", 0), 1)
+        self.assertEqual(len(index2.find_definition("a2")), 1)
+
+        # Remove one file: index should purge it without requiring a full rebuild.
+        (Path(self.temp_dir) / "scripts" / "b.gml").unlink()
+        index3 = GMLIndex(Path(self.temp_dir))
+        stats3 = index3.build(force=False)
+        self.assertEqual(stats3["status"], "incremental")
+        self.assertEqual(stats3.get("removed_files", 0), 1)
+        self.assertEqual(index3.find_definition("b"), [])
+
 
 class TestSymbolDataclasses(unittest.TestCase):
     """Tests for symbol dataclasses."""

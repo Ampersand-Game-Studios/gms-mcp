@@ -78,7 +78,7 @@ def project_paths(args: argparse.Namespace) -> Mapping[str, Path]:
         "junit_xml": junit_xml,
         "coverage_xml": coverage_xml,
         "tests_dir": root / args.tests_dir,
-        "server_file": root / "src" / "gms_mcp" / "gamemaker_mcp_server.py",
+        "server_sources_dir": root / "src" / "gms_mcp" / "server",
         "coverage_report_md": output_dir / "TEST_COVERAGE_REPORT.md",
         "tool_report_md": output_dir / "MCP_TOOL_VALIDATION_REPORT.md",
         "summary_json": output_dir / "quality_summary.json",
@@ -209,27 +209,35 @@ def parse_coverage(path: Path) -> Dict[str, object]:
     return {"overall": round(overall, 2), "modules": modules}
 
 
-def discover_mcp_tools(server_file: Path) -> List[str]:
-    source = server_file.read_text(encoding="utf-8")
-    tree = ast.parse(source)
-    tools: List[str] = []
+def discover_mcp_tools(server_sources_dir: Path) -> List[str]:
+    tools: set[str] = set()
 
-    for node in ast.walk(tree):
-        if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+    for path in sorted(server_sources_dir.rglob("*.py")):
+        try:
+            source = path.read_text(encoding="utf-8")
+        except OSError:
             continue
-        has_tool = False
-        for decorator in node.decorator_list:
-            if isinstance(decorator, ast.Call):
-                decorator = decorator.func
-            if isinstance(decorator, ast.Attribute) and decorator.attr == "tool":
-                has_tool = True
-            elif isinstance(decorator, ast.Name) and decorator.id == "tool":
-                has_tool = True
-        if has_tool and node.name.startswith("gm_"):
-            tools.append(node.name)
 
-    tools.sort()
-    return tools
+        try:
+            tree = ast.parse(source)
+        except SyntaxError:
+            continue
+
+        for node in ast.walk(tree):
+            if not isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef)):
+                continue
+            has_tool = False
+            for decorator in node.decorator_list:
+                if isinstance(decorator, ast.Call):
+                    decorator = decorator.func
+                if isinstance(decorator, ast.Attribute) and decorator.attr == "tool":
+                    has_tool = True
+                elif isinstance(decorator, ast.Name) and decorator.id == "tool":
+                    has_tool = True
+            if has_tool and node.name.startswith("gm_"):
+                tools.add(node.name)
+
+    return sorted(tools)
 
 
 def categorize_tool(name: str) -> str:
@@ -404,7 +412,7 @@ def main() -> int:
 
     junit = parse_junit(paths["junit_xml"])
     coverage = parse_coverage(paths["coverage_xml"])
-    tools = discover_mcp_tools(paths["server_file"])
+    tools = discover_mcp_tools(paths["server_sources_dir"])
     referenced = scan_tool_references(paths["root"] / "cli/tests/python", tools)
 
     paths["output_dir"].mkdir(parents=True, exist_ok=True)
