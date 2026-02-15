@@ -50,11 +50,71 @@ class GMLIndex:
         # Try to load cache if not forcing rebuild
         if not force and cache_path.exists():
             if self._load_cache(cache_path):
+                # Incremental update: only rescan changed/new files and purge deleted files.
+                current_files = {str(f.relative_to(self.project_root)) for f in self._find_gml_files()}
+                cached_files = set(self.file_hashes.keys())
+
+                added_files = current_files - cached_files
+                removed_files = cached_files - current_files
+
+                changed_files: Set[str] = set()
+                for rel_path in sorted(current_files & cached_files):
+                    file_path = self.project_root / rel_path
+                    try:
+                        content = file_path.read_text(encoding="utf-8", errors="replace")
+                        current_hash = hashlib.md5(content.encode()).hexdigest()
+                    except Exception:
+                        # If we can't read a file now, treat as changed so we drop stale entries.
+                        changed_files.add(rel_path)
+                        continue
+                    if current_hash != self.file_hashes.get(rel_path):
+                        changed_files.add(rel_path)
+
+                if not added_files and not removed_files and not changed_files:
+                    return {
+                        "status": "cached",
+                        "symbols": sum(len(defs) for defs in self.definitions.values()),
+                        "references": sum(len(refs) for refs in self.references.values()),
+                        "files": len(self.file_hashes),
+                    }
+
+                # Purge entries for removed/changed files, then rescan changed/new files.
+                touched_files = set(added_files) | set(changed_files)
+                for rel_path in sorted(set(removed_files) | set(changed_files)):
+                    self._remove_file_entries(rel_path)
+                    self.file_hashes.pop(rel_path, None)
+
+                files_scanned = 0
+                total_symbols = sum(len(defs) for defs in self.definitions.values())
+                total_refs = sum(len(refs) for refs in self.references.values())
+
+                for rel_path in sorted(touched_files):
+                    file_path = self.project_root / rel_path
+                    try:
+                        content = file_path.read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        continue
+                    self.file_hashes[rel_path] = hashlib.md5(content.encode()).hexdigest()
+
+                    symbols, refs = self.scanner.scan_file(file_path)
+                    for symbol in symbols:
+                        self.definitions.setdefault(symbol.name, []).append(symbol)
+                        total_symbols += 1
+                    for ref in refs:
+                        self.references.setdefault(ref.symbol_name, []).append(ref)
+                        total_refs += 1
+                    files_scanned += 1
+
+                self._is_built = True
+                self._save_cache(cache_path)
                 return {
-                    "status": "cached",
-                    "symbols": sum(len(defs) for defs in self.definitions.values()),
-                    "references": sum(len(refs) for refs in self.references.values()),
-                    "files": len(self.file_hashes),
+                    "status": "incremental",
+                    "symbols": total_symbols,
+                    "references": total_refs,
+                    "files": files_scanned,
+                    "added_files": len(added_files),
+                    "changed_files": len(changed_files),
+                    "removed_files": len(removed_files),
                 }
         
         # Find all GML files
@@ -243,25 +303,13 @@ class GMLIndex:
             # Verify cache version
             if data.get('version') != 1:
                 return False
-            
-            # Verify file hashes match current state
-            cached_hashes = data.get('file_hashes', {})
-            for rel_path, cached_hash in cached_hashes.items():
-                file_path = self.project_root / rel_path
-                if not file_path.exists():
-                    return False
-                content = file_path.read_text(encoding='utf-8', errors='replace')
-                current_hash = hashlib.md5(content.encode()).hexdigest()
-                if current_hash != cached_hash:
-                    return False
-            
-            # Check if any new files exist
-            current_files = {str(f.relative_to(self.project_root)) for f in self._find_gml_files()}
-            if current_files != set(cached_hashes.keys()):
+
+            cached_hashes = data.get('file_hashes', {}) or {}
+            if not isinstance(cached_hashes, dict):
                 return False
-            
-            # Load the cached data
-            self.file_hashes = cached_hashes
+
+            # Load the cached data (validation happens in build(), which can also do incremental updates).
+            self.file_hashes = {str(k): str(v) for k, v in cached_hashes.items()}
             
             # Reconstruct definitions
             self.definitions.clear()
@@ -284,6 +332,33 @@ class GMLIndex:
             
         except Exception:
             return False
+
+    def _remove_file_entries(self, rel_path: str) -> None:
+        """Remove all cached symbol/refs that originate from a specific project-relative file."""
+        try:
+            target = (self.project_root / rel_path).resolve()
+        except Exception:
+            target = self.project_root / rel_path
+
+        def _same_file(p: Path) -> bool:
+            try:
+                return p.resolve() == target
+            except Exception:
+                return p == target
+
+        for name in list(self.definitions.keys()):
+            kept = [s for s in self.definitions.get(name, []) if not _same_file(s.location.file_path)]
+            if kept:
+                self.definitions[name] = kept
+            else:
+                self.definitions.pop(name, None)
+
+        for name in list(self.references.keys()):
+            kept = [r for r in self.references.get(name, []) if not _same_file(r.location.file_path)]
+            if kept:
+                self.references[name] = kept
+            else:
+                self.references.pop(name, None)
     
     def _save_cache(self, cache_path: Path):
         """Save index to cache file."""
