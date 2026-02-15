@@ -51,6 +51,33 @@ class GMLScanner:
     def __init__(self):
         self.symbols: List[Symbol] = []
         self.references: List[SymbolReference] = []
+
+    def scan_content(self, content: str, file_path: Path) -> Tuple[List[Symbol], List[SymbolReference]]:
+        """Scan provided GML content for symbols and references."""
+        self.symbols = []
+        self.references = []
+
+        lines = content.split('\n')
+
+        # Extract doc comments for functions
+        doc_comments = self._extract_doc_comments(lines)
+
+        # Find function definitions
+        self._scan_functions(content, file_path, doc_comments)
+
+        # Find enum definitions
+        self._scan_enums(content, file_path)
+
+        # Find macro definitions
+        self._scan_macros(content, file_path)
+
+        # Find globalvar declarations
+        self._scan_globalvars(content, file_path)
+
+        # Find references (word tokens that could be symbol usages)
+        self._scan_references(content, file_path, lines)
+
+        return self.symbols, self.references
     
     def scan_file(self, file_path: Path) -> Tuple[List[Symbol], List[SymbolReference]]:
         """Scan a single GML file for symbols and references.
@@ -68,28 +95,8 @@ class GMLScanner:
             content = file_path.read_text(encoding='utf-8', errors='replace')
         except Exception:
             return [], []
-        
-        lines = content.split('\n')
-        
-        # Extract doc comments for functions
-        doc_comments = self._extract_doc_comments(lines)
-        
-        # Find function definitions
-        self._scan_functions(content, file_path, doc_comments)
-        
-        # Find enum definitions
-        self._scan_enums(content, file_path)
-        
-        # Find macro definitions
-        self._scan_macros(content, file_path)
-        
-        # Find globalvar declarations
-        self._scan_globalvars(content, file_path)
-        
-        # Find references (word tokens that could be symbol usages)
-        self._scan_references(content, file_path, lines)
-        
-        return self.symbols, self.references
+
+        return self.scan_content(content, file_path)
     
     def _extract_doc_comments(self, lines: List[str]) -> dict:
         """Extract JSDoc-style comments that precede functions.

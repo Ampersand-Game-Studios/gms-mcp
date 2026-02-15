@@ -231,6 +231,40 @@ def load_json(file_path):
     except json.JSONDecodeError as e:
         raise ValueError(f"Invalid JSON in {file_path}: {e}")
 
+
+def detect_asset_format_version(project_root: Path, asset_type: str) -> str | None:
+    """
+    Detect the version string used for top-level $GM* tags for a given asset type folder.
+
+    Example: objects/<name>/<name>.yy commonly contains {"$GMObject": "v1", ...}
+    This function returns the value ("v1", "", etc.) found in the first asset file scanned.
+
+    Returns None if no existing assets are found (caller should keep defaults).
+    """
+    try:
+        asset_dir = (Path(project_root) / asset_type).resolve()
+        if not asset_dir.exists() or not asset_dir.is_dir():
+            return None
+
+        for subdir in asset_dir.iterdir():
+            if not subdir.is_dir():
+                continue
+            yy_files = list(subdir.glob("*.yy"))
+            if not yy_files:
+                continue
+            try:
+                data = load_json(yy_files[0])
+            except Exception:
+                continue
+            if not isinstance(data, dict):
+                continue
+            for key in data.keys():
+                if isinstance(key, str) and key.startswith("$GM"):
+                    return str(data.get(key, ""))
+    except Exception:
+        return None
+    return None
+
 def add_trailing_commas(json_str):
     """Add trailing commas to JSON string to match GameMaker's style."""
     lines = json_str.split('\n')
