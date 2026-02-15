@@ -28,9 +28,9 @@ from .client_registry import (
     resolve_client_spec,
 )
 
-try:
+if sys.version_info >= (3, 11):
     import tomllib as _toml_parser  # Python 3.11+
-except ModuleNotFoundError:
+else:
     try:
         import tomli as _toml_parser  # Python 3.10 fallback
     except ModuleNotFoundError:
