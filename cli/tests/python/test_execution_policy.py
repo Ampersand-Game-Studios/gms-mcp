@@ -11,7 +11,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from gms_mcp.execution_policy import policy_manager, ExecutionMode, ToolPolicy, PolicyManager
-from gms_mcp import gamemaker_mcp_server as server
+from gms_mcp.server import dispatch as server
+from gms_mcp.server.results import ToolRunResult
 
 class TestExecutionPolicy(unittest.TestCase):
     def test_default_detection(self):
@@ -47,14 +48,14 @@ class TestExecutionPolicy(unittest.TestCase):
         self.assertEqual(policy.timeout_seconds, 10)
 
 class TestServerPolicyIntegration(unittest.TestCase):
-    @patch("gms_mcp.gamemaker_mcp_server._run_direct")
-    @patch("gms_mcp.gamemaker_mcp_server._run_cli_async")
+    @patch("gms_mcp.server.dispatch._run_direct")
+    @patch("gms_mcp.server.dispatch._run_cli_async")
     def test_run_with_fallback_uses_policy(self, mock_cli, mock_direct):
         """Test that _run_with_fallback respects the policy manager."""
-        mock_direct.return_value = server.ToolRunResult(ok=True, stdout="direct", stderr="", direct_used=True)
+        mock_direct.return_value = ToolRunResult(ok=True, stdout="direct", stderr="", direct_used=True)
         
         async def _fake_cli(*args, **kwargs):
-            return server.ToolRunResult(ok=True, stdout="cli", stderr="", direct_used=False)
+            return ToolRunResult(ok=True, stdout="cli", stderr="", direct_used=False)
         mock_cli.side_effect = _fake_cli
 
         # Force a tool to be SUBPROCESS

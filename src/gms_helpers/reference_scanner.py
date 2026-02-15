@@ -7,6 +7,7 @@ Finds ALL references to assets across GameMaker project files
 import json
 import re
 import os
+import sys
 from pathlib import Path
 from typing import List, Dict, Tuple, Set, Optional
 from dataclasses import dataclass
