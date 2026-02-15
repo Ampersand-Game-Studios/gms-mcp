@@ -1,6 +1,10 @@
 __pycache__/
 *.py[cod]
 *.pyo
+.coverage
+.coverage.*
+uv.lock
+
 
 .venv/
 venv/

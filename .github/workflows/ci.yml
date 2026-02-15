@@ -43,11 +43,22 @@ jobs:
       - name: Build package
         run: python -m build
 
-      - name: Run test suite
-        run: python cli/tests/python/run_all_tests.py
+      - name: Generate quality reports
+        run: |
+          python scripts/generate_quality_reports.py
 
-      - name: Run final verification
-        run: python -m pytest cli/tests/python/test_final_verification.py
+      - name: Upload quality reports
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: quality-reports-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: |
+            build/reports/TEST_COVERAGE_REPORT.md
+            build/reports/MCP_TOOL_VALIDATION_REPORT.md
+            build/reports/quality_summary.json
+            build/reports/coverage.xml
+            build/reports/pytest_results.xml
+          if-no-files-found: error
 
   mac_runner_session:
     name: macOS Runner/Session (Py${{ matrix.python-version }})
