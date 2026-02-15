@@ -228,7 +228,12 @@ class TestBridgeServerConnection(unittest.TestCase):
     
     def setUp(self):
         """Create and start a server for testing."""
-        self.server = BridgeServer(port=6540)
+        # Use an available port to avoid collisions with any local bridge/dev servers.
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.bind(("127.0.0.1", 0))
+            self.port = s.getsockname()[1]
+
+        self.server = BridgeServer(port=self.port)
         self.server.start()
         time.sleep(0.1)  # Give server time to start
         
@@ -243,7 +248,7 @@ class TestBridgeServerConnection(unittest.TestCase):
         client.settimeout(2.0)
         
         try:
-            client.connect(("127.0.0.1", 6540))
+            client.connect(("127.0.0.1", self.port))
             time.sleep(0.2)  # Give server time to accept
             
             self.assertTrue(self.server.is_connected)
@@ -257,7 +262,7 @@ class TestBridgeServerConnection(unittest.TestCase):
         client.settimeout(2.0)
         
         try:
-            client.connect(("127.0.0.1", 6540))
+            client.connect(("127.0.0.1", self.port))
             time.sleep(0.2)
             
             # Send a log message
@@ -284,7 +289,7 @@ class TestBridgeServerConnection(unittest.TestCase):
         client.settimeout(2.0)
 
         try:
-            client.connect(("127.0.0.1", 6540))
+            client.connect(("127.0.0.1", self.port))
             time.sleep(0.2)
 
             # Send two log lines with an embedded NUL between them (simulates GM buffer_string).
@@ -307,7 +312,7 @@ class TestBridgeServerConnection(unittest.TestCase):
         client.setblocking(False)
         
         try:
-            client.connect(("127.0.0.1", 6540))
+            client.connect(("127.0.0.1", self.port))
             time.sleep(0.2)
             
             # Start a thread to respond to commands
