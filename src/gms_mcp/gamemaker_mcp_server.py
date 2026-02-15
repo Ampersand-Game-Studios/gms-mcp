@@ -847,7 +847,18 @@ async def _run_with_fallback(
 ) -> Dict[str, Any]:
     derived_tool_name = tool_name
     if not derived_tool_name:
-        head = [p for p in (cli_args[:3] if cli_args else []) if p]
+        # Derive a stable tool identifier from the CLI args.
+        # We intentionally ignore flags/values so policies like "run-compile"
+        # keep applying even when the CLI invocation includes options.
+        head: List[str] = []
+        for token in (cli_args or []):
+            if not token:
+                continue
+            if token.startswith("-"):
+                break
+            head.append(token)
+            if len(head) >= 3:
+                break
         derived_tool_name = "-".join(head) if head else "tool"
 
     # Get execution policy for this tool

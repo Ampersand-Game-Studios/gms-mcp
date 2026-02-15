@@ -1,4 +1,5 @@
 # GameMaker MCP Tools
+[![CI](https://github.com/Ampersand-Game-Studios/gms-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Ampersand-Game-Studios/gms-mcp/actions/workflows/ci.yml)
 
 ## Project Features
 
@@ -121,6 +122,28 @@ See `RELEASING.md` for the one-time PyPI setup and the first manual upload helpe
 
 - Core CI runs on Ubuntu and Windows across Python `3.11`-`3.13`.
 - Runner/session regression tests also run on macOS across Python `3.11`-`3.13`, including a mockless smoke test that builds a real `.app` bundle structure and validates executable path resolution.
+
+### Quality Reports
+
+Quality reports are generated during CI and published as `quality-reports-*` artifacts.
+
+- `TEST_COVERAGE_REPORT.md`
+- `MCP_TOOL_VALIDATION_REPORT.md`
+- `coverage.xml`
+- `pytest_results.xml`
+- `quality_summary.json`
+
+You can regenerate these locally with:
+
+```bash
+python scripts/generate_quality_reports.py
+```
+
+Use `--skip-test-run` to regenerate from existing CI artifacts:
+
+```bash
+python scripts/generate_quality_reports.py --skip-test-run --junit-xml build/reports/pytest_results.xml --coverage-xml build/reports/coverage.xml
+```
 
 ## X (Twitter) posting on `main`
 
