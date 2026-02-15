@@ -1,7 +1,6 @@
 """GML Symbol Index - manages the symbol database for a project."""
 
 import json
-import hashlib
 from pathlib import Path
 from typing import Dict, List, Optional, Set
 
@@ -31,8 +30,10 @@ class GMLIndex:
         # Symbol name -> list of SymbolReference
         self.references: Dict[str, List[SymbolReference]] = {}
         
-        # Track which files have been indexed and their hashes
-        self.file_hashes: Dict[str, str] = {}
+        # Track which files have been indexed. We use cheap metadata so we can
+        # detect changes without reading every file on every build.
+        self.file_mtimes_ns: Dict[str, int] = {}
+        self.file_sizes: Dict[str, int] = {}
         
         self._is_built = False
     
@@ -52,7 +53,7 @@ class GMLIndex:
             if self._load_cache(cache_path):
                 # Incremental update: only rescan changed/new files and purge deleted files.
                 current_files = {str(f.relative_to(self.project_root)) for f in self._find_gml_files()}
-                cached_files = set(self.file_hashes.keys())
+                cached_files = set(self.file_mtimes_ns.keys())
 
                 added_files = current_files - cached_files
                 removed_files = cached_files - current_files
@@ -61,13 +62,16 @@ class GMLIndex:
                 for rel_path in sorted(current_files & cached_files):
                     file_path = self.project_root / rel_path
                     try:
-                        content = file_path.read_text(encoding="utf-8", errors="replace")
-                        current_hash = hashlib.md5(content.encode()).hexdigest()
+                        stat = file_path.stat()
                     except Exception:
-                        # If we can't read a file now, treat as changed so we drop stale entries.
+                        # If we can't stat a file now, treat as changed so we drop stale entries.
                         changed_files.add(rel_path)
                         continue
-                    if current_hash != self.file_hashes.get(rel_path):
+
+                    if (
+                        stat.st_mtime_ns != self.file_mtimes_ns.get(rel_path)
+                        or stat.st_size != self.file_sizes.get(rel_path)
+                    ):
                         changed_files.add(rel_path)
 
                 if not added_files and not removed_files and not changed_files:
@@ -75,14 +79,15 @@ class GMLIndex:
                         "status": "cached",
                         "symbols": sum(len(defs) for defs in self.definitions.values()),
                         "references": sum(len(refs) for refs in self.references.values()),
-                        "files": len(self.file_hashes),
+                        "files": len(self.file_mtimes_ns),
                     }
 
                 # Purge entries for removed/changed files, then rescan changed/new files.
                 touched_files = set(added_files) | set(changed_files)
                 for rel_path in sorted(set(removed_files) | set(changed_files)):
                     self._remove_file_entries(rel_path)
-                    self.file_hashes.pop(rel_path, None)
+                    self.file_mtimes_ns.pop(rel_path, None)
+                    self.file_sizes.pop(rel_path, None)
 
                 files_scanned = 0
                 total_symbols = sum(len(defs) for defs in self.definitions.values())
@@ -91,12 +96,14 @@ class GMLIndex:
                 for rel_path in sorted(touched_files):
                     file_path = self.project_root / rel_path
                     try:
+                        stat = file_path.stat()
                         content = file_path.read_text(encoding="utf-8", errors="replace")
                     except Exception:
                         continue
-                    self.file_hashes[rel_path] = hashlib.md5(content.encode()).hexdigest()
+                    self.file_mtimes_ns[rel_path] = stat.st_mtime_ns
+                    self.file_sizes[rel_path] = stat.st_size
 
-                    symbols, refs = self.scanner.scan_file(file_path)
+                    symbols, refs = self.scanner.scan_content(content, file_path)
                     for symbol in symbols:
                         self.definitions.setdefault(symbol.name, []).append(symbol)
                         total_symbols += 1
@@ -123,7 +130,8 @@ class GMLIndex:
         # Clear existing data
         self.definitions.clear()
         self.references.clear()
-        self.file_hashes.clear()
+        self.file_mtimes_ns.clear()
+        self.file_sizes.clear()
         
         files_scanned = 0
         total_symbols = 0
@@ -131,14 +139,14 @@ class GMLIndex:
         
         for gml_file in gml_files:
             try:
-                # Calculate file hash
+                stat = gml_file.stat()
                 content = gml_file.read_text(encoding='utf-8', errors='replace')
-                file_hash = hashlib.md5(content.encode()).hexdigest()
                 rel_path = str(gml_file.relative_to(self.project_root))
-                self.file_hashes[rel_path] = file_hash
+                self.file_mtimes_ns[rel_path] = stat.st_mtime_ns
+                self.file_sizes[rel_path] = stat.st_size
                 
                 # Scan the file
-                symbols, refs = self.scanner.scan_file(gml_file)
+                symbols, refs = self.scanner.scan_content(content, gml_file)
                 
                 # Add symbols to index
                 for symbol in symbols:
@@ -301,15 +309,17 @@ class GMLIndex:
                 data = json.load(f)
             
             # Verify cache version
-            if data.get('version') != 1:
+            if data.get('version') != 2:
                 return False
 
-            cached_hashes = data.get('file_hashes', {}) or {}
-            if not isinstance(cached_hashes, dict):
+            cached_mtimes = data.get('file_mtimes_ns', {}) or {}
+            cached_sizes = data.get('file_sizes', {}) or {}
+            if not isinstance(cached_mtimes, dict) or not isinstance(cached_sizes, dict):
                 return False
 
             # Load the cached data (validation happens in build(), which can also do incremental updates).
-            self.file_hashes = {str(k): str(v) for k, v in cached_hashes.items()}
+            self.file_mtimes_ns = {str(k): int(v) for k, v in cached_mtimes.items()}
+            self.file_sizes = {str(k): int(v) for k, v in cached_sizes.items()}
             
             # Reconstruct definitions
             self.definitions.clear()
@@ -375,8 +385,9 @@ class GMLIndex:
                     all_references.append(ref.to_dict())
             
             data = {
-                'version': 1,
-                'file_hashes': self.file_hashes,
+                'version': 2,
+                'file_mtimes_ns': self.file_mtimes_ns,
+                'file_sizes': self.file_sizes,
                 'definitions': all_definitions,
                 'references': all_references,
             }
