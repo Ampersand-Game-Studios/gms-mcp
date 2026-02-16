@@ -23,6 +23,8 @@ gamemaker/
 .vscode/settings.json
 .cursor/mcp.json
 .cursor/debug.log
+.codex/
+.DS_Store
 
 # Local environment (API keys, secrets)
 .env
