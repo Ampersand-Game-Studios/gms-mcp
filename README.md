@@ -373,9 +373,29 @@ Build a dependency graph of assets with two modes:
 - **Shallow (fast)**: Parses `.yy` files for structural references (parent objects, sprites, etc.)
 - **Deep (complete)**: Also scans all GML code for runtime references like `instance_create`, `sprite_index`, `audio_play_sound`, etc.
 
+### Texture Groups (`gm_texture_group_*`)
+Create, inspect, and edit `.yyp` `TextureGroups`, plus bulk-assign assets (sprites/fonts/tilesets/etc) via `textureGroupId`.
+
+Read-only tools:
+- `gm_texture_group_list`: list texture groups + available configs (desktop/android/ios/etc)
+- `gm_texture_group_read`: read a single texture group entry
+- `gm_texture_group_members`: list assets in a group (top-level + ConfigValues overrides)
+- `gm_texture_group_scan`: report missing groups referenced + mismatches (top-level vs config override)
+
+Destructive tools (all support `dry_run=true`):
+- `gm_texture_group_create`: clone an existing template group (default: `Default`)
+- `gm_texture_group_update`: patch fields on a group (optionally per config via `ConfigValues`)
+- `gm_texture_group_rename`: rename a group and rewrite asset references
+- `gm_texture_group_delete`: blocks by default if referenced unless `reassign_to` is provided
+- `gm_texture_group_assign`: bulk-assign assets by explicit list or filters
+
+Config scope defaults:
+- Assignment updates an asset's top-level `textureGroupId` **only when it is a dict** (null is left as-is).
+- If `configs` is omitted, assignment updates only **existing** `ConfigValues` entries; pass `configs=[...]` to create explicit overrides.
+
 ### MCP Resources
 Pre-built, cacheable project data for agents:
-- `gms://project/index`: Complete project structure (assets, folders, room order, audio/texture groups, IDE version)
+- `gms://project/index`: Complete project structure (assets, folders, room order, configs, audio/texture groups, IDE version)
 - `gms://project/asset-graph`: Asset dependency graph
 - `gms://system/updates`: Returns a human-readable message if a newer version of `gms-mcp` is available on PyPI or GitHub.
 
@@ -392,4 +412,6 @@ Run from a project directory (or pass `--project-root`):
 ```bash
 gms --version
 gms --project-root . asset create script my_function --parent-path "folders/Scripts.yy"
+gms --project-root . texture-groups list
+gms --project-root . texture-groups assign game --type sprite --folder-prefix sprites/ --dry-run
 ```
