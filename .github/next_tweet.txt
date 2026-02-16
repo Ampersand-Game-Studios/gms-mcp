@@ -1,1 +1,1 @@
-Antigravity setup just got safer in gms-mcp: use `gms-mcp-init --antigravity-app-setup` for atomic config updates, automatic backups, and JSON readiness checks. We also added per-tool dry-run allowlists and hardened full-suite test execution. #GameMaker #gamedev
+macOS gm_compile/gm_run are fixed: Igor now gets `Mac` (not `macOS`), Prefabs auto-detect includes `/Users/Shared/GameMakerStudio2/Prefabs`, and PackageZip no longer crashes with the weird kernel32 error. #GameMaker #gamedev
