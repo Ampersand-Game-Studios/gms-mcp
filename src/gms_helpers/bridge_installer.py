@@ -203,6 +203,129 @@ class BridgeInstaller:
         if self.backup_path and self.backup_path.exists():
             self.backup_path.unlink()
             self.backup_path = None
+
+    def _iter_room_files(self, yyp_data: Dict[str, Any]) -> List[Path]:
+        """Return room .yy files listed in the project resources."""
+        room_files: List[Path] = []
+        seen: set[str] = set()
+        resources = yyp_data.get("resources", [])
+        if not isinstance(resources, list):
+            return room_files
+
+        for resource in resources:
+            if not isinstance(resource, dict):
+                continue
+            res_id = resource.get("id")
+            if not isinstance(res_id, dict):
+                continue
+            rel_path = res_id.get("path")
+            if not isinstance(rel_path, str):
+                continue
+
+            normalized = rel_path.replace("\\", "/")
+            if not normalized.startswith("rooms/") or not normalized.endswith(".yy"):
+                continue
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+
+            room_file = self.project_root / Path(normalized)
+            if room_file.exists():
+                room_files.append(room_file)
+
+        return room_files
+
+    @staticmethod
+    def _is_bridge_instance(instance_data: Dict[str, Any]) -> bool:
+        """Check whether a room instance points to the bridge object."""
+        object_id = instance_data.get("objectId")
+        if not isinstance(object_id, dict):
+            return False
+
+        object_name = str(object_id.get("name", ""))
+        object_path = str(object_id.get("path", "")).replace("\\", "/")
+        return (
+            object_name == BRIDGE_OBJECT_NAME
+            or object_path == f"objects/{BRIDGE_OBJECT_NAME}/{BRIDGE_OBJECT_NAME}.yy"
+            or f"/{BRIDGE_OBJECT_NAME}/" in object_path
+        )
+
+    def _cleanup_bridge_room_instances(self, yyp_data: Dict[str, Any]) -> Dict[str, Any]:
+        """Remove __mcp_bridge instances from all project rooms."""
+        summary: Dict[str, Any] = {
+            "rooms_modified": [],
+            "instances_removed": 0,
+            "creation_code_deleted": 0,
+            "warnings": [],
+        }
+
+        for room_file in self._iter_room_files(yyp_data):
+            try:
+                room_data = load_json(room_file)
+                if not isinstance(room_data, dict):
+                    summary["warnings"].append(f"Failed to parse room JSON: {room_file}")
+                    continue
+
+                layers = room_data.get("layers", [])
+                if not isinstance(layers, list):
+                    continue
+
+                changed = False
+                removed_instance_ids: set[str] = set()
+                removed_count = 0
+
+                for layer in layers:
+                    if not isinstance(layer, dict):
+                        continue
+                    instances = layer.get("instances")
+                    if not isinstance(instances, list):
+                        continue
+
+                    kept_instances = []
+                    for instance in instances:
+                        if isinstance(instance, dict) and self._is_bridge_instance(instance):
+                            removed_count += 1
+                            instance_name = instance.get("name") or instance.get("%Name")
+                            if isinstance(instance_name, str) and instance_name:
+                                removed_instance_ids.add(instance_name)
+                            changed = True
+                            continue
+                        kept_instances.append(instance)
+
+                    if len(kept_instances) != len(instances):
+                        layer["instances"] = kept_instances
+
+                if removed_instance_ids:
+                    creation_order = room_data.get("instanceCreationOrder")
+                    if isinstance(creation_order, list):
+                        before_count = len(creation_order)
+
+                        def _keep(entry: Any) -> bool:
+                            if isinstance(entry, str):
+                                return entry not in removed_instance_ids
+                            if isinstance(entry, dict):
+                                entry_name = entry.get("name") or entry.get("%Name")
+                                return entry_name not in removed_instance_ids
+                            return True
+
+                        room_data["instanceCreationOrder"] = [entry for entry in creation_order if _keep(entry)]
+                        if len(room_data["instanceCreationOrder"]) != before_count:
+                            changed = True
+
+                    for instance_id in removed_instance_ids:
+                        creation_code_file = room_file.parent / f"{instance_id}.gml"
+                        if creation_code_file.exists():
+                            creation_code_file.unlink()
+                            summary["creation_code_deleted"] += 1
+
+                if changed:
+                    save_json(room_data, room_file)
+                    summary["instances_removed"] += removed_count
+                    summary["rooms_modified"].append(str(room_file.relative_to(self.project_root)))
+            except Exception as exc:
+                summary["warnings"].append(f"Failed to clean room '{room_file}': {exc}")
+
+        return summary
     
     def _generate_uuid(self) -> str:
         """Generate a GameMaker-style UUID."""
@@ -714,9 +837,11 @@ global.__mcp_enabled = false;
             print("[BRIDGE] Backing up .yyp...")
             self._backup_yyp()
             
-            # Step 2: Update .yyp (remove references first)
+            # Step 2: Load .yyp and clean room instances before deleting assets
             print("[BRIDGE] Updating .yyp...")
             yyp_data = load_json(self.yyp_path)
+
+            room_cleanup = self._cleanup_bridge_room_instances(yyp_data)
             
             # Remove from Folders
             if "Folders" in yyp_data:
@@ -760,10 +885,15 @@ global.__mcp_enabled = false;
             self._cleanup_backup()
             
             print("[BRIDGE] Uninstallation complete!")
+            warnings = room_cleanup.get("warnings", [])
             return {
                 "ok": True,
                 "message": "Bridge removed successfully",
                 "items_deleted": deleted_count,
+                "rooms_cleaned": len(room_cleanup.get("rooms_modified", [])),
+                "instances_removed": room_cleanup.get("instances_removed", 0),
+                "creation_code_removed": room_cleanup.get("creation_code_deleted", 0),
+                "warnings": warnings,
             }
             
         except Exception as e:

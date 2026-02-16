@@ -192,12 +192,45 @@ class TestBridgeInstallerUninstall(unittest.TestCase):
         (self.project_root / "objects").mkdir()
         (self.project_root / "scripts").mkdir()
         (self.project_root / "folders").mkdir()
+        (self.project_root / "rooms").mkdir()
+        (self.project_root / "rooms" / "r_test").mkdir()
+        
+        self.bridge_instance_id = "inst_bridge_cleanup_test"
+        self.room_path = self.project_root / "rooms" / "r_test" / "r_test.yy"
+        self.room_creation_code = self.project_root / "rooms" / "r_test" / f"{self.bridge_instance_id}.gml"
+        
+        room_data = {
+            "name": "r_test",
+            "instanceCreationOrder": [
+                {"name": self.bridge_instance_id, "path": "rooms/r_test/r_test.yy"},
+            ],
+            "layers": [
+                {
+                    "name": "Instances",
+                    "resourceType": "GMRInstanceLayer",
+                    "instances": [
+                        {
+                            "name": self.bridge_instance_id,
+                            "%Name": self.bridge_instance_id,
+                            "objectId": {
+                                "name": BRIDGE_OBJECT_NAME,
+                                "path": f"objects/{BRIDGE_OBJECT_NAME}/{BRIDGE_OBJECT_NAME}.yy",
+                            },
+                        },
+                    ],
+                },
+            ],
+        }
+        self.room_path.write_text(json.dumps(room_data))
+        self.room_creation_code.write_text("// bridge creation code")
         
         # Create minimal .yyp
         self.yyp_path = self.project_root / "test.yyp"
         self.yyp_data = {
             "name": "test",
-            "resources": [],
+            "resources": [
+                {"id": {"name": "r_test", "path": "rooms/r_test/r_test.yy"}},
+            ],
             "Folders": [],
         }
         self.yyp_path.write_text(json.dumps(self.yyp_data))
@@ -251,6 +284,42 @@ class TestBridgeInstallerUninstall(unittest.TestCase):
         
         self.assertTrue(result["ok"])
         self.assertTrue(result.get("already_uninstalled", False))
+
+    def test_uninstall_removes_bridge_instances_from_rooms(self):
+        """Test uninstall removes bridge instances and creation-order refs from rooms."""
+        installer = BridgeInstaller(self.project_root)
+        result = installer.uninstall()
+
+        self.assertTrue(result["ok"])
+        self.assertGreaterEqual(result.get("rooms_cleaned", 0), 1)
+        self.assertGreaterEqual(result.get("instances_removed", 0), 1)
+
+        room_data = load_json(self.room_path)
+        layers = room_data.get("layers", [])
+
+        room_instances = []
+        for layer in layers:
+            if isinstance(layer, dict):
+                room_instances.extend(layer.get("instances", []))
+
+        self.assertFalse(
+            any(
+                isinstance(inst, dict)
+                and isinstance(inst.get("objectId"), dict)
+                and inst["objectId"].get("name") == BRIDGE_OBJECT_NAME
+                for inst in room_instances
+            )
+        )
+
+        creation_order = room_data.get("instanceCreationOrder", [])
+        self.assertFalse(
+            any(
+                (entry == self.bridge_instance_id)
+                or (isinstance(entry, dict) and entry.get("name") == self.bridge_instance_id)
+                for entry in creation_order
+            )
+        )
+        self.assertFalse(self.room_creation_code.exists())
 
 
 class TestBridgeInstallerConvenience(unittest.TestCase):
