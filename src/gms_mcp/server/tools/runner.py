@@ -3,14 +3,35 @@ from __future__ import annotations
 import argparse
 from typing import Any, Dict
 
+from ..direct import _capture_output, _pushd
 from ..dispatch import _run_with_fallback
 from ..mcp_types import Context
 from ..platform import _default_target_platform
-from ..project import _ensure_cli_on_sys_path, _resolve_repo_root
+from ..project import _ensure_cli_on_sys_path, _resolve_project_directory, _resolve_repo_root
 
 
 def register(mcp: Any, ContextType: Any) -> None:
     globals()["Context"] = ContextType
+
+    def _run_direct_preserve_result(handler: Any, args: argparse.Namespace, project_root: str) -> tuple[bool, str, str, Any, str | None, int | None]:
+        """
+        Run a handler in-process while capturing stdout/stderr, but preserve the handler's return value.
+
+        This is required for runner subcommands like `run start --background` where the handler returns a dict
+        (pid/run_id/etc). Using the generic direct-execution path discards return values intentionally.
+        """
+        project_directory = _resolve_project_directory(project_root)
+
+        def _invoke() -> Any:
+            from gms_helpers.utils import validate_working_directory
+
+            with _pushd(project_directory):
+                validate_working_directory()
+                # Normalize project_root after chdir so downstream handlers behave consistently.
+                setattr(args, "project_root", ".")
+                return handler(args)
+
+        return _capture_output(_invoke)
 
     # -----------------------------
     # Runner tools
@@ -111,6 +132,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         # Auto-detect bridge if not explicitly set
         bridge_enabled = False
         bridge_server = None
+        bridge_start_error: str | None = None
         
         if enable_bridge is None or enable_bridge is True:
             try:
@@ -123,43 +145,50 @@ def register(mcp: Any, ContextType: Any) -> None:
                         bridge_server = get_bridge_server(str(repo_root), create=True)
                         if bridge_server and bridge_server.start():
                             bridge_enabled = True
-                            if not quiet:
-                                print(f"[BRIDGE] Server started on port {bridge_server.port}")
             except Exception as e:
-                if not quiet:
-                    print(f"[BRIDGE] Failed to start bridge: {e}")
+                bridge_start_error = str(e)
         
         # For background mode, we want to run directly and return quickly
         # The game will be launched and we'll return session info immediately
         if background:
-            # Run the handler directly - it will return session info without blocking
             try:
-                result = handle_runner_run(args)
-                
-                # If result is a dict (background mode returns dict), add bridge info
-                if isinstance(result, dict):
-                    result["bridge_enabled"] = bridge_enabled
-                    if bridge_enabled and bridge_server:
-                        result["bridge_port"] = bridge_server.port
-                    return result
-                
-                # Fallback if somehow we got a bool
-                return {
-                    "ok": bool(result),
-                    "background": True,
-                    "bridge_enabled": bridge_enabled,
-                    "message": "Game launched" if result else "Failed to launch game",
-                }
+                ok, _stdout, _stderr, result_value, error_text, _exit_code = _run_direct_preserve_result(
+                    handle_runner_run, args, project_root
+                )
             except Exception as e:
-                # Stop bridge on failure
                 if bridge_server:
                     bridge_server.stop()
-                return {
-                    "ok": False,
-                    "background": True,
-                    "error": str(e),
-                    "message": f"Failed to launch game: {e}",
-                }
+                return {"ok": False, "background": True, "error": str(e), "message": f"Failed to launch game: {e}"}
+
+            if error_text:
+                if bridge_server:
+                    bridge_server.stop()
+                return {"ok": False, "background": True, "error": error_text, "message": f"Failed to launch game: {error_text}"}
+
+            if isinstance(result_value, dict):
+                result: Dict[str, Any] = dict(result_value)
+                result["bridge_enabled"] = bridge_enabled
+                if bridge_enabled and bridge_server:
+                    result.setdefault("bridge_port", bridge_server.port)
+                if bridge_start_error:
+                    result.setdefault("bridge_error", bridge_start_error)
+
+                # If the handler reported failure, stop the bridge server to avoid leaving it running.
+                if result.get("ok") is False and bridge_server:
+                    bridge_server.stop()
+                return result
+
+            # Fallback if somehow we got a bool or an unexpected return type
+            ok_bool = bool(result_value) if isinstance(result_value, bool) else bool(ok)
+            if not ok_bool and bridge_server:
+                bridge_server.stop()
+            return {
+                "ok": ok_bool,
+                "background": True,
+                "bridge_enabled": bridge_enabled,
+                "bridge_error": bridge_start_error,
+                "message": "Game launched" if ok_bool else "Failed to launch game",
+            }
         
         # For foreground mode, use the standard fallback mechanism
         cli_args = [
@@ -223,13 +252,26 @@ def register(mcp: Any, ContextType: Any) -> None:
         
         # Run directly for immediate response
         try:
-            result = handle_runner_stop(args)
-            if isinstance(result, dict):
-                result["bridge_stopped"] = bridge_stopped
-                return result
-            return {"ok": bool(result), "bridge_stopped": bridge_stopped, "message": "Game stopped" if result else "Failed to stop game"}
+            ok, _stdout, _stderr, result_value, error_text, _exit_code = _run_direct_preserve_result(
+                handle_runner_stop, args, project_root
+            )
         except Exception as e:
-            return {"ok": False, "error": str(e), "message": f"Error stopping game: {e}"}
+            return {"ok": False, "bridge_stopped": bridge_stopped, "error": str(e), "message": f"Error stopping game: {e}"}
+
+        if error_text:
+            return {"ok": False, "bridge_stopped": bridge_stopped, "error": error_text, "message": f"Error stopping game: {error_text}"}
+
+        if isinstance(result_value, dict):
+            result: Dict[str, Any] = dict(result_value)
+            result["bridge_stopped"] = bridge_stopped
+            return result
+
+        ok_bool = bool(result_value) if isinstance(result_value, bool) else bool(ok)
+        return {
+            "ok": ok_bool,
+            "bridge_stopped": bridge_stopped,
+            "message": "Game stopped" if ok_bool else "Failed to stop game",
+        }
 
     @mcp.tool()
     async def gm_run_status(
@@ -263,9 +305,16 @@ def register(mcp: Any, ContextType: Any) -> None:
         
         # Run directly for immediate response
         try:
-            result = handle_runner_status(args)
-            if isinstance(result, dict):
-                return result
-            return {"running": bool(result), "message": "Status check completed"}
+            ok, _stdout, _stderr, result_value, error_text, _exit_code = _run_direct_preserve_result(
+                handle_runner_status, args, project_root
+            )
         except Exception as e:
             return {"ok": False, "error": str(e), "message": f"Error checking status: {e}"}
+
+        if error_text:
+            return {"ok": False, "error": error_text, "message": f"Error checking status: {error_text}"}
+
+        if isinstance(result_value, dict):
+            return result_value
+
+        return {"ok": bool(ok), "running": bool(result_value), "message": "Status check completed"}
