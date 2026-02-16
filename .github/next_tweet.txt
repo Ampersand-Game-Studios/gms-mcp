@@ -1,1 +1,1 @@
-Cross-client MCP parity just landed in gms-mcp: `gms-mcp-init --client ... --scope ... --action ...` now supports setup/check/check-json/app-setup for Cursor, Codex, Claude Desktop/Code, Gemini, VSCode, Windsurf, OpenClaw. #GameMaker #gamedev
+macOS gm_compile/gm_run are fixed: Igor now gets `Mac` (not `macOS`), Prefabs auto-detect includes `/Users/Shared/GameMakerStudio2/Prefabs`, and PackageZip no longer crashes with the weird kernel32 error. #GameMaker #gamedev

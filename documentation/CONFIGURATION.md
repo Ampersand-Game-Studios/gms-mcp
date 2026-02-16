@@ -265,7 +265,7 @@ Projects that use GameMaker prefabs (indicated by `ForcedPrefabProjectReferences
 GMS-MCP automatically detects the prefabs library location:
 
 - **Windows**: `C:/ProgramData/GameMakerStudio2/Prefabs`
-- **macOS**: `/Library/Application Support/GameMakerStudio2/Prefabs` or `~/Library/Application Support/GameMakerStudio2/Prefabs`
+- **macOS**: `/Users/Shared/GameMakerStudio2/Prefabs`, `/Library/Application Support/GameMakerStudio2/Prefabs`, or `~/Library/Application Support/GameMakerStudio2/Prefabs`
 - **Linux**: `~/.config/GameMakerStudio2/Prefabs` or `/opt/GameMakerStudio2/Prefabs`
 
 ### Custom Prefabs Path
