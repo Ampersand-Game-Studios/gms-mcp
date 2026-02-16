@@ -39,11 +39,20 @@ def normalize_platform_target(platform_target: Optional[str]) -> str:
         "windows": "Windows",
         "html5": "HTML5",
         "macos": "macOS",
+        "mac": "macOS",
+        "osx": "macOS",
         "linux": "Linux",
         "android": "Android",
         "ios": "iOS",
     }
     return aliases.get(platform_target.strip().lower(), platform_target)
+
+
+def _to_igor_platform(platform_target: str) -> str:
+    """Map canonical platform targets to the token Igor expects after `--`."""
+    if platform_target == "macOS":
+        return "Mac"
+    return platform_target
 
 
 class GameMakerRunner:
@@ -127,6 +136,7 @@ class GameMakerRunner:
         elif system == "Darwin":
             # macOS location
             default_paths = [
+                Path("/Users/Shared/GameMakerStudio2/Prefabs"),
                 Path("/Library/Application Support/GameMakerStudio2/Prefabs"),
                 Path.home() / "Library/Application Support/GameMakerStudio2/Prefabs",
             ]
@@ -343,6 +353,7 @@ class GameMakerRunner:
                           runtime_type: str = "VM", **kwargs) -> List[str]:
         """Build Igor command line."""
         platform_target = normalize_platform_target(platform_target)
+        igor_platform = _to_igor_platform(platform_target)
 
         igor_path = self.find_gamemaker_runtime()
         if not igor_path:
@@ -387,13 +398,14 @@ class GameMakerRunner:
             cmd.extend(["/runtime=YYC"])
         
         # Add platform and action
-        cmd.extend(["--", platform_target, action])
+        cmd.extend(["--", igor_platform, action])
         
         return cmd
     
     def compile_project(self, platform_target: Optional[str] = None, runtime_type: str = "VM") -> bool:
         """Compile the GameMaker project."""
         platform_target = normalize_platform_target(platform_target)
+        igor_platform = _to_igor_platform(platform_target)
 
         try:
             print(f"[BUILD] Compiling project for {platform_target} ({runtime_type})...")
@@ -436,11 +448,15 @@ class GameMakerRunner:
 
             # Output location
             cmd.extend([f"--of={ide_temp_dir / project_name}"])
+
+            # macOS PackageZip needs an explicit target filename for the zipped .app output.
+            if platform_target == "macOS":
+                cmd.extend([f"--tf={ide_temp_dir / f'{project_name}.app.zip'}"])
             
             if runtime_type.upper() == "YYC":
                 cmd.extend(["/runtime=YYC"])
             
-            cmd.extend(["--", platform_target, "PackageZip"])
+            cmd.extend(["--", igor_platform, "PackageZip"])
             
             print(f"[CMD] Command: {' '.join(cmd)}")
             
@@ -500,6 +516,7 @@ class GameMakerRunner:
         3. Run the generated game artifact from the temp location
         """
         platform_target = normalize_platform_target(platform_target)
+        igor_platform = _to_igor_platform(platform_target)
 
         try:
             import tempfile
@@ -555,13 +572,18 @@ class GameMakerRunner:
 
             # Add output parameters (BEFORE the -- separator)
             cmd.extend([f"--of={ide_temp_dir / project_name}"])
+
+            target_app_zip = None
+            if platform_target == "macOS":
+                target_app_zip = ide_temp_dir / f"{project_name}.app.zip"
+                cmd.extend([f"--tf={target_app_zip}"])
             
             # Add runtime type
             if runtime_type.upper() == "YYC":
                 cmd.extend(["/runtime=YYC"])
             
             # Add platform and action
-            cmd.extend(["--", platform_target, "PackageZip"])
+            cmd.extend(["--", igor_platform, "PackageZip"])
             
             print(f"[CMD] Package command: {' '.join(cmd)}")
             
@@ -588,6 +610,15 @@ class GameMakerRunner:
             if process.returncode != 0:
                 print(f"[WARN] Igor PackageZip returned exit code {process.returncode}, checking if executable was created...")
                 # Don't return False immediately - check if files were created successfully
+
+            if platform_target == "macOS" and target_app_zip and target_app_zip.exists():
+                # Igor emits a zipped .app. Extract it so we can launch the bundle directly.
+                subprocess.run(
+                    ["/usr/bin/unzip", "-o", str(target_app_zip), "-d", str(ide_temp_dir)],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    check=False,
+                )
             
             # Step 2: Find the runnable artifact from PackageZip output.
             launch_path = self._find_launch_target(ide_temp_dir, project_name, platform_target)
@@ -666,6 +697,7 @@ class GameMakerRunner:
         2. Game runs directly from Igor
         """
         platform_target = normalize_platform_target(platform_target)
+        igor_platform = _to_igor_platform(platform_target)
 
         try:
             import tempfile
@@ -717,7 +749,7 @@ class GameMakerRunner:
                 cmd.extend(["/runtime=YYC"])
 
             # Add platform and action (classic Run command)
-            cmd.extend(["--", platform_target, "Run"])
+            cmd.extend(["--", igor_platform, "Run"])
             
             print(f"[CMD] Run command: {' '.join(cmd)}")
             
