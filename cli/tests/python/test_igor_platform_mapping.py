@@ -47,14 +47,17 @@ class TestPrefabsAutoDetection(unittest.TestCase):
         shared_prefabs = "/Users/Shared/GameMakerStudio2/Prefabs"
 
         def fake_exists(path_obj: Path) -> bool:
-            return str(path_obj) == shared_prefabs
+            # `Path` is OS-specific; normalize so this test is stable on Windows CI.
+            return path_obj.as_posix() == shared_prefabs
 
         with patch.dict(os.environ, {}, clear=True):
-            with patch("gms_helpers.runner.Path.exists", autospec=True, side_effect=fake_exists):
-                found = runner.get_prefabs_path()
+            # On Windows, clearing env vars can break Path.home() resolution.
+            with patch("gms_helpers.runner.Path.home", return_value=Path("/fake/home")):
+                with patch("gms_helpers.runner.Path.exists", autospec=True, side_effect=fake_exists):
+                    found = runner.get_prefabs_path()
 
         self.assertIsNotNone(found)
-        self.assertEqual(str(found), shared_prefabs)
+        self.assertEqual(found.as_posix(), shared_prefabs)
 
 
 class TestMacPackageZipTargetFilename(unittest.TestCase):
