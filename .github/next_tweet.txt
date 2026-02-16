@@ -1,1 +1,1 @@
-macOS gm_compile/gm_run are fixed: Igor now gets `Mac` (not `macOS`), Prefabs auto-detect includes `/Users/Shared/GameMakerStudio2/Prefabs`, and PackageZip no longer crashes with the weird kernel32 error. #GameMaker #gamedev
+Texture groups are now first-class in gms-mcp. List/read/scan/create/update/rename/delete groups, inspect membership, and bulk-assign sprites/assets with config-aware overrides (desktop/android/ios) from MCP + CLI. #GameMaker #gamedev
