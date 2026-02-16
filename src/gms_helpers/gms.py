@@ -52,6 +52,7 @@ Examples:
     setup_asset_commands(subparsers)
     setup_event_commands(subparsers)
     setup_workflow_commands(subparsers)
+    setup_texture_group_commands(subparsers)
     setup_sprite_commands(subparsers)
     setup_room_commands(subparsers)
     setup_maintenance_commands(subparsers)
@@ -327,8 +328,8 @@ def setup_sound_parser(subparsers):
                               help='Sound type: 0=Normal, 1=Background, 2=3D (default: 0)')
     parser.add_argument('--bitrate', type=int, default=128, help='Bitrate (default: 128)')
     parser.add_argument('--sample-rate', type=int, default=44100, help='Sample rate (default: 44100)')
-    parser.add_argument('--format', type=int, default=0, choices=[0, 1, 2], 
-                              help='Format: 0=OGG, 1=MP3, 2=WAV (default: 0)')
+    parser.add_argument('--format', type=int, default=2, choices=[0, 1, 2], 
+                              help='Preferred format: 0=OGG, 1=MP3, 2=WAV (default: 2)')
     parser.add_argument('--skip-maintenance', action='store_true', help='Skip pre/post validation')
     parser.add_argument('--no-auto-fix', action='store_true', help='Do not automatically fix issues')
     parser.add_argument('--maintenance-verbose', action=argparse.BooleanOptionalAction, default=True, help='Show verbose maintenance output')
@@ -494,6 +495,90 @@ def setup_workflow_commands(subparsers):
     swap_parser.add_argument('png', help='Path to replacement PNG file')
     swap_parser.add_argument('--frame', type=int, default=0, help='Frame index to replace (0-indexed, default: 0)')
     swap_parser.set_defaults(func=handle_workflow_swap_sprite)
+
+
+def setup_texture_group_commands(subparsers):
+    """Set up texture group commands."""
+    tg_parser = subparsers.add_parser("texture-groups", help="Create, inspect, and edit texture groups")
+    tg_subparsers = tg_parser.add_subparsers(dest="tg_action", help="Texture group actions")
+    tg_subparsers.required = True
+
+    # List
+    list_parser = tg_subparsers.add_parser("list", help="List texture groups")
+    list_parser.set_defaults(func=handle_texture_groups_list)
+
+    # Show
+    show_parser = tg_subparsers.add_parser("show", help="Show a texture group")
+    show_parser.add_argument("name", help="Texture group name")
+    show_parser.set_defaults(func=handle_texture_groups_show)
+
+    # Create
+    create_parser = tg_subparsers.add_parser("create", help="Create a texture group")
+    create_parser.add_argument("name", help="Texture group name")
+    create_parser.add_argument("--template", default="Default", help="Template group to clone (default: Default)")
+    create_parser.add_argument("--set", action="append", help="Patch field key=value (repeatable)")
+    create_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    create_parser.set_defaults(func=handle_texture_groups_create)
+
+    # Update
+    update_parser = tg_subparsers.add_parser("update", help="Update a texture group")
+    update_parser.add_argument("name", help="Texture group name")
+    update_parser.add_argument("--set", action="append", help="Patch field key=value (repeatable)")
+    update_parser.add_argument("--configs", help="Comma-separated config names to set (creates overrides)")
+    update_parser.add_argument(
+        "--update-existing-configs",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Update existing ConfigValues entries (default: true)",
+    )
+    update_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    update_parser.set_defaults(func=handle_texture_groups_update)
+
+    # Rename
+    rename_parser = tg_subparsers.add_parser("rename", help="Rename a texture group")
+    rename_parser.add_argument("old_name", help="Existing texture group name")
+    rename_parser.add_argument("new_name", help="New texture group name")
+    rename_parser.add_argument(
+        "--no-update-references",
+        dest="update_references",
+        action="store_false",
+        help="Do not update asset references",
+    )
+    rename_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    rename_parser.set_defaults(func=handle_texture_groups_rename)
+
+    # Delete
+    delete_parser = tg_subparsers.add_parser("delete", help="Delete a texture group")
+    delete_parser.add_argument("name", help="Texture group name")
+    delete_parser.add_argument("--reassign-to", dest="reassign_to", help="Texture group to reassign assets to")
+    delete_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    delete_parser.set_defaults(func=handle_texture_groups_delete)
+
+    # Members
+    members_parser = tg_subparsers.add_parser("members", help="List texture group members")
+    members_parser.add_argument("group", help="Texture group name")
+    members_parser.add_argument("--types", help="Comma-separated asset types (e.g., sprite,font,tileset)")
+    members_parser.add_argument("--configs", help="Comma-separated config names to include")
+    members_parser.set_defaults(func=handle_texture_groups_members)
+
+    # Assign
+    assign_parser = tg_subparsers.add_parser("assign", help="Assign assets to a texture group")
+    assign_parser.add_argument("group", help="Texture group name")
+    assign_parser.add_argument("--assets", help="Comma-separated asset identifiers (name or relative .yy path)")
+    assign_parser.add_argument("--type", dest="asset_type", help="Asset type filter (e.g., sprite)")
+    assign_parser.add_argument("--name-contains", dest="name_contains", help="Filter by name substring (case-insensitive)")
+    assign_parser.add_argument("--folder-prefix", dest="folder_prefix", help="Filter by folder/path substring")
+    assign_parser.add_argument("--from-group", dest="from_group", help="Only assign assets currently in this group")
+    assign_parser.add_argument("--configs", help="Comma-separated config names to set (creates overrides)")
+    assign_parser.add_argument("--no-top-level", dest="no_top_level", action="store_true", help="Do not change top-level textureGroupId")
+    assign_parser.add_argument(
+        "--no-update-existing-configs",
+        dest="no_update_existing_configs",
+        action="store_true",
+        help="Do not update existing ConfigValues entries",
+    )
+    assign_parser.add_argument("--dry-run", action="store_true", help="Preview without writing")
+    assign_parser.set_defaults(func=handle_texture_groups_assign)
 
 
 def setup_sprite_commands(subparsers):
@@ -779,6 +864,16 @@ from .commands.event_commands import (
 from .commands.workflow_commands import (
     handle_workflow_duplicate, handle_workflow_rename,
     handle_workflow_delete, handle_workflow_swap_sprite
+)
+from .commands.texture_group_commands import (
+    handle_texture_groups_list,
+    handle_texture_groups_show,
+    handle_texture_groups_create,
+    handle_texture_groups_update,
+    handle_texture_groups_rename,
+    handle_texture_groups_delete,
+    handle_texture_groups_members,
+    handle_texture_groups_assign,
 )
 from .commands.room_commands import (
     handle_room_layer_add, handle_room_layer_remove, handle_room_layer_list,
