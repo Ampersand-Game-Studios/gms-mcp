@@ -353,6 +353,42 @@ class TestBridgeServerConnection(unittest.TestCase):
             except Exception:
                 pass
 
+    def test_disconnect_during_command_fails_without_timeout(self):
+        """Pending command should fail immediately when the game disconnects."""
+        client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        client.settimeout(2.0)
+
+        try:
+            client.connect(("127.0.0.1", self.port))
+            time.sleep(0.2)
+
+            def disconnect_on_command():
+                try:
+                    data = client.recv(1024)
+                    if data and data.startswith(b"CMD:"):
+                        client.close()
+                except Exception:
+                    pass
+
+            thread = threading.Thread(target=disconnect_on_command, daemon=True)
+            thread.start()
+
+            start = time.time()
+            result = self.server.send_command("ping", timeout=2.0)
+            elapsed = time.time() - start
+
+            thread.join(timeout=1.0)
+
+            self.assertFalse(result.success)
+            self.assertEqual(result.error, "Game disconnected")
+            # Should return quickly on disconnect, not wait for full timeout.
+            self.assertLess(elapsed, 1.5)
+        finally:
+            try:
+                client.close()
+            except Exception:
+                pass
+
 
 if __name__ == "__main__":
     unittest.main()

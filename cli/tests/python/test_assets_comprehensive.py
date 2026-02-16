@@ -9,6 +9,7 @@ import tempfile
 import shutil
 import os
 import json
+import wave
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -1057,6 +1058,57 @@ class TestAssetIntegrationScenarios(TestAssetsComprehensive):
                 # Verify each was created
                 yy_file = self.project_root / relative_path
                 self.assertTrue(yy_file.exists())
+
+
+class TestSoundAndTimelineRegression(TestAssetsComprehensive):
+    """Regression tests for compile-safe sound/timeline asset generation."""
+
+    def setUp(self):
+        super().setUp()
+        self.parent_path = self._create_test_folder_structure()
+
+    def test_sound_create_yy_defaults_to_wav_placeholder(self):
+        sound_asset = SoundAsset()
+        yy_data = sound_asset.create_yy_data("snd_test", self.parent_path)
+        self.assertEqual(yy_data["soundFile"], "snd_test.wav")
+
+    def test_sound_placeholder_is_valid_wav_even_if_ogg_requested(self):
+        sound_asset = SoundAsset()
+        asset_folder = self.project_root / "sounds" / "snd_test"
+        asset_folder.mkdir(parents=True)
+
+        with patch("builtins.print") as mock_print:
+            sound_asset.create_stub_files(asset_folder, "snd_test", format=0, sample_rate=22050)
+
+        wav_path = asset_folder / "snd_test.wav"
+        self.assertTrue(wav_path.exists())
+
+        with wave.open(str(wav_path), "rb") as wav_file:
+            self.assertEqual(wav_file.getnchannels(), 1)
+            self.assertEqual(wav_file.getsampwidth(), 2)
+            self.assertEqual(wav_file.getframerate(), 22050)
+            self.assertGreater(wav_file.getnframes(), 0)
+
+        output = "\n".join(call.args[0] for call in mock_print.call_args_list if call.args)
+        self.assertIn("unsupported", output)
+        self.assertIn(".wav", output)
+
+    def test_timeline_create_yy_uses_compiler_safe_moment_schema(self):
+        timeline_asset = TimelineAsset()
+        yy_data = timeline_asset.create_yy_data("tl_test", self.parent_path)
+
+        self.assertEqual(yy_data["$GMTimeline"], "")
+        self.assertIn("momentList", yy_data)
+        self.assertGreaterEqual(len(yy_data["momentList"]), 1)
+
+        first_moment = yy_data["momentList"][0]
+        self.assertEqual(first_moment["resourceType"], "GMMoment")
+        self.assertIn("%Name", first_moment)
+        self.assertIn("name", first_moment)
+        self.assertIn("evnt", first_moment)
+        self.assertEqual(first_moment["evnt"]["resourceType"], "GMEvent")
+        self.assertIn("%Name", first_moment["evnt"])
+        self.assertIn("name", first_moment["evnt"])
 
 
 if __name__ == '__main__':

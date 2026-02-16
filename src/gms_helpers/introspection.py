@@ -426,10 +426,31 @@ def build_project_index(project_root: Path) -> Dict[str, Any]:
     ]
     
     # Extract texture groups
-    texture_groups = [
-        {"name": tg.get("name"), "autocrop": tg.get("autocrop"), "border": tg.get("border")}
-        for tg in yyp_data.get("TextureGroups", [])
-    ]
+    raw_texture_groups = yyp_data.get("TextureGroups", None)
+    if raw_texture_groups is None:
+        raw_texture_groups = yyp_data.get("textureGroups", [])
+    texture_groups = [tg for tg in (raw_texture_groups or []) if isinstance(tg, dict)]
+
+    # Extract configs (leaf names from the .yyp "configs" tree, excluding root "Default")
+    configs: List[str] = []
+    configs_root = yyp_data.get("configs")
+    if isinstance(configs_root, dict):
+        seen_cfgs: Set[str] = set()
+
+        def _walk_cfg(node: Any) -> None:
+            if not isinstance(node, dict):
+                return
+            name = node.get("name")
+            children = node.get("children") or []
+            if not children:
+                if isinstance(name, str) and name and name != "Default" and name not in seen_cfgs:
+                    seen_cfgs.add(name)
+                    configs.append(name)
+                return
+            for child in children:
+                _walk_cfg(child)
+
+        _walk_cfg(configs_root)
     
     # Project metadata
     metadata = yyp_data.get("MetaData", {})
@@ -438,6 +459,7 @@ def build_project_index(project_root: Path) -> Dict[str, Any]:
         "project_name": yyp_path.stem if yyp_path else "Unknown",
         "project_path": str(project_root),
         "ide_version": metadata.get("IDEVersion", "Unknown"),
+        "configs": configs,
         "assets": assets_by_type,
         "folders": folders,
         "room_order": room_order,

@@ -27,8 +27,11 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
     - `gm_search_references`: Search for patterns (string or regex) across the project with scoping options
     - `gm_get_asset_graph`: Build dependency graph with optional **deep mode** for GML code reference parsing
     - `gm_get_project_stats`: Quick project statistics
+  - **Texture Groups** (manage `.yyp` TextureGroups + bulk-assign asset `textureGroupId`):
+    - Read-only: `gm_texture_group_list`, `gm_texture_group_read`, `gm_texture_group_members`, `gm_texture_group_scan`
+    - Destructive (dry-run aware): `gm_texture_group_create`, `gm_texture_group_update`, `gm_texture_group_rename`, `gm_texture_group_delete`, `gm_texture_group_assign`
   - **MCP Resources** (addressable, cacheable data for fast agent context loading):
-    - `gms://project/index`: Complete project structure (assets, folders, room order, audio/texture groups)
+    - `gms://project/index`: Complete project structure (assets, folders, room order, configs, audio/texture groups)
     - `gms://project/asset-graph`: Asset dependency graph (structural references)
     - `gms://system/updates`: Check for newer versions of `gms-mcp` (human-readable)
   - **Updates**:
