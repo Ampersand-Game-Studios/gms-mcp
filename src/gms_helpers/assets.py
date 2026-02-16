@@ -3,6 +3,7 @@ Concrete implementations of GameMaker asset types
 """
 
 import re
+import wave
 from pathlib import Path
 from typing import Dict, Any
 
@@ -946,6 +947,50 @@ class SoundAsset(BaseAsset):
     kind = "sound"
     folder_prefix = "sounds"
     gm_tag = "GMSound"
+
+    _FORMAT_TO_EXTENSION = {
+        0: "ogg",
+        1: "mp3",
+        2: "wav",
+    }
+
+    @classmethod
+    def _normalize_format(cls, sound_format: Any) -> int:
+        """Return a supported sound format index."""
+        try:
+            parsed = int(sound_format)
+        except (TypeError, ValueError):
+            return 2
+        return parsed if parsed in cls._FORMAT_TO_EXTENSION else 2
+
+    @classmethod
+    def _requested_extension(cls, sound_format: Any) -> str:
+        return cls._FORMAT_TO_EXTENSION[cls._normalize_format(sound_format)]
+
+    @classmethod
+    def _placeholder_extension(cls, sound_format: Any) -> str:
+        # We generate a real silent WAV placeholder so fresh projects compile.
+        _ = sound_format
+        return "wav"
+
+    @staticmethod
+    def _write_silent_wav(path: Path, sample_rate: int = 44100, duration_seconds: float = 0.25) -> None:
+        """Write a valid mono 16-bit PCM silent WAV file."""
+        safe_rate = 44100
+        try:
+            parsed_rate = int(sample_rate)
+            if parsed_rate > 0:
+                safe_rate = parsed_rate
+        except (TypeError, ValueError):
+            pass
+
+        frame_count = max(1, int(safe_rate * max(duration_seconds, 0.01)))
+
+        with wave.open(str(path), "wb") as wav_file:
+            wav_file.setnchannels(1)
+            wav_file.setsampwidth(2)  # 16-bit PCM
+            wav_file.setframerate(safe_rate)
+            wav_file.writeframes(b"\x00\x00" * frame_count)
     
     def create_yy_data(self, name: str, parent_path: str, **kwargs) -> Dict[str, Any]:
         # Sound configuration parameters
@@ -955,6 +1000,7 @@ class SoundAsset(BaseAsset):
         bitrate = kwargs.get("bitrate", 128)
         sample_rate = kwargs.get("sample_rate", 44100)
         sound_format = kwargs.get("format", 0)  # 0=OGG, 1=MP3, 2=WAV
+        sound_file_ext = self._placeholder_extension(sound_format)
         
         return {
             "$GMSound": "",
@@ -977,20 +1023,26 @@ class SoundAsset(BaseAsset):
             "resourceType": "GMSound",
             "resourceVersion": "2.0",
             "sampleRate": sample_rate,
-            "soundFile": f"{name}.ogg",
+            "soundFile": f"{name}.{sound_file_ext}",
             "type": sound_type,
             "volume": volume
         }
     
     def create_stub_files(self, asset_folder: Path, name: str, **kwargs):
-        # Create a dummy OGG file (placeholder)
-        ogg_path = asset_folder / f"{name}.ogg"
-        if not ogg_path.exists():
-            # Create a minimal empty OGG file (placeholder)
-            placeholder_content = b"OggS\x00\x02\x00\x00\x00\x00\x00\x00\x00\x00"  # Minimal OGG header
-            ogg_path.write_bytes(placeholder_content)
-            print(f"Created {ogg_path.name} (placeholder audio file)")
-            print(f"[WARN]  Replace with actual audio file (.ogg, .mp3, or .wav) before using!")
+        requested_ext = self._requested_extension(kwargs.get("format", 0))
+        placeholder_ext = self._placeholder_extension(kwargs.get("format", 0))
+        sample_rate = kwargs.get("sample_rate", 44100)
+
+        placeholder_path = asset_folder / f"{name}.{placeholder_ext}"
+        if not placeholder_path.exists():
+            self._write_silent_wav(placeholder_path, sample_rate=sample_rate)
+            print(f"Created {placeholder_path.name} (silent placeholder audio)")
+            if requested_ext != placeholder_ext:
+                print(
+                    f"[WARN]  Requested .{requested_ext} placeholder is unsupported; "
+                    f"created .{placeholder_ext} instead for build compatibility."
+                )
+            print(f"[WARN]  Replace placeholder audio with real content before shipping.")
     
     def validate_name(self, name: str) -> bool:
         """Validate sound name against configured pattern."""
@@ -1167,29 +1219,62 @@ class TimelineAsset(BaseAsset):
     kind = "timeline"
     folder_prefix = "timelines"
     gm_tag = "GMTimeline"
+
+    @staticmethod
+    def _normalize_moment(moment: Any, index: int) -> Dict[str, Any]:
+        """Convert loose timeline moment input into a GameMaker-safe moment entry."""
+        raw_moment = moment if isinstance(moment, dict) else {}
+        raw_event = raw_moment.get("evnt")
+        if not isinstance(raw_event, dict):
+            raw_event = {}
+
+        try:
+            moment_value = int(raw_moment.get("moment", index))
+        except (TypeError, ValueError):
+            moment_value = index
+
+        moment_name = raw_moment.get("%Name") or raw_moment.get("name") or f"moment_{moment_value}"
+        event_name = raw_event.get("%Name") or raw_event.get("name") or f"ev_{moment_value}"
+
+        try:
+            event_num = int(raw_event.get("eventNum", 0))
+        except (TypeError, ValueError):
+            event_num = 0
+
+        try:
+            event_type = int(raw_event.get("eventType", 0))
+        except (TypeError, ValueError):
+            event_type = 0
+
+        return {
+            "$GMMoment": raw_moment.get("$GMMoment", ""),
+            "%Name": str(moment_name),
+            "name": str(moment_name),
+            "moment": moment_value,
+            "evnt": {
+                "$GMEvent": raw_event.get("$GMEvent", ""),
+                "%Name": str(event_name),
+                "isDnD": bool(raw_event.get("isDnD", False)),
+                "eventNum": event_num,
+                "eventType": event_type,
+                "collisionObjectId": raw_event.get("collisionObjectId"),
+                "name": str(event_name),
+                "resourceType": "GMEvent",
+                "resourceVersion": "2.0",
+            },
+            "resourceType": "GMMoment",
+            "resourceVersion": "2.0",
+        }
     
     def create_yy_data(self, name: str, parent_path: str, **kwargs) -> Dict[str, Any]:
-        # Timeline configuration parameters - create a simple example timeline
-        moments = kwargs.get("moments", [])
-        
-        # If no moments provided, create a basic example
-        if not moments:
-            moments = [
-                {
-                    "moment": 0,
-                    "evnt": {
-                        "isDnD": False,
-                        "eventNum": 0,
-                        "eventType": 0,
-                        "collisionObjectId": None,
-                        "resourceType": "GMEvent",
-                        "resourceVersion": "2.0"
-                    }
-                }
-            ]
+        # Build a compiler-safe default timeline shape.
+        raw_moments = kwargs.get("moments")
+        if not isinstance(raw_moments, list) or not raw_moments:
+            raw_moments = [{"moment": 0}]
+        moments = [self._normalize_moment(moment, index) for index, moment in enumerate(raw_moments)]
         
         return {
-            "$GMTimeline": "v1",
+            "$GMTimeline": "",
             "%Name": name,
             "momentList": moments,
             "name": name,

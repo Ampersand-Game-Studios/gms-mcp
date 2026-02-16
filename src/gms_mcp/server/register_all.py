@@ -15,6 +15,7 @@ from .tools import (
     rooms,
     runner,
     runtime,
+    texture_groups,
     workflow,
 )
 
@@ -30,7 +31,7 @@ def register_all(mcp: Any, Context: Any) -> None:
     workflow.register(mcp, Context)
     rooms.register(mcp, Context)
     introspection.register(mcp, Context)
+    texture_groups.register(mcp, Context)
     code_intel.register(mcp, Context)
     docs.register(mcp, Context)
     resources.register(mcp)
-

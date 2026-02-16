@@ -504,7 +504,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         sound_type: int = 0,
         bitrate: int = 128,
         sample_rate: int = 44100,
-        format: int = 0,
+        format: int = 2,
         skip_maintenance: bool = True,
         no_auto_fix: bool = False,
         maintenance_verbose: bool = False,
