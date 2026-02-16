@@ -60,10 +60,10 @@ def register(mcp: Any, ContextType: Any) -> None:
         Remove the MCP bridge from the GameMaker project.
         
         Safely removes all __mcp_ prefixed assets and cleans up .yyp references.
+        Attempts to remove __mcp_bridge room instances as part of uninstall.
         Uses backup/rollback to ensure project integrity.
 
-        Important: If you placed __mcp_bridge instances into rooms, remove those instances first.
-        Uninstalling removes the object asset; leaving room instance references can break IDE loading.
+        Note: If room cleanup cannot be completed, warnings are returned in the result.
         
         Args:
             project_root: Path to project root

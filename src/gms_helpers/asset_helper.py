@@ -1308,8 +1308,8 @@ Maintenance Commands:
                               help='Sound type: 0=Normal, 1=Background, 2=3D (default: 0)')
     sound_parser.add_argument('--bitrate', type=int, default=128, help='Bitrate (default: 128)')
     sound_parser.add_argument('--sample-rate', type=int, default=44100, help='Sample rate (default: 44100)')
-    sound_parser.add_argument('--format', type=int, default=0, choices=[0, 1, 2], 
-                              help='Format: 0=OGG, 1=MP3, 2=WAV (default: 0)')
+    sound_parser.add_argument('--format', type=int, default=2, choices=[0, 1, 2], 
+                              help='Preferred format: 0=OGG, 1=MP3, 2=WAV (default: 2)')
     sound_parser.set_defaults(func=create_sound)
     
     # Path command

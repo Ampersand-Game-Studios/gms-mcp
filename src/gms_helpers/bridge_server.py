@@ -177,7 +177,16 @@ class BridgeServer:
         
         was_connected = self._connected
         self._connected = False
-        
+
+        # Fail any pending commands immediately so callers don't sit on timeout
+        # when the game connection drops mid-request.
+        with self._command_lock:
+            now = time.time()
+            for pending in self._pending_commands.values():
+                if pending.completed_at is None:
+                    pending.error = pending.error or "Game disconnected"
+                    pending.completed_at = now
+
         if was_connected and self._on_disconnect:
             try:
                 self._on_disconnect()
@@ -423,6 +432,12 @@ class BridgeServer:
                     # Remove from pending
                     self._pending_commands.pop(cmd_id, None)
                     return result
+            if not self._connected:
+                with self._command_lock:
+                    self._pending_commands.pop(cmd_id, None)
+                result.error = "Game disconnected"
+                result.completed_at = time.time()
+                return result
             time.sleep(0.05)
         
         # Timeout

@@ -462,12 +462,14 @@ class GameMakerRunner:
             
             # Run compilation
             process = self._run_igor_command(cmd)
+            output_lines = []
             
             # Stream output in real-time
             if process.stdout:
                 for line in process.stdout:
                     line = line.strip()
                     if line:
+                        output_lines.append(line)
                         # Basic log filtering
                         if "error" in line.lower():
                             print(f"[ERROR] {line}")
@@ -484,6 +486,26 @@ class GameMakerRunner:
                 print("[OK] Compilation successful!")
                 return True
             else:
+                if platform_target == "macOS":
+                    signed_artifact_exists = (
+                        (ide_temp_dir / f"{project_name}.app.zip").exists()
+                        or (ide_temp_dir / f"{project_name}.app").exists()
+                    )
+                    signing_failure_markers = (
+                        "SecKeychainUnlock",
+                        "CreateMacExecutable",
+                        "Unable to obtain authorization for this operation",
+                    )
+                    saw_signing_failure = any(
+                        any(marker in line for marker in signing_failure_markers)
+                        for line in output_lines
+                    )
+                    if signed_artifact_exists and saw_signing_failure:
+                        print(
+                            "[WARN] Igor reported a macOS signing/keychain error after producing build artifacts. "
+                            "Treating compile as successful for local development."
+                        )
+                        return True
                 print(f"[ERROR] Compilation failed with exit code {process.returncode}")
                 return False
                 
