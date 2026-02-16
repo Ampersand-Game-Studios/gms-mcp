@@ -1,1 +1,1 @@
-Texture groups are now first-class in gms-mcp. List/read/scan/create/update/rename/delete groups, inspect membership, and bulk-assign sprites/assets with config-aware overrides (desktop/android/ios) from MCP + CLI. #GameMaker #gamedev
+Managing multiple GameMaker repos in Codex just got cleaner in gms-mcp: workspace-scoped MCP config + audit tooling now keeps GM_PROJECT_ROOT pinned per repo, so tools stop bleeding into unrelated chats. Better multi-project reliability. #GameMaker #gamedev
