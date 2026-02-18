@@ -12,6 +12,7 @@ Features:
 import hashlib
 import json
 import os
+import re
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
@@ -30,8 +31,12 @@ def compute_hash(content: str) -> str:
 
 def extract_tools_mentioned(content: str) -> list[str]:
     """Extract gm_* tool names from tweet content."""
-    import re
     return re.findall(r'\bgm_\w+\b', content)
+
+
+def extract_hashtags_mentioned(content: str) -> list[str]:
+    """Extract hashtags from tweet content."""
+    return re.findall(r"(?<!\w)#\w+", content)
 
 
 def load_history() -> dict:
@@ -77,6 +82,7 @@ def add_to_history(
         "format": tweet_format,
         "generated_by": generated_by,
         "tools_mentioned": extract_tools_mentioned(tweet_content),
+        "hashtags_mentioned": extract_hashtags_mentioned(tweet_content),
     }
     if tweet_id:
         entry["tweet_id"] = tweet_id

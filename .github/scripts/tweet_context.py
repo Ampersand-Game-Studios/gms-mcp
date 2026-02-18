@@ -241,7 +241,7 @@ TOPIC_CATEGORIES = {
     },
 }
 
-# Hashtags to use (will pick 1-2)
+# Hashtag examples for style cues only (not a fixed allowlist)
 HASHTAGS = ["#gamedev", "#GameMaker", "#indiedev", "#GML", "#GameMakerStudio2"]
 
 # Opening pattern types to encourage variety (20 options)
@@ -441,6 +441,21 @@ def select_opening_pattern(opening_coverage: dict) -> str:
     return sorted_patterns[0][0]
 
 
+def build_hashtag_guidance(category: dict, topic_tools: str, selected_angle: str) -> str:
+    """Build freeform hashtag strategy guidance for Claude."""
+    tool_hint = ", ".join(category["tools"][:3]) if category["tools"] else "general GameMaker workflows"
+    examples = ", ".join(HASHTAGS[:3])
+
+    return (
+        "- Use 0-2 hashtags maximum.\n"
+        "- Hashtags are optional; skip them when they do not add discoverability.\n"
+        f"- Match tags to this topic/angle: {category['name']} + {selected_angle.lower()}.\n"
+        f"- Prefer tags aligned with the specific tools/feature context ({tool_hint}; full topic tools: {topic_tools}).\n"
+        "- Avoid generic stuffing or unrelated trending tags.\n"
+        f"- Style cues only (not required list): {examples}."
+    )
+
+
 def build_context_for_claude(
     topic: str,
     tweet_format: str,
@@ -491,6 +506,7 @@ def build_context_for_claude(
 
     # Format topic details
     topic_tools = ", ".join(category["tools"][:5]) if category["tools"] else "General features"
+    hashtag_guidance = build_hashtag_guidance(category, topic_tools, selected_angle)
 
     # Opening pattern descriptions for guidance (19 patterns - confession removed)
     opening_descriptions = {
@@ -543,7 +559,8 @@ RELEASED FEATURES (can reference):
 
 TIME OF DAY: {get_time_slot()} UTC
 
-HASHTAG OPTIONS (pick 1-2): {', '.join(HASHTAGS[:4])}
+HASHTAG STRATEGY (freeform):
+{hashtag_guidance}
 """
 
 
