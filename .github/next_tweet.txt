@@ -1,1 +1,1 @@
-Texture groups are now first-class in gms-mcp. List/read/scan/create/update/rename/delete groups, inspect membership, and bulk-assign sprites/assets with config-aware overrides (desktop/android/ios) from MCP + CLI. #GameMaker #gamedev
+gms-mcp quality reports are trustworthy again: fixed JUnit parsing (no more fake 0-test artifacts) and expanded MCP smoke tests across core categories, including runner, bridge, workflow, rooms, texture groups, and code intel. Safer releases. #GameMaker #gamedev
