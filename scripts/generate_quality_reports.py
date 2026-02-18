@@ -22,6 +22,22 @@ from typing import Dict, List, Mapping
 from xml.etree import ElementTree as ET
 
 
+def _parse_int_attr(node: ET.Element, name: str) -> int:
+    value = node.attrib.get(name, "0")
+    try:
+        return int(float(value))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _parse_float_attr(node: ET.Element, name: str) -> float:
+    value = node.attrib.get(name, "0")
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return 0.0
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Generate coverage + MCP validation artifacts")
     parser.add_argument(
@@ -156,14 +172,31 @@ def parse_junit(path: Path) -> Dict[str, object]:
         }
 
     root = ET.parse(path).getroot()
-    totals = {
-        "tests": int(root.attrib.get("tests", "0")),
-        "failures": int(root.attrib.get("failures", "0")),
-        "errors": int(root.attrib.get("errors", "0")),
-        "skipped": int(root.attrib.get("skipped", "0")),
-        "time": root.attrib.get("time", "0.0"),
-        "suites": len(list(root)) if list(root) else 0,
-    }
+    suites = []
+    if root.tag == "testsuite":
+        suites = [root]
+    elif root.tag == "testsuites":
+        suites = list(root.findall("testsuite"))
+
+    if suites:
+        totals = {
+            "tests": sum(_parse_int_attr(suite, "tests") for suite in suites),
+            "failures": sum(_parse_int_attr(suite, "failures") for suite in suites),
+            "errors": sum(_parse_int_attr(suite, "errors") for suite in suites),
+            "skipped": sum(_parse_int_attr(suite, "skipped") for suite in suites),
+            "time": f"{sum(_parse_float_attr(suite, 'time') for suite in suites):.3f}",
+            "suites": len(suites),
+        }
+    else:
+        totals = {
+            "tests": _parse_int_attr(root, "tests"),
+            "failures": _parse_int_attr(root, "failures"),
+            "errors": _parse_int_attr(root, "errors"),
+            "skipped": _parse_int_attr(root, "skipped"),
+            "time": f"{_parse_float_attr(root, 'time'):.3f}",
+            "suites": 1 if root.tag == "testsuite" else len(list(root)),
+        }
+
     totals["passed"] = max(0, totals["tests"] - totals["failures"] - totals["errors"] - totals["skipped"])
     return totals
 
@@ -420,7 +453,7 @@ def main() -> int:
     write_tool_report(tools, referenced, junit, paths["tool_report_md"])
 
     summary = {
-        "generated_at": datetime.datetime.utcnow().isoformat(timespec="seconds") + "Z",
+        "generated_at": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "project": "gms-mcp",
         "coverage": coverage,
         "tests": junit,
