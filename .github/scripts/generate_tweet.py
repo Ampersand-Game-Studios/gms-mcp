@@ -66,6 +66,7 @@ HISTORY_FILE = GITHUB_DIR / "tweet_history.json"
 MAX_RETRIES = 3
 MAX_TWEET_LENGTH = 280
 MIN_TWEET_LENGTH = 50
+MAX_HASHTAGS = 2
 
 
 def load_history() -> dict:
@@ -168,6 +169,11 @@ def is_semantic_duplicate(content: str, history: dict, threshold: float = 0.6) -
     return False, ""
 
 
+def extract_hashtags(content: str) -> list[str]:
+    """Extract hashtag tokens from content."""
+    return re.findall(r"(?<!\w)#\w+", content)
+
+
 def validate_tweet(content: str, history: dict) -> tuple[bool, str]:
     """Validate generated tweet meets requirements."""
     content = content.strip()
@@ -188,9 +194,9 @@ def validate_tweet(content: str, history: dict) -> tuple[bool, str]:
     if is_sem_dup:
         return False, sem_reason
 
-    # Hashtag count (max 3)
-    hashtag_count = content.count("#")
-    if hashtag_count > 3:
+    # Hashtag count (max 2)
+    hashtag_count = len(extract_hashtags(content))
+    if hashtag_count > MAX_HASHTAGS:
         return False, f"too_many_hashtags ({hashtag_count})"
 
     # Bad patterns to avoid
@@ -320,7 +326,7 @@ RECENT TWEETS TO AVOID REPEATING:
 Requirements:
 1. Highlight a specific tool or feature from the topic category
 2. Be distinctly different from recent tweets
-3. Include 1-2 relevant hashtags at the end
+3. Use 0-2 relevant hashtags only if they help discoverability
 4. Keep it under 280 characters
 5. Make it interesting and specific, not generic
 
