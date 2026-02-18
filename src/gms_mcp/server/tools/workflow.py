@@ -16,6 +16,37 @@ def register(mcp: Any, ContextType: Any) -> None:
     # Workflow tools
     # -----------------------------
     @mcp.tool()
+    async def gm_safe_delete(
+        asset_type: str,
+        asset_name: str,
+        force: bool = False,
+        clean_refs: bool = False,
+        dry_run: bool = True,
+        project_root: str = ".",
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """Dependency-aware delete for an asset by type/name."""
+        _ = ctx
+        repo_root = _resolve_repo_root(project_root)
+        _ensure_cli_on_sys_path(repo_root)
+        from gms_helpers.workflow import safe_delete_asset
+
+        if not dry_run and _requires_dry_run_for_tool("gm_safe_delete"):
+            return _dry_run_policy_blocked_result(
+                "gm_safe_delete",
+                "Use dry_run=true, add gm_safe_delete to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
+            )
+
+        return safe_delete_asset(
+            project_root=project_root,
+            asset_type=asset_type,
+            asset_name=asset_name,
+            force=force,
+            clean_refs=clean_refs,
+            dry_run=dry_run,
+        )
+
+    @mcp.tool()
     async def gm_workflow_duplicate(
         asset_path: str,
         new_name: str,

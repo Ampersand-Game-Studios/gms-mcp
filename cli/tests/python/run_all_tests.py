@@ -9,6 +9,7 @@ import sys
 import os
 from pathlib import Path
 import shutil
+from typing import Optional, Tuple
 
 # Fix Windows UTF-8 encoding issues
 if sys.platform == "win32":
@@ -42,6 +43,12 @@ for p in (PROJECT_ROOT, src_dir):
         to_add.append(str(p))
 if to_add:
     os.environ["PYTHONPATH"] = os.pathsep.join([*to_add, current_pythonpath]) if current_pythonpath else os.pathsep.join(to_add)
+
+MCP_REQUIRED_MODULES = ("mcp", "fastmcp")
+MCP_DEPENDENT_TESTS = {
+    "test_bridge_one_shot_enable.py",
+    "test_mcp_integration_tools.py",
+}
 
 def find_python_executable():
     """Find the best Python executable to use"""
@@ -81,6 +88,52 @@ def find_python_executable():
     # Fallback to sys.executable
     return sys.executable
 
+
+def _python_version_tuple(python_exe: str) -> Optional[Tuple[int, int, int]]:
+    """Return interpreter version as (major, minor, patch), or None if unavailable."""
+    try:
+        result = subprocess.run(
+            [python_exe, "-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}')"],
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return None
+        parts = result.stdout.strip().split(".")
+        if len(parts) != 3:
+            return None
+        return int(parts[0]), int(parts[1]), int(parts[2])
+    except Exception:
+        return None
+
+
+def _python_has_module(python_exe: str, module_name: str) -> bool:
+    """Check whether module import succeeds for the provided interpreter."""
+    try:
+        result = subprocess.run(
+            [python_exe, "-c", f"import {module_name}"],
+            capture_output=True,
+            text=True,
+        )
+        return result.returncode == 0
+    except Exception:
+        return False
+
+
+def _determine_mcp_test_mode(python_exe: str) -> str:
+    """
+    Return one of:
+      - "native": dependencies present in interpreter
+      - "uv": run MCP tests through uv ephemeral deps
+      - "skip": skip MCP tests with explicit reason
+    """
+    missing = [mod for mod in MCP_REQUIRED_MODULES if not _python_has_module(python_exe, mod)]
+    if not missing:
+        return "native"
+    if shutil.which("uv"):
+        return "uv"
+    return "skip"
+
 def _test_requires_pytest(test_file_path: Path) -> bool:
     """Best-effort detection for tests that need pytest collection/runtime."""
     try:
@@ -116,7 +169,7 @@ def _build_test_command(test_file_path: Path, python_exe: str):
 
     return None, "pytest-missing"
 
-def run_test_file(test_file_path):
+def run_test_file(test_file_path, *, mcp_test_mode: str):
     """Run a single test file and return results"""
     print(f"\n{'='*60}")
     print(f"[RUN] {test_file_path.name}")
@@ -135,13 +188,38 @@ def run_test_file(test_file_path):
                 with open(yyp_file, "w") as f:
                     f.write('{"resources":[], "MetaData":{"name":"minimal"}}')
 
-        command, mode = _build_test_command(test_file_path, python_exe)
+        test_name = test_file_path.name
+        if test_name in MCP_DEPENDENT_TESTS:
+            if mcp_test_mode == "skip":
+                print("[SKIP] Missing MCP dependencies (mcp, fastmcp) and uv is unavailable.")
+                return "skip", 0
+            if mcp_test_mode == "uv":
+                command = [
+                    "uv",
+                    "run",
+                    "--with",
+                    "mcp",
+                    "--with",
+                    "fastmcp",
+                    "--with",
+                    "pytest",
+                    "python",
+                    "-m",
+                    "pytest",
+                    str(test_file_path.resolve()),
+                    "-q",
+                ]
+                mode = "uv+mcp-deps"
+            else:
+                command, mode = _build_test_command(test_file_path, python_exe)
+        else:
+            command, mode = _build_test_command(test_file_path, python_exe)
         if command is None:
             print(
                 f"[ERROR] {test_file_path.name} requires pytest, but pytest is unavailable "
                 "and uv is not installed."
             )
-            return False, 1
+            return "fail", 1
 
         print(f"[MODE] {mode}")
         # Run from gamemaker directory so CLI tools find the .yyp file.
@@ -153,10 +231,10 @@ def run_test_file(test_file_path):
             env=os.environ.copy(),
         )
 
-        return result.returncode == 0, result.returncode
+        return ("pass" if result.returncode == 0 else "fail"), result.returncode
     except Exception as e:
         print(f"[ERROR] Error running {test_file_path.name}: {e}")
-        return False, -1
+        return "fail", -1
 
 def main():
     """Main test runner function"""
@@ -168,14 +246,32 @@ def main():
     print(f"Using Python: {python_exe}")
 
     try:
-        version_result = subprocess.run([python_exe, "--version"],
-                                      capture_output=True, text=True)
+        version_result = subprocess.run([python_exe, "--version"], capture_output=True, text=True)
         if version_result.returncode == 0:
-            print(f"Version: {version_result.stdout.strip()}")
-    except:
+            version_text = (version_result.stdout or version_result.stderr).strip()
+            print(f"Version: {version_text}")
+    except Exception:
         pass
 
     print("=" * 60)
+
+    py_ver = _python_version_tuple(python_exe)
+    if py_ver is None:
+        print("[ERROR] Could not determine Python interpreter version.")
+        return 1
+    if py_ver < (3, 10, 0):
+        print(
+            "[ERROR] Python 3.10+ is required by this project. "
+            f"Detected {py_ver[0]}.{py_ver[1]}.{py_ver[2]} from '{python_exe}'."
+        )
+        print("[HINT] Use Python 3.12 for local development, e.g. `python3.12 cli/tests/python/run_all_tests.py`.")
+        return 1
+
+    mcp_test_mode = _determine_mcp_test_mode(python_exe)
+    if mcp_test_mode == "uv":
+        print("[INFO] MCP deps missing in interpreter; MCP-specific tests will run via uv with ephemeral deps.")
+    elif mcp_test_mode == "skip":
+        print("[WARN] MCP deps missing and uv unavailable; MCP-specific tests will be marked SKIP.")
 
     # Find all test files (relative to this script, not the caller's CWD)
     test_dir = Path(__file__).resolve().parent
@@ -191,29 +287,35 @@ def main():
 
     # Run all tests
     results = []
-    total_tests = 0
 
     # Set test suite flag for clearer logs
     os.environ["GMS_TEST_SUITE"] = "1"
 
     for test_file in sorted(test_files):
-        success, exit_code = run_test_file(test_file)
-        results.append((test_file.name, success, exit_code))
+        status, exit_code = run_test_file(test_file, mcp_test_mode=mcp_test_mode)
+        results.append((test_file.name, status, exit_code))
 
     # Print summary
     print(f"\n{'='*60}")
     print("TEST SUMMARY")
     print(f"{'='*60}")
 
-    passed = sum(1 for _, success, _ in results if success)
-    failed = len(results) - passed
+    passed = sum(1 for _, status, _ in results if status == "pass")
+    skipped = sum(1 for _, status, _ in results if status == "skip")
+    failed = sum(1 for _, status, _ in results if status == "fail")
 
-    for test_name, success, exit_code in results:
-        status = "PASS" if success else f"FAIL (exit code: {exit_code})"
-        print(f"{test_name:<30} {status}")
+    for test_name, status, exit_code in results:
+        if status == "pass":
+            summary = "PASS"
+        elif status == "skip":
+            summary = "SKIP (missing dependency)"
+        else:
+            summary = f"FAIL (exit code: {exit_code})"
+        print(f"{test_name:<30} {summary}")
 
     print(f"\nOVERALL RESULTS:")
     print(f"   Passed: {passed}/{len(results)}")
+    print(f"   Skipped: {skipped}/{len(results)}")
     print(f"   Failed: {failed}/{len(results)}")
 
     if failed == 0:

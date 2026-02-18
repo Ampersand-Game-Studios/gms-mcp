@@ -488,6 +488,15 @@ def setup_workflow_commands(subparsers):
     delete_parser.add_argument('asset_path', help='Asset .yy path relative to project root')
     delete_parser.add_argument('--dry-run', action='store_true', help='Preview without deleting')
     delete_parser.set_defaults(func=handle_workflow_delete)
+
+    # Safe delete command
+    safe_delete_parser = workflow_subparsers.add_parser('safe-delete', help='Dependency-aware asset deletion')
+    safe_delete_parser.add_argument('--asset-type', required=True, help='Asset type (e.g., script, object, sprite)')
+    safe_delete_parser.add_argument('--asset-name', required=True, help='Asset name (e.g., o_player)')
+    safe_delete_parser.add_argument('--force', action='store_true', help='Allow delete when dependencies exist')
+    safe_delete_parser.add_argument('--clean-refs', action='store_true', help='Attempt best-effort reference cleanup')
+    safe_delete_parser.add_argument('--apply', action='store_true', help='Apply deletion (default is dry-run)')
+    safe_delete_parser.set_defaults(func=handle_workflow_safe_delete)
     
     # Swap sprite command
     swap_parser = workflow_subparsers.add_parser('swap-sprite', help="Replace sprite's PNG source")
@@ -863,7 +872,7 @@ from .commands.event_commands import (
 )
 from .commands.workflow_commands import (
     handle_workflow_duplicate, handle_workflow_rename,
-    handle_workflow_delete, handle_workflow_swap_sprite
+    handle_workflow_delete, handle_workflow_swap_sprite, handle_workflow_safe_delete
 )
 from .commands.texture_group_commands import (
     handle_texture_groups_list,
