@@ -1,1 +1,1 @@
-Managing multiple GameMaker repos in Codex just got cleaner in gms-mcp: workspace-scoped MCP config + audit tooling now keeps GM_PROJECT_ROOT pinned per repo, so tools stop bleeding into unrelated chats. Better multi-project reliability. #GameMaker #gamedev
+gms-mcp quality reports are trustworthy again: fixed JUnit parsing (no more fake 0-test artifacts) and expanded MCP smoke tests across core categories, including runner, bridge, workflow, rooms, texture groups, and code intel. Safer releases. #GameMaker #gamedev
