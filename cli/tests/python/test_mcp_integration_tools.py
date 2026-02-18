@@ -259,6 +259,50 @@ class TestMCPIntegrationTools(unittest.TestCase):
         self.assertTrue(texture_groups.get("ok"))
         self.assertGreaterEqual(int(texture_groups.get("count", 0)), 1)
 
+    def test_safe_delete_tool_dry_run_and_apply(self):
+        create_target = self._call_tool(
+            "gm_create_script",
+            {"name": "scr_target", "project_root": str(self.project_root)},
+        )
+        self.assertTrue(create_target.get("ok"), msg=create_target.get("error") or create_target.get("stdout"))
+
+        create_caller = self._call_tool(
+            "gm_create_script",
+            {"name": "scr_caller", "project_root": str(self.project_root)},
+        )
+        self.assertTrue(create_caller.get("ok"), msg=create_caller.get("error") or create_caller.get("stdout"))
+
+        caller_file = self.project_root / "scripts" / "scr_caller" / "scr_caller.gml"
+        caller_file.write_text("function scr_caller() {\n    script_execute(scr_target);\n}\n", encoding="utf-8")
+
+        dry_run = self._call_tool(
+            "gm_safe_delete",
+            {
+                "asset_type": "script",
+                "asset_name": "scr_target",
+                "dry_run": True,
+                "project_root": str(self.project_root),
+            },
+        )
+        self.assertTrue(dry_run.get("blocked"))
+        self.assertFalse(dry_run.get("deleted"))
+
+        applied = self._call_tool(
+            "gm_safe_delete",
+            {
+                "asset_type": "script",
+                "asset_name": "scr_target",
+                "dry_run": False,
+                "force": True,
+                "clean_refs": True,
+                "project_root": str(self.project_root),
+            },
+        )
+        self.assertTrue(applied.get("ok"), msg=applied)
+        self.assertTrue(applied.get("deleted"), msg=applied)
+        self.assertGreaterEqual(int(applied.get("cleaned_refs", {}).get("replacements", 0)), 1)
+        self.assertFalse((self.project_root / "scripts" / "scr_target").exists())
+
         build_index = self._call_tool(
             "gm_build_index",
             {"project_root": str(self.project_root), "force": True},

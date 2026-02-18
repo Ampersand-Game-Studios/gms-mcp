@@ -14,7 +14,7 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
 - **Full `gms` parity** exposed as MCP tools, with **safe execution safeguards** and **local diagnostic logging**:
   - **Assets**: create *all* supported asset types + delete
   - **Events**: add/remove/duplicate/list/validate/fix
-  - **Workflow**: duplicate/rename/delete/swap-sprite
+  - **Workflow**: duplicate/rename/delete/**safe-delete**/swap-sprite
   - **Rooms**: ops (duplicate/rename/delete/list), layers (add/remove/list), instances (add/remove/list)
   - **Code Intelligence** (GML symbol analysis for navigation and understanding):
     - `gm_build_index`: Build/rebuild the GML symbol index (cached for performance)
@@ -96,7 +96,7 @@ After changing `.cursor/mcp.json`, **Reload Window** in Cursor to pick up MCP co
   - Tools apply **category-aware default max runtimes** (overrideable) to prevent indefinite blocking. Override globally with `GMS_MCP_DEFAULT_TIMEOUT_SECONDS`.
   - To bypass subprocess overhead and use faster **in-process execution**, set `GMS_MCP_ENABLE_DIRECT=1`. This is faster but less resilient to hangs in library code.
   - To require dry-run mode for destructive operations, set `GMS_MCP_REQUIRE_DRY_RUN=1` (enabled by default for `--antigravity-setup`).
-  - To allow specific destructive tools while this policy is enabled, set `GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST` to a comma-separated list (for example: `gm_asset_delete,gm_workflow_delete`).
+  - To allow specific destructive tools while this policy is enabled, set `GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST` to a comma-separated list (for example: `gm_asset_delete,gm_workflow_delete,gm_safe_delete`).
 
 - **Picking the `gms` executable (Windows shims)**:
   - The server prefers a "real" `gms` when multiple are present on Windows (avoids the WindowsApps shim when possible).
