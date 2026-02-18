@@ -1,1 +1,1 @@
-gms-mcp quality reports are trustworthy again: fixed JUnit parsing (no more fake 0-test artifacts) and expanded MCP smoke tests across core categories, including runner, bridge, workflow, rooms, texture groups, and code intel. Safer releases. #GameMaker #gamedev
+Safe delete is live: gm_safe_delete checks incoming dependencies before deletion, defaults to dry-run, and supports forced delete with best-effort reference cleanup. Also hardened test runs against Python/dependency drift with clear SKIP vs FAIL reporting. #GameMaker #gamedev

@@ -86,6 +86,7 @@ class TestMasterCLI(unittest.TestCase):
         self.assertIn("duplicate", stdout)
         self.assertIn("rename", stdout)
         self.assertIn("delete", stdout)
+        self.assertIn("safe-delete", stdout)
         self.assertIn("swap-sprite", stdout)
 
     def test_room_commands(self):

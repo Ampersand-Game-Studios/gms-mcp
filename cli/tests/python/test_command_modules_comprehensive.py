@@ -26,7 +26,7 @@ from gms_helpers.commands.event_commands import (
 )
 from gms_helpers.commands.workflow_commands import (
     handle_workflow_duplicate, handle_workflow_rename,
-    handle_workflow_delete, handle_workflow_swap_sprite
+    handle_workflow_delete, handle_workflow_swap_sprite, handle_workflow_safe_delete
 )
 from gms_helpers.commands.room_commands import (
     handle_room_layer_add, handle_room_layer_remove, handle_room_layer_list,
@@ -97,6 +97,25 @@ class TestWorkflowCommands(unittest.TestCase):
         result = handle_workflow_duplicate(self.test_args)
         
         self.assertTrue(result.success)
+
+    @patch("gms_helpers.commands.workflow_commands.safe_delete_asset")
+    def test_handle_workflow_safe_delete(self, mock_safe_delete):
+        """Test dependency-aware safe delete command handler."""
+        mock_safe_delete.return_value = {
+            "ok": True,
+            "blocked": False,
+            "deleted": True,
+        }
+        self.test_args.project_root = "."
+        self.test_args.asset_type = "script"
+        self.test_args.asset_name = "scr_test"
+        self.test_args.force = True
+        self.test_args.clean_refs = True
+        self.test_args.apply = True
+
+        result = handle_workflow_safe_delete(self.test_args)
+        self.assertTrue(result)
+        mock_safe_delete.assert_called_once()
 
 class TestRoomCommands(unittest.TestCase):
     """Test room command functions."""
