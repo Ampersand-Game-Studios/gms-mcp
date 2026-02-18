@@ -88,12 +88,20 @@ class TestTweetValidation(unittest.TestCase):
         self.assertEqual(reason, "duplicate")
 
     def test_too_many_hashtags(self):
-        """Should reject tweet with more than 3 hashtags."""
+        """Should reject tweet with more than 2 hashtags."""
         history = {"posted": []}
-        tweet = "Check this out #gamedev #GameMaker #indiedev #GML #coding"
+        tweet = "Check this GameMaker workflow update today #gamedev #GameMaker #indiedev"
         valid, reason = generate_tweet.validate_tweet(tweet, history)
         self.assertFalse(valid)
         self.assertIn("too_many_hashtags", reason)
+
+    def test_zero_hashtags_allowed(self):
+        """Should accept tweet with zero hashtags."""
+        history = {"posted": []}
+        tweet = "gm_find_references maps call sites across your project so refactors are safer and faster for teams"
+        valid, reason = generate_tweet.validate_tweet(tweet, history)
+        self.assertTrue(valid)
+        self.assertEqual(reason, "valid")
 
     def test_corporate_speak(self):
         """Should reject corporate speak patterns."""
@@ -183,6 +191,18 @@ class TestContextBuilding(unittest.TestCase):
         )
         self.assertIn("SUGGESTED OPENING STYLE: discovery", context)
         self.assertIn("TIL", context)  # Example text for discovery pattern
+
+    def test_context_uses_freeform_hashtag_strategy(self):
+        """Context should guide freeform hashtags, not fixed options."""
+        context = tweet_context.build_context_for_claude(
+            topic="code_intelligence",
+            tweet_format="problem_solution",
+            selected_angle="Test angle",
+            recent_tweets=[],
+            changelog_entries=[]
+        )
+        self.assertIn("HASHTAG STRATEGY (freeform)", context)
+        self.assertNotIn("HASHTAG OPTIONS (pick 1-2)", context)
 
 
 class TestHistoryManagement(unittest.TestCase):
@@ -324,9 +344,9 @@ class TestOpeningPatternSelection(unittest.TestCase):
         self.assertEqual(pattern, "discovery")
 
     def test_initialize_opening_coverage(self):
-        """Should create coverage dict for all 20 patterns."""
+        """Should create coverage dict for all configured patterns."""
         coverage = tweet_context.initialize_opening_coverage()
-        self.assertEqual(len(coverage), 20)
+        self.assertEqual(len(coverage), len(tweet_context.OPENING_PATTERNS))
         self.assertIn("statement", coverage)
         self.assertIn("shortcut", coverage)
         for pattern, timestamp in coverage.items():

@@ -117,7 +117,7 @@ class TestHistoryManagement(unittest.TestCase):
     def test_add_to_history(self):
         """Should add entry with correct fields."""
         history = {"posted": []}
-        post_tweet.add_to_history(history, "abc123", "Test tweet content here", "posted", "12345")
+        post_tweet.add_to_history(history, "abc123", "Test tweet content #gamedev #GameMaker", "posted", "12345")
 
         self.assertEqual(len(history["posted"]), 1)
         entry = history["posted"][0]
@@ -126,6 +126,7 @@ class TestHistoryManagement(unittest.TestCase):
         self.assertEqual(entry["tweet_id"], "12345")
         self.assertIn("timestamp", entry)
         self.assertIn("preview", entry)
+        self.assertEqual(entry["hashtags_mentioned"], ["#gamedev", "#GameMaker"])
 
     def test_add_to_history_truncates_preview(self):
         """Should truncate long previews."""
