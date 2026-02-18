@@ -11,14 +11,17 @@ from pathlib import Path
 import shutil
 from typing import Optional, Tuple
 
-# Fix Windows UTF-8 encoding issues
-if sys.platform == "win32":
+def _configure_windows_console() -> None:
+    """Apply UTF-8 console settings for standalone Windows execution."""
+    if sys.platform != "win32":
+        return
+
     # Set stdout/stderr to UTF-8 encoding
     import io
-    if hasattr(sys.stdout, 'buffer'):
-        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8')
-    if hasattr(sys.stderr, 'buffer'):
-        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8')
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
+    if hasattr(sys.stderr, "buffer"):
+        sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8")
 
     # Set console output encoding to UTF-8 for subprocess calls
     os.environ["PYTHONIOENCODING"] = "utf-8"
@@ -28,7 +31,7 @@ if sys.platform == "win32":
         import ctypes
         kernel32 = ctypes.windll.kernel32
         kernel32.SetConsoleOutputCP(65001)  # UTF-8 codepage
-    except:
+    except Exception:
         pass  # Ignore if this fails on older Windows versions
 
 # Ensure the src directory is on PYTHONPATH for all child processes so that
@@ -238,6 +241,7 @@ def run_test_file(test_file_path, *, mcp_test_mode: str):
 
 def main():
     """Main test runner function"""
+    _configure_windows_console()
     print("GameMaker Project Test Suite Runner")
     print("=" * 60)
 
