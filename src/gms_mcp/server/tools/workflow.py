@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+from pathlib import Path
 from typing import Any, Dict
 
 from ..dispatch import _run_with_fallback
@@ -38,7 +39,7 @@ def register(mcp: Any, ContextType: Any) -> None:
             )
 
         return safe_delete_asset(
-            project_root=project_root,
+            project_root=Path(project_root),
             asset_type=asset_type,
             asset_name=asset_name,
             force=force,
