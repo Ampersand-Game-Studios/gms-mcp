@@ -82,10 +82,18 @@ If you are working on the `gms-mcp` codebase itself, follow these steps to set u
 1.  **Clone and install in editable mode**:
     ```bash
     git checkout dev
-    python3 -m pip install -e ".[dev]"
+    python3.12 -m venv .venv
+    source .venv/bin/activate
+    python3.12 -m pip install -e ".[dev]"
+    ```
+    `gms-mcp` requires Python `3.10+`; we recommend Python `3.12` for local development.
+
+2.  **Run the full local test suite**:
+    ```bash
+    PYTHONPATH=src python3.12 cli/tests/python/run_all_tests.py
     ```
 
-2.  **Initialize local and global MCP servers for testing**:
+3.  **Initialize local and global MCP servers for testing**:
     We recommend setting up two separate MCP server configurations in Cursor to test your changes:
     
     *   **Global (`gms-global`)**: For general use across all your GameMaker projects.
@@ -110,7 +118,7 @@ If you are working on the `gms-mcp` codebase itself, follow these steps to set u
     gms-mcp-init --cursor --server-name gms-local --mode python-module --python python --non-interactive
     ```
 
-3.  **Verify in Cursor**:
+4.  **Verify in Cursor**:
     Go to **Cursor Settings > Features > MCP** to see your new servers. You may need to click "Reload" or restart Cursor to see changes.
 
 ## Publishing (maintainers)

@@ -23,11 +23,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import sys
 import time
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Tuple, Optional
 
 # Direct imports - no complex fallbacks needed
 from .utils import (
@@ -78,6 +79,8 @@ def _c(text: str, colour: str | None = None):
 def _asset_from_path(project_root: Path, asset_path: str):
     """Return (asset_type, asset_folder_path, asset_name) using .yyp-style path."""
     p = Path(asset_path)
+    if len(p.parts) < 2:
+        raise InvalidAssetTypeError(f"Invalid asset path '{asset_path}'. Expected '<folder>/<name>/<name>.yy'.")
     plural = p.parts[0]
     mapping = {
         "scripts": "script",
@@ -85,6 +88,15 @@ def _asset_from_path(project_root: Path, asset_path: str):
         "sprites": "sprite",
         "rooms": "room",
         "folders": "folder",
+        "fonts": "font",
+        "shaders": "shader",
+        "animcurves": "animcurve",
+        "sounds": "sound",
+        "paths": "path",
+        "tilesets": "tileset",
+        "timelines": "timeline",
+        "sequences": "sequence",
+        "notes": "note",
     }
     asset_type = mapping.get(plural, plural)
     if asset_type not in ASSET_TYPES:
@@ -346,6 +358,179 @@ def delete_asset(project_root: Path, asset_path: str, *, dry_run: bool = False) 
         message=message,
         warnings=warnings
     )
+
+
+def _resolve_asset_path(project_root: Path, asset_type: str, asset_name: str) -> Optional[str]:
+    """Resolve an asset type/name pair to a .yy path from the .yyp resource list."""
+    from .introspection import list_assets_by_type
+
+    assets = list_assets_by_type(project_root, asset_type_filter=asset_type, include_included_files=True)
+    for asset in assets.get(asset_type, []):
+        if asset.get("name") == asset_name:
+            path = asset.get("path")
+            if isinstance(path, str):
+                return path
+    return None
+
+
+def _collect_incoming_dependencies(project_root: Path, asset_name: str) -> List[Dict[str, Any]]:
+    """Find all incoming graph edges that point to the target asset."""
+    from .introspection import build_asset_graph
+
+    graph = build_asset_graph(project_root, deep=True)
+    node_by_id = {
+        node.get("id"): node for node in graph.get("nodes", []) if isinstance(node, dict)
+    }
+
+    incoming: List[Dict[str, Any]] = []
+    for edge in graph.get("edges", []):
+        if not isinstance(edge, dict):
+            continue
+        if edge.get("to") != asset_name:
+            continue
+        source_name = edge.get("from")
+        if not isinstance(source_name, str) or source_name == asset_name:
+            continue
+
+        source_node = node_by_id.get(source_name, {})
+        incoming.append(
+            {
+                "asset_name": source_name,
+                "asset_type": source_node.get("type", "unknown"),
+                "asset_path": source_node.get("path", ""),
+                "relation": edge.get("relation", "unknown"),
+            }
+        )
+
+    incoming.sort(key=lambda d: (str(d.get("asset_type", "")), str(d.get("asset_name", ""))))
+    return incoming
+
+
+def _cleanup_symbol_references(project_root: Path, asset_name: str) -> Dict[str, Any]:
+    """
+    Best-effort cleanup: replace direct symbol references in GML code with `undefined`.
+    This intentionally avoids rewriting JSON metadata structure.
+    """
+    pattern = re.compile(rf"\b{re.escape(asset_name)}\b")
+    roots = [project_root / "scripts", project_root / "objects", project_root / "rooms"]
+    touched_files: List[str] = []
+    replacements = 0
+
+    for root in roots:
+        if not root.exists():
+            continue
+        for gml_path in root.rglob("*.gml"):
+            try:
+                content = gml_path.read_text(encoding="utf-8")
+            except Exception:
+                continue
+
+            match_count = len(pattern.findall(content))
+            if match_count == 0:
+                continue
+
+            patched = pattern.sub("undefined", content)
+            if patched == content:
+                continue
+
+            gml_path.write_text(patched, encoding="utf-8")
+            replacements += match_count
+            touched_files.append(str(gml_path.relative_to(project_root).as_posix()))
+
+    return {
+        "replacement_token": "undefined",
+        "replacements": replacements,
+        "files": sorted(touched_files),
+    }
+
+
+def safe_delete_asset(
+    project_root: Path,
+    asset_type: str,
+    asset_name: str,
+    *,
+    force: bool = False,
+    clean_refs: bool = False,
+    dry_run: bool = True,
+) -> Dict[str, Any]:
+    """
+    Dependency-aware delete workflow.
+    Defaults to dry-run and blocks apply when incoming dependencies exist unless force=True.
+    """
+    project_root = Path(project_root)
+
+    asset_path = _resolve_asset_path(project_root, asset_type, asset_name)
+    if not asset_path:
+        return {
+            "ok": False,
+            "blocked": False,
+            "asset_type": asset_type,
+            "asset_name": asset_name,
+            "error": f"Asset '{asset_name}' of type '{asset_type}' was not found.",
+            "dependencies": [],
+            "dependency_count": 0,
+            "deleted": False,
+            "cleaned_refs": {"replacements": 0, "files": []},
+            "warnings": [],
+        }
+
+    dependencies = _collect_incoming_dependencies(project_root, asset_name)
+    blocked = len(dependencies) > 0 and not force
+    warnings: List[str] = []
+    cleaned_refs: Dict[str, Any] = {"replacements": 0, "files": []}
+
+    if blocked:
+        warnings.append(
+            "Deletion blocked because dependent assets reference this target. Use force=True to continue."
+        )
+
+    if dry_run or blocked:
+        message = (
+            f"[SAFE DELETE] {'Blocked' if blocked else 'Dry-run'} for {asset_type} '{asset_name}' "
+            f"({len(dependencies)} dependent reference(s))."
+        )
+        print(_c(message, "yellow"))
+        return {
+            "ok": not blocked,
+            "blocked": blocked,
+            "asset_type": asset_type,
+            "asset_name": asset_name,
+            "asset_path": asset_path,
+            "dry_run": dry_run,
+            "force": force,
+            "clean_refs": clean_refs,
+            "dependencies": dependencies,
+            "dependency_count": len(dependencies),
+            "deleted": False,
+            "cleaned_refs": cleaned_refs,
+            "warnings": warnings,
+        }
+
+    if clean_refs and dependencies:
+        cleaned_refs = _cleanup_symbol_references(project_root, asset_name)
+        warnings.append(
+            "Reference cleanup is best-effort and currently rewrites direct GML symbol tokens only."
+        )
+
+    delete_result = delete_asset(project_root, asset_path, dry_run=False)
+    warnings.extend(delete_result.warnings)
+
+    return {
+        "ok": bool(delete_result.success),
+        "blocked": False,
+        "asset_type": asset_type,
+        "asset_name": asset_name,
+        "asset_path": asset_path,
+        "dry_run": False,
+        "force": force,
+        "clean_refs": clean_refs,
+        "dependencies": dependencies,
+        "dependency_count": len(dependencies),
+        "deleted": bool(delete_result.success),
+        "cleaned_refs": cleaned_refs,
+        "warnings": warnings,
+        "message": delete_result.message,
+    }
 
 # ---------------------------------------------------------------------------
 # C-4: Swap Sprite PNG
