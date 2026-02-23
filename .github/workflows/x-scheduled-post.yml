@@ -12,10 +12,14 @@ permissions:
   contents: read
   actions: write  # Needed to delete old cache
 
+concurrency:
+  group: x-posting-main
+  cancel-in-progress: false
+
 jobs:
   generate-and-post:
     # Only run in the real repo, not forks
-    if: github.repository == 'Ampersand-Game-Studios/gms-mcp'
+    if: github.repository == 'Ampersand-Game-Studios/gms-mcp' && vars.X_SCHEDULED_PAUSED != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
