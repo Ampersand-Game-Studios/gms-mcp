@@ -54,10 +54,26 @@ Generated tweets are validated for:
 ### Files
 
 - `workflows/x-scheduled-post.yml` - Main workflow
+- `workflows/x-evergreen-experiment.yml` - Evergreen experiment workflow
 - `scripts/generate_tweet.py` - Tweet generation with Claude API
 - `scripts/post_tweet.py` - X API posting
+- `scripts/post_evergreen.py` - Evergreen queue posting (does not use `next_tweet.txt`)
+- `scripts/report_evergreen_experiment.py` - Experiment KPI report generation
 - `scripts/tweet_context.py` - Topic categories, formats, context building
 - `x-personality.md` - Voice/tone guidelines
+
+## Evergreen Experiment Controls
+
+The evergreen experiment is controlled entirely through repository variables:
+
+- `X_SCHEDULED_PAUSED` - when set to `true`, `x-scheduled-post.yml` is paused.
+- `X_EVERGREEN_EXPERIMENT_ACTIVE` - when set to `true`, evergreen workflow can run.
+- `X_EVERGREEN_EXPERIMENT_START_UTC` - ISO UTC experiment start timestamp.
+- `X_EVERGREEN_EXPERIMENT_END_UTC` - ISO UTC experiment end timestamp (exclusive).
+- `X_EVERGREEN_QUEUE_FILE` - optional queue file path (defaults to `.github/evergreen_queue.json`).
+
+The evergreen workflow posts from a versioned queue file and records metrics
+to job summary + artifacts without changing the release/main tweet staging flow.
 
 ## Other Workflows
 
