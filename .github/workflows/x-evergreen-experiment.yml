@@ -1,0 +1,110 @@
+name: Evergreen X Experiment
+
+on:
+  schedule:
+    - cron: '0 8 * * *'
+    - cron: '0 14 * * *'
+    - cron: '0 20 * * *'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Select content and write report without posting"
+        required: false
+        type: boolean
+        default: false
+      slot:
+        description: "Optional UTC slot override (08, 14, 20)"
+        required: false
+        type: string
+
+permissions:
+  contents: read
+  actions: write
+
+concurrency:
+  group: x-posting-main
+  cancel-in-progress: false
+
+jobs:
+  evergreen-post:
+    if: github.repository == 'Ampersand-Game-Studios/gms-mcp' && vars.X_EVERGREEN_EXPERIMENT_ACTIVE == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Restore tweet history from cache
+        uses: actions/cache/restore@v4
+        id: cache-restore
+        with:
+          path: .github/tweet_history.json
+          key: tweet-history-${{ github.run_id }}
+          restore-keys: |
+            tweet-history-
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: pip install tweepy
+
+      - name: Post evergreen tweet
+        id: evergreen
+        env:
+          X_APP_KEY: ${{ secrets.X_APP_KEY }}
+          X_APP_SECRET: ${{ secrets.X_APP_SECRET }}
+          X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
+          X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
+          X_EVERGREEN_EXPERIMENT_START_UTC: ${{ vars.X_EVERGREEN_EXPERIMENT_START_UTC }}
+          X_EVERGREEN_EXPERIMENT_END_UTC: ${{ vars.X_EVERGREEN_EXPERIMENT_END_UTC }}
+          X_EVERGREEN_QUEUE_FILE: ${{ vars.X_EVERGREEN_QUEUE_FILE }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          SLOT_OVERRIDE: ${{ github.event.inputs.slot || '' }}
+        run: |
+          set -euo pipefail
+          QUEUE_FILE="${X_EVERGREEN_QUEUE_FILE:-.github/evergreen_queue.json}"
+          ARGS=(--queue-file "$QUEUE_FILE")
+          if [ -n "${SLOT_OVERRIDE}" ]; then
+            ARGS+=(--slot "${SLOT_OVERRIDE}")
+          fi
+          if [ "${DRY_RUN}" = "true" ]; then
+            ARGS+=(--dry-run)
+          fi
+          python .github/scripts/post_evergreen.py "${ARGS[@]}"
+
+      - name: Build experiment report
+        if: always()
+        env:
+          X_EVERGREEN_EXPERIMENT_START_UTC: ${{ vars.X_EVERGREEN_EXPERIMENT_START_UTC }}
+          X_EVERGREEN_EXPERIMENT_END_UTC: ${{ vars.X_EVERGREEN_EXPERIMENT_END_UTC }}
+        run: |
+          set -euo pipefail
+          python .github/scripts/report_evergreen_experiment.py \
+            --output-json "$RUNNER_TEMP/evergreen_report.json" \
+            --output-csv "$RUNNER_TEMP/evergreen_report.csv"
+
+      - name: Upload experiment report artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: evergreen-report-${{ github.run_id }}
+          path: |
+            ${{ runner.temp }}/evergreen_report.json
+            ${{ runner.temp }}/evergreen_report.csv
+
+      - name: Delete old cache
+        if: always() && steps.cache-restore.outputs.cache-matched-key
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh cache delete "${{ steps.cache-restore.outputs.cache-matched-key }}" --repo ${{ github.repository }} || true
+
+      - name: Save tweet history to cache
+        uses: actions/cache/save@v4
+        if: always()
+        with:
+          path: .github/tweet_history.json
+          key: tweet-history-${{ github.run_id }}
