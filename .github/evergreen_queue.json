@@ -1,0 +1,216 @@
+{
+  "version": 1,
+  "experiment_id": "evergreen-v1-2026-02",
+  "posts": [
+    {
+      "id": "EVG-001",
+      "text": "Before a jam sprint, run gm_diagnostics first. It flags missing refs, broken asset paths, and config issues before you sink hours into debugging the wrong thing. #GameMaker #gamedev",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-002",
+      "text": "gm_find_references is the safest first step before renaming functions or objects. Map every call site, then refactor once instead of chasing breakages later. #gamedev #GameMaker",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-003",
+      "text": "Team merge just happened? gm_event_validate catches event-list mismatches between .yy metadata and actual event files before compile errors pile up. #GameMaker #gamedev",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-004",
+      "text": "gm_maintenance_auto is a solid weekly hygiene pass: orphan cleanup, structural checks, and faster confidence before builds. #gamedev #GameMaker",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-005",
+      "text": "Use gm_get_asset_graph before deleting assets. Seeing dependency edges first saves the classic \"removed one sprite, broke six rooms\" surprise. #GameMaker #gamedev",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-006",
+      "text": "Large level pass: duplicate a room with gm_room_ops_duplicate, then place instances with gm_room_instance_add. Better consistency, less manual placement drift. #gamedev #GameMaker",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-007",
+      "text": "gm_runtime_pin is underrated for bug reproduction. Lock runtime, verify issue, then compare intentionally instead of testing against moving targets. #GameMaker #gamedev",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-008",
+      "text": "gm_search_references with scope filters (gml, objects, scripts) cuts noise fast when tracking where behavior actually lives. #gamedev #GameMaker",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-009",
+      "text": "gm_run_logs plus gm_run_command turns debugging into a tight loop: observe state, tweak one value, verify immediately. #GameMaker #gamedev",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-010",
+      "text": "Need a variant object fast? gm_workflow_duplicate then gm_workflow_rename keeps structure intact while you swap behavior and art intentionally. #gamedev #GameMaker",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-011",
+      "text": "gm_list_symbols plus gm_find_definition is a clean codebase tour for new contributors: what exists, where it is defined, and what to touch safely. #GameMaker #gamedev",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-012",
+      "text": "Run gm_maintenance_validate_json before release builds. JSON drift is cheap to catch early and expensive to debug late. #gamedev #GameMaker",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-013",
+      "text": "gm_project_info and gm_get_project_stats give instant project context: where the .yyp is and how asset types are distributed. Great onboarding step. #GameMaker #gamedev",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-014",
+      "text": "Weekly closeout loop: gm_diagnostics, then gm_maintenance_auto, then gm_compile. Start the next session from a clean baseline instead of firefighting yesterday's issues. #gamedev #GameMaker",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-015",
+      "text": "gm_doc_search plus gm_doc_lookup keeps reference checks inside your flow. Validate edge-case syntax without context switching to docs tabs all day. #GameMaker #gamedev",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-016",
+      "text": "If your project starts feeling fragile, run gm_maintenance_list_orphans and remove dead assets intentionally. Smaller trees are easier to reason about. #gamedev #GameMaker",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-017",
+      "text": "gm_room_layer_list and gm_room_instance_list are useful before shipping level updates. They catch stale placements and layering drift early. #GameMaker #gamedev",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-018",
+      "text": "When AI suggestions feel uncertain, run gm_build_index first. Better symbol awareness means fewer hallucinated references in bigger projects. #gamedev #GameMaker",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-019",
+      "text": "gm_find_definition is a fast sanity check during review: jump to source, confirm behavior, and move on without hunting manually through scripts. #GameMaker #gamedev",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-020",
+      "text": "For rename safety, use gm_workflow_rename instead of manual search and replace. It keeps references aligned across project metadata and code. #gamedev #GameMaker",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-021",
+      "text": "gm_mcp_health is a quick first check when tools suddenly fail. It verifies runtime, project state, and dependency readiness in one pass. #GameMaker #gamedev",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-022",
+      "text": "Use gm_get_project_stats before planning refactors. Asset counts by type quickly show where complexity is concentrated. #gamedev #GameMaker",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-023",
+      "text": "gm_list_assets with type and folder filters is a practical pre-cleanup map. Know what exists before deleting or reorganizing anything. #GameMaker #gamedev",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-024",
+      "text": "When event files drift after merges, gm_maintenance_sync_events with fix mode can realign metadata and reduce weird compile-time surprises. #gamedev #GameMaker",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-025",
+      "text": "Need faster room setup? Pair gm_create_room with gm_room_instance_add to scaffold gameplay layouts without menu-heavy repetitive work. #GameMaker #gamedev",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-026",
+      "text": "gm_read_asset helps verify the true .yy state when behavior does not match expectations. It is a reliable source during debugging. #gamedev #GameMaker",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-027",
+      "text": "Use gm_compile after maintenance, not before. Clean project structure reduces false alarms and makes build failures more actionable. #GameMaker #gamedev",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-028",
+      "text": "gm_run_status and gm_run_stop are useful for keeping test sessions tidy, especially when iterating quickly with bridge-enabled runs. #gamedev #GameMaker",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-029",
+      "text": "Run gm_runtime_verify before long debugging sessions when switching versions. It prevents chasing bugs caused by a bad runtime state. #GameMaker #gamedev",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    },
+    {
+      "id": "EVG-030",
+      "text": "gm_search_references is ideal for impact analysis before deleting helper scripts. Find where they are used, then remove safely. #gamedev #GameMaker",
+      "active": true,
+      "max_uses": 2,
+      "slots": ["08", "14", "20"]
+    }
+  ]
+}
