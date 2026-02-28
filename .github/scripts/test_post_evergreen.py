@@ -45,6 +45,20 @@ class TestHelpers(unittest.TestCase):
         history["posted"][0]["generated_by"] = post_evergreen.EXPERIMENT_GENERATED_BY
         self.assertFalse(post_evergreen.has_non_evergreen_post_today(history, today.date()))
 
+    def test_has_evergreen_post_in_slot_today(self):
+        ts = datetime(2026, 2, 24, 14, 5, tzinfo=timezone.utc)
+        history = {
+            "posted": [
+                {
+                    "timestamp": ts.isoformat(),
+                    "status": "posted",
+                    "generated_by": post_evergreen.EXPERIMENT_GENERATED_BY,
+                }
+            ]
+        }
+        self.assertTrue(post_evergreen.has_evergreen_post_in_slot_today(history, ts.date(), "14"))
+        self.assertFalse(post_evergreen.has_evergreen_post_in_slot_today(history, ts.date(), "20"))
+
     def test_pick_queue_item_honors_max_uses(self):
         queue = {
             "posts": [
@@ -166,6 +180,38 @@ class TestExecute(unittest.TestCase):
         self.assertEqual(result, 0)
         outputs = self._read_outputs()
         self.assertEqual(outputs.get("skip_reason"), "collision_non_evergreen_today")
+
+    def test_execute_already_posted_slot_skip(self):
+        now = datetime(2026, 2, 24, 20, 0, tzinfo=timezone.utc)
+        history = {
+            "posted": [
+                {
+                    "status": "posted",
+                    "generated_by": post_evergreen.EXPERIMENT_GENERATED_BY,
+                    "timestamp": now.isoformat(),
+                    "hash": "existing-evergreen-hash",
+                }
+            ]
+        }
+        with open(self.history_file, "w", encoding="utf-8") as fh:
+            json.dump(history, fh)
+
+        args = Namespace(
+            queue_file=str(self.queue_file),
+            slot="20",
+            now_utc=now.isoformat(),
+            dry_run=True,
+        )
+        env = {
+            "GITHUB_OUTPUT": str(self.output_file),
+            "X_EVERGREEN_EXPERIMENT_START_UTC": (now - timedelta(days=1)).isoformat(),
+            "X_EVERGREEN_EXPERIMENT_END_UTC": (now + timedelta(days=1)).isoformat(),
+        }
+        with patch.dict(os.environ, env, clear=False):
+            result = post_evergreen.execute(args)
+        self.assertEqual(result, 0)
+        outputs = self._read_outputs()
+        self.assertEqual(outputs.get("skip_reason"), "already_posted_slot_today")
 
     def test_execute_outside_window(self):
         now = datetime(2026, 2, 24, 20, 0, tzinfo=timezone.utc)
