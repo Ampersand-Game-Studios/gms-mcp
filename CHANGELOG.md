@@ -47,6 +47,7 @@ All notable changes to this project will be documented in this file.
 - **Test Suite assertions**: Updated 371-test suite to reflect the new standardized asset versioning requirements.
 - **Run Session process termination on Windows**: Fixed `RunSessionManager.kill_process` to use fallback signal values when platform `signal` constants are unavailable, preventing Windows-only failures in process teardown and ensuring CI reliability across `test_run_session`.
 - **macOS Local Compile/Run Pipeline**: Fixed `gm_compile` and default local `gm_run` behavior on macOS so local validation uses Igor's run-based path instead of `PackageZip`, avoiding incorrect Developer ID signing/certificate failures during normal IDE-equivalent compile/run workflows. macOS background run sessions now track and stop the real `Mac_Runner` process cleanly.
+- **X Posting Workflow Retries**: Fixed the GitHub X posting workflows so transient `503 Service Unavailable` responses no longer honor unbounded server retry hints that exceed the job timeout. `5xx` retries now stay on the local bounded backoff, while `429` retry hints remain capped to fit within the workflow budget.
 
 ### Changed
 - **Diagnostic output**: Refined tool outputs to be cleaner and more consistent across the code intelligence suite.

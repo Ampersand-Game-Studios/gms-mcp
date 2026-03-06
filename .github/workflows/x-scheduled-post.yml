@@ -42,7 +42,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install tweepy anthropic
+        run: pip install requests requests-oauthlib anthropic
 
       - name: Generate tweet with Claude
         id: generate
