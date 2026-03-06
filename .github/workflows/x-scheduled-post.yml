@@ -64,7 +64,7 @@ jobs:
           TWEET_TOPIC: ${{ steps.generate.outputs.topic }}
           TWEET_FORMAT: ${{ steps.generate.outputs.format }}
           TWEET_GENERATED_BY: claude-api
-        run: python .github/scripts/post_tweet.py
+        run: python -u .github/scripts/post_tweet.py
 
       - name: Delete old cache
         if: always() && steps.cache-restore.outputs.cache-matched-key
