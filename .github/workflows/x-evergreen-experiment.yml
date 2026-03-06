@@ -34,6 +34,7 @@ jobs:
   evergreen-post:
     if: github.repository == 'Ampersand-Game-Studios/gms-mcp' && vars.X_EVERGREEN_EXPERIMENT_ACTIVE == 'true' && (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'schedule')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
