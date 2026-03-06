@@ -14,13 +14,26 @@ import json
 import os
 import re
 import sys
+import time
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Callable
 
 # Constants
 TWEET_FILE = Path(".github/next_tweet.txt")
 HISTORY_FILE = Path(".github/tweet_history.json")
 MAX_HISTORY_ENTRIES = 100  # Keep last N tweets to prevent file bloat
+RETRY_BACKOFF_SECONDS = (5, 15, 30)
+
+
+@dataclass(frozen=True)
+class XPostResult:
+    """Result of an X post attempt."""
+
+    ok: bool
+    reason: str
+    tweet_id: str | None = None
 
 
 def compute_hash(content: str) -> str:
@@ -112,6 +125,120 @@ def set_output(name: str, value: str) -> None:
             f.write(f"{name}={value}\n")
 
 
+def create_x_client(tweepy_module) -> object:
+    """Build a Tweepy client from environment credentials."""
+    return tweepy_module.Client(
+        consumer_key=os.environ["X_APP_KEY"],
+        consumer_secret=os.environ["X_APP_SECRET"],
+        access_token=os.environ["X_ACCESS_TOKEN"],
+        access_token_secret=os.environ["X_ACCESS_SECRET"],
+    )
+
+
+def retry_delay_seconds(exc: Exception, attempt: int) -> int:
+    """Choose a retry delay, respecting API-provided hints when present."""
+    delay = RETRY_BACKOFF_SECONDS[min(attempt - 1, len(RETRY_BACKOFF_SECONDS) - 1)]
+    response = getattr(exc, "response", None)
+    headers = getattr(response, "headers", None) or {}
+
+    retry_after = headers.get("retry-after")
+    if retry_after:
+        try:
+            return max(1, int(float(retry_after)))
+        except (TypeError, ValueError):
+            pass
+
+    rate_limit_reset = headers.get("x-rate-limit-reset")
+    if rate_limit_reset:
+        try:
+            reset_epoch = int(float(rate_limit_reset))
+            remaining = max(1, reset_epoch - int(time.time()))
+            return min(remaining, 900)
+        except (TypeError, ValueError):
+            pass
+
+    return delay
+
+
+def post_text_to_x(
+    tweet_content: str,
+    *,
+    tweepy_module=None,
+    max_attempts: int | None = None,
+    sleep_func: Callable[[float], None] = time.sleep,
+    log_func: Callable[[str], None] = print,
+) -> XPostResult:
+    """Post a tweet with retry handling for transient X API failures."""
+    if tweepy_module is None:
+        try:
+            import tweepy as tweepy_module
+        except ImportError:
+            log_func("Error: tweepy not installed")
+            return XPostResult(False, "missing_tweepy")
+
+    required_env = ["X_APP_KEY", "X_APP_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET"]
+    missing = [key for key in required_env if not os.environ.get(key)]
+    if missing:
+        log_func(f"Error: Missing credentials: {missing}")
+        return XPostResult(False, "missing_credentials")
+
+    client = create_x_client(tweepy_module)
+    total_attempts = max_attempts or (len(RETRY_BACKOFF_SECONDS) + 1)
+
+    for attempt in range(1, total_attempts + 1):
+        if total_attempts > 1:
+            log_func(f"Post attempt {attempt}/{total_attempts}...")
+
+        try:
+            response = client.create_tweet(text=tweet_content)
+            return XPostResult(True, "posted", response.data["id"])
+
+        except tweepy_module.Forbidden as e:
+            log_func(f"\n[FORBIDDEN ERROR] {e}")
+            if "duplicate" in str(e).lower():
+                return XPostResult(False, "duplicate_on_x")
+            log_func("This may be a permissions issue with the X API credentials.")
+            return XPostResult(False, "forbidden")
+
+        except tweepy_module.TooManyRequests as e:
+            log_func(f"\n[RATE LIMITED] {e}")
+            if attempt < total_attempts:
+                delay = retry_delay_seconds(e, attempt)
+                log_func(f"Retrying in {delay}s (attempt {attempt + 1}/{total_attempts})...")
+                sleep_func(delay)
+                continue
+            log_func("Too many requests. The tweet will be retried on the next workflow run.")
+            return XPostResult(False, "rate_limited")
+
+        except tweepy_module.TwitterServerError as e:
+            log_func(f"\n[X SERVER ERROR] {e}")
+            if attempt < total_attempts:
+                delay = retry_delay_seconds(e, attempt)
+                log_func(f"Retrying in {delay}s (attempt {attempt + 1}/{total_attempts})...")
+                sleep_func(delay)
+                continue
+            log_func("X's servers are still having issues after retries. The tweet will remain queued.")
+            return XPostResult(False, "x_server_error")
+
+        except tweepy_module.Unauthorized as e:
+            log_func(f"\n[UNAUTHORIZED] {e}")
+            log_func("API credentials are invalid or expired.")
+            log_func("Please check the X_* secrets in GitHub repository settings.")
+            return XPostResult(False, "unauthorized")
+
+        except tweepy_module.BadRequest as e:
+            log_func(f"\n[BAD REQUEST] {e}")
+            log_func("The tweet content may be invalid (too long, forbidden content, etc.)")
+            return XPostResult(False, "bad_request")
+
+        except Exception as e:
+            log_func(f"\n[UNEXPECTED ERROR] {type(e).__name__}: {e}")
+            log_func("An unexpected error occurred. Not clearing tweet file.")
+            return XPostResult(False, "unexpected_error")
+
+    return XPostResult(False, "unexpected_error")
+
+
 def main() -> int:
     print("=" * 50)
     print("X/Twitter Post Script")
@@ -156,31 +283,10 @@ def main() -> int:
 
     # Attempt to post to X
     print("\nAttempting to post to X...")
+    result = post_text_to_x(tweet_content)
 
-    try:
-        import tweepy
-    except ImportError:
-        print("Error: tweepy not installed")
-        return 1
-
-    # Validate credentials
-    required_env = ["X_APP_KEY", "X_APP_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET"]
-    missing = [key for key in required_env if not os.environ.get(key)]
-    if missing:
-        print(f"Error: Missing credentials: {missing}")
-        return 1
-
-    try:
-        client = tweepy.Client(
-            consumer_key=os.environ["X_APP_KEY"],
-            consumer_secret=os.environ["X_APP_SECRET"],
-            access_token=os.environ["X_ACCESS_TOKEN"],
-            access_token_secret=os.environ["X_ACCESS_SECRET"],
-        )
-
-        response = client.create_tweet(text=tweet_content)
-        tweet_id = response.data["id"]
-
+    if result.ok:
+        tweet_id = result.tweet_id
         print(f"\n[SUCCESS]")
         print(f"Tweet posted! ID: {tweet_id}")
         print(f"URL: https://x.com/i/status/{tweet_id}")
@@ -192,58 +298,25 @@ def main() -> int:
         set_output("should_commit", "true")
         return 0
 
-    except tweepy.Forbidden as e:
-        error_str = str(e)
-        print(f"\n[FORBIDDEN ERROR] {e}")
+    if result.reason == "duplicate_on_x":
+        print("\nX rejected this as duplicate content.")
+        print("The tweet was likely already posted successfully.")
+        print("Marking as posted and clearing file.")
 
-        # Check if it's a duplicate content error from X
-        if "duplicate" in error_str.lower():
-            print("\nX rejected this as duplicate content.")
-            print("The tweet was likely already posted successfully.")
-            print("Marking as posted and clearing file.")
+        add_to_history(history, tweet_hash, tweet_content, "duplicate_on_x", None, topic, tweet_format, generated_by)
+        save_history(history)
+        clear_tweet_file()
+        set_output("should_commit", "true")
+        return 0
 
-            add_to_history(history, tweet_hash, tweet_content, "duplicate_on_x", None, topic, tweet_format, generated_by)
-            save_history(history)
-            clear_tweet_file()
-            set_output("should_commit", "true")
-            return 0
-
-        # Other forbidden errors (permissions, etc.)
-        print("This may be a permissions issue with the X API credentials.")
-        return 1
-
-    except tweepy.TooManyRequests as e:
-        print(f"\n[RATE LIMITED] {e}")
-        print("Too many requests. The tweet will be retried on the next push.")
-        # Don't clear file - allow retry
-        return 1
-
-    except tweepy.TwitterServerError as e:
-        print(f"\n[X SERVER ERROR] {e}")
-        print("X's servers are having issues. Will retry on next push.")
-        # Don't clear file - allow retry
-        return 1
-
-    except tweepy.Unauthorized as e:
-        print(f"\n[UNAUTHORIZED] {e}")
-        print("API credentials are invalid or expired.")
-        print("Please check the X_* secrets in GitHub repository settings.")
-        return 1
-
-    except tweepy.BadRequest as e:
-        print(f"\n[BAD REQUEST] {e}")
-        print("The tweet content may be invalid (too long, forbidden content, etc.)")
-        # Clear file to prevent repeated failures
+    if result.reason == "bad_request":
         add_to_history(history, tweet_hash, tweet_content, "rejected_invalid", None, topic, tweet_format, generated_by)
         save_history(history)
         clear_tweet_file()
         set_output("should_commit", "true")
         return 1
 
-    except Exception as e:
-        print(f"\n[UNEXPECTED ERROR] {type(e).__name__}: {e}")
-        print("An unexpected error occurred. Not clearing tweet file.")
-        return 1
+    return 1
 
 
 if __name__ == "__main__":

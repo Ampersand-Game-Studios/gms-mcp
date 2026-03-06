@@ -164,7 +164,9 @@ This repo can post to X automatically when `main` is updated.
 
 - When a commit lands on `main`, GitHub Actions reads `.github/next_tweet.txt`.
 - If it contains the placeholder text (or is empty), it **skips posting**.
-- If it contains a real tweet, it posts to X and then **clears the file** back to the placeholder.
+- If it contains a real tweet, it posts to X, records the post in cached tweet history, and leaves the staged text in git so later runs can safely dedupe it.
+- Transient X API failures are retried automatically inside the posting script.
+- You can also retry the release-post workflow manually with the `Post to X` workflow dispatch in GitHub Actions.
 
 ### Maintainer flow (dev -> pre-release -> main)
 
