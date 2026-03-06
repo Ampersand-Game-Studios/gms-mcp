@@ -25,6 +25,7 @@ TWEET_FILE = Path(".github/next_tweet.txt")
 HISTORY_FILE = Path(".github/tweet_history.json")
 MAX_HISTORY_ENTRIES = 100  # Keep last N tweets to prevent file bloat
 RETRY_BACKOFF_SECONDS = (5, 15, 30)
+REQUEST_TIMEOUT_SECONDS = (10, 30)
 
 
 @dataclass(frozen=True)
@@ -127,12 +128,23 @@ def set_output(name: str, value: str) -> None:
 
 def create_x_client(tweepy_module) -> object:
     """Build a Tweepy client from environment credentials."""
-    return tweepy_module.Client(
+    client = tweepy_module.Client(
         consumer_key=os.environ["X_APP_KEY"],
         consumer_secret=os.environ["X_APP_SECRET"],
         access_token=os.environ["X_ACCESS_TOKEN"],
         access_token_secret=os.environ["X_ACCESS_SECRET"],
     )
+    session = getattr(client, "session", None)
+    session_request = getattr(session, "request", None)
+
+    if callable(session_request):
+        def request_with_timeout(method, url, **kwargs):
+            kwargs.setdefault("timeout", REQUEST_TIMEOUT_SECONDS)
+            return session_request(method, url, **kwargs)
+
+        session.request = request_with_timeout
+
+    return client
 
 
 def retry_delay_seconds(exc: Exception, attempt: int) -> int:
