@@ -43,6 +43,7 @@ class FakeClient:
     def __init__(self, outcomes):
         self._outcomes = list(outcomes)
         self.calls: list[str] = []
+        self.session = SimpleNamespace(request=lambda *args, **kwargs: None)
 
     def create_tweet(self, *, text: str):
         self.calls.append(text)
@@ -118,6 +119,38 @@ def test_post_text_to_x_exhausts_server_error_retries(monkeypatch):
     assert sleeps == [5, 15, 30]
 
 
+def test_create_x_client_wraps_requests_with_timeout(monkeypatch):
+    module = load_module("test_post_tweet_timeout_client", ".github/scripts/post_tweet.py")
+    set_x_credentials(monkeypatch)
+    recorded: list[tuple[str, str, dict]] = []
+
+    def raw_request(method: str, url: str, **kwargs):
+        recorded.append((method, url, kwargs))
+        return "ok"
+
+    client = SimpleNamespace(session=SimpleNamespace(request=raw_request))
+    fake_tweepy = SimpleNamespace(Client=lambda **_: client)
+
+    configured = module.create_x_client(fake_tweepy)
+    configured.session.request("POST", "https://example.com")
+
+    assert recorded == [
+        ("POST", "https://example.com", {"timeout": module.REQUEST_TIMEOUT_SECONDS})
+    ]
+
+
 def test_x_post_workflow_supports_manual_dispatch():
     workflow_text = (REPO_ROOT / ".github/workflows/x-post.yml").read_text(encoding="utf-8")
     assert "workflow_dispatch:" in workflow_text
+
+
+def test_x_workflows_define_timeout_guards():
+    workflow_paths = [
+        ".github/workflows/x-post.yml",
+        ".github/workflows/x-scheduled-post.yml",
+        ".github/workflows/x-evergreen-experiment.yml",
+    ]
+
+    for relative_path in workflow_paths:
+        workflow_text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        assert "timeout-minutes:" in workflow_text

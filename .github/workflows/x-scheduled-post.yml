@@ -21,6 +21,7 @@ jobs:
     # Only run in the real repo, not forks
     if: github.repository == 'Ampersand-Game-Studios/gms-mcp' && vars.X_SCHEDULED_PAUSED != 'true'
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
