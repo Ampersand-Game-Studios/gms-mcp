@@ -143,6 +143,16 @@ def create_x_auth(oauth_factory):
     )
 
 
+def build_request_headers(requests_module) -> dict[str, str]:
+    """Build explicit headers for the X API request."""
+    python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
+    requests_version = getattr(requests_module, "__version__", "unknown")
+    return {
+        "Accept": "application/json",
+        "User-Agent": f"Python/{python_version} Requests/{requests_version} gms-mcp-x-post/1.0",
+    }
+
+
 def retry_delay_seconds(
     headers: dict | None,
     attempt: int,
@@ -174,6 +184,21 @@ def retry_delay_seconds(
                 pass
 
     return delay
+
+
+def is_edge_challenge_response(status_code: int, response_text: str) -> bool:
+    """Detect HTML challenge pages from X's edge protection."""
+    if status_code not in (403, 429, 503):
+        return False
+
+    challenge_markers = (
+        "just a moment",
+        "cf_chl_opt",
+        "challenge-platform",
+        "enable javascript and cookies to continue",
+    )
+    text_lower = response_text.lower()
+    return any(marker in text_lower for marker in challenge_markers)
 
 
 def response_error_text(response) -> str:
@@ -241,6 +266,7 @@ def post_text_to_x(
 
     http_session = session or requests_module.Session()
     auth = create_x_auth(oauth_factory)
+    request_headers = build_request_headers(requests_module)
     total_attempts = max_attempts or (len(RETRY_BACKOFF_SECONDS) + 1)
 
     for attempt in range(1, total_attempts + 1):
@@ -252,6 +278,7 @@ def post_text_to_x(
                 X_POST_URL,
                 json={"text": tweet_content},
                 auth=auth,
+                headers=request_headers,
                 timeout=REQUEST_TIMEOUT_SECONDS,
             )
         except requests_module.Timeout as exc:
@@ -275,7 +302,18 @@ def post_text_to_x(
 
         error_text = response_error_text(response)
         status_code = getattr(response, "status_code", 0)
-        headers = getattr(response, "headers", None) or {}
+        response_headers = getattr(response, "headers", None) or {}
+        response_text = getattr(response, "text", "") or ""
+
+        if is_edge_challenge_response(status_code, response_text):
+            logger("\n[X EDGE CHALLENGE] X returned an HTML challenge page instead of the API response.")
+            if attempt < total_attempts:
+                delay = retry_delay_seconds({}, attempt)
+                logger(f"Retrying in {delay}s (attempt {attempt + 1}/{total_attempts})...")
+                sleep_func(delay)
+                continue
+            logger("X kept challenging the workflow runner. The tweet will remain queued for a later rerun.")
+            return XPostResult(False, "x_edge_challenge")
 
         if status_code in (200, 201):
             try:
@@ -298,7 +336,7 @@ def post_text_to_x(
             logger(f"\n[RATE LIMITED] {error_text}")
             if attempt < total_attempts:
                 delay = retry_delay_seconds(
-                    headers,
+                    response_headers,
                     attempt,
                     allow_retry_after=True,
                     allow_rate_limit_reset=True,
@@ -312,7 +350,7 @@ def post_text_to_x(
         if status_code >= 500:
             logger(f"\n[X SERVER ERROR] HTTP {status_code}: {error_text}")
             if attempt < total_attempts:
-                delay = retry_delay_seconds(headers, attempt)
+                delay = retry_delay_seconds(response_headers, attempt)
                 logger(f"Retrying in {delay}s (attempt {attempt + 1}/{total_attempts})...")
                 sleep_func(delay)
                 continue
