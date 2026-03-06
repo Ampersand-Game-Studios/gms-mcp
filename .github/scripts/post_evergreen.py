@@ -198,39 +198,8 @@ def post_to_x(tweet_text: str) -> tuple[bool, str, str | None]:
     Returns:
       (success, reason, tweet_id)
     """
-    try:
-        import tweepy
-    except ImportError:
-        return False, "missing_tweepy", None
-
-    required_env = ["X_APP_KEY", "X_APP_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET"]
-    missing = [key for key in required_env if not os.environ.get(key)]
-    if missing:
-        return False, "missing_credentials", None
-
-    try:
-        client = tweepy.Client(
-            consumer_key=os.environ["X_APP_KEY"],
-            consumer_secret=os.environ["X_APP_SECRET"],
-            access_token=os.environ["X_ACCESS_TOKEN"],
-            access_token_secret=os.environ["X_ACCESS_SECRET"],
-        )
-        response = client.create_tweet(text=tweet_text)
-        return True, "posted", response.data["id"]
-    except tweepy.Forbidden as exc:
-        if "duplicate" in str(exc).lower():
-            return False, "duplicate_on_x", None
-        return False, "forbidden", None
-    except tweepy.TooManyRequests:
-        return False, "rate_limited", None
-    except tweepy.TwitterServerError:
-        return False, "x_server_error", None
-    except tweepy.Unauthorized:
-        return False, "unauthorized", None
-    except tweepy.BadRequest:
-        return False, "bad_request", None
-    except Exception:
-        return False, "unexpected_error", None
+    result = post_tweet.post_text_to_x(tweet_text)
+    return result.ok, result.reason, result.tweet_id
 
 
 def execute(args: argparse.Namespace) -> int:
