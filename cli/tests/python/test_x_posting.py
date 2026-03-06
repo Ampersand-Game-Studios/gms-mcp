@@ -126,6 +126,60 @@ def test_post_text_to_x_exhausts_server_error_retries(monkeypatch):
     assert sleeps == [5, 15, 30]
 
 
+def test_post_text_to_x_ignores_long_retry_after_on_server_errors(monkeypatch):
+    module = load_module("test_post_tweet_retry_after_ignored", ".github/scripts/post_tweet.py")
+    set_x_credentials(monkeypatch)
+    session = FakeSession(
+        [
+            FakeResponse(503, text="Service Unavailable", headers={"retry-after": "436"}),
+            FakeResponse(201, payload={"data": {"id": "tweet-789"}}),
+        ]
+    )
+    sleeps: list[float] = []
+
+    result = module.post_text_to_x(
+        "hello world",
+        requests_module=make_fake_requests(),
+        session=session,
+        oauth_factory=lambda *args: ("oauth", args),
+        max_attempts=4,
+        sleep_func=sleeps.append,
+        log_func=lambda _: None,
+    )
+
+    assert result.ok is True
+    assert result.reason == "posted"
+    assert result.tweet_id == "tweet-789"
+    assert sleeps == [5]
+
+
+def test_post_text_to_x_caps_retry_after_on_rate_limit(monkeypatch):
+    module = load_module("test_post_tweet_retry_after_capped", ".github/scripts/post_tweet.py")
+    set_x_credentials(monkeypatch)
+    session = FakeSession(
+        [
+            FakeResponse(429, text="Too Many Requests", headers={"retry-after": "436"}),
+            FakeResponse(201, payload={"data": {"id": "tweet-999"}}),
+        ]
+    )
+    sleeps: list[float] = []
+
+    result = module.post_text_to_x(
+        "hello world",
+        requests_module=make_fake_requests(),
+        session=session,
+        oauth_factory=lambda *args: ("oauth", args),
+        max_attempts=4,
+        sleep_func=sleeps.append,
+        log_func=lambda _: None,
+    )
+
+    assert result.ok is True
+    assert result.reason == "posted"
+    assert result.tweet_id == "tweet-999"
+    assert sleeps == [module.MAX_RETRY_HINT_SECONDS]
+
+
 def test_post_text_to_x_retries_network_timeout(monkeypatch):
     module = load_module("test_post_tweet_network_timeout", ".github/scripts/post_tweet.py")
     set_x_credentials(monkeypatch)
@@ -168,3 +222,15 @@ def test_x_workflows_define_timeout_guards():
     for relative_path in workflow_paths:
         workflow_text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
         assert "timeout-minutes:" in workflow_text
+
+
+def test_x_workflows_install_direct_http_dependencies():
+    workflow_paths = [
+        ".github/workflows/x-post.yml",
+        ".github/workflows/x-scheduled-post.yml",
+        ".github/workflows/x-evergreen-experiment.yml",
+    ]
+
+    for relative_path in workflow_paths:
+        workflow_text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        assert "requests-oauthlib" in workflow_text

@@ -26,6 +26,7 @@ HISTORY_FILE = Path(".github/tweet_history.json")
 MAX_HISTORY_ENTRIES = 100  # Keep last N tweets to prevent file bloat
 RETRY_BACKOFF_SECONDS = (5, 15, 30)
 REQUEST_TIMEOUT_SECONDS = (10, 30)
+MAX_RETRY_HINT_SECONDS = 30
 X_POST_URL = "https://api.twitter.com/2/tweets"
 
 
@@ -142,26 +143,35 @@ def create_x_auth(oauth_factory):
     )
 
 
-def retry_delay_seconds(headers: dict | None, attempt: int) -> int:
-    """Choose a retry delay, respecting API-provided hints when present."""
+def retry_delay_seconds(
+    headers: dict | None,
+    attempt: int,
+    *,
+    allow_retry_after: bool = False,
+    allow_rate_limit_reset: bool = False,
+) -> int:
+    """Choose a retry delay, only honoring bounded API hints when explicitly allowed."""
     delay = RETRY_BACKOFF_SECONDS[min(attempt - 1, len(RETRY_BACKOFF_SECONDS) - 1)]
     headers = headers or {}
 
-    retry_after = headers.get("retry-after")
-    if retry_after:
-        try:
-            return max(1, int(float(retry_after)))
-        except (TypeError, ValueError):
-            pass
+    if allow_retry_after:
+        retry_after = headers.get("retry-after")
+        if retry_after:
+            try:
+                hinted_delay = max(1, int(float(retry_after)))
+                return min(hinted_delay, MAX_RETRY_HINT_SECONDS)
+            except (TypeError, ValueError):
+                pass
 
-    rate_limit_reset = headers.get("x-rate-limit-reset")
-    if rate_limit_reset:
-        try:
-            reset_epoch = int(float(rate_limit_reset))
-            remaining = max(1, reset_epoch - int(time.time()))
-            return min(remaining, 900)
-        except (TypeError, ValueError):
-            pass
+    if allow_rate_limit_reset:
+        rate_limit_reset = headers.get("x-rate-limit-reset")
+        if rate_limit_reset:
+            try:
+                reset_epoch = int(float(rate_limit_reset))
+                remaining = max(1, reset_epoch - int(time.time()))
+                return min(remaining, MAX_RETRY_HINT_SECONDS)
+            except (TypeError, ValueError):
+                pass
 
     return delay
 
@@ -287,7 +297,12 @@ def post_text_to_x(
         if status_code == 429:
             logger(f"\n[RATE LIMITED] {error_text}")
             if attempt < total_attempts:
-                delay = retry_delay_seconds(headers, attempt)
+                delay = retry_delay_seconds(
+                    headers,
+                    attempt,
+                    allow_retry_after=True,
+                    allow_rate_limit_reset=True,
+                )
                 logger(f"Retrying in {delay}s (attempt {attempt + 1}/{total_attempts})...")
                 sleep_func(delay)
                 continue
