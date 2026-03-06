@@ -98,6 +98,8 @@ def test_post_text_to_x_retries_server_errors_then_succeeds(monkeypatch):
     assert len(session.calls) == 3
     assert session.calls[0]["url"] == module.X_POST_URL
     assert session.calls[0]["json"] == {"text": "hello world"}
+    assert session.calls[0]["headers"]["Accept"] == "application/json"
+    assert "gms-mcp-x-post/1.0" in session.calls[0]["headers"]["User-Agent"]
     assert session.calls[0]["timeout"] == module.REQUEST_TIMEOUT_SECONDS
     assert sleeps == [5, 15]
     assert any("Retrying in 5s" in line for line in logs)
@@ -178,6 +180,36 @@ def test_post_text_to_x_caps_retry_after_on_rate_limit(monkeypatch):
     assert result.reason == "posted"
     assert result.tweet_id == "tweet-999"
     assert sleeps == [module.MAX_RETRY_HINT_SECONDS]
+
+
+def test_post_text_to_x_retries_edge_challenge(monkeypatch):
+    module = load_module("test_post_tweet_edge_challenge", ".github/scripts/post_tweet.py")
+    set_x_credentials(monkeypatch)
+    session = FakeSession(
+        [
+            FakeResponse(
+                403,
+                text="<!DOCTYPE html><title>Just a moment...</title><script>window._cf_chl_opt = {};</script>",
+            ),
+            FakeResponse(201, payload={"data": {"id": "tweet-edge"}}),
+        ]
+    )
+    sleeps: list[float] = []
+
+    result = module.post_text_to_x(
+        "hello world",
+        requests_module=make_fake_requests(),
+        session=session,
+        oauth_factory=lambda *args: ("oauth", args),
+        max_attempts=4,
+        sleep_func=sleeps.append,
+        log_func=lambda _: None,
+    )
+
+    assert result.ok is True
+    assert result.reason == "posted"
+    assert result.tweet_id == "tweet-edge"
+    assert sleeps == [5]
 
 
 def test_post_text_to_x_retries_network_timeout(monkeypatch):
