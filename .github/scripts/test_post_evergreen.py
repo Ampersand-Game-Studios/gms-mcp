@@ -45,6 +45,20 @@ class TestHelpers(unittest.TestCase):
         history["posted"][0]["generated_by"] = post_evergreen.EXPERIMENT_GENERATED_BY
         self.assertFalse(post_evergreen.has_non_evergreen_post_today(history, today.date()))
 
+    def test_has_evergreen_post_in_slot_today(self):
+        now = datetime(2026, 2, 24, 20, 0, tzinfo=timezone.utc)
+        history = {
+            "posted": [
+                {
+                    "timestamp": now.isoformat(),
+                    "status": "posted",
+                    "generated_by": post_evergreen.EXPERIMENT_GENERATED_BY,
+                }
+            ]
+        }
+        self.assertTrue(post_evergreen.has_evergreen_post_in_slot_today(history, now.date(), "20"))
+        self.assertFalse(post_evergreen.has_evergreen_post_in_slot_today(history, now.date(), "14"))
+
     def test_pick_queue_item_honors_max_uses(self):
         queue = {
             "posts": [
@@ -70,6 +84,43 @@ class TestHelpers(unittest.TestCase):
         chosen, reason = post_evergreen.pick_queue_item(queue, "20", history)
         self.assertIsNone(chosen)
         self.assertEqual(reason, "queue_exhausted")
+
+    def test_pick_queue_item_skips_duplicate_history_and_advances(self):
+        first_text = "Evergreen content #gamedev #GameMaker"
+        second_text = "Fresh evergreen content #gamedev #GameMaker"
+        queue = {
+            "posts": [
+                {
+                    "id": "EVG-001",
+                    "text": first_text,
+                    "active": True,
+                    "max_uses": 2,
+                    "slots": ["20"],
+                },
+                {
+                    "id": "EVG-002",
+                    "text": second_text,
+                    "active": True,
+                    "max_uses": 2,
+                    "slots": ["20"],
+                },
+            ]
+        }
+        history = {
+            "posted": [
+                {
+                    "hash": post_tweet.compute_hash(first_text),
+                    "format": "EVG-001",
+                    "generated_by": post_evergreen.EXPERIMENT_GENERATED_BY,
+                    "status": "posted",
+                    "timestamp": "2026-02-24T20:00:00+00:00",
+                }
+            ]
+        }
+        chosen, reason = post_evergreen.pick_queue_item(queue, "20", history)
+        self.assertEqual(reason, "")
+        self.assertIsNotNone(chosen)
+        self.assertEqual(chosen["id"], "EVG-002")
 
 
 class TestExecute(unittest.TestCase):
@@ -166,6 +217,37 @@ class TestExecute(unittest.TestCase):
         self.assertEqual(result, 0)
         outputs = self._read_outputs()
         self.assertEqual(outputs.get("skip_reason"), "collision_non_evergreen_today")
+
+    def test_execute_skips_when_slot_already_posted_today(self):
+        now = datetime(2026, 2, 24, 20, 0, tzinfo=timezone.utc)
+        history = {
+            "posted": [
+                {
+                    "status": "posted",
+                    "generated_by": post_evergreen.EXPERIMENT_GENERATED_BY,
+                    "timestamp": now.isoformat(),
+                }
+            ]
+        }
+        with open(self.history_file, "w", encoding="utf-8") as fh:
+            json.dump(history, fh)
+
+        args = Namespace(
+            queue_file=str(self.queue_file),
+            slot="20",
+            now_utc=now.isoformat(),
+            dry_run=True,
+        )
+        env = {
+            "GITHUB_OUTPUT": str(self.output_file),
+            "X_EVERGREEN_EXPERIMENT_START_UTC": (now - timedelta(days=1)).isoformat(),
+            "X_EVERGREEN_EXPERIMENT_END_UTC": (now + timedelta(days=1)).isoformat(),
+        }
+        with patch.dict(os.environ, env, clear=False):
+            result = post_evergreen.execute(args)
+        self.assertEqual(result, 0)
+        outputs = self._read_outputs()
+        self.assertEqual(outputs.get("skip_reason"), "already_posted_slot_today")
 
     def test_execute_outside_window(self):
         now = datetime(2026, 2, 24, 20, 0, tzinfo=timezone.utc)

@@ -1,10 +1,15 @@
 name: Evergreen X Experiment
 
 on:
+  # Keep non-zero minutes to avoid top-of-hour scheduler drops.
   schedule:
-    - cron: '0 8 * * *'
-    - cron: '0 14 * * *'
-    - cron: '0 20 * * *'
+    - cron: '17 8 * * *'
+    - cron: '23 14 * * *'
+    - cron: '29 20 * * *'
+  # Backup trigger: fire after each Scheduled X Post schedule tick.
+  workflow_run:
+    workflows: ["Scheduled X Post"]
+    types: [completed]
   workflow_dispatch:
     inputs:
       dry_run:
@@ -27,7 +32,7 @@ concurrency:
 
 jobs:
   evergreen-post:
-    if: github.repository == 'Ampersand-Game-Studios/gms-mcp' && vars.X_EVERGREEN_EXPERIMENT_ACTIVE == 'true'
+    if: github.repository == 'Ampersand-Game-Studios/gms-mcp' && vars.X_EVERGREEN_EXPERIMENT_ACTIVE == 'true' && (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'schedule')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -63,12 +68,16 @@ jobs:
           X_EVERGREEN_QUEUE_FILE: ${{ vars.X_EVERGREEN_QUEUE_FILE }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
           SLOT_OVERRIDE: ${{ github.event.inputs.slot || '' }}
+          SOURCE_NOW_UTC: ${{ github.event.workflow_run.created_at || '' }}
         run: |
           set -euo pipefail
           QUEUE_FILE="${X_EVERGREEN_QUEUE_FILE:-.github/evergreen_queue.json}"
           ARGS=(--queue-file "$QUEUE_FILE")
           if [ -n "${SLOT_OVERRIDE}" ]; then
             ARGS+=(--slot "${SLOT_OVERRIDE}")
+          fi
+          if [ -n "${SOURCE_NOW_UTC}" ]; then
+            ARGS+=(--now-utc "${SOURCE_NOW_UTC}")
           fi
           if [ "${DRY_RUN}" = "true" ]; then
             ARGS+=(--dry-run)

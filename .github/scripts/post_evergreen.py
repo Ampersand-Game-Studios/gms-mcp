@@ -101,6 +101,22 @@ def has_non_evergreen_post_today(history: dict[str, Any], day: datetime.date) ->
     return False
 
 
+def has_evergreen_post_in_slot_today(history: dict[str, Any], day: datetime.date, slot: str) -> bool:
+    """Return True when evergreen already posted in this UTC day+hour slot."""
+    normalized_slot = normalize_slot(slot)
+    for entry in history.get("posted", []):
+        ts = parse_entry_timestamp(entry)
+        if ts is None or ts.date() != day:
+            continue
+        status = entry.get("status")
+        generated_by = entry.get("generated_by")
+        if status not in POSTED_STATUSES or generated_by != EXPERIMENT_GENERATED_BY:
+            continue
+        if f"{ts.hour:02d}" == normalized_slot:
+            return True
+    return False
+
+
 def usage_count(history: dict[str, Any], queue_id: str) -> int:
     """Count how many times a queue item has already been used."""
     count = 0
@@ -157,6 +173,12 @@ def pick_queue_item(
         used = usage_count(history, queue_id)
         if used >= max_uses:
             continue
+
+        # Static queue text cannot be reposted verbatim on X, so keep scanning.
+        candidate_hash = post_tweet.compute_hash(text)
+        if post_tweet.is_duplicate_in_history(history, candidate_hash):
+            continue
+
         any_reusable = True
         return post, ""
 
@@ -215,6 +237,7 @@ def execute(args: argparse.Namespace) -> int:
     """Execute evergreen post attempt."""
     now = parse_iso_utc(args.now_utc) if args.now_utc else datetime.now(timezone.utc)
     slot = normalize_slot(args.slot) if args.slot else f"{now.hour:02d}"
+    set_output("slot", slot)
 
     start = parse_iso_utc(os.environ.get("X_EVERGREEN_EXPERIMENT_START_UTC"))
     end = parse_iso_utc(os.environ.get("X_EVERGREEN_EXPERIMENT_END_UTC"))
@@ -239,6 +262,10 @@ def execute(args: argparse.Namespace) -> int:
         set_output("posted", "false")
         set_output("skip_reason", "collision_non_evergreen_today")
         return 0
+    if has_evergreen_post_in_slot_today(history, now.date(), slot):
+        set_output("posted", "false")
+        set_output("skip_reason", "already_posted_slot_today")
+        return 0
 
     try:
         queue = load_queue(queue_file)
@@ -259,7 +286,6 @@ def execute(args: argparse.Namespace) -> int:
 
     set_output("queue_id", queue_id)
     set_output("tweet_hash", tweet_hash)
-    set_output("slot", slot)
 
     if post_tweet.is_duplicate_in_history(history, tweet_hash):
         set_output("posted", "false")
