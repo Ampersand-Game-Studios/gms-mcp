@@ -60,7 +60,7 @@ class TestPrefabsAutoDetection(unittest.TestCase):
         self.assertEqual(found.as_posix(), shared_prefabs)
 
 
-class TestMacPackageZipTargetFilename(unittest.TestCase):
+class TestRunnerCommandSelection(unittest.TestCase):
     def setUp(self):
         self.tmp_dir = tempfile.mkdtemp()
         self.project_root = Path(self.tmp_dir)
@@ -70,31 +70,95 @@ class TestMacPackageZipTargetFilename(unittest.TestCase):
         import shutil
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
-    def test_compile_project_adds_tf_for_macos(self):
+    def _fake_find_runtime(self, runner: GameMakerRunner):
+        runner.runtime_path = Path("/fake/runtime")
+        return Path("/fake/Igor")
+
+    def _fake_process(self):
+        proc = MagicMock()
+        proc.stdout = None
+        proc.wait.return_value = 0
+        proc.returncode = 0
+        proc.pid = 12345
+        return proc
+
+    @patch.object(GameMakerRunner, "_wait_for_macos_main_loop", return_value=True)
+    @patch.object(GameMakerRunner, "_stop_platform_process", return_value=True)
+    def test_compile_project_uses_local_run_validation_on_macos(self, _mock_stop, _mock_wait):
         runner = GameMakerRunner(self.project_root)
-
         captured_cmd = []
-
-        def fake_find_runtime():
-            runner.runtime_path = Path("/fake/runtime")
-            return Path("/fake/Igor")
 
         def fake_run_igor(cmd):
             captured_cmd[:] = cmd
-            proc = MagicMock()
-            proc.stdout = None
-            proc.wait.return_value = 0
-            proc.returncode = 0
-            return proc
+            return self._fake_process()
 
-        with patch.object(runner, "find_gamemaker_runtime", side_effect=fake_find_runtime):
+        with patch.object(runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)):
             with patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")):
                 with patch.object(runner, "get_prefabs_path", return_value=None):
                     with patch.object(runner, "_run_igor_command", side_effect=fake_run_igor):
                         ok = runner.compile_project(platform_target="macOS", runtime_type="VM")
 
         self.assertTrue(ok)
-        self.assertTrue(any(str(arg).startswith("--tf=") for arg in captured_cmd))
+        self.assertIn("Run", captured_cmd)
+        self.assertNotIn("PackageZip", captured_cmd)
+        self.assertNotIn("Tests", captured_cmd)
+        self.assertFalse(any(str(arg).startswith("--tf=") for arg in captured_cmd))
+
+    def test_compile_project_keeps_packagezip_on_windows(self):
+        runner = GameMakerRunner(self.project_root)
+        captured_cmd = []
+
+        def fake_run_igor(cmd):
+            captured_cmd[:] = cmd
+            return self._fake_process()
+
+        with patch.object(runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)):
+            with patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")):
+                with patch.object(runner, "get_prefabs_path", return_value=None):
+                    with patch.object(runner, "_run_igor_command", side_effect=fake_run_igor):
+                        ok = runner.compile_project(platform_target="Windows", runtime_type="VM")
+
+        self.assertTrue(ok)
+        self.assertIn("PackageZip", captured_cmd)
+        self.assertNotIn("Tests", captured_cmd)
+
+    def test_macos_temp_run_uses_local_run_without_tf(self):
+        runner = GameMakerRunner(self.project_root)
+        captured_cmd = []
+
+        def fake_run_igor(cmd):
+            captured_cmd[:] = cmd
+            return self._fake_process()
+
+        with patch.object(runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)):
+            with patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")):
+                with patch.object(runner, "get_prefabs_path", return_value=None):
+                    with patch.object(runner, "_run_igor_command", side_effect=fake_run_igor):
+                        with patch.object(runner, "_collect_igor_output_async", return_value=([], MagicMock())):
+                            with patch.object(runner, "_wait_for_macos_runner_start", return_value=(222, {222}, {333})):
+                                result = runner.run_project_direct(
+                                    platform_target="macOS",
+                                    runtime_type="VM",
+                                    background=True,
+                                    output_location="temp",
+                                )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["background"])
+        self.assertEqual(result["pid"], 222)
+        self.assertIn("Run", captured_cmd)
+        self.assertNotIn("PackageZip", captured_cmd)
+        self.assertFalse(any(str(arg).startswith("--tf=") for arg in captured_cmd))
+
+    def test_package_export_failure_message_mentions_signing_stage(self):
+        runner = GameMakerRunner(self.project_root)
+        message = runner._build_stage_failure_message(
+            "package/export",
+            1,
+            ["Could not find matching certificate for Developer ID Application:"],
+        )
+
+        self.assertIn("Package/export step failed during macOS signing", message)
 
 
 if __name__ == "__main__":

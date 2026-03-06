@@ -28,7 +28,8 @@ def handle_runner_compile(args) -> bool:
         if success:
             print("[SUCCESS] Compilation completed successfully!")
         else:
-            print("[ERROR] Compilation failed!")
+            failure_message = runner.last_failure_message or "Build validation failed!"
+            print(f"[ERROR] {failure_message}")
             
         return success
         
