@@ -83,7 +83,7 @@ jobs:
           if [ "${DRY_RUN}" = "true" ]; then
             ARGS+=(--dry-run)
           fi
-          python .github/scripts/post_evergreen.py "${ARGS[@]}"
+          python -u .github/scripts/post_evergreen.py "${ARGS[@]}"
 
       - name: Build experiment report
         if: always()
