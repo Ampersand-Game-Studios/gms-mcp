@@ -38,5 +38,5 @@ To merge without posting to X, ensure `.github/next_tweet.txt` is empty.
 The workflow safely handles:
 - Empty file → skips posting
 - Duplicate content → detects via hash and skips
-- Transient X API errors → retries with bounded backoff, then leaves the tweet queued for the next run
+- Transient X API and edge protection errors → retries with bounded backoff, then leaves the tweet queued for the next run
 - Hung X API calls → request/job timeouts prevent the workflow queue from getting stuck
