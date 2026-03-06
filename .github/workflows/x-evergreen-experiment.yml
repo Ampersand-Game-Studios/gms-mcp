@@ -55,7 +55,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install dependencies
-        run: pip install tweepy
+        run: pip install requests requests-oauthlib
 
       - name: Post evergreen tweet
         id: evergreen
