@@ -133,6 +133,53 @@ class TestRunnerStopGame(unittest.TestCase):
         self.assertTrue(result["ok"])
         self.assertIn("already stopped", result["message"])
 
+    def test_stop_game_routes_macos_local_run_sessions_through_runner_cleanup(self):
+        """macOS local-run sessions should use the macOS-specific stop path."""
+        runner = GameMakerRunner(self.project_root)
+        session = runner._session_manager.create_session(
+            pid=222,
+            exe_path=str(self.project_root / "output" / "test_project" / "game.ios"),
+            platform_target="macOS",
+            runtime_type="VM",
+            log_file=str(self.project_root / "output" / "test_project" / "debug.log"),
+        )
+
+        with patch.object(runner, "_stop_macos_run_session", return_value={"ok": True, "message": "stopped"}) as mock_stop:
+            result = runner.stop_game()
+
+        self.assertTrue(result["ok"])
+        mock_stop.assert_called_once()
+        called_session = mock_stop.call_args[0][0]
+        self.assertEqual(called_session.run_id, session.run_id)
+
+    def test_stop_macos_run_session_terminates_lingering_runner_and_tail(self):
+        """macOS stop should clean up runner and tail helper processes when Igor Stop is insufficient."""
+        runner = GameMakerRunner(self.project_root)
+        session = runner._session_manager.create_session(
+            pid=222,
+            exe_path=str(self.project_root / "output" / "test_project" / "game.ios"),
+            platform_target="macOS",
+            runtime_type="VM",
+            log_file=str(self.project_root / "output" / "test_project" / "debug.log"),
+        )
+
+        killed_pids = set()
+
+        def fake_is_alive(pid):
+            return pid not in killed_pids
+
+        with patch.object(runner, "_find_macos_validation_helper_pids", return_value=({222}, {333})):
+            with patch.object(runner, "_stop_platform_process", return_value=False):
+                with patch.object(runner, "_terminate_pid", side_effect=lambda pid, _label: killed_pids.add(pid)):
+                    with patch.object(runner._session_manager, "is_process_alive", side_effect=fake_is_alive):
+                        with patch("gms_helpers.runner.time.monotonic", side_effect=[0.0, 0.0, 6.0]):
+                            with patch("gms_helpers.runner.time.sleep", return_value=None):
+                                result = runner._stop_macos_run_session(session)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(killed_pids, {222, 333})
+        self.assertIsNone(runner._session_manager.get_current_session())
+
 
 class TestRunnerIsGameRunning(unittest.TestCase):
     """Tests for is_game_running using session manager."""
@@ -318,7 +365,7 @@ class TestRunnerBackgroundMode(unittest.TestCase):
         }
         
         runner = GameMakerRunner(self.project_root)
-        result = runner.run_project_direct(background=True)
+        result = runner.run_project_direct(platform_target="Windows", background=True)
         
         self.assertIsInstance(result, dict)
         self.assertTrue(result.get("background"))
@@ -329,10 +376,65 @@ class TestRunnerBackgroundMode(unittest.TestCase):
         mock_run.return_value = True
         
         runner = GameMakerRunner(self.project_root)
-        result = runner.run_project_direct(background=False)
+        result = runner.run_project_direct(platform_target="Windows", background=False)
         
         # Should call the method and return its result
         mock_run.assert_called_once()
+
+    @patch.object(GameMakerRunner, '_run_project_classic_approach')
+    @patch.object(GameMakerRunner, '_run_project_ide_temp_approach')
+    def test_macos_temp_output_routes_to_classic_approach(self, mock_temp, mock_classic):
+        """macOS temp output should use the local Run path instead of PackageZip."""
+        mock_classic.return_value = True
+
+        runner = GameMakerRunner(self.project_root)
+        result = runner.run_project_direct(platform_target="macOS", output_location="temp")
+
+        self.assertTrue(result)
+        mock_classic.assert_called_once_with("macOS", "VM", False)
+        mock_temp.assert_not_called()
+
+    @patch.object(GameMakerRunner, '_run_project_classic_approach')
+    @patch.object(GameMakerRunner, '_run_project_ide_temp_approach')
+    def test_windows_temp_output_still_routes_to_ide_temp_approach(self, mock_temp, mock_classic):
+        """Non-mac temp output should keep the existing IDE-temp pipeline."""
+        mock_temp.return_value = True
+
+        runner = GameMakerRunner(self.project_root)
+        result = runner.run_project_direct(platform_target="Windows", output_location="temp")
+
+        self.assertTrue(result)
+        mock_temp.assert_called_once_with("Windows", "VM", False)
+        mock_classic.assert_not_called()
+
+    def test_macos_background_run_tracks_runner_pid_in_session(self):
+        """macOS background runs should persist the actual Mac_Runner PID, not Igor's PID."""
+        runner = GameMakerRunner(self.project_root)
+        fake_process = MagicMock()
+        fake_process.pid = 12345
+        fake_process.poll.return_value = None
+
+        with patch.object(runner, "_build_platform_action_command", return_value=["igor", "--", "Mac", "Run"]):
+            with patch.object(runner, "_find_macos_validation_helper_pids", return_value=(set(), set())):
+                with patch.object(runner, "_run_igor_command", return_value=fake_process):
+                    with patch.object(runner, "_collect_igor_output_async", return_value=([], MagicMock())):
+                        with patch.object(runner, "_wait_for_macos_runner_start", return_value=(222, {222}, {333})):
+                            result = runner.run_project_direct(
+                                platform_target="macOS",
+                                runtime_type="VM",
+                                background=True,
+                                output_location="temp",
+                            )
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["pid"], 222)
+        self.assertEqual(result["igor_pid"], 12345)
+
+        session = runner._session_manager.get_current_session()
+        self.assertIsNotNone(session)
+        self.assertEqual(session.pid, 222)
+        self.assertEqual(Path(session.exe_path).resolve(), (self.project_root / "output" / "test_project" / "game.ios").resolve())
+        self.assertEqual(Path(session.log_file).resolve(), (self.project_root / "output" / "test_project" / "debug.log").resolve())
 
 
 class TestRunnerLaunchTargetDetection(unittest.TestCase):

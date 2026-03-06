@@ -10,7 +10,7 @@
 - **Health & Diagnostics**: `gm_mcp_health` provides a one-click diagnostic tool to verify the local GameMaker environment. `gm_diagnostics` provides structured, machine-readable project diagnostics (JSON, naming, orphans, references) compatible with IDE problem panels.
 - **Runtime Management**: `gm_runtime_list`, `gm_runtime_pin`, and `gm_runtime_verify` allow precise control over which GameMaker runtime version is used for builds and execution.
 - **Cross-Platform Runner Defaults**: `gm_run` / `gm_compile` now default to the host OS target platform (`macOS`, `Linux`, or `Windows`) when not explicitly provided.
-- **macOS Runner Launch Support**: temp-output runs now detect and launch macOS `.app` bundles by resolving the executable in `Contents/MacOS/`.
+- **macOS Local Runner Behavior**: local `gm_run` / `gm_compile` use Igor's run-based path for IDE-equivalent validation without Developer ID packaging, and macOS background run sessions now track and stop the real `Mac_Runner` process cleanly. Packaged temp-output runs still resolve `.app` bundles via `Contents/MacOS/` when `PackageZip` is used.
 - **GML Symbol Indexing & Code Intelligence**: `gm_build_index`, `gm_find_definition`, `gm_find_references`, and `gm_list_symbols` provide deep, fast, and filtered code analysis (definitions and cross-file references).
 - **Introspection**: complete project inspection with support for all asset types (including extensions and datafiles).
 - **MCP Resources**: addressable project index and asset graph for high-performance agent context loading.
