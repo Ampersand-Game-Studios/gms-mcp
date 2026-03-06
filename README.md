@@ -166,6 +166,7 @@ This repo can post to X automatically when `main` is updated.
 - If it contains the placeholder text (or is empty), it **skips posting**.
 - If it contains a real tweet, it posts to X, records the post in cached tweet history, and leaves the staged text in git so later runs can safely dedupe it.
 - Transient X API failures are retried automatically inside the posting script.
+- The X workflows also enforce job/request timeouts so a hung API call cannot block the queue indefinitely.
 - You can also retry the release-post workflow manually with the `Post to X` workflow dispatch in GitHub Actions.
 
 ### Maintainer flow (dev -> pre-release -> main)
