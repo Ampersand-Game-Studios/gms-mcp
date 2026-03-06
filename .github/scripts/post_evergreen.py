@@ -173,6 +173,12 @@ def pick_queue_item(
         used = usage_count(history, queue_id)
         if used >= max_uses:
             continue
+
+        # Static queue text cannot be reposted verbatim on X, so keep scanning.
+        candidate_hash = post_tweet.compute_hash(text)
+        if post_tweet.is_duplicate_in_history(history, candidate_hash):
+            continue
+
         any_reusable = True
         return post, ""
 
