@@ -19,51 +19,47 @@ def load_module(module_name: str, relative_path: str):
     return module
 
 
-class FakeTwitterServerError(Exception):
+class FakeTimeout(Exception):
     pass
 
 
-class FakeTooManyRequests(Exception):
+class FakeRequestException(Exception):
     pass
 
 
-class FakeForbidden(Exception):
-    pass
+class FakeResponse:
+    def __init__(self, status_code: int, *, payload: dict | None = None, text: str = "", headers: dict | None = None):
+        self.status_code = status_code
+        self._payload = payload
+        self.text = text
+        self.headers = headers or {}
+        self.reason = text or f"HTTP {status_code}"
+
+    def json(self):
+        if self._payload is None:
+            raise ValueError("no json")
+        return self._payload
 
 
-class FakeUnauthorized(Exception):
-    pass
-
-
-class FakeBadRequest(Exception):
-    pass
-
-
-class FakeClient:
+class FakeSession:
     def __init__(self, outcomes):
         self._outcomes = list(outcomes)
-        self.calls: list[str] = []
-        self.session = SimpleNamespace(request=lambda *args, **kwargs: None)
+        self.calls: list[dict] = []
 
-    def create_tweet(self, *, text: str):
-        self.calls.append(text)
+    def post(self, url: str, **kwargs):
+        self.calls.append({"url": url, **kwargs})
         outcome = self._outcomes.pop(0)
         if isinstance(outcome, Exception):
             raise outcome
-        return SimpleNamespace(data={"id": outcome})
+        return outcome
 
 
-def make_fake_tweepy(outcomes):
-    client = FakeClient(outcomes)
-    fake_tweepy = SimpleNamespace(
-        Client=lambda **_: client,
-        TwitterServerError=FakeTwitterServerError,
-        TooManyRequests=FakeTooManyRequests,
-        Forbidden=FakeForbidden,
-        Unauthorized=FakeUnauthorized,
-        BadRequest=FakeBadRequest,
+def make_fake_requests():
+    return SimpleNamespace(
+        Timeout=FakeTimeout,
+        RequestException=FakeRequestException,
+        Session=lambda: FakeSession([]),
     )
-    return fake_tweepy, client
 
 
 def set_x_credentials(monkeypatch):
@@ -76,15 +72,21 @@ def set_x_credentials(monkeypatch):
 def test_post_text_to_x_retries_server_errors_then_succeeds(monkeypatch):
     module = load_module("test_post_tweet_retry_success", ".github/scripts/post_tweet.py")
     set_x_credentials(monkeypatch)
-    fake_tweepy, client = make_fake_tweepy(
-        [FakeTwitterServerError("503"), FakeTwitterServerError("503"), "tweet-123"]
+    session = FakeSession(
+        [
+            FakeResponse(503, text="Service Unavailable"),
+            FakeResponse(503, text="Service Unavailable"),
+            FakeResponse(201, payload={"data": {"id": "tweet-123"}}),
+        ]
     )
     sleeps: list[float] = []
     logs: list[str] = []
 
     result = module.post_text_to_x(
         "hello world",
-        tweepy_module=fake_tweepy,
+        requests_module=make_fake_requests(),
+        session=session,
+        oauth_factory=lambda *args: ("oauth", args),
         max_attempts=4,
         sleep_func=sleeps.append,
         log_func=logs.append,
@@ -93,7 +95,10 @@ def test_post_text_to_x_retries_server_errors_then_succeeds(monkeypatch):
     assert result.ok is True
     assert result.reason == "posted"
     assert result.tweet_id == "tweet-123"
-    assert client.calls == ["hello world", "hello world", "hello world"]
+    assert len(session.calls) == 3
+    assert session.calls[0]["url"] == module.X_POST_URL
+    assert session.calls[0]["json"] == {"text": "hello world"}
+    assert session.calls[0]["timeout"] == module.REQUEST_TIMEOUT_SECONDS
     assert sleeps == [5, 15]
     assert any("Retrying in 5s" in line for line in logs)
 
@@ -101,12 +106,14 @@ def test_post_text_to_x_retries_server_errors_then_succeeds(monkeypatch):
 def test_post_text_to_x_exhausts_server_error_retries(monkeypatch):
     module = load_module("test_post_tweet_retry_failure", ".github/scripts/post_tweet.py")
     set_x_credentials(monkeypatch)
-    fake_tweepy, client = make_fake_tweepy([FakeTwitterServerError("503")] * 4)
+    session = FakeSession([FakeResponse(503, text="Service Unavailable")] * 4)
     sleeps: list[float] = []
 
     result = module.post_text_to_x(
         "hello world",
-        tweepy_module=fake_tweepy,
+        requests_module=make_fake_requests(),
+        session=session,
+        oauth_factory=lambda *args: ("oauth", args),
         max_attempts=4,
         sleep_func=sleeps.append,
         log_func=lambda _: None,
@@ -115,28 +122,35 @@ def test_post_text_to_x_exhausts_server_error_retries(monkeypatch):
     assert result.ok is False
     assert result.reason == "x_server_error"
     assert result.tweet_id is None
-    assert client.calls == ["hello world"] * 4
+    assert len(session.calls) == 4
     assert sleeps == [5, 15, 30]
 
 
-def test_create_x_client_wraps_requests_with_timeout(monkeypatch):
-    module = load_module("test_post_tweet_timeout_client", ".github/scripts/post_tweet.py")
+def test_post_text_to_x_retries_network_timeout(monkeypatch):
+    module = load_module("test_post_tweet_network_timeout", ".github/scripts/post_tweet.py")
     set_x_credentials(monkeypatch)
-    recorded: list[tuple[str, str, dict]] = []
+    session = FakeSession(
+        [
+            FakeTimeout("read timed out"),
+            FakeResponse(201, payload={"data": {"id": "tweet-456"}}),
+        ]
+    )
+    sleeps: list[float] = []
 
-    def raw_request(method: str, url: str, **kwargs):
-        recorded.append((method, url, kwargs))
-        return "ok"
+    result = module.post_text_to_x(
+        "hello world",
+        requests_module=make_fake_requests(),
+        session=session,
+        oauth_factory=lambda *args: ("oauth", args),
+        max_attempts=3,
+        sleep_func=sleeps.append,
+        log_func=lambda _: None,
+    )
 
-    client = SimpleNamespace(session=SimpleNamespace(request=raw_request))
-    fake_tweepy = SimpleNamespace(Client=lambda **_: client)
-
-    configured = module.create_x_client(fake_tweepy)
-    configured.session.request("POST", "https://example.com")
-
-    assert recorded == [
-        ("POST", "https://example.com", {"timeout": module.REQUEST_TIMEOUT_SECONDS})
-    ]
+    assert result.ok is True
+    assert result.reason == "posted"
+    assert result.tweet_id == "tweet-456"
+    assert sleeps == [5]
 
 
 def test_x_post_workflow_supports_manual_dispatch():
