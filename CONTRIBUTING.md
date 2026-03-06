@@ -30,6 +30,7 @@ When changes are promoted to `main`, a GitHub Action may post to X.
 1. Update `.github/next_tweet.txt` with the tweet content
 2. Include the tweet in the PR description (see above)
 3. The action posts automatically when the PR merges to `main`
+4. If X returns a transient error, rerun `Post to X` from GitHub Actions after the built-in retries are exhausted
 
 **Skipping the tweet:**
 To merge without posting to X, ensure `.github/next_tweet.txt` is empty.
@@ -37,4 +38,4 @@ To merge without posting to X, ensure `.github/next_tweet.txt` is empty.
 The workflow safely handles:
 - Empty file → skips posting
 - Duplicate content → detects via hash and skips
-- X API errors → appropriate retry or skip behavior
+- Transient X API errors → retries with backoff, then leaves the tweet queued for the next run
