@@ -239,6 +239,28 @@ def test_post_text_to_x_retries_network_timeout(monkeypatch):
     assert sleeps == [5]
 
 
+def test_deferred_history_does_not_block_future_retries(monkeypatch):
+    module = load_module("test_post_tweet_deferred_history", ".github/scripts/post_tweet.py")
+    history = {
+        "posted": [
+            {
+                "hash": "abc123",
+                "status": module.DEFERRED_STATUS,
+            }
+        ]
+    }
+
+    assert module.is_duplicate_in_history(history, "abc123") is False
+
+
+def test_transient_failure_reason_helper():
+    module = load_module("test_post_tweet_transient_reason_helper", ".github/scripts/post_tweet.py")
+
+    assert module.is_transient_x_failure("x_server_error") is True
+    assert module.is_transient_x_failure("x_edge_challenge") is True
+    assert module.is_transient_x_failure("bad_request") is False
+
+
 def test_x_post_workflow_supports_manual_dispatch():
     workflow_text = (REPO_ROOT / ".github/workflows/x-post.yml").read_text(encoding="utf-8")
     assert "workflow_dispatch:" in workflow_text

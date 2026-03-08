@@ -1,1 +1,1 @@
-If your macOS project ran in the IDE but gms-mcp failed on `Developer ID Application:`, that's fixed. Local `gm_compile` / `gm_run` now use the IDE-style Run path, and `gm_run_stop` cleans up the real `Mac_Runner`. #GameMaker #gamedev
+X can be flaky. gms-mcp now defers transient X failures instead of turning them into red workflows, and evergreen retries stop hammering the same slot twice. Less noise, same retry safety. #GameMaker #gamedev
