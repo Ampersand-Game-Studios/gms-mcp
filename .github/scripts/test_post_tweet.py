@@ -114,6 +114,19 @@ class TestHistoryManagement(unittest.TestCase):
         self.assertTrue(post_tweet.is_duplicate_in_history(history, "def456"))
         self.assertFalse(post_tweet.is_duplicate_in_history(history, "xyz789"))
 
+    def test_is_duplicate_in_history_ignores_deferred_entries(self):
+        """Deferred retries should not permanently block the same tweet from future attempts."""
+        history = {
+            "posted": [
+                {
+                    "hash": "abc123",
+                    "status": post_tweet.DEFERRED_STATUS,
+                }
+            ]
+        }
+
+        self.assertFalse(post_tweet.is_duplicate_in_history(history, "abc123"))
+
     def test_add_to_history(self):
         """Should add entry with correct fields."""
         history = {"posted": []}
@@ -212,6 +225,23 @@ class TestMainFunction(unittest.TestCase):
         # Tweet file should be cleared (empty)
         content = post_tweet.TWEET_FILE.read_text()
         self.assertEqual(content, "")
+
+    def test_main_transient_x_failure_is_deferred(self):
+        """Known transient X failures should not fail the workflow or clear the staged tweet."""
+        tweet_content = "Test tweet content"
+        post_tweet.TWEET_FILE.write_text(tweet_content)
+
+        with patch.object(
+            post_tweet,
+            "post_text_to_x",
+            return_value=post_tweet.XPostResult(False, "x_server_error"),
+        ):
+            result = post_tweet.main()
+
+        self.assertEqual(result, 0)
+        self.assertEqual(post_tweet.TWEET_FILE.read_text(), tweet_content)
+        history = json.loads(post_tweet.HISTORY_FILE.read_text()) if post_tweet.HISTORY_FILE.exists() else {"posted": []}
+        self.assertEqual(history["posted"], [])
 
 
 def run_tests():
