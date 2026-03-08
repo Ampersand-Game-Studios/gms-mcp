@@ -28,6 +28,17 @@ RETRY_BACKOFF_SECONDS = (5, 15, 30)
 REQUEST_TIMEOUT_SECONDS = (10, 30)
 MAX_RETRY_HINT_SECONDS = 30
 X_POST_URL = "https://api.twitter.com/2/tweets"
+POSTED_STATUSES = frozenset({"posted", "duplicate_on_x"})
+TRANSIENT_X_FAILURE_REASONS = frozenset(
+    {
+        "network_timeout",
+        "network_error",
+        "rate_limited",
+        "x_edge_challenge",
+        "x_server_error",
+    }
+)
+DEFERRED_STATUS = "deferred_retry"
 
 
 @dataclass(frozen=True)
@@ -109,9 +120,25 @@ def add_to_history(
         history["generation_stats"]["total_posted"] = history["generation_stats"].get("total_posted", 0) + 1
 
 
+def history_entry_blocks_repost(entry: dict) -> bool:
+    """Only actual/assumed published entries should block future repost attempts."""
+    status = entry.get("status")
+    if status is None:
+        return True
+    return status in POSTED_STATUSES
+
+
 def is_duplicate_in_history(history: dict, tweet_hash: str) -> bool:
     """Check if a tweet hash already exists in history."""
-    return any(entry["hash"] == tweet_hash for entry in history.get("posted", []))
+    return any(
+        entry.get("hash") == tweet_hash and history_entry_blocks_repost(entry)
+        for entry in history.get("posted", [])
+    )
+
+
+def is_transient_x_failure(reason: str) -> bool:
+    """Return True when a post failure should be deferred for a later retry."""
+    return reason in TRANSIENT_X_FAILURE_REASONS
 
 
 def clear_tweet_file() -> None:
@@ -186,7 +213,7 @@ def retry_delay_seconds(
     return delay
 
 
-def is_edge_challenge_response(status_code: int, response_text: str) -> bool:
+def is_edge_challenge_response(status_code: int, *response_texts: str) -> bool:
     """Detect HTML challenge pages from X's edge protection."""
     if status_code not in (403, 429, 503):
         return False
@@ -197,7 +224,7 @@ def is_edge_challenge_response(status_code: int, response_text: str) -> bool:
         "challenge-platform",
         "enable javascript and cookies to continue",
     )
-    text_lower = response_text.lower()
+    text_lower = "\n".join(text or "" for text in response_texts).lower()
     return any(marker in text_lower for marker in challenge_markers)
 
 
@@ -305,7 +332,7 @@ def post_text_to_x(
         response_headers = getattr(response, "headers", None) or {}
         response_text = getattr(response, "text", "") or ""
 
-        if is_edge_challenge_response(status_code, response_text):
+        if is_edge_challenge_response(status_code, response_text, error_text):
             logger("\n[X EDGE CHALLENGE] X returned an HTML challenge page instead of the API response.")
             if attempt < total_attempts:
                 delay = retry_delay_seconds({}, attempt)
@@ -456,6 +483,14 @@ def main() -> int:
         clear_tweet_file()
         set_output("should_commit", "true")
         return 1
+
+    if is_transient_x_failure(result.reason):
+        print("\n[DEFERRED]")
+        print(f"Transient X failure: {result.reason}")
+        print("Leaving staged tweet in place for a later retry.")
+        set_output("should_commit", "false")
+        set_output("deferred_reason", result.reason)
+        return 0
 
     return 1
 

@@ -59,6 +59,19 @@ class TestHelpers(unittest.TestCase):
         self.assertTrue(post_evergreen.has_evergreen_post_in_slot_today(history, now.date(), "20"))
         self.assertFalse(post_evergreen.has_evergreen_post_in_slot_today(history, now.date(), "14"))
 
+    def test_has_evergreen_post_in_slot_today_treats_deferred_retry_as_blocking(self):
+        now = datetime(2026, 2, 24, 20, 0, tzinfo=timezone.utc)
+        history = {
+            "posted": [
+                {
+                    "timestamp": now.isoformat(),
+                    "status": post_tweet.DEFERRED_STATUS,
+                    "generated_by": post_evergreen.EXPERIMENT_GENERATED_BY,
+                }
+            ]
+        }
+        self.assertTrue(post_evergreen.has_evergreen_post_in_slot_today(history, now.date(), "20"))
+
     def test_pick_queue_item_honors_max_uses(self):
         queue = {
             "posts": [
@@ -267,6 +280,41 @@ class TestExecute(unittest.TestCase):
         self.assertEqual(result, 0)
         outputs = self._read_outputs()
         self.assertEqual(outputs.get("skip_reason"), "outside_window_before_start")
+
+    def test_execute_transient_failure_is_deferred(self):
+        now = datetime(2026, 2, 24, 20, 0, tzinfo=timezone.utc)
+        args = Namespace(
+            queue_file=str(self.queue_file),
+            slot="20",
+            now_utc=now.isoformat(),
+            dry_run=False,
+        )
+        env = {
+            "GITHUB_OUTPUT": str(self.output_file),
+            "X_EVERGREEN_EXPERIMENT_START_UTC": (now - timedelta(days=1)).isoformat(),
+            "X_EVERGREEN_EXPERIMENT_END_UTC": (now + timedelta(days=1)).isoformat(),
+        }
+        with patch.dict(os.environ, env, clear=False), patch.object(
+            post_evergreen,
+            "post_to_x",
+            return_value=(False, "x_server_error", None),
+        ):
+            result = post_evergreen.execute(args)
+
+        self.assertEqual(result, 0)
+        outputs = self._read_outputs()
+        self.assertEqual(outputs.get("posted"), "false")
+        self.assertEqual(outputs.get("skip_reason"), "x_server_error")
+        self.assertEqual(outputs.get("retry_deferred"), "true")
+
+        with open(self.history_file, "r", encoding="utf-8") as fh:
+            history = json.load(fh)
+
+        self.assertEqual(len(history["posted"]), 1)
+        entry = history["posted"][0]
+        self.assertEqual(entry["status"], post_tweet.DEFERRED_STATUS)
+        self.assertEqual(entry["generated_by"], post_evergreen.EXPERIMENT_GENERATED_BY)
+        self.assertEqual(entry["format"], "EVG-100")
 
 
 def run_tests() -> int:
