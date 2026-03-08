@@ -21,7 +21,8 @@ import post_tweet
 
 EXPERIMENT_GENERATED_BY = "evergreen-experiment"
 QUEUE_DEFAULT = Path(".github/evergreen_queue.json")
-POSTED_STATUSES = {"posted", "duplicate_on_x"}
+POSTED_STATUSES = set(post_tweet.POSTED_STATUSES)
+BLOCKING_SLOT_STATUSES = POSTED_STATUSES | {post_tweet.DEFERRED_STATUS}
 
 
 def set_output(name: str, value: str) -> None:
@@ -102,7 +103,7 @@ def has_non_evergreen_post_today(history: dict[str, Any], day: datetime.date) ->
 
 
 def has_evergreen_post_in_slot_today(history: dict[str, Any], day: datetime.date, slot: str) -> bool:
-    """Return True when evergreen already posted in this UTC day+hour slot."""
+    """Return True when evergreen already consumed this UTC day+hour slot."""
     normalized_slot = normalize_slot(slot)
     for entry in history.get("posted", []):
         ts = parse_entry_timestamp(entry)
@@ -110,7 +111,7 @@ def has_evergreen_post_in_slot_today(history: dict[str, Any], day: datetime.date
             continue
         status = entry.get("status")
         generated_by = entry.get("generated_by")
-        if status not in POSTED_STATUSES or generated_by != EXPERIMENT_GENERATED_BY:
+        if status not in BLOCKING_SLOT_STATUSES or generated_by != EXPERIMENT_GENERATED_BY:
             continue
         if f"{ts.hour:02d}" == normalized_slot:
             return True
@@ -300,6 +301,24 @@ def execute(args: argparse.Namespace) -> int:
         post_tweet.save_history(history)
         set_output("posted", "false")
         set_output("skip_reason", "duplicate_on_x")
+        return 0
+
+    if post_tweet.is_transient_x_failure(post_reason):
+        post_tweet.add_to_history(
+            history,
+            tweet_hash,
+            tweet_text,
+            post_tweet.DEFERRED_STATUS,
+            None,
+            "evergreen",
+            queue_id,
+            EXPERIMENT_GENERATED_BY,
+        )
+        post_tweet.save_history(history)
+        set_output("posted", "false")
+        set_output("skip_reason", post_reason)
+        set_output("retry_deferred", "true")
+        print(f"Deferred evergreen queue item {queue_id} after transient X failure: {post_reason}")
         return 0
 
     set_output("posted", "false")
