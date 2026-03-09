@@ -27,7 +27,8 @@ MAX_HISTORY_ENTRIES = 100  # Keep last N tweets to prevent file bloat
 RETRY_BACKOFF_SECONDS = (5, 15, 30)
 REQUEST_TIMEOUT_SECONDS = (10, 30)
 MAX_RETRY_HINT_SECONDS = 30
-X_POST_URL = "https://api.twitter.com/2/tweets"
+X_POST_URL = "https://api.x.com/2/tweets"
+X_POST_FALLBACK_URL = "https://api.x.com/1.1/statuses/update.json"
 POSTED_STATUSES = frozenset({"posted", "duplicate_on_x"})
 TRANSIENT_X_FAILURE_REASONS = frozenset(
     {
@@ -160,24 +161,28 @@ def default_log(message: str) -> None:
     print(message, flush=True)
 
 
-def create_x_auth(oauth_factory):
+def create_x_auth(oauth_factory, *, force_include_body: bool = False):
     """Build OAuth1 auth from environment credentials."""
     return oauth_factory(
         os.environ["X_APP_KEY"],
         os.environ["X_APP_SECRET"],
         os.environ["X_ACCESS_TOKEN"],
         os.environ["X_ACCESS_SECRET"],
+        force_include_body=force_include_body,
     )
 
 
-def build_request_headers(requests_module) -> dict[str, str]:
+def build_request_headers(requests_module, *, content_type: str | None = None) -> dict[str, str]:
     """Build explicit headers for the X API request."""
     python_version = f"{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro}"
     requests_version = getattr(requests_module, "__version__", "unknown")
-    return {
+    headers = {
         "Accept": "application/json",
         "User-Agent": f"Python/{python_version} Requests/{requests_version} gms-mcp-x-post/1.0",
     }
+    if content_type:
+        headers["Content-Type"] = content_type
+    return headers
 
 
 def retry_delay_seconds(
@@ -260,6 +265,147 @@ def response_error_text(response) -> str:
     return text.strip() or reason or f"HTTP {getattr(response, 'status_code', 'unknown')}"
 
 
+def extract_tweet_id(payload: dict) -> str:
+    """Extract a tweet ID from either v2 or v1.1 post responses."""
+    candidates: list[object] = []
+    data = payload.get("data")
+    if isinstance(data, dict):
+        candidates.extend([data.get("id"), data.get("id_str")])
+    candidates.extend([payload.get("id"), payload.get("id_str"), payload.get("tweet_id")])
+
+    for candidate in candidates:
+        value = str(candidate or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def post_text_to_x_endpoint(
+    tweet_content: str,
+    *,
+    requests_module,
+    http_session,
+    auth,
+    url: str,
+    request_headers: dict[str, str],
+    request_kwargs: dict,
+    max_attempts: int,
+    sleep_func: Callable[[float], None],
+    logger: Callable[[str], None],
+    endpoint_name: str,
+) -> XPostResult:
+    """Post through a single X endpoint with retry handling."""
+    for attempt in range(1, max_attempts + 1):
+        if max_attempts > 1:
+            logger(f"Post attempt {attempt}/{max_attempts}...")
+
+        try:
+            response = http_session.post(
+                url,
+                auth=auth,
+                headers=request_headers,
+                timeout=REQUEST_TIMEOUT_SECONDS,
+                **request_kwargs,
+            )
+        except requests_module.Timeout as exc:
+            logger(f"\n[NETWORK TIMEOUT] {exc}")
+            if attempt < max_attempts:
+                delay = retry_delay_seconds({}, attempt)
+                logger(f"Retrying in {delay}s (attempt {attempt + 1}/{max_attempts})...")
+                sleep_func(delay)
+                continue
+            logger(f"X did not respond before the request timeout on {endpoint_name}. The tweet will remain queued.")
+            return XPostResult(False, "network_timeout")
+        except requests_module.RequestException as exc:
+            logger(f"\n[NETWORK ERROR] {exc}")
+            if attempt < max_attempts:
+                delay = retry_delay_seconds({}, attempt)
+                logger(f"Retrying in {delay}s (attempt {attempt + 1}/{max_attempts})...")
+                sleep_func(delay)
+                continue
+            logger(f"X could not be reached on {endpoint_name} after retries. The tweet will remain queued.")
+            return XPostResult(False, "network_error")
+
+        error_text = response_error_text(response)
+        status_code = getattr(response, "status_code", 0)
+        response_headers = getattr(response, "headers", None) or {}
+        response_text = getattr(response, "text", "") or ""
+
+        if is_edge_challenge_response(status_code, response_text, error_text):
+            logger("\n[X EDGE CHALLENGE] X returned an HTML challenge page instead of the API response.")
+            if attempt < max_attempts:
+                delay = retry_delay_seconds({}, attempt)
+                logger(f"Retrying in {delay}s (attempt {attempt + 1}/{max_attempts})...")
+                sleep_func(delay)
+                continue
+            logger(f"X kept challenging the workflow runner on {endpoint_name}. The tweet will remain queued for a later rerun.")
+            return XPostResult(False, "x_edge_challenge")
+
+        if status_code in (200, 201):
+            try:
+                payload = response.json()
+            except ValueError:
+                logger("\n[UNEXPECTED ERROR] X returned invalid JSON for a successful post.")
+                return XPostResult(False, "unexpected_error")
+
+            tweet_id = extract_tweet_id(payload)
+            if not tweet_id:
+                logger("\n[UNEXPECTED ERROR] X did not return a tweet ID.")
+                return XPostResult(False, "unexpected_error")
+            return XPostResult(True, "posted", tweet_id)
+
+        if status_code == 403 and "duplicate" in error_text.lower():
+            logger(f"\n[DUPLICATE ON X] {error_text}")
+            return XPostResult(False, "duplicate_on_x")
+
+        if status_code == 429:
+            logger(f"\n[RATE LIMITED] {error_text}")
+            if attempt < max_attempts:
+                delay = retry_delay_seconds(
+                    response_headers,
+                    attempt,
+                    allow_retry_after=True,
+                    allow_rate_limit_reset=True,
+                )
+                logger(f"Retrying in {delay}s (attempt {attempt + 1}/{max_attempts})...")
+                sleep_func(delay)
+                continue
+            logger("Too many requests. The tweet will be retried on the next workflow run.")
+            return XPostResult(False, "rate_limited")
+
+        if status_code >= 500:
+            logger(f"\n[X SERVER ERROR] HTTP {status_code}: {error_text}")
+            if attempt < max_attempts:
+                delay = retry_delay_seconds(response_headers, attempt)
+                logger(f"Retrying in {delay}s (attempt {attempt + 1}/{max_attempts})...")
+                sleep_func(delay)
+                continue
+            logger(f"X's servers are still having issues on {endpoint_name} after retries. The tweet will remain queued.")
+            return XPostResult(False, "x_server_error")
+
+        if status_code == 401:
+            logger(f"\n[UNAUTHORIZED] {error_text}")
+            logger("API credentials are invalid or expired.")
+            logger("Please check the X_* secrets in GitHub repository settings.")
+            return XPostResult(False, "unauthorized")
+
+        if status_code == 400:
+            logger(f"\n[BAD REQUEST] {error_text}")
+            logger("The tweet content may be invalid (too long, forbidden content, etc.)")
+            return XPostResult(False, "bad_request")
+
+        if status_code == 403:
+            logger(f"\n[FORBIDDEN ERROR] {error_text}")
+            logger("This may be a permissions issue with the X API credentials.")
+            return XPostResult(False, "forbidden")
+
+        logger(f"\n[UNEXPECTED ERROR] HTTP {status_code}: {error_text}")
+        logger("An unexpected error occurred. Not clearing tweet file.")
+        return XPostResult(False, "unexpected_error")
+
+    return XPostResult(False, "unexpected_error")
+
+
 def post_text_to_x(
     tweet_content: str,
     *,
@@ -292,119 +438,42 @@ def post_text_to_x(
         return XPostResult(False, "missing_credentials")
 
     http_session = session or requests_module.Session()
-    auth = create_x_auth(oauth_factory)
-    request_headers = build_request_headers(requests_module)
     total_attempts = max_attempts or (len(RETRY_BACKOFF_SECONDS) + 1)
 
-    for attempt in range(1, total_attempts + 1):
-        if total_attempts > 1:
-            logger(f"Post attempt {attempt}/{total_attempts}...")
+    primary_result = post_text_to_x_endpoint(
+        tweet_content,
+        requests_module=requests_module,
+        http_session=http_session,
+        auth=create_x_auth(oauth_factory),
+        url=X_POST_URL,
+        request_headers=build_request_headers(requests_module),
+        request_kwargs={"json": {"text": tweet_content}},
+        max_attempts=total_attempts,
+        sleep_func=sleep_func,
+        logger=logger,
+        endpoint_name="POST /2/tweets",
+    )
+    if primary_result.ok or primary_result.reason in {"duplicate_on_x", "rate_limited", "bad_request", "unauthorized", "forbidden"}:
+        return primary_result
 
-        try:
-            response = http_session.post(
-                X_POST_URL,
-                json={"text": tweet_content},
-                auth=auth,
-                headers=request_headers,
-                timeout=REQUEST_TIMEOUT_SECONDS,
-            )
-        except requests_module.Timeout as exc:
-            logger(f"\n[NETWORK TIMEOUT] {exc}")
-            if attempt < total_attempts:
-                delay = retry_delay_seconds({}, attempt)
-                logger(f"Retrying in {delay}s (attempt {attempt + 1}/{total_attempts})...")
-                sleep_func(delay)
-                continue
-            logger("X did not respond before the request timeout. The tweet will remain queued.")
-            return XPostResult(False, "network_timeout")
-        except requests_module.RequestException as exc:
-            logger(f"\n[NETWORK ERROR] {exc}")
-            if attempt < total_attempts:
-                delay = retry_delay_seconds({}, attempt)
-                logger(f"Retrying in {delay}s (attempt {attempt + 1}/{total_attempts})...")
-                sleep_func(delay)
-                continue
-            logger("X could not be reached after retries. The tweet will remain queued.")
-            return XPostResult(False, "network_error")
+    if primary_result.reason not in {"network_timeout", "network_error", "x_edge_challenge", "x_server_error"}:
+        return primary_result
 
-        error_text = response_error_text(response)
-        status_code = getattr(response, "status_code", 0)
-        response_headers = getattr(response, "headers", None) or {}
-        response_text = getattr(response, "text", "") or ""
-
-        if is_edge_challenge_response(status_code, response_text, error_text):
-            logger("\n[X EDGE CHALLENGE] X returned an HTML challenge page instead of the API response.")
-            if attempt < total_attempts:
-                delay = retry_delay_seconds({}, attempt)
-                logger(f"Retrying in {delay}s (attempt {attempt + 1}/{total_attempts})...")
-                sleep_func(delay)
-                continue
-            logger("X kept challenging the workflow runner. The tweet will remain queued for a later rerun.")
-            return XPostResult(False, "x_edge_challenge")
-
-        if status_code in (200, 201):
-            try:
-                payload = response.json()
-            except ValueError:
-                logger("\n[UNEXPECTED ERROR] X returned invalid JSON for a successful post.")
-                return XPostResult(False, "unexpected_error")
-
-            tweet_id = str((payload.get("data") or {}).get("id") or "").strip()
-            if not tweet_id:
-                logger("\n[UNEXPECTED ERROR] X did not return a tweet ID.")
-                return XPostResult(False, "unexpected_error")
-            return XPostResult(True, "posted", tweet_id)
-
-        if status_code == 403 and "duplicate" in error_text.lower():
-            logger(f"\n[DUPLICATE ON X] {error_text}")
-            return XPostResult(False, "duplicate_on_x")
-
-        if status_code == 429:
-            logger(f"\n[RATE LIMITED] {error_text}")
-            if attempt < total_attempts:
-                delay = retry_delay_seconds(
-                    response_headers,
-                    attempt,
-                    allow_retry_after=True,
-                    allow_rate_limit_reset=True,
-                )
-                logger(f"Retrying in {delay}s (attempt {attempt + 1}/{total_attempts})...")
-                sleep_func(delay)
-                continue
-            logger("Too many requests. The tweet will be retried on the next workflow run.")
-            return XPostResult(False, "rate_limited")
-
-        if status_code >= 500:
-            logger(f"\n[X SERVER ERROR] HTTP {status_code}: {error_text}")
-            if attempt < total_attempts:
-                delay = retry_delay_seconds(response_headers, attempt)
-                logger(f"Retrying in {delay}s (attempt {attempt + 1}/{total_attempts})...")
-                sleep_func(delay)
-                continue
-            logger("X's servers are still having issues after retries. The tweet will remain queued.")
-            return XPostResult(False, "x_server_error")
-
-        if status_code == 401:
-            logger(f"\n[UNAUTHORIZED] {error_text}")
-            logger("API credentials are invalid or expired.")
-            logger("Please check the X_* secrets in GitHub repository settings.")
-            return XPostResult(False, "unauthorized")
-
-        if status_code == 400:
-            logger(f"\n[BAD REQUEST] {error_text}")
-            logger("The tweet content may be invalid (too long, forbidden content, etc.)")
-            return XPostResult(False, "bad_request")
-
-        if status_code == 403:
-            logger(f"\n[FORBIDDEN ERROR] {error_text}")
-            logger("This may be a permissions issue with the X API credentials.")
-            return XPostResult(False, "forbidden")
-
-        logger(f"\n[UNEXPECTED ERROR] HTTP {status_code}: {error_text}")
-        logger("An unexpected error occurred. Not clearing tweet file.")
-        return XPostResult(False, "unexpected_error")
-
-    return XPostResult(False, "unexpected_error")
+    logger("\n[LEGACY FALLBACK]")
+    logger("Falling back to POST /1.1/statuses/update.json after repeated v2 write failures.")
+    return post_text_to_x_endpoint(
+        tweet_content,
+        requests_module=requests_module,
+        http_session=http_session,
+        auth=create_x_auth(oauth_factory, force_include_body=True),
+        url=X_POST_FALLBACK_URL,
+        request_headers=build_request_headers(requests_module, content_type="application/x-www-form-urlencoded"),
+        request_kwargs={"data": {"status": tweet_content}},
+        max_attempts=total_attempts,
+        sleep_func=sleep_func,
+        logger=logger,
+        endpoint_name="POST /1.1/statuses/update.json",
+    )
 
 
 def main() -> int:
