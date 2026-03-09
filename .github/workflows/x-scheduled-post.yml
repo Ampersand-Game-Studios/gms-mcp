@@ -25,6 +25,7 @@ jobs:
     timeout-minutes: 10
     env:
       PYTHON_BIN: ${{ vars.GMS_MCP_X_PYTHON_BIN || 'python3' }}
+      XURL_BIN: ${{ vars.GMS_MCP_XURL_BIN || 'xurl' }}
     steps:
       - uses: actions/checkout@v4
         with:
