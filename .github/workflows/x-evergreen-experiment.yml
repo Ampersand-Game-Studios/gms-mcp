@@ -37,7 +37,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, gms-mcp-x]
     timeout-minutes: 10
     env:
-      PYTHON_BIN: /opt/homebrew/bin/python3.13
+      PYTHON_BIN: /Users/callum/.local/share/actions-runner-gms-mcp-x/x-posting-venv/bin/python
     steps:
       - uses: actions/checkout@v4
         with:
@@ -53,7 +53,8 @@ jobs:
             tweet-history-
 
       - name: Install dependencies
-        run: $PYTHON_BIN -m pip install --user --disable-pip-version-check requests requests-oauthlib
+        # The self-hosted runner venv is pre-provisioned with requests-oauthlib.
+        run: $PYTHON_BIN -c "import requests, requests_oauthlib"
 
       - name: Post evergreen tweet
         id: evergreen
