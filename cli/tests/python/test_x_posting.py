@@ -69,6 +69,10 @@ def set_x_credentials(monkeypatch):
     monkeypatch.setenv("X_ACCESS_SECRET", "token-secret")
 
 
+def fake_oauth_factory(*args, **kwargs):
+    return {"args": args, "kwargs": kwargs}
+
+
 def test_post_text_to_x_retries_server_errors_then_succeeds(monkeypatch):
     module = load_module("test_post_tweet_retry_success", ".github/scripts/post_tweet.py")
     set_x_credentials(monkeypatch)
@@ -86,7 +90,7 @@ def test_post_text_to_x_retries_server_errors_then_succeeds(monkeypatch):
         "hello world",
         requests_module=make_fake_requests(),
         session=session,
-        oauth_factory=lambda *args: ("oauth", args),
+        oauth_factory=fake_oauth_factory,
         max_attempts=4,
         sleep_func=sleeps.append,
         log_func=logs.append,
@@ -115,8 +119,8 @@ def test_post_text_to_x_exhausts_server_error_retries(monkeypatch):
         "hello world",
         requests_module=make_fake_requests(),
         session=session,
-        oauth_factory=lambda *args: ("oauth", args),
-        max_attempts=4,
+        oauth_factory=fake_oauth_factory,
+        max_attempts=2,
         sleep_func=sleeps.append,
         log_func=lambda _: None,
     )
@@ -125,7 +129,47 @@ def test_post_text_to_x_exhausts_server_error_retries(monkeypatch):
     assert result.reason == "x_server_error"
     assert result.tweet_id is None
     assert len(session.calls) == 4
-    assert sleeps == [5, 15, 30]
+    assert session.calls[0]["url"] == module.X_POST_URL
+    assert session.calls[-1]["url"] == module.X_POST_FALLBACK_URL
+    assert sleeps == [5, 5]
+
+
+def test_post_text_to_x_falls_back_to_legacy_endpoint(monkeypatch):
+    module = load_module("test_post_tweet_legacy_fallback", ".github/scripts/post_tweet.py")
+    set_x_credentials(monkeypatch)
+    session = FakeSession(
+        [
+            FakeResponse(503, text="Service Unavailable"),
+            FakeResponse(503, text="Service Unavailable"),
+            FakeResponse(200, payload={"id_str": "tweet-legacy"}),
+        ]
+    )
+    sleeps: list[float] = []
+    logs: list[str] = []
+
+    result = module.post_text_to_x(
+        "hello world",
+        requests_module=make_fake_requests(),
+        session=session,
+        oauth_factory=fake_oauth_factory,
+        max_attempts=2,
+        sleep_func=sleeps.append,
+        log_func=logs.append,
+    )
+
+    assert result.ok is True
+    assert result.reason == "posted"
+    assert result.tweet_id == "tweet-legacy"
+    assert [call["url"] for call in session.calls] == [
+        module.X_POST_URL,
+        module.X_POST_URL,
+        module.X_POST_FALLBACK_URL,
+    ]
+    assert session.calls[-1]["data"] == {"status": "hello world"}
+    assert session.calls[-1]["headers"]["Content-Type"] == "application/x-www-form-urlencoded"
+    assert session.calls[-1]["auth"]["kwargs"]["force_include_body"] is True
+    assert sleeps == [5]
+    assert any("LEGACY FALLBACK" in line for line in logs)
 
 
 def test_post_text_to_x_ignores_long_retry_after_on_server_errors(monkeypatch):
@@ -143,7 +187,7 @@ def test_post_text_to_x_ignores_long_retry_after_on_server_errors(monkeypatch):
         "hello world",
         requests_module=make_fake_requests(),
         session=session,
-        oauth_factory=lambda *args: ("oauth", args),
+        oauth_factory=fake_oauth_factory,
         max_attempts=4,
         sleep_func=sleeps.append,
         log_func=lambda _: None,
@@ -170,7 +214,7 @@ def test_post_text_to_x_caps_retry_after_on_rate_limit(monkeypatch):
         "hello world",
         requests_module=make_fake_requests(),
         session=session,
-        oauth_factory=lambda *args: ("oauth", args),
+        oauth_factory=fake_oauth_factory,
         max_attempts=4,
         sleep_func=sleeps.append,
         log_func=lambda _: None,
@@ -200,7 +244,7 @@ def test_post_text_to_x_retries_edge_challenge(monkeypatch):
         "hello world",
         requests_module=make_fake_requests(),
         session=session,
-        oauth_factory=lambda *args: ("oauth", args),
+        oauth_factory=fake_oauth_factory,
         max_attempts=4,
         sleep_func=sleeps.append,
         log_func=lambda _: None,
@@ -227,7 +271,7 @@ def test_post_text_to_x_retries_network_timeout(monkeypatch):
         "hello world",
         requests_module=make_fake_requests(),
         session=session,
-        oauth_factory=lambda *args: ("oauth", args),
+        oauth_factory=fake_oauth_factory,
         max_attempts=3,
         sleep_func=sleeps.append,
         log_func=lambda _: None,
