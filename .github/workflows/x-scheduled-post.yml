@@ -20,7 +20,8 @@ jobs:
   generate-and-post:
     # Only run in the real repo, not forks
     if: github.repository == 'Ampersand-Game-Studios/gms-mcp' && vars.X_SCHEDULED_PAUSED != 'true'
-    runs-on: ubuntu-latest
+    # GitHub-hosted runner IPs are intermittently challenged by X/Cloudflare.
+    runs-on: [self-hosted, macOS, ARM64, gms-mcp-x]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
