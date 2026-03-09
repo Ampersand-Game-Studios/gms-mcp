@@ -13,7 +13,10 @@ import hashlib
 import json
 import os
 import re
+import shutil
+import subprocess
 import sys
+import tempfile
 import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -28,7 +31,6 @@ RETRY_BACKOFF_SECONDS = (5, 15, 30)
 REQUEST_TIMEOUT_SECONDS = (10, 30)
 MAX_RETRY_HINT_SECONDS = 30
 X_POST_URL = "https://api.x.com/2/tweets"
-X_POST_FALLBACK_URL = "https://api.x.com/1.1/statuses/update.json"
 POSTED_STATUSES = frozenset({"posted", "duplicate_on_x"})
 TRANSIENT_X_FAILURE_REASONS = frozenset(
     {
@@ -185,6 +187,33 @@ def build_request_headers(requests_module, *, content_type: str | None = None) -
     return headers
 
 
+def response_payload_error_text(payload: dict) -> str:
+    """Extract a short error description from an API payload."""
+    parts: list[str] = []
+    title = payload.get("title")
+    detail = payload.get("detail")
+    message = payload.get("message")
+    error = payload.get("error")
+    if title:
+        parts.append(str(title))
+    if detail:
+        parts.append(str(detail))
+    if message:
+        parts.append(str(message))
+    if error:
+        parts.append(str(error))
+
+    errors = payload.get("errors")
+    if isinstance(errors, list):
+        for entry in errors:
+            if isinstance(entry, dict):
+                nested_message = entry.get("message") or entry.get("detail")
+                if nested_message:
+                    parts.append(str(nested_message))
+
+    return " | ".join(parts)
+
+
 def retry_delay_seconds(
     headers: dict | None,
     attempt: int,
@@ -241,24 +270,9 @@ def response_error_text(response) -> str:
         payload = None
 
     if isinstance(payload, dict):
-        parts: list[str] = []
-        title = payload.get("title")
-        detail = payload.get("detail")
-        if title:
-            parts.append(str(title))
-        if detail:
-            parts.append(str(detail))
-
-        errors = payload.get("errors")
-        if isinstance(errors, list):
-            for error in errors:
-                if isinstance(error, dict):
-                    message = error.get("message") or error.get("detail")
-                    if message:
-                        parts.append(str(message))
-
-        if parts:
-            return " | ".join(parts)
+        payload_text = response_payload_error_text(payload)
+        if payload_text:
+            return payload_text
 
     text = getattr(response, "text", "") or ""
     reason = getattr(response, "reason", "") or ""
@@ -278,6 +292,137 @@ def extract_tweet_id(payload: dict) -> str:
         if value:
             return value
     return ""
+
+
+def resolve_xurl_bin() -> str:
+    """Return the xurl binary path when available."""
+    configured = os.environ.get("XURL_BIN")
+    if configured:
+        return configured
+    return shutil.which("xurl") or ""
+
+
+def parse_json_text(*texts: str) -> dict | None:
+    """Parse the first JSON object found in the provided text blobs."""
+    for text in texts:
+        candidate = (text or "").strip()
+        if not candidate:
+            continue
+        try:
+            payload = json.loads(candidate)
+        except ValueError:
+            continue
+        if isinstance(payload, dict):
+            return payload
+    return None
+
+
+def post_text_to_x_with_xurl(
+    tweet_content: str,
+    *,
+    run_command: Callable[..., subprocess.CompletedProcess[str]] = subprocess.run,
+    log_func: Callable[[str], None] | None = None,
+) -> XPostResult:
+    """Try X's official xurl client as a compatibility fallback for POST /2/tweets."""
+    logger = log_func or default_log
+    xurl_bin = resolve_xurl_bin()
+    if not xurl_bin:
+        return XPostResult(False, "missing_xurl")
+
+    command_env = dict(os.environ)
+    command_env["NO_COLOR"] = "1"
+
+    try:
+        with tempfile.TemporaryDirectory(prefix="xurl-auth-") as temp_home:
+            command_env["HOME"] = temp_home
+            command_env["XDG_CONFIG_HOME"] = temp_home
+
+            auth_command = [
+                xurl_bin,
+                "auth",
+                "oauth1",
+                "--consumer-key",
+                os.environ["X_APP_KEY"],
+                "--consumer-secret",
+                os.environ["X_APP_SECRET"],
+                "--access-token",
+                os.environ["X_ACCESS_TOKEN"],
+                "--token-secret",
+                os.environ["X_ACCESS_SECRET"],
+            ]
+            auth_result = run_command(
+                auth_command,
+                capture_output=True,
+                text=True,
+                env=command_env,
+                timeout=REQUEST_TIMEOUT_SECONDS[1],
+                check=False,
+            )
+            if auth_result.returncode != 0:
+                logger("\n[XURL AUTH ERROR] Could not initialize OAuth1 auth for xurl.")
+                return XPostResult(False, "xurl_unavailable")
+
+            post_command = [xurl_bin, "post", tweet_content, "--auth", "oauth1"]
+            post_result = run_command(
+                post_command,
+                capture_output=True,
+                text=True,
+                env=command_env,
+                timeout=REQUEST_TIMEOUT_SECONDS[1],
+                check=False,
+            )
+    except subprocess.TimeoutExpired as exc:
+        logger(f"\n[XURL TIMEOUT] {exc}")
+        return XPostResult(False, "network_timeout")
+    except OSError as exc:
+        logger(f"\n[XURL ERROR] {exc}")
+        return XPostResult(False, "xurl_unavailable")
+
+    payload = parse_json_text(post_result.stdout, post_result.stderr)
+    error_text = response_payload_error_text(payload) if payload else ""
+    error_text = error_text or (post_result.stdout or post_result.stderr or "").strip() or "xurl failed"
+    status_code = 0
+    if isinstance(payload, dict):
+        try:
+            status_code = int(payload.get("status") or 0)
+        except (TypeError, ValueError):
+            status_code = 0
+
+    if post_result.returncode == 0:
+        if not isinstance(payload, dict):
+            logger("\n[XURL ERROR] xurl returned success without a JSON payload.")
+            return XPostResult(False, "xurl_unavailable")
+        tweet_id = extract_tweet_id(payload)
+        if not tweet_id:
+            logger("\n[XURL ERROR] xurl returned success without a tweet ID.")
+            return XPostResult(False, "xurl_unavailable")
+        return XPostResult(True, "posted", tweet_id)
+
+    if is_edge_challenge_response(status_code, post_result.stdout, post_result.stderr, error_text):
+        logger("\n[XURL EDGE CHALLENGE] X returned an HTML challenge page to xurl.")
+        return XPostResult(False, "x_edge_challenge")
+
+    if status_code == 401:
+        logger(f"\n[XURL UNAUTHORIZED] {error_text}")
+        return XPostResult(False, "unauthorized")
+    if status_code == 403 and "duplicate" in error_text.lower():
+        logger(f"\n[XURL DUPLICATE] {error_text}")
+        return XPostResult(False, "duplicate_on_x")
+    if status_code == 403:
+        logger(f"\n[XURL FORBIDDEN] {error_text}")
+        return XPostResult(False, "forbidden")
+    if status_code == 429:
+        logger(f"\n[XURL RATE LIMITED] {error_text}")
+        return XPostResult(False, "rate_limited")
+    if status_code >= 500:
+        logger(f"\n[XURL SERVER ERROR] {error_text}")
+        return XPostResult(False, "x_server_error")
+    if status_code == 400:
+        logger(f"\n[XURL BAD REQUEST] {error_text}")
+        return XPostResult(False, "bad_request")
+
+    logger(f"\n[XURL ERROR] {error_text}")
+    return XPostResult(False, "xurl_unavailable")
 
 
 def post_text_to_x_endpoint(
@@ -459,21 +604,12 @@ def post_text_to_x(
     if primary_result.reason not in {"network_timeout", "network_error", "x_edge_challenge", "x_server_error"}:
         return primary_result
 
-    logger("\n[LEGACY FALLBACK]")
-    logger("Falling back to POST /1.1/statuses/update.json after repeated v2 write failures.")
-    return post_text_to_x_endpoint(
-        tweet_content,
-        requests_module=requests_module,
-        http_session=http_session,
-        auth=create_x_auth(oauth_factory, force_include_body=True),
-        url=X_POST_FALLBACK_URL,
-        request_headers=build_request_headers(requests_module, content_type="application/x-www-form-urlencoded"),
-        request_kwargs={"data": {"status": tweet_content}},
-        max_attempts=total_attempts,
-        sleep_func=sleep_func,
-        logger=logger,
-        endpoint_name="POST /1.1/statuses/update.json",
-    )
+    logger("\n[XURL FALLBACK]")
+    logger("Retrying via X's official xurl client after repeated direct v2 write failures.")
+    xurl_result = post_text_to_x_with_xurl(tweet_content, log_func=logger)
+    if xurl_result.ok or xurl_result.reason in {"duplicate_on_x", "rate_limited", "bad_request", "unauthorized", "forbidden"}:
+        return xurl_result
+    return primary_result
 
 
 def main() -> int:

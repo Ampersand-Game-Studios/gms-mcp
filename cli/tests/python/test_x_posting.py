@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import importlib.util
+import json
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -73,6 +74,10 @@ def fake_oauth_factory(*args, **kwargs):
     return {"args": args, "kwargs": kwargs}
 
 
+def make_completed_process(returncode: int, *, stdout: str = "", stderr: str = ""):
+    return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+
 def test_post_text_to_x_retries_server_errors_then_succeeds(monkeypatch):
     module = load_module("test_post_tweet_retry_success", ".github/scripts/post_tweet.py")
     set_x_credentials(monkeypatch)
@@ -114,6 +119,7 @@ def test_post_text_to_x_exhausts_server_error_retries(monkeypatch):
     set_x_credentials(monkeypatch)
     session = FakeSession([FakeResponse(503, text="Service Unavailable")] * 4)
     sleeps: list[float] = []
+    monkeypatch.setattr(module, "post_text_to_x_with_xurl", lambda *args, **kwargs: module.XPostResult(False, "xurl_unavailable"))
 
     result = module.post_text_to_x(
         "hello world",
@@ -128,24 +134,27 @@ def test_post_text_to_x_exhausts_server_error_retries(monkeypatch):
     assert result.ok is False
     assert result.reason == "x_server_error"
     assert result.tweet_id is None
-    assert len(session.calls) == 4
+    assert len(session.calls) == 2
     assert session.calls[0]["url"] == module.X_POST_URL
-    assert session.calls[-1]["url"] == module.X_POST_FALLBACK_URL
-    assert sleeps == [5, 5]
+    assert sleeps == [5]
 
 
-def test_post_text_to_x_falls_back_to_legacy_endpoint(monkeypatch):
-    module = load_module("test_post_tweet_legacy_fallback", ".github/scripts/post_tweet.py")
+def test_post_text_to_x_uses_xurl_fallback_after_v2_failures(monkeypatch):
+    module = load_module("test_post_tweet_xurl_fallback", ".github/scripts/post_tweet.py")
     set_x_credentials(monkeypatch)
     session = FakeSession(
         [
             FakeResponse(503, text="Service Unavailable"),
             FakeResponse(503, text="Service Unavailable"),
-            FakeResponse(200, payload={"id_str": "tweet-legacy"}),
         ]
     )
     sleeps: list[float] = []
     logs: list[str] = []
+    monkeypatch.setattr(
+        module,
+        "post_text_to_x_with_xurl",
+        lambda *args, **kwargs: module.XPostResult(True, "posted", "tweet-xurl"),
+    )
 
     result = module.post_text_to_x(
         "hello world",
@@ -159,17 +168,58 @@ def test_post_text_to_x_falls_back_to_legacy_endpoint(monkeypatch):
 
     assert result.ok is True
     assert result.reason == "posted"
-    assert result.tweet_id == "tweet-legacy"
-    assert [call["url"] for call in session.calls] == [
-        module.X_POST_URL,
-        module.X_POST_URL,
-        module.X_POST_FALLBACK_URL,
-    ]
-    assert session.calls[-1]["data"] == {"status": "hello world"}
-    assert session.calls[-1]["headers"]["Content-Type"] == "application/x-www-form-urlencoded"
-    assert session.calls[-1]["auth"]["kwargs"]["force_include_body"] is True
+    assert result.tweet_id == "tweet-xurl"
+    assert [call["url"] for call in session.calls] == [module.X_POST_URL, module.X_POST_URL]
     assert sleeps == [5]
-    assert any("LEGACY FALLBACK" in line for line in logs)
+    assert any("XURL FALLBACK" in line for line in logs)
+
+
+def test_post_text_to_x_with_xurl_posts_successfully(monkeypatch):
+    module = load_module("test_post_tweet_xurl_success", ".github/scripts/post_tweet.py")
+    set_x_credentials(monkeypatch)
+    monkeypatch.setattr(module, "resolve_xurl_bin", lambda: "/fake/xurl")
+    commands: list[list[str]] = []
+
+    def fake_run(command, **kwargs):
+        commands.append(command)
+        if command[1:3] == ["auth", "oauth1"]:
+            return make_completed_process(0, stdout="saved")
+        if command[1:2] == ["post"]:
+            return make_completed_process(0, stdout=json.dumps({"data": {"id": "tweet-via-xurl"}}))
+        raise AssertionError(f"unexpected command: {command}")
+
+    result = module.post_text_to_x_with_xurl("hello world", run_command=fake_run, log_func=lambda _: None)
+
+    assert result.ok is True
+    assert result.reason == "posted"
+    assert result.tweet_id == "tweet-via-xurl"
+    assert commands[0][0] == "/fake/xurl"
+    assert commands[1] == ["/fake/xurl", "post", "hello world", "--auth", "oauth1"]
+
+
+def test_post_text_to_x_with_xurl_returns_forbidden(monkeypatch):
+    module = load_module("test_post_tweet_xurl_forbidden", ".github/scripts/post_tweet.py")
+    set_x_credentials(monkeypatch)
+    monkeypatch.setattr(module, "resolve_xurl_bin", lambda: "/fake/xurl")
+
+    def fake_run(command, **kwargs):
+        if command[1:3] == ["auth", "oauth1"]:
+            return make_completed_process(0, stdout="saved")
+        return make_completed_process(
+            1,
+            stdout=json.dumps(
+                {
+                    "title": "Forbidden",
+                    "status": 403,
+                    "detail": "You currently have access to a subset of X API V2 endpoints only.",
+                }
+            ),
+        )
+
+    result = module.post_text_to_x_with_xurl("hello world", run_command=fake_run, log_func=lambda _: None)
+
+    assert result.ok is False
+    assert result.reason == "forbidden"
 
 
 def test_post_text_to_x_ignores_long_retry_after_on_server_errors(monkeypatch):

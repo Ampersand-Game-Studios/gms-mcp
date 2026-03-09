@@ -22,6 +22,7 @@ jobs:
     timeout-minutes: 5
     env:
       PYTHON_BIN: /Users/callum/.local/share/actions-runner-gms-mcp-x/x-posting-venv/bin/python
+      XURL_BIN: /Users/callum/.local/bin/xurl
     steps:
       - uses: actions/checkout@v4
 
