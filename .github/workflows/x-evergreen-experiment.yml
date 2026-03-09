@@ -36,6 +36,8 @@ jobs:
     # GitHub-hosted runner IPs are intermittently challenged by X/Cloudflare.
     runs-on: [self-hosted, macOS, ARM64, gms-mcp-x]
     timeout-minutes: 10
+    env:
+      PYTHON_BIN: /opt/homebrew/bin/python3.13
     steps:
       - uses: actions/checkout@v4
         with:
@@ -50,13 +52,8 @@ jobs:
           restore-keys: |
             tweet-history-
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Install dependencies
-        run: pip install requests requests-oauthlib
+        run: $PYTHON_BIN -m pip install --user --disable-pip-version-check requests requests-oauthlib
 
       - name: Post evergreen tweet
         id: evergreen
@@ -84,7 +81,7 @@ jobs:
           if [ "${DRY_RUN}" = "true" ]; then
             ARGS+=(--dry-run)
           fi
-          python -u .github/scripts/post_evergreen.py "${ARGS[@]}"
+          "$PYTHON_BIN" -u .github/scripts/post_evergreen.py "${ARGS[@]}"
 
       - name: Build experiment report
         if: always()
@@ -93,7 +90,7 @@ jobs:
           X_EVERGREEN_EXPERIMENT_END_UTC: ${{ vars.X_EVERGREEN_EXPERIMENT_END_UTC }}
         run: |
           set -euo pipefail
-          python .github/scripts/report_evergreen_experiment.py \
+          "$PYTHON_BIN" .github/scripts/report_evergreen_experiment.py \
             --output-json "$RUNNER_TEMP/evergreen_report.json" \
             --output-csv "$RUNNER_TEMP/evergreen_report.csv"
 
