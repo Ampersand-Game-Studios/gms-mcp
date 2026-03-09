@@ -33,7 +33,8 @@ concurrency:
 jobs:
   evergreen-post:
     if: github.repository == 'Ampersand-Game-Studios/gms-mcp' && vars.X_EVERGREEN_EXPERIMENT_ACTIVE == 'true' && (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'schedule')
-    runs-on: ubuntu-latest
+    # GitHub-hosted runner IPs are intermittently challenged by X/Cloudflare.
+    runs-on: [self-hosted, macOS, ARM64, gms-mcp-x]
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
