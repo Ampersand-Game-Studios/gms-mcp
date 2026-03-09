@@ -10,15 +10,20 @@ fi
 
 echo "[gms-mcp] GameMaker project detected"
 
-# Check for updates
-UPDATE_CHECK=$(uvx gms-mcp check-updates 2>/dev/null || echo "")
-if echo "$UPDATE_CHECK" | grep -q "update available"; then
-    echo "[gms-mcp] Update available - run: pip install --upgrade gms-mcp"
+# Check for updates (only if gms-mcp is already installed locally)
+if command -v gms-mcp >/dev/null 2>&1; then
+    UPDATE_CHECK=$(gms-mcp check-updates 2>/dev/null || echo "")
+    if echo "$UPDATE_CHECK" | grep -q "update available"; then
+        echo "[gms-mcp] Update available - run: pip install --upgrade gms-mcp"
+    fi
 fi
 
-# Check bridge status
-BRIDGE_STATUS=$(uvx gms bridge status 2>/dev/null || echo "not installed")
-if echo "$BRIDGE_STATUS" | grep -q "installed"; then
+# Check bridge status (only if gms is already installed locally)
+if command -v gms >/dev/null 2>&1; then
+    BRIDGE_STATUS=$(gms bridge status 2>/dev/null || echo "not installed")
+fi
+
+if echo "${BRIDGE_STATUS:-not installed}" | grep -q "installed"; then
     echo "[gms-mcp] Bridge: installed"
 else
     echo "[gms-mcp] Bridge: not installed (optional - for live debugging)"
