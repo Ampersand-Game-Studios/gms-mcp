@@ -1,1 +1,1 @@
-Coverage and validation just got less hand-wavy. gms-mcp now collects subprocess coverage from real CLI tests, tightened wrapper/install coverage, and the repo clears 90% statement coverage. Safer refactors, fewer blind spots. #GameMaker #gamedev
+Release automation should clean up after itself. gms-mcp now clears the staged release tweet after a successful X post, while transient X failures still leave the queue in place for a safe retry. Less manual cleanup, fewer release footguns. #GameMaker #gamedev
