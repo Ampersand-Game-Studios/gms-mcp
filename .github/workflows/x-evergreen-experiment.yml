@@ -33,8 +33,12 @@ concurrency:
 jobs:
   evergreen-post:
     if: github.repository == 'Ampersand-Game-Studios/gms-mcp' && vars.X_EVERGREEN_EXPERIMENT_ACTIVE == 'true' && (github.event_name != 'workflow_run' || github.event.workflow_run.event == 'schedule')
-    runs-on: ubuntu-latest
+    # GitHub-hosted runner IPs are intermittently challenged by X/Cloudflare.
+    runs-on: [self-hosted, macOS, ARM64, gms-mcp-x]
     timeout-minutes: 10
+    env:
+      PYTHON_BIN: ${{ vars.GMS_MCP_X_PYTHON_BIN || 'python3' }}
+      XURL_BIN: ${{ vars.GMS_MCP_XURL_BIN || 'xurl' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -49,13 +53,9 @@ jobs:
           restore-keys: |
             tweet-history-
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Install dependencies
-        run: pip install requests requests-oauthlib
+        # The self-hosted runner venv is pre-provisioned with requests-oauthlib.
+        run: $PYTHON_BIN -c "import requests, requests_oauthlib"
 
       - name: Post evergreen tweet
         id: evergreen
@@ -83,7 +83,7 @@ jobs:
           if [ "${DRY_RUN}" = "true" ]; then
             ARGS+=(--dry-run)
           fi
-          python -u .github/scripts/post_evergreen.py "${ARGS[@]}"
+          "$PYTHON_BIN" -u .github/scripts/post_evergreen.py "${ARGS[@]}"
 
       - name: Build experiment report
         if: always()
@@ -92,7 +92,7 @@ jobs:
           X_EVERGREEN_EXPERIMENT_END_UTC: ${{ vars.X_EVERGREEN_EXPERIMENT_END_UTC }}
         run: |
           set -euo pipefail
-          python .github/scripts/report_evergreen_experiment.py \
+          "$PYTHON_BIN" .github/scripts/report_evergreen_experiment.py \
             --output-json "$RUNNER_TEMP/evergreen_report.json" \
             --output-csv "$RUNNER_TEMP/evergreen_report.csv"
 

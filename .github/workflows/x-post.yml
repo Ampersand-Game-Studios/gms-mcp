@@ -17,8 +17,12 @@ jobs:
   post:
     # Only run in the real repo, not forks
     if: github.repository == 'Ampersand-Game-Studios/gms-mcp'
-    runs-on: ubuntu-latest
+    # GitHub-hosted runner IPs are intermittently challenged by X/Cloudflare.
+    runs-on: [self-hosted, macOS, ARM64, gms-mcp-x]
     timeout-minutes: 5
+    env:
+      PYTHON_BIN: ${{ vars.GMS_MCP_X_PYTHON_BIN || 'python3' }}
+      XURL_BIN: ${{ vars.GMS_MCP_XURL_BIN || 'xurl' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -31,13 +35,9 @@ jobs:
           restore-keys: |
             tweet-history-
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Install dependencies
-        run: pip install requests requests-oauthlib
+        # The self-hosted runner venv is pre-provisioned with requests-oauthlib.
+        run: $PYTHON_BIN -c "import requests, requests_oauthlib"
 
       - name: Post to X
         id: post
@@ -46,7 +46,7 @@ jobs:
           X_APP_SECRET: ${{ secrets.X_APP_SECRET }}
           X_ACCESS_TOKEN: ${{ secrets.X_ACCESS_TOKEN }}
           X_ACCESS_SECRET: ${{ secrets.X_ACCESS_SECRET }}
-        run: python -u .github/scripts/post_tweet.py
+        run: $PYTHON_BIN -u .github/scripts/post_tweet.py
 
       - name: Delete old cache
         if: always() && steps.cache-restore.outputs.cache-matched-key

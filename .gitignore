@@ -26,6 +26,11 @@ gamemaker/
 .codex/
 .DS_Store
 
+# Local MCP client config (machine-specific)
+.mcp.json
+.claude-plugin/
+mcp-configs/
+
 # Local environment (API keys, secrets)
 .env
 .claude/settings.local.json

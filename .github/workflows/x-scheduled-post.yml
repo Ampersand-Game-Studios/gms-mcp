@@ -20,8 +20,12 @@ jobs:
   generate-and-post:
     # Only run in the real repo, not forks
     if: github.repository == 'Ampersand-Game-Studios/gms-mcp' && vars.X_SCHEDULED_PAUSED != 'true'
-    runs-on: ubuntu-latest
+    # GitHub-hosted runner IPs are intermittently challenged by X/Cloudflare.
+    runs-on: [self-hosted, macOS, ARM64, gms-mcp-x]
     timeout-minutes: 10
+    env:
+      PYTHON_BIN: ${{ vars.GMS_MCP_X_PYTHON_BIN || 'python3' }}
+      XURL_BIN: ${{ vars.GMS_MCP_XURL_BIN || 'xurl' }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -36,21 +40,17 @@ jobs:
           restore-keys: |
             tweet-history-
 
-      - name: Set up Python
-        uses: actions/setup-python@v5
-        with:
-          python-version: "3.12"
-
       - name: Install dependencies
-        run: pip install requests requests-oauthlib anthropic
+        # The self-hosted runner venv is pre-provisioned with requests-oauthlib and anthropic.
+        run: $PYTHON_BIN -c "import anthropic, requests, requests_oauthlib"
 
       - name: Generate tweet with Claude
         id: generate
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
-          python .github/scripts/generate_tweet.py
-          TOPIC=$(python -c "import json; h=json.load(open('.github/tweet_history.json')); print(h.get('topic_coverage',{}).keys().__iter__().__next__() if h else '')" 2>/dev/null || echo "")
+          "$PYTHON_BIN" .github/scripts/generate_tweet.py
+          TOPIC=$("$PYTHON_BIN" -c "import json; h=json.load(open('.github/tweet_history.json')); print(h.get('topic_coverage',{}).keys().__iter__().__next__() if h else '')" 2>/dev/null || echo "")
           echo "topic=$TOPIC" >> $GITHUB_OUTPUT
 
       - name: Post to X
@@ -64,7 +64,7 @@ jobs:
           TWEET_TOPIC: ${{ steps.generate.outputs.topic }}
           TWEET_FORMAT: ${{ steps.generate.outputs.format }}
           TWEET_GENERATED_BY: claude-api
-        run: python -u .github/scripts/post_tweet.py
+        run: $PYTHON_BIN -u .github/scripts/post_tweet.py
 
       - name: Delete old cache
         if: always() && steps.cache-restore.outputs.cache-matched-key
