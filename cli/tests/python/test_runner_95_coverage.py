@@ -117,9 +117,11 @@ class TestRunner95Coverage(unittest.TestCase):
         self.assertEqual(runner_pids, set())
         self.assertEqual(tail_pids, set())
 
-        ps_output = "\ninvalid\nnot_a_pid command\n101 /tmp/Game.app/Contents/MacOS/Mac_Runner /tmp/game.ios\n"
+        game_path = Path("/tmp/game.ios")
+        debug_log = Path("/tmp/debug.log")
+        ps_output = f"\ninvalid\nnot_a_pid command\n101 /tmp/Game.app/Contents/MacOS/Mac_Runner {game_path}\n"
         with patch("gms_helpers.runner.subprocess.run", return_value=SimpleNamespace(stdout=ps_output)):
-            runner_pids, tail_pids = self.runner._find_macos_validation_helper_pids(Path("/tmp/game.ios"), Path("/tmp/debug.log"))
+            runner_pids, tail_pids = self.runner._find_macos_validation_helper_pids(game_path, debug_log)
         self.assertEqual(runner_pids, {101})
         self.assertEqual(tail_pids, set())
 
