@@ -190,13 +190,14 @@ def test_post_text_to_x_with_xurl_posts_successfully(monkeypatch):
     module = load_module("test_post_tweet_xurl_success", ".github/scripts/post_tweet.py")
     set_x_credentials(monkeypatch)
     monkeypatch.setattr(module, "resolve_xurl_bin", lambda: "/fake/xurl")
-    commands: list[list[str]] = []
+    commands: list[dict] = []
+    captured_config: dict[str, str] = {}
 
     def fake_run(command, **kwargs):
-        commands.append(command)
-        if command[1:3] == ["auth", "oauth1"]:
-            return make_completed_process(0, stdout="saved")
+        commands.append({"command": command, "kwargs": kwargs})
         if command[1:2] == ["post"]:
+            xurl_config = Path(kwargs["env"]["HOME"]) / ".xurl"
+            captured_config["text"] = xurl_config.read_text(encoding="utf-8")
             return make_completed_process(0, stdout=json.dumps({"data": {"id": "tweet-via-xurl"}}))
         raise AssertionError(f"unexpected command: {command}")
 
@@ -205,8 +206,22 @@ def test_post_text_to_x_with_xurl_posts_successfully(monkeypatch):
     assert result.ok is True
     assert result.reason == "posted"
     assert result.tweet_id == "tweet-via-xurl"
-    assert commands[0][0] == "/fake/xurl"
-    assert commands[1] == ["/fake/xurl", "post", "hello world", "--auth", "oauth1"]
+    assert len(commands) == 1
+    assert commands[0]["command"] == ["/fake/xurl", "post", "hello world", "--auth", "oauth1"]
+    assert "key" not in commands[0]["command"]
+    assert "secret" not in commands[0]["command"]
+
+    child_env = commands[0]["kwargs"]["env"]
+    assert "X_APP_KEY" not in child_env
+    assert "X_APP_SECRET" not in child_env
+    assert "X_ACCESS_TOKEN" not in child_env
+    assert "X_ACCESS_SECRET" not in child_env
+
+    config_text = captured_config["text"]
+    assert 'consumer_key: "key"' in config_text
+    assert 'consumer_secret: "secret"' in config_text
+    assert 'access_token: "token"' in config_text
+    assert 'token_secret: "token-secret"' in config_text
 
 
 def test_post_text_to_x_with_xurl_returns_forbidden(monkeypatch):
@@ -215,8 +230,8 @@ def test_post_text_to_x_with_xurl_returns_forbidden(monkeypatch):
     monkeypatch.setattr(module, "resolve_xurl_bin", lambda: "/fake/xurl")
 
     def fake_run(command, **kwargs):
-        if command[1:3] == ["auth", "oauth1"]:
-            return make_completed_process(0, stdout="saved")
+        assert command == ["/fake/xurl", "post", "hello world", "--auth", "oauth1"]
+        assert "X_ACCESS_TOKEN" not in kwargs["env"]
         return make_completed_process(
             1,
             stdout=json.dumps(
@@ -396,6 +411,20 @@ def test_x_workflows_install_direct_http_dependencies():
         assert "requests-oauthlib" in workflow_text
 
 
+def test_x_workflows_do_not_embed_local_runner_paths():
+    workflow_paths = [
+        ".github/workflows/x-post.yml",
+        ".github/workflows/x-scheduled-post.yml",
+        ".github/workflows/x-evergreen-experiment.yml",
+    ]
+
+    for relative_path in workflow_paths:
+        workflow_text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
+        assert "actions-runner-gms-mcp-x/x-posting-venv/bin/python" not in workflow_text
+        assert "GMS_MCP_X_PYTHON_BIN" in workflow_text
+        assert "GMS_MCP_XURL_BIN" in workflow_text
+
+
 def test_x_post_workflow_commits_cleared_staging_file():
     workflow_text = (REPO_ROOT / ".github/workflows/x-post.yml").read_text(encoding="utf-8")
 
@@ -453,3 +482,10 @@ def test_x_post_reset_commands_push_empty_staging_file(tmp_path):
         "main:.github/next_tweet.txt",
     )
     assert staged_file_contents == ""
+
+
+def test_agents_instructions_do_not_embed_local_repo_paths():
+    agents_text = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
+
+    assert "Use `/Users/" not in agents_text
+    assert "directory containing this file" in agents_text
