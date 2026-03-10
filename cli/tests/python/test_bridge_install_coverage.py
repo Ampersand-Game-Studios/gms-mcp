@@ -546,7 +546,7 @@ class TestInstallCoverage(unittest.TestCase):
                 config_path_override="custom/config.json",
             )
         self.assertTrue(state.readiness.not_applicable)
-        self.assertTrue(state.path.endswith("custom/config.json"))
+        self.assertTrue(state.path.replace("\\", "/").endswith("custom/config.json"))
 
         with patch("gms_mcp.install.resolve_client_spec", return_value=fake_spec), patch(
             "gms_mcp.install._scope_not_applicable_reason",
@@ -559,7 +559,7 @@ class TestInstallCoverage(unittest.TestCase):
                 server_name="gms",
                 config_path_override=None,
             )
-        self.assertTrue(state.path.endswith("configs/workspace.json"))
+        self.assertTrue(state.path.replace("\\", "/").endswith("configs/workspace.json"))
 
         with patch("gms_mcp.install.resolve_client_spec", return_value=fake_spec), patch(
             "gms_mcp.install._scope_not_applicable_reason",
