@@ -93,7 +93,9 @@ def project_paths(args: argparse.Namespace) -> Mapping[str, Path]:
         "output_dir": output_dir,
         "junit_xml": junit_xml,
         "coverage_xml": coverage_xml,
+        "cov_config": root / "pyproject.toml",
         "tests_dir": root / args.tests_dir,
+        "gamemaker_dir": root / "gamemaker",
         "server_sources_dir": root / "src" / "gms_mcp" / "server",
         "coverage_report_md": output_dir / "TEST_COVERAGE_REPORT.md",
         "tool_report_md": output_dir / "MCP_TOOL_VALIDATION_REPORT.md",
@@ -120,15 +122,66 @@ def ensure_gamemaker_context(project_root: Path) -> Path:
     return gamemaker_dir
 
 
+def cleanup_coverage_data(paths: Mapping[str, Path]) -> None:
+    for directory in (paths["root"], paths["gamemaker_dir"]):
+        for candidate in directory.glob(".coverage*"):
+            if candidate.is_file():
+                candidate.unlink()
+
+
+def has_parallel_coverage_data(paths: Mapping[str, Path]) -> bool:
+    for directory in (paths["root"], paths["gamemaker_dir"]):
+        for candidate in directory.glob(".coverage*"):
+            if candidate.is_file() and candidate.name != ".coverage":
+                return True
+    return False
+
+
+def write_coverage_xml(paths: Mapping[str, Path], env: Mapping[str, str]) -> int:
+    if has_parallel_coverage_data(paths):
+        combine_cmd = [
+            sys.executable,
+            "-m",
+            "coverage",
+            "combine",
+            "--rcfile",
+            str(paths["cov_config"]),
+            str(paths["root"]),
+            str(paths["gamemaker_dir"]),
+        ]
+        result = run_command(combine_cmd, paths["root"], env)
+        if result.returncode != 0:
+            return result.returncode
+
+    if not (paths["root"] / ".coverage").exists():
+        print("[ERROR] Coverage data file was not generated.")
+        return 1
+
+    xml_cmd = [
+        sys.executable,
+        "-m",
+        "coverage",
+        "xml",
+        "--rcfile",
+        str(paths["cov_config"]),
+        "-o",
+        str(paths["coverage_xml"]),
+    ]
+    result = run_command(xml_cmd, paths["root"], env)
+    return result.returncode
+
+
 def run_quality_suite(paths: Mapping[str, Path], skip_final_verification: bool) -> int:
     env = os.environ.copy()
     env["PYTHONPATH"] = str(paths["root"] / "src")
     env["GMS_TEST_SUITE"] = "1"
+    env["COVERAGE_FILE"] = str(paths["root"] / ".coverage")
     if sys.platform == "win32":
         env["PYTHONIOENCODING"] = "utf-8"
 
     paths["output_dir"].mkdir(parents=True, exist_ok=True)
     gamemaker_dir = ensure_gamemaker_context(paths["root"])
+    cleanup_coverage_data(paths)
 
     cmd = [
         sys.executable,
@@ -139,12 +192,18 @@ def run_quality_suite(paths: Mapping[str, Path], skip_final_verification: bool) 
         "--junit-xml",
         str(paths["junit_xml"]),
         f"--cov={paths['root'] / 'src'}",
-        f"--cov-report=xml:{paths['coverage_xml']}",
+        "--cov-config",
+        str(paths["cov_config"]),
+        "--cov-report=",
         "--maxfail=1",
     ]
     result = run_command(cmd, gamemaker_dir, env)
     if result.returncode != 0:
         return result.returncode
+
+    coverage_status = write_coverage_xml(paths, env)
+    if coverage_status != 0:
+        return coverage_status
 
     final_verification = paths["root"] / "cli/tests/python/test_final_verification.py"
     if final_verification.exists() and not skip_final_verification:
