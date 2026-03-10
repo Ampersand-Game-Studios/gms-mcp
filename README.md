@@ -135,6 +135,10 @@ See `RELEASING.md` for the one-time PyPI setup and the first manual upload helpe
 
 Quality reports are generated during CI and published as `quality-reports-*` artifacts.
 
+The reporting pipeline is subprocess-aware: CLI tests that launch `python -m gms_helpers.gms`
+or other child processes now contribute to the final coverage artifacts instead of silently
+dropping out of `coverage.xml`.
+
 - `TEST_COVERAGE_REPORT.md`
 - `MCP_TOOL_VALIDATION_REPORT.md`
 - `coverage.xml`
@@ -147,10 +151,25 @@ You can regenerate these locally with:
 python scripts/generate_quality_reports.py
 ```
 
+This command:
+- runs the Python test suite with coverage enabled
+- combines any parallel / subprocess coverage data
+- rewrites `build/reports/coverage.xml`
+- regenerates the markdown and JSON quality summaries
+- runs `cli/tests/python/test_final_verification.py`
+
 Use `--skip-test-run` to regenerate from existing CI artifacts:
 
 ```bash
 python scripts/generate_quality_reports.py --skip-test-run --junit-xml build/reports/pytest_results.xml --coverage-xml build/reports/coverage.xml
+```
+
+For release-bound promotions, maintainers should run all three locally from the repo root:
+
+```bash
+PYTHONPATH=src python cli/tests/python/run_all_tests.py
+PYTHONPATH=src python -m pytest cli/tests/python/test_final_verification.py
+python scripts/generate_quality_reports.py
 ```
 
 ## X (Twitter) posting on `main`
@@ -165,6 +184,9 @@ This repo can post to X automatically when `main` is updated.
 - When a commit lands on `main`, GitHub Actions reads `.github/next_tweet.txt`.
 - If it contains the placeholder text (or is empty), it **skips posting**.
 - If it contains a real tweet, it posts to X, records the post in cached tweet history, and leaves the staged text in git so later runs can safely dedupe it.
+- The X workflows run on the dedicated self-hosted runner label `gms-mcp-x` because GitHub-hosted runner IPs are intermittently blocked or challenged by X.
+- That runner uses a pre-provisioned Python 3.13 virtualenv under `~/.local/share/actions-runner-gms-mcp-x/x-posting-venv`.
+- That same runner also provisions X's official `xurl` CLI at `~/.local/bin/xurl` so the posting script can retry `/2/tweets` through X's own client when direct OAuth1 requests misbehave.
 - Transient X API failures are retried automatically inside the posting script with bounded backoff so `503 Retry-After` hints cannot exceed the workflow budget, and edge challenge pages are retried without misreporting them as credential failures.
 - If X still fails with a known transient error after retries, the workflow now leaves the staged tweet or evergreen queue item in place for a later retry instead of marking the whole job failed.
 - The X workflows also enforce job/request timeouts so a hung API call cannot block the queue indefinitely.
@@ -175,6 +197,8 @@ This repo can post to X automatically when `main` is updated.
 Because this repo promotes changes `dev` -> `pre-release` -> `main`, prepare the tweet during the `pre-release` -> `main` PR:
 
 - Update `.github/next_tweet.txt` with the tweet (following `.github/x-personality.md`)
+- Confirm the local validation commands above pass before promotion
+- Confirm GitHub Actions `CI` passes on `main` after the promotion lands
 - Merge to `main`
 
 ## Use with a GameMaker project (multi-project friendly)

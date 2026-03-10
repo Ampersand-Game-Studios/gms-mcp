@@ -1,1 +1,1 @@
-X can be flaky. gms-mcp now defers transient X failures instead of turning them into red workflows, and evergreen retries stop hammering the same slot twice. Less noise, same retry safety. #GameMaker #gamedev
+Coverage and validation just got less hand-wavy. gms-mcp now collects subprocess coverage from real CLI tests, tightened wrapper/install coverage, and the repo clears 90% statement coverage. Safer refactors, fewer blind spots. #GameMaker #gamedev

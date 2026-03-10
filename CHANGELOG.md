@@ -38,6 +38,7 @@ All notable changes to this project will be documented in this file.
   - Normalized path comparison behavior to avoid case-related mismatches on macOS case-insensitive volumes.
   - Added a dedicated mockless macOS smoke test for real `.app` bundle launch path resolution.
   - Added macOS-specific launch/runtime permission diagnostics for sandbox blocks and unsigned binaries, including actionable remediation guidance.
+- **Coverage Audit Expansion**: Added focused coverage suites for CLI wrappers, helper-heavy modules, install/setup flows, bridge tools, and reporting regressions. Project-wide statement coverage now clears 90% with release artifacts generated from the same pipeline used in CI.
 
 ### Fixed
 - **Spurious `.gms_mcp` Folder Creation**: Fixed an issue where the MCP server would create a `.gms_mcp/logs/` folder in the current working directory even when no GameMaker project was present. Debug logging now only activates when a valid project is detected.
@@ -52,6 +53,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - **Diagnostic output**: Refined tool outputs to be cleaner and more consistent across the code intelligence suite.
 - **Standardized Versioning**: Locked default asset creation to GameMaker 2024.x+ standards.
+- **Quality Reporting Pipeline**: `scripts/generate_quality_reports.py` now collects subprocess coverage correctly, combines parallel `.coverage*` data before writing `coverage.xml`, and keeps the published markdown/XML/JSON quality artifacts aligned with real CLI execution paths.
 
 ## [0.1.1.dev41] - 2025-12-18 (Approximate)
 ### Added
