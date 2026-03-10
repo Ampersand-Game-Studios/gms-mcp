@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
@@ -76,6 +77,17 @@ def fake_oauth_factory(*args, **kwargs):
 
 def make_completed_process(returncode: int, *, stdout: str = "", stderr: str = ""):
     return SimpleNamespace(returncode=returncode, stdout=stdout, stderr=stderr)
+
+
+def run_git(repo: Path, *args: str) -> str:
+    result = subprocess.run(
+        ["git", *args],
+        cwd=repo,
+        check=True,
+        text=True,
+        capture_output=True,
+    )
+    return result.stdout.strip()
 
 
 def test_post_text_to_x_retries_server_errors_then_succeeds(monkeypatch):
@@ -392,3 +404,52 @@ def test_x_post_workflow_commits_cleared_staging_file():
     assert "git add .github/next_tweet.txt" in workflow_text
     assert "Reset staged release tweet [skip ci]" in workflow_text
     assert "git push origin HEAD:main" in workflow_text
+
+
+def test_x_post_reset_commands_push_empty_staging_file(tmp_path):
+    remote_repo = tmp_path / "remote.git"
+    work_repo = tmp_path / "work"
+
+    subprocess.run(["git", "init", "--bare", str(remote_repo)], check=True, capture_output=True, text=True)
+    subprocess.run(["git", "init", "-b", "main", str(work_repo)], check=True, capture_output=True, text=True)
+
+    run_git(work_repo, "config", "user.name", "Test User")
+    run_git(work_repo, "config", "user.email", "test@example.com")
+    run_git(work_repo, "remote", "add", "origin", str(remote_repo))
+
+    tweet_file = work_repo / ".github" / "next_tweet.txt"
+    tweet_file.parent.mkdir(parents=True, exist_ok=True)
+    tweet_file.write_text("queued tweet\n", encoding="utf-8")
+
+    run_git(work_repo, "add", ".github/next_tweet.txt")
+    run_git(work_repo, "commit", "-m", "Seed queued tweet")
+    run_git(work_repo, "push", "origin", "HEAD:main")
+
+    tweet_file.write_text("", encoding="utf-8")
+
+    run_git(work_repo, "config", "user.name", "github-actions[bot]")
+    run_git(work_repo, "config", "user.email", "41898282+github-actions[bot]@users.noreply.github.com")
+    run_git(work_repo, "add", ".github/next_tweet.txt")
+
+    diff_result = subprocess.run(
+        ["git", "diff", "--cached", "--quiet", "--", ".github/next_tweet.txt"],
+        cwd=work_repo,
+        text=True,
+        capture_output=True,
+    )
+    assert diff_result.returncode == 1
+
+    run_git(work_repo, "commit", "-m", "Reset staged release tweet [skip ci]")
+    run_git(work_repo, "push", "origin", "HEAD:main")
+
+    commit_message = run_git(work_repo, "log", "-1", "--pretty=%s", "origin/main")
+    assert commit_message == "Reset staged release tweet [skip ci]"
+
+    staged_file_contents = run_git(
+        work_repo,
+        "--git-dir",
+        str(remote_repo),
+        "show",
+        "main:.github/next_tweet.txt",
+    )
+    assert staged_file_contents == ""
