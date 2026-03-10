@@ -237,15 +237,19 @@ class TestPathUtils(unittest.TestCase):
             (root / ".git" / "ignored.yy").write_text("{}", encoding="utf-8")
             (root / "sprites" / "Hero.PNG").write_text("png", encoding="utf-8")
 
-            filesystem_map = path_utils.build_filesystem_map(str(root))
-            actual = path_utils.find_file_case_insensitive("sprites/hero.png", filesystem_map)
-            self.assertEqual(actual, "sprites/Hero.PNG")
+            with patch("gms_helpers.maintenance.path_utils.platform.system", return_value="Windows"):
+                filesystem_map = path_utils.build_filesystem_map(str(root))
+                actual = path_utils.find_file_case_insensitive("sprites/hero.png", filesystem_map)
+                self.assertEqual(actual, "sprites/Hero.PNG")
 
-            with patch("gms_helpers.maintenance.path_utils.os.path.exists", side_effect=lambda p: str(p) == "sprites/exact.yy"):
-                categories = path_utils.categorize_path_differences(
-                    {"sprites/exact.yy", "sprites/hero.png", "missing/file.yy"},
-                    filesystem_map,
-                )
+                with patch(
+                    "gms_helpers.maintenance.path_utils.os.path.exists",
+                    side_effect=lambda p: str(p) == "sprites/exact.yy",
+                ):
+                    categories = path_utils.categorize_path_differences(
+                        {"sprites/exact.yy", "sprites/hero.png", "missing/file.yy"},
+                        filesystem_map,
+                    )
 
             self.assertEqual(categories["found_exact"], ["sprites/exact.yy"])
             self.assertEqual(categories["found_case_diff"], ["sprites/hero.png -> sprites/Hero.PNG"])
