@@ -421,6 +421,7 @@ def test_x_workflows_do_not_embed_local_runner_paths():
     for relative_path in workflow_paths:
         workflow_text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
         assert "actions-runner-gms-mcp-x/x-posting-venv/bin/python" not in workflow_text
+        assert ".local/bin/xurl" not in workflow_text
         assert "GMS_MCP_X_PYTHON_BIN" in workflow_text
         assert "GMS_MCP_XURL_BIN" in workflow_text
 
@@ -488,4 +489,5 @@ def test_agents_instructions_do_not_embed_local_repo_paths():
     agents_text = (REPO_ROOT / "AGENTS.md").read_text(encoding="utf-8")
 
     assert "Use `/Users/" not in agents_text
+    assert "The parent folder (`/Users/" not in agents_text
     assert "directory containing this file" in agents_text
