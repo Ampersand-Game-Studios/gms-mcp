@@ -129,19 +129,20 @@ class TestRunner95Coverage(unittest.TestCase):
             self.runner._terminate_pid(10, "runner")
 
         kill_calls = []
+        expected_signal = getattr(__import__("signal"), "SIGKILL", __import__("signal").SIGTERM)
 
         def stubborn_kill(pid, sig):
             kill_calls.append(sig)
             if sig == 0:
                 return None
-            if sig == __import__("signal").SIGKILL:
+            if sig == expected_signal:
                 raise RuntimeError("cannot kill")
 
         with patch("gms_helpers.runner.os.kill", side_effect=stubborn_kill):
             with patch("gms_helpers.runner.time.monotonic", side_effect=[0.0, 0.1, 6.0]):
                 with patch("gms_helpers.runner.time.sleep"):
                     self.runner._terminate_pid(20, "runner")
-        self.assertIn(__import__("signal").SIGKILL, kill_calls)
+        self.assertIn(expected_signal, kill_calls)
 
     def test_stop_macos_session_remaining_paths(self):
         session = SimpleNamespace(pid=99, exe_path="/tmp/game.ios", log_file="/tmp/debug.log", runtime_type="VM")
