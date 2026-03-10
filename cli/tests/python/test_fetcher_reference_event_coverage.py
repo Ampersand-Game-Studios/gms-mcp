@@ -46,6 +46,7 @@ from gms_helpers.maintenance.audit.reference_collector import (
     collect_project_references,
     comprehensive_analysis,
 )
+from gms_helpers.maintenance.path_utils import normalize_path
 class TestFetcherCoverage(unittest.TestCase):
     def test_simple_html_text_extractor_ignores_script_and_style(self):
         parser = SimpleHTMLTextExtractor()
@@ -345,22 +346,22 @@ class TestReferenceCollectorCoverage(unittest.TestCase):
     def test_collect_project_references_discovers_companion_files(self):
         refs = collect_project_references(str(self.project_root))
 
-        self.assertIn("testgame.yyp", refs)
-        self.assertIn("objects/o_player/create_0.gml", refs)
-        self.assertIn("objects/o_player/collision_o_wall.gml", refs)
-        self.assertIn("scripts/scr_boot/scr_boot.gml", refs)
-        self.assertIn("sprites/spr_logo/framea.png", refs)
-        self.assertIn("sprites/spr_logo/layers/layera/image.png", refs)
-        self.assertIn("sounds/snd_beep/beep.wav", refs)
-        self.assertIn("fonts/fnt_main/font.png", refs)
-        self.assertIn("shaders/shd_tint/shd_tint.vsh", refs)
-        self.assertIn("shaders/shd_tint/shd_tint.fsh", refs)
+        self.assertIn(normalize_path("TestGame.yyp"), refs)
+        self.assertIn(normalize_path("objects/o_player/Create_0.gml"), refs)
+        self.assertIn(normalize_path("objects/o_player/Collision_o_wall.gml"), refs)
+        self.assertIn(normalize_path("scripts/scr_boot/scr_boot.gml"), refs)
+        self.assertIn(normalize_path("sprites/spr_logo/frameA.png"), refs)
+        self.assertIn(normalize_path("sprites/spr_logo/layers/layerA/image.png"), refs)
+        self.assertIn(normalize_path("sounds/snd_beep/beep.wav"), refs)
+        self.assertIn(normalize_path("fonts/fnt_main/font.png"), refs)
+        self.assertIn(normalize_path("shaders/shd_tint/shd_tint.vsh"), refs)
+        self.assertIn(normalize_path("shaders/shd_tint/shd_tint.fsh"), refs)
 
     def test_reference_collector_helper_methods_and_fallbacks(self):
         collector = ReferenceCollector(str(self.project_root))
 
         collector._add_reference("Objects\\o_player\\Create_0.gml")
-        self.assertIn("objects/o_player/create_0.gml", collector.referenced_files)
+        self.assertIn(normalize_path("Objects/o_player/Create_0.gml"), collector.referenced_files)
 
         self.assertEqual(
             collector._determine_asset_type({}, Path("objects/o_enemy/o_enemy.yy")),
