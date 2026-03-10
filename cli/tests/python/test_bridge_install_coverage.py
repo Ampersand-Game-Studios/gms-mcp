@@ -959,7 +959,7 @@ class TestInstallCoverage(unittest.TestCase):
                 )
             self.assertEqual(result, 0)
             self.assertIn("'gms-mcp' not found on PATH", output)
-            self.assertIn(".cursor/mcp.json", output)
+            self.assertIn(f".cursor{os.sep}mcp.json", output)
 
             with patch("gms_mcp.install._select_gm_project_root", return_value=(None, [])), patch(
                 "gms_mcp.install._resolve_launcher",
