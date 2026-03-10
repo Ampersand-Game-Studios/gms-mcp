@@ -630,8 +630,10 @@ class GameMakerRunner:
                 return
             time.sleep(0.2)
 
+        force_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
+
         try:
-            os.kill(pid, signal.SIGKILL)
+            os.kill(pid, force_signal)
         except ProcessLookupError:
             return
         except Exception as exc:
