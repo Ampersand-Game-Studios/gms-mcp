@@ -573,7 +573,7 @@ class TestInstallCoverage(unittest.TestCase):
                     server_name="gms",
                     config_path_override=None,
                 )
-        self.assertIn(".fake/config.json", state.path)
+        self.assertIn(".fake/config.json", state.path.replace("\\", "/"))
 
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
