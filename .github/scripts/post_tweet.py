@@ -317,6 +317,34 @@ def parse_json_text(*texts: str) -> dict | None:
     return None
 
 
+def write_xurl_oauth1_config(home_dir: str | Path) -> Path:
+    """Write xurl's OAuth1 config file inside an isolated temp HOME."""
+    config_path = Path(home_dir) / ".xurl"
+    config_text = "\n".join(
+        [
+            "apps:",
+            "    default:",
+            f"        client_id: {json.dumps('')}",
+            f"        client_secret: {json.dumps('')}",
+            "        oauth1_token:",
+            "            type: oauth1",
+            "            oauth1:",
+            f"                access_token: {json.dumps(os.environ['X_ACCESS_TOKEN'])}",
+            f"                token_secret: {json.dumps(os.environ['X_ACCESS_SECRET'])}",
+            f"                consumer_key: {json.dumps(os.environ['X_APP_KEY'])}",
+            f"                consumer_secret: {json.dumps(os.environ['X_APP_SECRET'])}",
+            "default_app: default",
+            "",
+        ]
+    )
+    config_path.write_text(config_text, encoding="utf-8")
+    try:
+        os.chmod(config_path, 0o600)
+    except OSError:
+        pass
+    return config_path
+
+
 def post_text_to_x_with_xurl(
     tweet_content: str,
     *,
@@ -331,36 +359,14 @@ def post_text_to_x_with_xurl(
 
     command_env = dict(os.environ)
     command_env["NO_COLOR"] = "1"
+    for credential_var in ("X_APP_KEY", "X_APP_SECRET", "X_ACCESS_TOKEN", "X_ACCESS_SECRET"):
+        command_env.pop(credential_var, None)
 
     try:
         with tempfile.TemporaryDirectory(prefix="xurl-auth-") as temp_home:
             command_env["HOME"] = temp_home
             command_env["XDG_CONFIG_HOME"] = temp_home
-
-            auth_command = [
-                xurl_bin,
-                "auth",
-                "oauth1",
-                "--consumer-key",
-                os.environ["X_APP_KEY"],
-                "--consumer-secret",
-                os.environ["X_APP_SECRET"],
-                "--access-token",
-                os.environ["X_ACCESS_TOKEN"],
-                "--token-secret",
-                os.environ["X_ACCESS_SECRET"],
-            ]
-            auth_result = run_command(
-                auth_command,
-                capture_output=True,
-                text=True,
-                env=command_env,
-                timeout=REQUEST_TIMEOUT_SECONDS[1],
-                check=False,
-            )
-            if auth_result.returncode != 0:
-                logger("\n[XURL AUTH ERROR] Could not initialize OAuth1 auth for xurl.")
-                return XPostResult(False, "xurl_unavailable")
+            write_xurl_oauth1_config(temp_home)
 
             post_command = [xurl_bin, "post", tweet_content, "--auth", "oauth1"]
             post_result = run_command(
