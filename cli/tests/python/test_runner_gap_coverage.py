@@ -223,9 +223,14 @@ class TestRunnerGapCoverage(unittest.TestCase):
         thread.join(timeout=2)
         self.assertEqual(output_lines, ["test run"])
 
-        ps_output = "101 /tmp/Game.app/Contents/MacOS/Mac_Runner /tmp/game.ios\n102 tail -F /tmp/debug.log\n"
+        game_path = Path("/tmp/game.ios")
+        debug_log_path = Path("/tmp/debug.log")
+        ps_output = (
+            f"101 /tmp/Game.app/Contents/MacOS/Mac_Runner {game_path}\n"
+            f"102 tail -F {debug_log_path}\n"
+        )
         with patch("gms_helpers.runner.subprocess.run", return_value=SimpleNamespace(stdout=ps_output)):
-            runner_pids, tail_pids = runner._find_macos_validation_helper_pids(Path("/tmp/game.ios"), Path("/tmp/debug.log"))
+            runner_pids, tail_pids = runner._find_macos_validation_helper_pids(game_path, debug_log_path)
         self.assertEqual(runner_pids, {101})
         self.assertEqual(tail_pids, {102})
 
