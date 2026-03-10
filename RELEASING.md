@@ -5,8 +5,38 @@ This project uses `setuptools-scm` + CI to control versions.
 Policy:
 - `main` publishes a **normal release** and bumps **patch** automatically (`X.Y.Z`).
 - `dev` publishes **dev releases** (`X.Y.(Z+1).devN`).
-- `prerelease` publishes **release candidates** (`X.Y.(Z+1)rcN`).
+- `pre-release` publishes **release candidates** (`X.Y.(Z+1)rcN`).
 - **Post releases** (`X.Y.Z.postN`) are **manual only** and intended for packaging/deployment fixes (not code changes).
+
+## Promotion flow
+
+This repo promotes code in order:
+
+1. `dev`
+2. `pre-release`
+3. `main`
+
+Do not push ad-hoc release commits directly to `main`.
+
+## Required validation before promotion
+
+Run these from the repo root:
+
+```bash
+PYTHONPATH=src python cli/tests/python/run_all_tests.py
+PYTHONPATH=src python -m pytest cli/tests/python/test_final_verification.py
+python scripts/generate_quality_reports.py
+```
+
+The quality report script regenerates `build/reports/coverage.xml`, `TEST_COVERAGE_REPORT.md`,
+`MCP_TOOL_VALIDATION_REPORT.md`, and `quality_summary.json`, and it merges subprocess coverage
+data before writing the final report.
+
+Before merging `pre-release` into `main`:
+
+1. Stage `.github/next_tweet.txt` with the release post text.
+2. Merge `pre-release` into `main`.
+3. Confirm GitHub Actions `CI` passes on `main`.
 
 ## One-time: install tooling
 

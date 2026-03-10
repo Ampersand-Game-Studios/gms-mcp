@@ -135,6 +135,10 @@ See `RELEASING.md` for the one-time PyPI setup and the first manual upload helpe
 
 Quality reports are generated during CI and published as `quality-reports-*` artifacts.
 
+The reporting pipeline is subprocess-aware: CLI tests that launch `python -m gms_helpers.gms`
+or other child processes now contribute to the final coverage artifacts instead of silently
+dropping out of `coverage.xml`.
+
 - `TEST_COVERAGE_REPORT.md`
 - `MCP_TOOL_VALIDATION_REPORT.md`
 - `coverage.xml`
@@ -147,10 +151,25 @@ You can regenerate these locally with:
 python scripts/generate_quality_reports.py
 ```
 
+This command:
+- runs the Python test suite with coverage enabled
+- combines any parallel / subprocess coverage data
+- rewrites `build/reports/coverage.xml`
+- regenerates the markdown and JSON quality summaries
+- runs `cli/tests/python/test_final_verification.py`
+
 Use `--skip-test-run` to regenerate from existing CI artifacts:
 
 ```bash
 python scripts/generate_quality_reports.py --skip-test-run --junit-xml build/reports/pytest_results.xml --coverage-xml build/reports/coverage.xml
+```
+
+For release-bound promotions, maintainers should run all three locally from the repo root:
+
+```bash
+PYTHONPATH=src python cli/tests/python/run_all_tests.py
+PYTHONPATH=src python -m pytest cli/tests/python/test_final_verification.py
+python scripts/generate_quality_reports.py
 ```
 
 ## X (Twitter) posting on `main`
@@ -178,6 +197,8 @@ This repo can post to X automatically when `main` is updated.
 Because this repo promotes changes `dev` -> `pre-release` -> `main`, prepare the tweet during the `pre-release` -> `main` PR:
 
 - Update `.github/next_tweet.txt` with the tweet (following `.github/x-personality.md`)
+- Confirm the local validation commands above pass before promotion
+- Confirm GitHub Actions `CI` passes on `main` after the promotion lands
 - Merge to `main`
 
 ## Use with a GameMaker project (multi-project friendly)

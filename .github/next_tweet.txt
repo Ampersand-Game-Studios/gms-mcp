@@ -1,1 +1,1 @@
-Turns out our release tweets were getting stuck in X's write path. gms-mcp now posts from a self-hosted runner and falls back to the legacy write endpoint when v2 flakes out. Boring fix, useful result: release posts actually go out again. #GameMaker #gamedev
+Coverage and validation just got less hand-wavy. gms-mcp now collects subprocess coverage from real CLI tests, tightened wrapper/install coverage, and the repo clears 90% statement coverage. Safer refactors, fewer blind spots. #GameMaker #gamedev
