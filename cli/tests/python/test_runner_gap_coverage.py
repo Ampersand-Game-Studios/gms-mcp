@@ -141,9 +141,10 @@ class TestRunnerGapCoverage(unittest.TestCase):
                 with patch.object(runner, "find_license_file", return_value=Path("/fake/license.plist")):
                     with patch.object(runner, "get_prefabs_path", return_value=Path("/fake/Prefabs")):
                         cmd = runner._build_igor_base_command()
-        self.assertIn("/lf=/fake/license.plist", cmd)
-        self.assertIn("/rp=/fake/runtime", cmd)
-        self.assertIn("--pf=/fake/Prefabs", cmd)
+        normalized_cmd = [entry.replace("\\", "/") for entry in cmd]
+        self.assertIn("/lf=/fake/license.plist", normalized_cmd)
+        self.assertIn("/rp=/fake/runtime", normalized_cmd)
+        self.assertIn("--pf=/fake/Prefabs", normalized_cmd)
 
         with patch.object(runner, "find_gamemaker_runtime", return_value=None):
             with self.assertRaises(RuntimeNotFoundError):
