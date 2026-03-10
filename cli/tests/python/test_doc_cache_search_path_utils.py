@@ -240,7 +240,7 @@ class TestPathUtils(unittest.TestCase):
             with patch("gms_helpers.maintenance.path_utils.platform.system", return_value="Windows"):
                 filesystem_map = path_utils.build_filesystem_map(str(root))
                 actual = path_utils.find_file_case_insensitive("sprites/hero.png", filesystem_map)
-                self.assertEqual(actual, "sprites/Hero.PNG")
+                self.assertEqual(actual.replace("\\", "/"), "sprites/Hero.PNG")
 
                 with patch(
                     "gms_helpers.maintenance.path_utils.os.path.exists",
@@ -252,7 +252,10 @@ class TestPathUtils(unittest.TestCase):
                     )
 
             self.assertEqual(categories["found_exact"], ["sprites/exact.yy"])
-            self.assertEqual(categories["found_case_diff"], ["sprites/hero.png -> sprites/Hero.PNG"])
+            self.assertEqual(
+                [entry.replace("\\", "/") for entry in categories["found_case_diff"]],
+                ["sprites/hero.png -> sprites/Hero.PNG"],
+            )
             self.assertEqual(categories["missing"], ["missing/file.yy"])
 
     def test_get_gamemaker_files_filters_noise(self):
