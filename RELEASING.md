@@ -38,6 +38,11 @@ Before merging `pre-release` into `main`:
 2. Merge `pre-release` into `main`.
 3. Confirm GitHub Actions `CI` passes on `main`.
 
+On a successful or duplicate X post, the `Post to X` workflow commits an empty
+`.github/next_tweet.txt` back to `main` using a `[skip ci]` reset commit. If X
+fails with a transient retryable error, the staged tweet remains in git for the
+next run.
+
 ## One-time: install tooling
 
 ```bash

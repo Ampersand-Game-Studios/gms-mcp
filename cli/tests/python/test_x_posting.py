@@ -382,3 +382,13 @@ def test_x_workflows_install_direct_http_dependencies():
     for relative_path in workflow_paths:
         workflow_text = (REPO_ROOT / relative_path).read_text(encoding="utf-8")
         assert "requests-oauthlib" in workflow_text
+
+
+def test_x_post_workflow_commits_cleared_staging_file():
+    workflow_text = (REPO_ROOT / ".github/workflows/x-post.yml").read_text(encoding="utf-8")
+
+    assert "contents: write" in workflow_text
+    assert "steps.post.outputs.should_commit == 'true'" in workflow_text
+    assert "git add .github/next_tweet.txt" in workflow_text
+    assert "Reset staged release tweet [skip ci]" in workflow_text
+    assert "git push origin HEAD:main" in workflow_text
