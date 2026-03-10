@@ -231,7 +231,7 @@ class TestTextureGroupWrappers(MCPToolTestCase):
             ):
                 result = self.call_tool(tool_name, **kwargs)
             self.assertTrue(result["ok"])
-            self.assertEqual(result["project_directory"], "/tmp/project")
+            self.assertEqual(result["project_directory"].replace("\\", "/"), "/tmp/project")
             self.assertEqual(result["yyp"], "TestGame.yyp")
 
         with patch("gms_mcp.server.tools.texture_groups._requires_dry_run_for_tool", return_value=True):
