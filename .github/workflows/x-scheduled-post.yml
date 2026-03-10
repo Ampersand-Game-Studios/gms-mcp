@@ -24,6 +24,7 @@ jobs:
     runs-on: [self-hosted, macOS, ARM64, gms-mcp-x]
     timeout-minutes: 10
     env:
+      # Override these with repository/environment vars when the runner uses non-PATH installs.
       PYTHON_BIN: ${{ vars.GMS_MCP_X_PYTHON_BIN || 'python3' }}
       XURL_BIN: ${{ vars.GMS_MCP_XURL_BIN || 'xurl' }}
     steps:
