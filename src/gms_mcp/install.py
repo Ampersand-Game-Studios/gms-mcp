@@ -13,6 +13,7 @@ import argparse
 import datetime as _dt
 import json
 import os
+import re
 import shutil
 import sys
 import shlex
@@ -97,10 +98,111 @@ _FORWARDED_ENV_VARS = [
     "GMS_MCP_ENABLE_DIRECT",
 ]
 _SAFE_PROFILE_TIMEOUT_SECONDS = 600
+_REDACTED_VALUE = "***REDACTED***"
+_SAFE_ENV_OUTPUT_KEYS = {
+    "GM_PROJECT_ROOT",
+    "GMS_MCP_DEFAULT_TIMEOUT_SECONDS",
+    "GMS_MCP_ENABLE_DIRECT",
+    "GMS_MCP_GMS_PATH",
+    "GMS_MCP_REQUIRE_DRY_RUN",
+    "GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST",
+    "PYTHONUNBUFFERED",
+}
 
 
 def _as_posix_path(path: Path) -> str:
     return path.as_posix()
+
+
+def _normalize_config_key(key: str) -> str:
+    return key.strip().replace("-", "_")
+
+
+def _looks_secret_key(key: str) -> bool:
+    normalized = _normalize_config_key(key)
+    if normalized.upper() in _SAFE_ENV_OUTPUT_KEYS:
+        return False
+
+    lowered = normalized.lower()
+    tokens = [token for token in re.split(r"[^a-z0-9]+", lowered) if token]
+    if not tokens:
+        return False
+
+    if any(token in {"authorization", "bearer", "cookie", "password", "passwd", "secret", "session", "token"} for token in tokens):
+        return True
+    if "api" in tokens and "key" in tokens:
+        return True
+    if "access" in tokens and "key" in tokens:
+        return True
+    if "client" in tokens and ("key" in tokens or "secret" in tokens):
+        return True
+    if "consumer" in tokens and ("key" in tokens or "secret" in tokens):
+        return True
+    if "private" in tokens and "key" in tokens:
+        return True
+    if lowered.endswith("_key") and lowered.upper() not in _SAFE_ENV_OUTPUT_KEYS:
+        return True
+    return False
+
+
+def _looks_secret_flag(token: object) -> bool:
+    if not isinstance(token, str):
+        return False
+    stripped = token.strip()
+    if not stripped.startswith("-"):
+        return False
+    flag = stripped.lstrip("-").split("=", 1)[0]
+    return _looks_secret_key(flag)
+
+
+def _redact_args_list(values: list[object]) -> list[object]:
+    redacted: list[object] = []
+    redact_next = False
+
+    for value in values:
+        if redact_next:
+            redacted.append(_REDACTED_VALUE)
+            redact_next = False
+            continue
+
+        if not isinstance(value, str):
+            redacted.append(_redact_config_value(value))
+            continue
+
+        if not value.startswith("-"):
+            redacted.append(value)
+            continue
+
+        flag, sep, remainder = value.partition("=")
+        if _looks_secret_flag(flag):
+            if sep:
+                redacted.append(f"{flag}={_REDACTED_VALUE}")
+            else:
+                redacted.append(value)
+                redact_next = True
+            continue
+
+        redacted.append(value)
+
+    return redacted
+
+
+def _redact_config_value(value: object) -> object:
+    if isinstance(value, dict):
+        redacted: dict[object, object] = {}
+        for key, item in value.items():
+            key_text = str(key)
+            if _looks_secret_key(key_text):
+                redacted[key] = _REDACTED_VALUE
+                continue
+            if key_text == "args" and isinstance(item, list):
+                redacted[key] = _redact_args_list(item)
+                continue
+            redacted[key] = _redact_config_value(item)
+        return redacted
+    if isinstance(value, list):
+        return [_redact_config_value(item) for item in value]
+    return value
 
 
 def _find_yyp_dirs(workspace_root: Path, max_results: int = 5) -> list[Path]:
@@ -307,7 +409,7 @@ class ConfigState:
     readiness: ReadinessResult
 
     def as_dict(self) -> dict:
-        return {
+        redacted = _redact_config_value({
             "ok": True,
             "client": self.client,
             "scope": self.scope,
@@ -325,7 +427,9 @@ class ConfigState:
             "ready": self.readiness.ready,
             "problems": self.readiness.problems,
             "not_applicable": self.readiness.not_applicable,
-        }
+        })
+        assert isinstance(redacted, dict)
+        return redacted
 
 
 def _validate_common_entry(
@@ -441,7 +545,7 @@ def _print_standard_check(state: ConfigState) -> int:
     else:
         print(f"[INFO] Active server entry '{state.server_name}' source: {state.path}")
         print("[INFO] Active server entry payload:")
-        print(json.dumps(state.entry, indent=2, sort_keys=True))
+        print(json.dumps(_redact_config_value(state.entry), indent=2, sort_keys=True))
     print(f"[INFO] Ready for {state.client}: {'yes' if state.readiness.ready else 'no'}")
     for problem in state.readiness.problems:
         level = "WARN" if not state.readiness.not_applicable else "INFO"
@@ -1093,7 +1197,7 @@ def _print_antigravity_check(*, config_path: Path, server_name: str) -> int:
     ready, problems = _antigravity_entry_readiness(entry)
     print(f"[INFO] Active server entry '{server_name}' source: {state['config']['path']}")
     print("[INFO] Active server entry payload:")
-    print(json.dumps(entry, indent=2, sort_keys=True))
+    print(json.dumps(_redact_config_value(entry), indent=2, sort_keys=True))
     print(f"[INFO] Ready for Antigravity: {'yes' if ready else 'no'}")
     for problem in problems:
         print(f"[WARN] {problem}")
@@ -1112,7 +1216,7 @@ def _print_antigravity_check_json(*, config_path: Path, server_name: str) -> int
     state["ok"] = True
     state["ready"] = ready
     state["problems"] = problems
-    print(json.dumps(state, indent=2, sort_keys=True))
+    print(json.dumps(_redact_config_value(state), indent=2, sort_keys=True))
     return 0
 
 
@@ -1240,7 +1344,7 @@ def _print_codex_check(*, workspace_root: Path, server_name: str) -> int:
     else:
         print(f"[INFO] Active server entry '{server_name}' source: {state['active']['path']}")
         print("[INFO] Active server entry payload:")
-        print(json.dumps(active_entry, indent=2, sort_keys=True))
+        print(json.dumps(_redact_config_value(active_entry), indent=2, sort_keys=True))
 
     print(f"[INFO] Ready for Codex: {'yes' if state.get('ready') else 'no'}")
     for problem in state.get("problems", []):
@@ -1256,7 +1360,7 @@ def _print_codex_check_json(*, workspace_root: Path, server_name: str) -> int:
         print(json.dumps({"ok": False, "error": str(exc)}, indent=2, sort_keys=True))
         return 2
 
-    print(json.dumps(state, indent=2, sort_keys=True))
+    print(json.dumps(_redact_config_value(state), indent=2, sort_keys=True))
     return 0
 
 
