@@ -70,8 +70,8 @@ Global config mode writes directly to `~/.codex/config.toml` (merging server ent
 Use the printed command directly, or copy `.codex/mcp.toml` content into the `[mcp_servers]` section of your `~/.codex/config.toml`.
 
 Codex helpers:
-- `gms-mcp-init --codex-check` prints detected Codex config paths and active server entry.
-- `gms-mcp-init --codex-check-json` prints the same check output in machine-readable JSON.
+- `gms-mcp-init --codex-check` prints detected Codex config paths and active server entry, with secret-like values redacted.
+- `gms-mcp-init --codex-check-json` prints the same check output in machine-readable JSON, with secret-like values redacted.
 - `gms-mcp-init --codex-dry-run-only` prints final merged payloads for workspace + global Codex config without writing files.
 - `gms-mcp-init --codex-app-setup` runs one-shot Codex app setup: writes workspace config, previews global merge, then prints check + readiness summary.
 
@@ -237,6 +237,8 @@ Inspect current Codex config resolution:
 gms-mcp-init --codex-check
 ```
 
+Human and JSON check output redact secret-like env, header, and credential argument values before printing.
+
 Preview final merged Codex payloads for local + global without writing:
 
 ```bash
@@ -326,6 +328,8 @@ Print Antigravity check output as JSON:
 ```bash
 gms-mcp-init --antigravity-check-json
 ```
+
+Antigravity check output also redacts secret-like env, header, and credential argument values before printing.
 
 One-shot Antigravity app setup:
 

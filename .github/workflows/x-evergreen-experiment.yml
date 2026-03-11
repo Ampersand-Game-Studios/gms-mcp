@@ -41,12 +41,12 @@ jobs:
       PYTHON_BIN: ${{ vars.GMS_MCP_X_PYTHON_BIN || 'python3' }}
       XURL_BIN: ${{ vars.GMS_MCP_XURL_BIN || 'xurl' }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
         with:
           ref: main
 
       - name: Restore tweet history from cache
-        uses: actions/cache/restore@v4
+        uses: actions/cache/restore@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         id: cache-restore
         with:
           path: .github/tweet_history.json
@@ -99,7 +99,7 @@ jobs:
 
       - name: Upload experiment report artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: evergreen-report-${{ github.run_id }}
           path: |
@@ -114,7 +114,7 @@ jobs:
           gh cache delete "${{ steps.cache-restore.outputs.cache-matched-key }}" --repo ${{ github.repository }} || true
 
       - name: Save tweet history to cache
-        uses: actions/cache/save@v4
+        uses: actions/cache/save@0057852bfaa89a56745cba8c7296529d2fc39830 # v4
         if: always()
         with:
           path: .github/tweet_history.json

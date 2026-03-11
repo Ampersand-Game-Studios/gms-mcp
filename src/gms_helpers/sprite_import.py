@@ -40,8 +40,8 @@ def detect_strip_layout(
     Returns: (frame_count, frame_width, frame_height)
     """
     Image = _get_pillow()
-    image = Image.open(image_path)
-    width, height = image.size
+    with Image.open(image_path) as image:
+        width, height = image.size
     
     if frame_width and frame_height:
         # Grid mode - both dimensions specified
@@ -86,46 +86,45 @@ def split_strip(
     Returns: List of PIL Image objects
     """
     Image = _get_pillow()
-    image = Image.open(source_path)
-    width, height = image.size
-    
     frames = []
-    
-    if layout == "grid":
-        if not (frame_width and frame_height):
-            raise ValidationError("Grid layout requires frame_width and frame_height")
-        if not columns:
-            # Auto-detect columns from image width
-            columns = width // frame_width
-        
-        rows = height // frame_height
-        for row in range(rows):
-            for col in range(columns):
-                if col * frame_width >= width:
-                    break
-                box = (
-                    col * frame_width,
-                    row * frame_height,
-                    (col + 1) * frame_width,
-                    (row + 1) * frame_height
-                )
-                frames.append(image.crop(box))
-    
-    elif layout == "vertical":
-        if not frame_height:
-            frame_height = width  # Assume square frames
-        frame_count = height // frame_height
-        for i in range(frame_count):
-            box = (0, i * frame_height, width, (i + 1) * frame_height)
-            frames.append(image.crop(box))
-    
-    else:  # horizontal (default)
-        if not frame_width:
-            frame_width = height  # Assume square frames
-        frame_count = width // frame_width
-        for i in range(frame_count):
-            box = (i * frame_width, 0, (i + 1) * frame_width, height)
-            frames.append(image.crop(box))
+    with Image.open(source_path) as image:
+        width, height = image.size
+
+        if layout == "grid":
+            if not (frame_width and frame_height):
+                raise ValidationError("Grid layout requires frame_width and frame_height")
+            if not columns:
+                # Auto-detect columns from image width
+                columns = width // frame_width
+
+            rows = height // frame_height
+            for row in range(rows):
+                for col in range(columns):
+                    if col * frame_width >= width:
+                        break
+                    box = (
+                        col * frame_width,
+                        row * frame_height,
+                        (col + 1) * frame_width,
+                        (row + 1) * frame_height
+                    )
+                    frames.append(image.crop(box).copy())
+
+        elif layout == "vertical":
+            if not frame_height:
+                frame_height = width  # Assume square frames
+            frame_count = height // frame_height
+            for i in range(frame_count):
+                box = (0, i * frame_height, width, (i + 1) * frame_height)
+                frames.append(image.crop(box).copy())
+
+        else:  # horizontal (default)
+            if not frame_width:
+                frame_width = height  # Assume square frames
+            frame_count = width // frame_width
+            for i in range(frame_count):
+                box = (i * frame_width, 0, (i + 1) * frame_width, height)
+                frames.append(image.crop(box).copy())
     
     if not frames:
         raise ValidationError("No frames detected in source image")
