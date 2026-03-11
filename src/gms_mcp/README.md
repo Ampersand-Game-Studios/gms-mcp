@@ -56,8 +56,8 @@ This repo includes a small installer that generates **shareable, user-agnostic**
 - Generate Cursor global config (multi-project): `gms-mcp-init --cursor-global`
 - Generate other client examples (written to `mcp-configs/*.mcp.json`): `gms-mcp-init --vscode --windsurf --antigravity --openclaw`
 - Set up Antigravity global config (recommended): `gms-mcp-init --antigravity-setup`
-- Check Antigravity config readiness: `gms-mcp-init --antigravity-check`
-- Check Antigravity config as JSON: `gms-mcp-init --antigravity-check-json`
+- Check Antigravity config readiness: `gms-mcp-init --antigravity-check` (secret-like values are redacted in printed payloads)
+- Check Antigravity config as JSON: `gms-mcp-init --antigravity-check-json` (secret-like values are redacted in printed payloads)
 - One-shot Antigravity app setup: `gms-mcp-init --antigravity-app-setup`
 - Generate everything: `gms-mcp-init --all`
 
