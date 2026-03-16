@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from typing import Any, Dict, List
 
-from ...update_notifier import check_for_updates
+from ...update_status import get_update_status
 from ..direct import _run_gms_inprocess
 from ..dispatch import _run_with_fallback
 from ..mcp_types import Context
@@ -30,11 +30,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         """
         _ = ctx
         project_directory = _resolve_project_directory_no_deps(project_root)
-
-        # Check for updates in a separate thread to avoid blocking (best-effort)
-        # However, for a quick check, we can just call it.
-        # We'll use a 2s timeout in the notifier to keep it snappy.
-        update_info = check_for_updates()
+        update_info = get_update_status().to_dict()
 
         return {
             "project_directory": str(project_directory),
@@ -50,17 +46,12 @@ def register(mcp: Any, ContextType: Any) -> None:
         Verifies project validity, GameMaker runtimes/Igor, licenses, and Python dependencies.
         """
         from gms_helpers.health import gm_mcp_health as health_check
-        import argparse
 
-        return await _run_with_fallback(
-            direct_handler=lambda args: health_check(args.project_root),
-            direct_args=argparse.Namespace(project_root=project_root),
-            cli_args=["maintenance", "health"],
-            project_root=project_root,
-            prefer_cli=False,
-            tool_name="gm-mcp-health",
-            ctx=ctx
-        )
+        _ = ctx
+        result = health_check(project_root)
+        payload = result.to_dict()
+        payload["ok"] = payload.pop("success")
+        return payload
 
     @mcp.tool()
     async def gm_cli(
@@ -182,4 +173,4 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_check_updates() -> Dict[str, Any]:
         """Check for newer versions of gms-mcp on PyPI."""
-        return check_for_updates()
+        return get_update_status().to_dict()

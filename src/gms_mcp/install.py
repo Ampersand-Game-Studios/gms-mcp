@@ -1288,6 +1288,10 @@ def _collect_codex_check_state(*, workspace_root: Path, server_name: str) -> dic
         env_required=True,
     )
 
+    local_entry_redacted = _redact_config_value(local_entry)
+    global_entry_redacted = _redact_config_value(global_entry)
+    active_entry_redacted = _redact_config_value(active_entry)
+
     return {
         "ok": True,
         "client": "codex",
@@ -1295,17 +1299,17 @@ def _collect_codex_check_state(*, workspace_root: Path, server_name: str) -> dic
         "workspace": {
             "path": str(local_path),
             "exists": local_path.exists(),
-            "entry": local_entry,
+            "entry": local_entry_redacted,
         },
         "global": {
             "path": str(global_path),
             "exists": global_path.exists(),
-            "entry": global_entry,
+            "entry": global_entry_redacted,
         },
         "active": {
             "scope": active_scope,
             "path": active_path,
-            "entry": active_entry,
+            "entry": active_entry_redacted,
         },
         "ready": readiness.ready,
         "problems": readiness.problems,
@@ -2602,7 +2606,7 @@ def main(argv: list[str] | None = None) -> int:
         print("       Re-run with --gm-project-root <path> (or run interactively to choose).")
     print(f"[INFO] Selected GameMaker project root: {gm_note}")
     print("[INFO] If this is wrong, edit GM_PROJECT_ROOT in the generated config.")
-    print("[INFO] Manual local check: gms-mcp doctor")
+    print("[INFO] Manual local diagnostics: gms-mcp doctor")
     
     # Set up project naming config if we have a project root
     if gm_project_root:

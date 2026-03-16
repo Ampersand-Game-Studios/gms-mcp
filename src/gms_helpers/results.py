@@ -26,6 +26,7 @@ class MaintenanceResult(OperationResult):
     issues_found: int = 0
     issues_fixed: int = 0
     details: List[str] = field(default_factory=list)
+    data: Dict[str, Any] = field(default_factory=dict)
     
 @dataclass
 class RunnerResult(OperationResult):

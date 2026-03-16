@@ -38,9 +38,15 @@ class TestHealthCheck(unittest.TestCase):
             
         self.assertTrue(result.success, f"Health check failed: {result.message}\nDetails: {result.details}")
         self.assertEqual(result.issues_found, 0)
-        self.assertTrue(any("[OK] Project found: test.yyp" in d for d in result.details))
-        self.assertTrue(any("Igor found:" in d and "igor" in d.lower() for d in result.details))
-        self.assertTrue(any("GameMaker license found:" in d and "license.plist" in d.lower() for d in result.details))
+        self.assertIn("checks", result.data)
+        checks = {check["id"]: check for check in result.data["checks"]}
+        self.assertEqual(checks["project"]["status"], "ok")
+        self.assertEqual(checks["project"]["data"]["yyp"], "test.yyp")
+        self.assertEqual(checks["runtime"]["status"], "ok")
+        self.assertIn("igor", checks["runtime"]["summary"].lower())
+        self.assertEqual(checks["license"]["status"], "ok")
+        self.assertIn("license.plist", checks["license"]["summary"].lower())
+        self.assertEqual(checks["dependencies"]["status"], "ok")
 
     @patch("gms_helpers.health.GameMakerRunner")
     @patch("gms_helpers.health.resolve_project_directory")
@@ -60,10 +66,15 @@ class TestHealthCheck(unittest.TestCase):
             
         self.assertFalse(result.success)
         self.assertGreater(result.issues_found, 0)
-        self.assertTrue(any("Project not found" in d for d in result.details))
-        self.assertTrue(any("GameMaker runtime or Igor" in d for d in result.details))
-        self.assertTrue(any("GameMaker license file not found" in d for d in result.details))
-        self.assertTrue(any("Missing dependencies: mcp" in d for d in result.details))
+        checks = {check["id"]: check for check in result.data["checks"]}
+        self.assertEqual(checks["project"]["status"], "error")
+        self.assertIn("Project not found", checks["project"]["summary"])
+        self.assertEqual(checks["runtime"]["status"], "error")
+        self.assertIn("GameMaker runtime or Igor", checks["runtime"]["summary"])
+        self.assertEqual(checks["license"]["status"], "error")
+        self.assertIn("GameMaker license file not found", checks["license"]["summary"])
+        self.assertEqual(checks["dependencies"]["status"], "error")
+        self.assertIn("Missing dependencies: mcp", checks["dependencies"]["summary"])
 
 if __name__ == "__main__":
     unittest.main()

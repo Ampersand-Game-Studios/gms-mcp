@@ -1,1 +1,1 @@
-Release automation should clean up after itself. gms-mcp now clears the staged release tweet after a successful X post, while transient X failures still leave the queue in place for a safe retry. Less manual cleanup, fewer release footguns. #GameMaker #gamedev
+gms-mcp doctor is now a real diagnostics command. Quick checks by default, deeper project/full/client modes when you need them, and `--notify` stays lightweight for startup hooks. Better health checks, safer config inspection, less guesswork. #GameMaker #gamedev

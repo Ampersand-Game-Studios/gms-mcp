@@ -92,8 +92,8 @@ class TestMCPIntegrationTools(unittest.TestCase):
     def test_call_gm_project_info_through_server(self):
         # Avoid network in tests (PyPI update check).
         with patch(
-            "gms_mcp.server.tools.project_health.check_for_updates",
-            return_value={"update_available": False},
+            "gms_mcp.server.tools.project_health.get_update_status",
+            return_value=SimpleNamespace(to_dict=lambda: {"update_available": False, "status": "ok"}),
         ):
             out = asyncio.run(
                 self.mcp.call_tool(
@@ -156,8 +156,8 @@ class TestMCPIntegrationTools(unittest.TestCase):
 
     def test_smoke_calls_across_tool_categories(self):
         with patch(
-            "gms_mcp.server.tools.project_health.check_for_updates",
-            return_value={"update_available": False},
+            "gms_mcp.server.tools.project_health.get_update_status",
+            return_value=SimpleNamespace(to_dict=lambda: {"update_available": False, "status": "ok"}),
         ):
             project_info = self._call_tool("gm_project_info", {"project_root": str(self.project_root)})
         self.assertEqual(project_info.get("yyp"), "TestProject.yyp")

@@ -46,3 +46,7 @@ def main(argv: list[str] | None = None) -> int:
     print("Available commands: server, doctor, init", file=sys.stderr)
     print("Run bare `gms-mcp` with no arguments to start the MCP server.", file=sys.stderr)
     return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

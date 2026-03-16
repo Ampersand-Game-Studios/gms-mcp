@@ -13,6 +13,7 @@ from typing import Dict, Any, List
 import os
 
 from .exceptions import GMSError, ProjectNotFoundError, ValidationError
+from gms_mcp.project_detection import resolve_project_directory as resolve_gm_project_directory
 
 # ---- make console prints Unicode-safe on Windows -----------------
 import sys, os
@@ -425,77 +426,7 @@ def _search_upwards_for_gamemaker_yyp(start_dir: Path) -> Path | None:
 
 
 def resolve_project_directory(project_root_arg: str | Path | None = None) -> Path:
-    """
-    Resolve the GameMaker project directory that contains the .yyp file.
-
-    Resolution order:
-    1) explicit --project-root argument (if provided and not ".")
-    2) GM_PROJECT_ROOT or PROJECT_ROOT environment variable (if set)
-    3) upward search from current working directory for a .yyp
-    4) upward search for a 'gamemaker/' directory containing a .yyp
-
-    Returns:
-        Path to directory containing the .yyp file.
-
-    Raises:
-        FileNotFoundError if no project could be found.
-    """
-    candidates: List[Path] = []
-
-    # 1) explicit CLI argument
-    if project_root_arg is not None:
-        arg_str = str(project_root_arg).strip()
-        if arg_str and arg_str != ".":
-            candidates.append(Path(arg_str))
-
-    # 2) environment variable
-    for env_key in ("GM_PROJECT_ROOT", "PROJECT_ROOT"):
-        env_val = os.environ.get(env_key)
-        if env_val:
-            candidates.append(Path(env_val))
-
-    # 3/4) current working directory as a start point for searches
-    candidates.append(Path.cwd())
-
-    tried: List[str] = []
-    for raw in candidates:
-        p = Path(raw).expanduser()
-        if not p.is_absolute():
-            p = (Path.cwd() / p).resolve()
-
-        if p.is_file():
-            p = p.parent
-
-        tried.append(str(p))
-
-        if not p.exists() or not p.is_dir():
-            continue
-
-        # Direct .yyp in the directory
-        if _list_yyp_files(p):
-            return p
-
-        # Common layout: project root contains a gamemaker/ folder holding the .yyp
-        gm = p / "gamemaker"
-        if gm.exists() and gm.is_dir() and _list_yyp_files(gm):
-            return gm
-
-        # Upward search for a .yyp from this point (handles being in subfolders)
-        found = _search_upwards_for_yyp(p)
-        if found:
-            return found
-
-        # Upward search for gamemaker/ containing a .yyp (handles being at repo root)
-        found_gm = _search_upwards_for_gamemaker_yyp(p)
-        if found_gm:
-            return found_gm
-
-    raise FileNotFoundError(
-        "No GameMaker project (.yyp) found.\n"
-        f"Tried: {', '.join(tried)}\n"
-        "Fix: cd into the directory that contains your .yyp, or pass --project-root, "
-        "or set GM_PROJECT_ROOT or PROJECT_ROOT to the absolute path."
-    )
+    return resolve_gm_project_directory(project_root_arg)
 
 def find_yyp_file():
     """Find the main .yyp file in the current directory."""

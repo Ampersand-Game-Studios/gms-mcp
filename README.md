@@ -48,8 +48,10 @@ This provides:
 
 ```bash
 pip install gms-mcp
-gms-mcp doctor   # manual local package/update check
-gms-mcp-init --cursor  # or --vscode, --windsurf, --openclaw, etc.
+gms-mcp doctor            # quick package + project-detection + update check
+gms-mcp doctor --project  # project-aware environment check
+gms-mcp doctor --full     # add runtime selection + bridge status
+gms-mcp-init --cursor     # or --vscode, --windsurf, --openclaw, etc.
 ```
 
 For skill packs, OpenClaw users can install to user or workspace scope:
@@ -445,11 +447,20 @@ Pre-built, cacheable project data for agents:
 
 ### Update Notifier
 Shared update status is available through the MCP surfaces below, and supported client hooks can surface a once-daily reminder:
-- **CLI**: `gms-mcp doctor` is the standard manual local package/update check.
+- **CLI**: `gms-mcp doctor` is the standard local diagnostics command. `gms-mcp doctor --notify` remains the update-only startup hook path.
 - **Tool**: `gm_check_updates` returns structured update info.
 - **Auto-check**: `gm_project_info` includes a cached `updates` field.
 - **Resource**: `gms://system/updates` provides a quick text status.
 - Plain `pip` installs are not guaranteed a proactive reminder unless the client setup includes the bundled startup hook.
+
+Common doctor entry points:
+- `gms-mcp doctor`: quick package/update/project-detection check.
+- `gms-mcp doctor --project`: adds environment, runtime, license, and dependency checks.
+- `gms-mcp doctor --full`: adds runtime selection and bridge status.
+- `gms-mcp doctor --client codex|claude`: validates active client config for the current workspace.
+- `gms-mcp doctor --project-root /path/to/project`: targets an explicit GameMaker project directory.
+- `gms-mcp doctor --client codex --server-name gms-app`: validates a non-default MCP server entry name.
+- `gms-mcp doctor --json`: emits a stable JSON report with `overall_status`, `exit_code`, and `checks`.
 
 ## CLI usage
 

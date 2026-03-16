@@ -629,6 +629,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
                             "",
                             "[mcp_servers.gms-check.env]",
                             'PYTHONUNBUFFERED = "1"',
+                            'API_TOKEN = "super-secret"',
                         ]
                     )
                     + "\n",
@@ -654,6 +655,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
 
             self.assertEqual(state["active"]["scope"], "workspace")
             self.assertEqual(state["active"]["entry"]["command"], "local-cmd")
+            self.assertEqual(state["active"]["entry"]["env"]["API_TOKEN"], "***REDACTED***")
             self.assertTrue(state["workspace"]["exists"])
             self.assertTrue(state["global"]["exists"])
 
@@ -1057,7 +1059,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
             self.assertIn("[INFO] Active server entry 'gms-app' source:", output)
             self.assertIn("[INFO] Codex app readiness summary:", output)
             self.assertIn("[INFO] Ready for Codex app: yes", output)
-            self.assertIn("[INFO] Manual local check: gms-mcp doctor", output)
+            self.assertIn("[INFO] Manual local diagnostics: gms-mcp doctor", output)
 
     def test_generate_claude_code_plugin_dry_run(self):
         """Dry run should not create files but return paths."""

@@ -566,7 +566,7 @@ class TestServerHelpers(unittest.TestCase):
                 self.assertEqual(server_project._resolve_project_directory_no_deps(None), root)
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch.dict(os.environ, {}, clear=True), patch("gms_mcp.server.project.Path.cwd", return_value=Path(temp_dir)):
+            with patch.dict(os.environ, {}, clear=True), patch("gms_mcp.project_detection.Path.cwd", return_value=Path(temp_dir)):
                 with self.assertRaises(FileNotFoundError):
                     server_project._resolve_project_directory_no_deps(None)
 
@@ -590,7 +590,7 @@ class TestServerHelpers(unittest.TestCase):
             result = asyncio.run(mcp.resources["gms://project/asset-graph"]())
         self.assertIn('"nodes"', result)
 
-        with patch("gms_mcp.server.resources.check_for_updates", return_value={"message": "Up to date"}):
+        with patch("gms_mcp.server.resources.get_update_status", return_value=SimpleNamespace(message="Up to date")):
             result = asyncio.run(mcp.resources["gms://system/updates"]())
         self.assertEqual(result, "Up to date")
 
@@ -730,18 +730,29 @@ class TestProjectHealthTools(MCPToolTestCase):
         with patch("gms_mcp.server.tools.project_health._resolve_project_directory_no_deps", return_value=Path("/tmp/project")), patch(
             "gms_mcp.server.tools.project_health._find_yyp_file", return_value="game.yyp"
         ), patch(
-            "gms_mcp.server.tools.project_health.check_for_updates", return_value={"message": "Up to date"}
+            "gms_mcp.server.tools.project_health.get_update_status",
+            return_value=SimpleNamespace(to_dict=lambda: {"status": "ok", "message": "Up to date"}),
         ):
             info = self.call_tool("gm_project_info", project_root="/tmp/project")
         self.assertEqual(info["yyp"], "game.yyp")
+        self.assertEqual(info["updates"]["status"], "ok")
 
         with patch(
-            "gms_mcp.server.tools.project_health._run_with_fallback",
-            new=AsyncMock(return_value={"ok": True}),
-        ) as fallback:
+            "gms_helpers.health.gm_mcp_health",
+            return_value=SimpleNamespace(
+                to_dict=lambda: {
+                    "success": True,
+                    "message": "Health check passed!",
+                    "issues_found": 0,
+                    "issues_fixed": 0,
+                    "details": [],
+                    "data": {"checks": []},
+                }
+            ),
+        ):
             health = self.call_tool("gm_mcp_health", project_root="/tmp/project")
         self.assertTrue(health["ok"])
-        self.assertEqual(fallback.await_args.kwargs["tool_name"], "gm-mcp-health")
+        self.assertIn("data", health)
 
         async_result = SimpleNamespace(as_dict=lambda: {"ok": True, "stdout": "a\nb\nc", "stderr": ""})
         with patch(
@@ -798,9 +809,13 @@ class TestProjectHealthTools(MCPToolTestCase):
         self.assertTrue(diagnostics["ok"])
         self.assertEqual(fallback.await_args.kwargs["cli_args"], ["diagnostics", "--depth", "deep", "--include-info"])
 
-        with patch("gms_mcp.server.tools.project_health.check_for_updates", return_value={"message": "new version"}):
+        with patch(
+            "gms_mcp.server.tools.project_health.get_update_status",
+            return_value=SimpleNamespace(to_dict=lambda: {"status": "warn", "message": "new version"}),
+        ):
             updates = self.call_tool("gm_check_updates")
         self.assertEqual(updates["message"], "new version")
+        self.assertEqual(updates["status"], "warn")
 
 
 if __name__ == "__main__":

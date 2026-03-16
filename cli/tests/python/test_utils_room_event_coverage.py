@@ -150,6 +150,8 @@ class TestUtilsCoverage(unittest.TestCase):
 
         with patch.dict(os.environ, {"GM_PROJECT_ROOT": str(direct_root)}):
             self.assertEqual(resolve_project_directory(None), direct_root)
+            with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
+                resolve_project_directory(self.temp_dir / "missing-explicit")
 
         with patch("gms_helpers.utils._list_yyp_files", return_value=[]), patch(
             "gms_helpers.utils._search_upwards_for_yyp",

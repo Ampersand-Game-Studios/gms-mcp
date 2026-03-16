@@ -353,6 +353,9 @@ class TestRunnerWrappers(MCPToolTestCase):
         with patch(
             "gms_mcp.server.tools.runner._capture_output",
             return_value=(True, "", "", {"ok": True, "message": "Game launched"}, None, None),
+        ), patch(
+            "gms_mcp.server.tools.runner._resolve_project_directory",
+            return_value=Path("/tmp/project"),
         ), patch("gms_helpers.bridge_installer.is_bridge_installed", return_value=True), patch(
             "gms_helpers.bridge_server.get_bridge_server",
             return_value=fake_bridge_server,
@@ -373,6 +376,9 @@ class TestRunnerWrappers(MCPToolTestCase):
         with patch(
             "gms_mcp.server.tools.runner._capture_output",
             return_value=(True, "", "", None, "launch failed", None),
+        ), patch(
+            "gms_mcp.server.tools.runner._resolve_project_directory",
+            return_value=Path("/tmp/project"),
         ), patch("gms_helpers.bridge_installer.is_bridge_installed", return_value=True), patch(
             "gms_helpers.bridge_server.get_bridge_server",
             return_value=fake_bridge_server,
@@ -390,18 +396,27 @@ class TestRunnerWrappers(MCPToolTestCase):
         with patch("gms_helpers.bridge_server.stop_bridge_server") as mock_stop_bridge, patch(
             "gms_mcp.server.tools.runner._capture_output",
             return_value=(True, "", "", {"ok": True, "message": "Stopped"}, None, None),
+        ), patch(
+            "gms_mcp.server.tools.runner._resolve_project_directory",
+            return_value=Path("/tmp/project"),
         ):
             stop_result = self.call_tool("gm_run_stop", project_root="/tmp/project")
         self.assertTrue(stop_result["ok"])
         self.assertTrue(stop_result["bridge_stopped"])
         mock_stop_bridge.assert_called_once()
 
-        with patch("gms_mcp.server.tools.runner._capture_output", return_value=(True, "", "", None, "status failed", None)):
+        with patch("gms_mcp.server.tools.runner._capture_output", return_value=(True, "", "", None, "status failed", None)), patch(
+            "gms_mcp.server.tools.runner._resolve_project_directory",
+            return_value=Path("/tmp/project"),
+        ):
             status_error = self.call_tool("gm_run_status", project_root="/tmp/project")
         self.assertFalse(status_error["ok"])
         self.assertIn("status failed", status_error["message"])
 
-        with patch("gms_mcp.server.tools.runner._capture_output", return_value=(True, "", "", True, None, None)):
+        with patch("gms_mcp.server.tools.runner._capture_output", return_value=(True, "", "", True, None, None)), patch(
+            "gms_mcp.server.tools.runner._resolve_project_directory",
+            return_value=Path("/tmp/project"),
+        ):
             status_bool = self.call_tool("gm_run_status", project_root="/tmp/project")
         self.assertTrue(status_bool["ok"])
         self.assertTrue(status_bool["running"])

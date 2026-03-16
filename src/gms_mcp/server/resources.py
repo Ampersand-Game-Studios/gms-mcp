@@ -4,7 +4,7 @@ import json
 from typing import Any
 
 from .project import _resolve_project_directory
-from ..update_notifier import check_for_updates
+from ..update_status import get_update_status
 
 
 def register(mcp: Any) -> None:
@@ -29,6 +29,4 @@ def register(mcp: Any) -> None:
     @mcp.resource("gms://system/updates")
     async def gm_updates_resource() -> str:
         """Check for updates and return the status as a human-readable message."""
-        info = check_for_updates()
-        return info["message"]
-
+        return get_update_status().message

@@ -35,7 +35,9 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
     - `gms://project/asset-graph`: Asset dependency graph (structural references)
     - `gms://system/updates`: Check for newer versions of `gms-mcp` (human-readable)
   - **Updates**:
-    - `gms-mcp doctor`: Manual local package/update check
+    - `gms-mcp doctor`: Local diagnostics command (package, updates, project detection)
+    - `gms-mcp doctor --project`: Project-aware health check
+    - `gms-mcp doctor --full`: Full health check including runtime selection and bridge status
     - `gm_check_updates`: Manually check for updates on PyPI and GitHub
     - `gm_project_info`: Includes a cached `updates` summary
   - **Maintenance**: auto + diagnostics/lint/validate-json/list-orphans/prune-missing/validate-paths/dedupe-resources/sync-events/clean-old-files/clean-orphans/fix-issues
@@ -49,10 +51,16 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
 
 Install the packaged tool once (recommended: `pipx install gms-mcp`), then generate per-workspace config(s) with `gms-mcp-init`.
 
-Manual local package/update check:
+Manual local diagnostics check:
 
 ```bash
 gms-mcp doctor
+gms-mcp doctor --project
+gms-mcp doctor --full
+gms-mcp doctor --client codex
+gms-mcp doctor --project-root /path/to/project
+gms-mcp doctor --client codex --server-name gms-app
+gms-mcp doctor --json
 ```
 
 ### Configure (generate configs)
