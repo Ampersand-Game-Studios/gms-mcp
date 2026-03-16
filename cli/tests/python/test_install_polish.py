@@ -5,6 +5,7 @@ import tempfile
 import io
 from contextlib import redirect_stdout, contextmanager
 from pathlib import Path
+from unittest.mock import patch
 from gms_mcp.install import (
     _make_server_config,
     _make_antigravity_server_config,
@@ -102,6 +103,37 @@ class TestInstallAutodetect(unittest.TestCase):
         self.assertNotIn("GMS_MCP_DEFAULT_TIMEOUT_SECONDS", env)
         self.assertNotIn("GMS_MCP_ENABLE_DIRECT", env)
         self.assertEqual(env["GM_PROJECT_ROOT"], "${workspaceFolder}")
+
+    def test_main_help_includes_star_footer(self):
+        buffer = io.StringIO()
+        with self.assertRaises(SystemExit) as ctx:
+            with redirect_stdout(buffer):
+                main(["--help"])
+
+        output = buffer.getvalue()
+        self.assertEqual(ctx.exception.code, 0)
+        self.assertIn("Project:", output)
+        self.assertIn("star the repo on GitHub", output)
+
+    def test_main_setup_passes_no_star_flag_to_cta_helper(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            (workspace / "project.yyp").touch()
+
+            with patch("gms_mcp.install.maybe_print_star_cta", return_value=False) as mock_cta:
+                ret = main(
+                    [
+                        "--workspace-root",
+                        str(workspace),
+                        "--non-interactive",
+                        "--cursor",
+                        "--no-star-ask",
+                    ]
+                )
+
+        self.assertEqual(ret, 0)
+        mock_cta.assert_called_once()
+        self.assertTrue(mock_cta.call_args.kwargs["no_star_ask"])
 
 class TestClaudeCodeSupport(unittest.TestCase):
     """Tests for Claude Code plugin generation."""

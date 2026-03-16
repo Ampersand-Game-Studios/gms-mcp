@@ -1,5 +1,6 @@
 # GameMaker MCP Tools
 [![CI](https://github.com/Ampersand-Game-Studios/gms-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Ampersand-Game-Studios/gms-mcp/actions/workflows/ci.yml)
+[![GitHub stars](https://img.shields.io/github/stars/Ampersand-Game-Studios/gms-mcp?label=GitHub%20stars)](https://github.com/Ampersand-Game-Studios/gms-mcp/stargazers)
 
 ## Project Features
 
@@ -21,6 +22,8 @@
 ```bash
 pipx install gms-mcp
 ```
+
+If `gms-mcp` is useful, consider starring the repo on GitHub. Stars help other GameMaker users find it.
 
 PowerShell equivalent:
 

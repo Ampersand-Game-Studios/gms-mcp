@@ -28,6 +28,7 @@ from .client_registry import (
     all_client_names,
     resolve_client_spec,
 )
+from .star_cta import HELP_EPILOG, maybe_print_star_cta
 
 if sys.version_info >= (3, 11):
     import tomllib as _toml_parser  # Python 3.11+
@@ -1999,7 +2000,10 @@ def _run_canonical_flow(
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Generate MCP client configs for the GameMaker MCP server.")
+    parser = argparse.ArgumentParser(
+        description="Generate MCP client configs for the GameMaker MCP server.",
+        epilog=HELP_EPILOG,
+    )
     parser.add_argument("--workspace-root", default=".", help="Workspace root where configs should be written.")
     parser.add_argument("--server-name", default="gms", help="MCP server name in the config (default: gms).")
     parser.add_argument(
@@ -2027,6 +2031,11 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run",
         action="store_true",
         help="Print what would be written, but do not write any files.",
+    )
+    parser.add_argument(
+        "--no-star-ask",
+        action="store_true",
+        help="Suppress the post-setup GitHub star note for this run.",
     )
     parser.add_argument(
         "--client",
@@ -2618,11 +2627,14 @@ def main(argv: list[str] | None = None) -> int:
         if summary_code != 0:
             return summary_code
     if args.antigravity_app_setup:
-        return _print_antigravity_app_setup_summary(
+        summary_code = _print_antigravity_app_setup_summary(
             config_path=antigravity_config_path,
             server_name=args.server_name,
         )
-    
+        if summary_code != 0:
+            return summary_code
+
+    maybe_print_star_cta(no_star_ask=bool(args.no_star_ask))
     return 0
 
 

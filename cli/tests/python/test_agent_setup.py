@@ -67,6 +67,8 @@ class TestAgentSetup(unittest.TestCase):
         self.assertIn("asset", result.stdout)
         self.assertIn("event", result.stdout)
         self.assertIn("maintenance", result.stdout)
+        self.assertIn("Project:", result.stdout)
+        self.assertIn("star the repo on GitHub", result.stdout)
 
     def test_asset_command_structure(self):
         """Test that asset commands are properly structured."""

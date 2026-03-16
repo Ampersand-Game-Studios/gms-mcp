@@ -9,6 +9,8 @@ import sys
 import os
 import platform
 
+from gms_mcp.star_cta import HELP_EPILOG
+
 # Import utilities for directory validation
 from .utils import validate_working_directory, resolve_project_directory
 from .exceptions import GMSError
@@ -37,7 +39,10 @@ Examples:
   gms maintenance auto --fix --verbose
   gms run start --output-location temp     # Use IDE-style temp directory (default)
   gms run start --output-location project  # Use classic output folder in project
+
+{help_epilog}
         """
+        .format(help_epilog=HELP_EPILOG)
     )
     
     # Global options
