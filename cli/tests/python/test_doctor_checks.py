@@ -127,24 +127,26 @@ class TestDoctorChecks(unittest.TestCase):
         self.assertEqual(report["overall_status"], "warning")
 
     def test_build_doctor_report_client_mode_uses_requested_project_root_for_workspace(self):
-        with patch(
-            "gms_mcp.doctor_checks._build_package_check",
-            return_value=_check(check_id="package", name="package"),
-        ), patch(
-            "gms_mcp.doctor_checks._build_project_detection_check",
-            return_value=(_check(check_id="project_detection", name="project"), Path("/tmp/workspace/gamemaker")),
-        ), patch(
-            "gms_mcp.doctor_checks._build_updates_check",
-            return_value=_check(check_id="updates", name="updates"),
-        ), patch(
-            "gms_mcp.doctor_checks._build_client_checks",
-            return_value=[_check(check_id="client_codex", name="client-codex", scope="client")],
-        ) as build_client_checks:
-            doctor_checks_module.build_doctor_report(client="codex", project_root="/tmp/workspace")
+        with tempfile.TemporaryDirectory() as temp_dir:
+            workspace_root = Path(temp_dir)
+            with patch(
+                "gms_mcp.doctor_checks._build_package_check",
+                return_value=_check(check_id="package", name="package"),
+            ), patch(
+                "gms_mcp.doctor_checks._build_project_detection_check",
+                return_value=(_check(check_id="project_detection", name="project"), workspace_root / "gamemaker"),
+            ), patch(
+                "gms_mcp.doctor_checks._build_updates_check",
+                return_value=_check(check_id="updates", name="updates"),
+            ), patch(
+                "gms_mcp.doctor_checks._build_client_checks",
+                return_value=[_check(check_id="client_codex", name="client-codex", scope="client")],
+            ) as build_client_checks:
+                doctor_checks_module.build_doctor_report(client="codex", project_root=str(workspace_root))
 
         build_client_checks.assert_called_once_with(
             client="codex",
-            workspace_root=Path("/tmp/workspace"),
+            workspace_root=workspace_root,
             server_name="gms",
         )
 
