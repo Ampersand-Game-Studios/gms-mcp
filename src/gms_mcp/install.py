@@ -2593,6 +2593,7 @@ def main(argv: list[str] | None = None) -> int:
         print("       Re-run with --gm-project-root <path> (or run interactively to choose).")
     print(f"[INFO] Selected GameMaker project root: {gm_note}")
     print("[INFO] If this is wrong, edit GM_PROJECT_ROOT in the generated config.")
+    print("[INFO] Manual local check: gms-mcp doctor")
     
     # Set up project naming config if we have a project root
     if gm_project_root:

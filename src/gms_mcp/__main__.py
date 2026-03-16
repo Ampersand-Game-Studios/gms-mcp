@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from .cli import server
+from .cli import main
 
 if __name__ == "__main__":
-    server()
-
+    raise SystemExit(main())

@@ -265,9 +265,9 @@ fi
 echo "[gms-mcp] GameMaker project detected"
 
 # Check for updates
-UPDATE_CHECK=$(uvx gms-mcp check-updates 2>/dev/null || echo "")
-if echo "$UPDATE_CHECK" | grep -q "update available"; then
-    echo "[gms-mcp] Update available - run: pip install --upgrade gms-mcp"
+UPDATE_NOTICE=$(uvx gms-mcp doctor --notify 2>/dev/null || echo "")
+if [ -n "$UPDATE_NOTICE" ]; then
+    echo "$UPDATE_NOTICE"
 fi
 
 # Check bridge status
@@ -429,7 +429,7 @@ For Claude Code users, install the plugin for the best experience:
 
 This provides:
 - **Skills**: 18 workflow guides + 7 reference docs
-- **Hooks**: Automatic update checks and error notifications
+- **Hooks**: Once-daily update reminders and error notifications
 - **MCP Server**: Auto-configured via uvx (no pip install needed)
 
 ### For Other Tools (Cursor, VSCode, etc.)

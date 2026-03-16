@@ -1025,6 +1025,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
             self.assertIn("[INFO] Active server entry 'gms-app' source:", output)
             self.assertIn("[INFO] Codex app readiness summary:", output)
             self.assertIn("[INFO] Ready for Codex app: yes", output)
+            self.assertIn("[INFO] Manual local check: gms-mcp doctor", output)
 
     def test_generate_claude_code_plugin_dry_run(self):
         """Dry run should not create files but return paths."""
@@ -1077,6 +1078,23 @@ class TestClaudeCodeSupport(unittest.TestCase):
                 mcp_config = json.load(f)
             self.assertIn("gms", mcp_config)
             self.assertEqual(mcp_config["gms"]["env"]["GM_PROJECT_ROOT"], "${CLAUDE_PROJECT_DIR}")
+
+    def test_generate_claude_code_plugin_with_bundle_assets_copies_hooks(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plugin_dir = Path(tmpdir) / "gms-mcp"
+
+            _generate_claude_code_plugin(
+                plugin_dir=plugin_dir,
+                server_name="gms",
+                command="gms-mcp",
+                args_prefix=[],
+                dry_run=False,
+                include_bundle_assets=True,
+            )
+
+            session_start = plugin_dir / "hooks" / "session-start.sh"
+            self.assertTrue(session_start.exists())
+            self.assertIn("gms-mcp doctor --notify", session_start.read_text(encoding="utf-8"))
 
 
 if __name__ == "__main__":

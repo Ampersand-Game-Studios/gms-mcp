@@ -35,8 +35,9 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
     - `gms://project/asset-graph`: Asset dependency graph (structural references)
     - `gms://system/updates`: Check for newer versions of `gms-mcp` (human-readable)
   - **Updates**:
+    - `gms-mcp doctor`: Manual local package/update check
     - `gm_check_updates`: Manually check for updates on PyPI and GitHub
-    - `gm_project_info`: Now includes an `updates` summary
+    - `gm_project_info`: Includes a cached `updates` summary
   - **Maintenance**: auto + diagnostics/lint/validate-json/list-orphans/prune-missing/validate-paths/dedupe-resources/sync-events/clean-old-files/clean-orphans/fix-issues
   - **Runtime Management**: list/pin/unpin/verify GameMaker runtimes
   - **Runner**: compile/run (with runtime version pinning) + stop/status
@@ -47,6 +48,12 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
 ### Install
 
 Install the packaged tool once (recommended: `pipx install gms-mcp`), then generate per-workspace config(s) with `gms-mcp-init`.
+
+Manual local package/update check:
+
+```bash
+gms-mcp doctor
+```
 
 ### Configure (generate configs)
 

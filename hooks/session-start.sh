@@ -12,9 +12,9 @@ echo "[gms-mcp] GameMaker project detected"
 
 # Check for updates (only if gms-mcp is already installed locally)
 if command -v gms-mcp >/dev/null 2>&1; then
-    UPDATE_CHECK=$(gms-mcp check-updates 2>/dev/null || echo "")
-    if echo "$UPDATE_CHECK" | grep -q "update available"; then
-        echo "[gms-mcp] Update available - run: pip install --upgrade gms-mcp"
+    UPDATE_NOTICE=$(gms-mcp doctor --notify 2>/dev/null || echo "")
+    if [ -n "$UPDATE_NOTICE" ]; then
+        echo "$UPDATE_NOTICE"
     fi
 fi
 
