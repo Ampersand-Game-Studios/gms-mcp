@@ -10,7 +10,7 @@ import urllib.request
 from calendar import timegm
 from importlib.metadata import PackageNotFoundError, distribution, version
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 logger = logging.getLogger(__name__)
 
@@ -26,6 +26,15 @@ GITHUB_RELEASE_URL = "https://github.com/Ampersand-Game-Studios/gms-mcp/releases
 PYPI_JSON_URL = "https://pypi.org/pypi/gms-mcp/json"
 GITHUB_JSON_URL = "https://api.github.com/repos/Ampersand-Game-Studios/gms-mcp/releases/latest"
 _VERSION_TOKEN_RE = re.compile(r"\d+|[A-Za-z]+")
+
+
+class _CachedUpdateState(TypedDict):
+    status: str
+    latest_version: str
+    source: str | None
+    url: str | None
+    checked_at: str
+    last_notified_at: str | None
 
 
 def _default_python_command() -> str:
@@ -100,7 +109,8 @@ def get_current_version() -> str:
 def get_install_location() -> str:
     """Best-effort package location for doctor output."""
     try:
-        return str(Path(distribution(PACKAGE_NAME).locate_file("")).resolve())
+        location = distribution(PACKAGE_NAME).locate_file("")
+        return str(Path(str(location)).resolve())
     except Exception:
         return str(Path(__file__).resolve().parents[1])
 
@@ -208,20 +218,35 @@ def _build_update_info(
     return info
 
 
-def _load_cached_state() -> dict[str, Any] | None:
+def _string_value(value: object, default: str) -> str:
+    return value if isinstance(value, str) else default
+
+
+def _optional_string_value(value: object) -> str | None:
+    return value if isinstance(value, str) else None
+
+
+def _load_cached_state() -> _CachedUpdateState | None:
     path = _cache_path()
     if not path.exists():
         return None
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
         if isinstance(payload, dict):
-            return payload
+            return {
+                "status": _string_value(payload.get("status"), "unknown"),
+                "latest_version": _optional_string_value(payload.get("latest_version")) or "0.0.0",
+                "source": _optional_string_value(payload.get("source")),
+                "url": _optional_string_value(payload.get("url")),
+                "checked_at": _string_value(payload.get("checked_at"), ""),
+                "last_notified_at": _optional_string_value(payload.get("last_notified_at")),
+            }
     except Exception as exc:
         logger.debug("Failed to read update cache: %s", exc)
     return None
 
 
-def _save_cached_state(payload: dict[str, Any]) -> None:
+def _save_cached_state(payload: _CachedUpdateState) -> None:
     path = _cache_path()
     try:
         path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
@@ -229,63 +254,66 @@ def _save_cached_state(payload: dict[str, Any]) -> None:
         logger.debug("Failed to write update cache: %s", exc)
 
 
-def _build_info_from_cache(cached: dict[str, Any], *, current: str, used_cache: bool) -> dict[str, Any]:
-    status = cached.get("status") if isinstance(cached.get("status"), str) else "unknown"
-    latest = cached.get("latest_version") if isinstance(cached.get("latest_version"), str) else current
-    source = cached.get("source") if isinstance(cached.get("source"), str) else None
-    url = cached.get("url") if isinstance(cached.get("url"), str) else None
-    checked_at = cached.get("checked_at") if isinstance(cached.get("checked_at"), str) else None
-    last_notified_at = cached.get("last_notified_at") if isinstance(cached.get("last_notified_at"), str) else None
+def _build_info_from_cache(cached: _CachedUpdateState, *, current: str, used_cache: bool) -> dict[str, Any]:
+    checked_at = cached.get("checked_at") or None
     return _build_update_info(
         current=current,
-        latest=latest,
-        source=source,
-        url=url,
-        status=status,
+        latest=cached.get("latest_version") or current,
+        source=cached.get("source"),
+        url=cached.get("url"),
+        status=cached.get("status") or "unknown",
         checked_at=checked_at,
         used_cache=used_cache,
-        last_notified_at=last_notified_at,
+        last_notified_at=cached.get("last_notified_at"),
     )
 
 
-def _is_cache_fresh(cached: dict[str, Any]) -> bool:
+def _is_cache_fresh(cached: _CachedUpdateState) -> bool:
     checked_at_ts = _iso_to_ts(cached.get("checked_at"))
     if checked_at_ts is None:
         return False
     return (_utc_now() - checked_at_ts) < CACHE_TTL_SECONDS
 
 
-def _fetch_update_status(current: str) -> dict[str, Any] | None:
+def _fetch_update_status(current: str) -> _CachedUpdateState | None:
     checked_at = _ts_to_iso(_utc_now())
     pypi_latest = get_latest_version_pypi()
     if _is_newer(pypi_latest, current):
-        return {
+        assert pypi_latest is not None
+        payload: _CachedUpdateState = {
             "status": "warn",
             "latest_version": pypi_latest,
             "source": "PyPI",
             "url": PYPI_RELEASE_URL,
             "checked_at": checked_at,
+            "last_notified_at": None,
         }
+        return payload
 
     github_latest = get_latest_version_github()
     if _is_newer(github_latest, current):
-        return {
+        assert github_latest is not None
+        payload: _CachedUpdateState = {
             "status": "warn",
             "latest_version": github_latest,
             "source": "GitHub",
             "url": GITHUB_RELEASE_URL,
             "checked_at": checked_at,
+            "last_notified_at": None,
         }
+        return payload
 
     if pypi_latest or github_latest:
         latest = pypi_latest or github_latest or current
-        return {
+        payload = {
             "status": "ok",
             "latest_version": latest,
             "source": None,
             "url": None,
             "checked_at": checked_at,
+            "last_notified_at": None,
         }
+        return payload
 
     return None
 
@@ -304,13 +332,13 @@ def check_for_updates(*, force_refresh: bool = False) -> dict[str, Any]:
 
     fetched = _fetch_update_status(current)
     if fetched is not None:
-        payload = {
+        payload: _CachedUpdateState = {
             "status": fetched["status"],
             "latest_version": fetched["latest_version"],
             "source": fetched["source"],
             "url": fetched["url"],
             "checked_at": fetched["checked_at"],
-            "last_notified_at": cached.get("last_notified_at") if isinstance(cached, dict) else None,
+            "last_notified_at": cached.get("last_notified_at") if cached else None,
         }
         _save_cached_state(payload)
         return _build_info_from_cache(payload, current=current, used_cache=False)
@@ -333,15 +361,21 @@ def check_for_updates(*, force_refresh: bool = False) -> dict[str, Any]:
 def mark_update_notified(info: dict[str, Any]) -> None:
     """Persist the notification timestamp after a reminder is emitted."""
     timestamp = _ts_to_iso(_utc_now())
-    cached = _load_cached_state() or {}
-    cached.update(
-        {
-            "status": info.get("status") or cached.get("status") or "unknown",
-            "latest_version": info.get("latest_version") or cached.get("latest_version") or info.get("current_version"),
-            "source": info.get("source"),
-            "url": info.get("url"),
-            "checked_at": info.get("checked_at") or cached.get("checked_at"),
-            "last_notified_at": timestamp,
-        }
+    cached = _load_cached_state() or {
+        "status": "unknown",
+        "latest_version": _string_value(info.get("current_version"), "0.0.0"),
+        "source": None,
+        "url": None,
+        "checked_at": "",
+        "last_notified_at": None,
+    }
+    cached["status"] = _string_value(info.get("status"), cached["status"])
+    cached["latest_version"] = _string_value(
+        info.get("latest_version"),
+        _string_value(info.get("current_version"), cached["latest_version"]),
     )
+    cached["source"] = _optional_string_value(info.get("source"))
+    cached["url"] = _optional_string_value(info.get("url"))
+    cached["checked_at"] = _string_value(info.get("checked_at"), cached["checked_at"])
+    cached["last_notified_at"] = timestamp
     _save_cached_state(cached)

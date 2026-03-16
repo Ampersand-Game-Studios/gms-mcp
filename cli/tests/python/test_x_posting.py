@@ -151,6 +151,38 @@ def test_post_text_to_x_exhausts_server_error_retries(monkeypatch):
     assert sleeps == [5]
 
 
+def test_post_text_to_x_defers_when_x_credits_are_depleted(monkeypatch):
+    module = load_module("test_post_tweet_credits_depleted", ".github/scripts/post_tweet.py")
+    set_x_credentials(monkeypatch)
+    session = FakeSession(
+        [
+            FakeResponse(
+                402,
+                payload={
+                    "title": "CreditsDepleted",
+                    "detail": "Your enrolled account does not have any credits to fulfill this request.",
+                },
+            )
+        ]
+    )
+    logs: list[str] = []
+    monkeypatch.setattr(module, "post_text_to_x_with_xurl", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("xurl fallback should not run")))
+
+    result = module.post_text_to_x(
+        "hello world",
+        requests_module=make_fake_requests(),
+        session=session,
+        oauth_factory=fake_oauth_factory,
+        log_func=logs.append,
+    )
+
+    assert result.ok is False
+    assert result.reason == "credits_depleted"
+    assert result.tweet_id is None
+    assert len(session.calls) == 1
+    assert any("CREDITS DEPLETED" in line for line in logs)
+
+
 def test_post_text_to_x_uses_xurl_fallback_after_v2_failures(monkeypatch):
     module = load_module("test_post_tweet_xurl_fallback", ".github/scripts/post_tweet.py")
     set_x_credentials(monkeypatch)
@@ -377,6 +409,7 @@ def test_deferred_history_does_not_block_future_retries(monkeypatch):
 def test_transient_failure_reason_helper():
     module = load_module("test_post_tweet_transient_reason_helper", ".github/scripts/post_tweet.py")
 
+    assert module.is_transient_x_failure("credits_depleted") is True
     assert module.is_transient_x_failure("x_server_error") is True
     assert module.is_transient_x_failure("x_edge_challenge") is True
     assert module.is_transient_x_failure("bad_request") is False

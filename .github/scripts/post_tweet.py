@@ -34,6 +34,7 @@ X_POST_URL = "https://api.x.com/2/tweets"
 POSTED_STATUSES = frozenset({"posted", "duplicate_on_x"})
 TRANSIENT_X_FAILURE_REASONS = frozenset(
     {
+        "credits_depleted",
         "network_timeout",
         "network_error",
         "rate_limited",
@@ -277,6 +278,12 @@ def response_error_text(response) -> str:
     text = getattr(response, "text", "") or ""
     reason = getattr(response, "reason", "") or ""
     return text.strip() or reason or f"HTTP {getattr(response, 'status_code', 'unknown')}"
+
+
+def is_credits_depleted_error(error_text: str) -> bool:
+    """Detect X billing/credit exhaustion responses that should be retried later."""
+    normalized = error_text.lower()
+    return "creditsdepleted" in normalized or "does not have any credits" in normalized
 
 
 def extract_tweet_id(payload: dict) -> str:
@@ -539,6 +546,11 @@ def post_text_to_x_endpoint(
             logger("API credentials are invalid or expired.")
             logger("Please check the X_* secrets in GitHub repository settings.")
             return XPostResult(False, "unauthorized")
+
+        if status_code == 402 and is_credits_depleted_error(error_text):
+            logger(f"\n[CREDITS DEPLETED] {error_text}")
+            logger("X posting credits are exhausted. The tweet will remain queued for a later retry.")
+            return XPostResult(False, "credits_depleted")
 
         if status_code == 400:
             logger(f"\n[BAD REQUEST] {error_text}")
