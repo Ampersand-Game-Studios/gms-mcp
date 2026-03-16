@@ -52,7 +52,7 @@ Issues = "https://github.com/Ampersand-Game-Studios/gms-mcp/issues"
 
 [project.scripts]
 gms = "gms_helpers.cli:main"
-gms-mcp = "gms_mcp.cli:server"
+gms-mcp = "gms_mcp.cli:main"
 gms-mcp-init = "gms_mcp.cli:init"
 
 [tool.setuptools]

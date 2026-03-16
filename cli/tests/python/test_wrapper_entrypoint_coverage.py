@@ -116,10 +116,34 @@ class TestEntrypoints(unittest.TestCase):
                 mcp_cli.init()
         self.assertEqual(exc.exception.code, 0)
 
-    def test_mcp_main_module_calls_server(self):
-        with patch("gms_mcp.cli.server") as mock_server:
-            runpy.run_module("gms_mcp.__main__", run_name="__main__")
-        mock_server.assert_called_once()
+    def test_mcp_cli_main_dispatches_commands(self):
+        with patch("gms_mcp.cli._server_main", return_value=7):
+            self.assertEqual(mcp_cli.main([]), 7)
+            self.assertEqual(mcp_cli.main(["server"]), 7)
+
+        with patch("gms_mcp.doctor.main", return_value=3) as doctor_main:
+            self.assertEqual(mcp_cli.main(["doctor", "--json"]), 3)
+        doctor_main.assert_called_once_with(["--json"])
+
+        with patch("gms_mcp.install.main", return_value=5):
+            self.assertEqual(mcp_cli.main(["init", "--codex"]), 5)
+
+        code, stdout, stderr = _capture_output(mcp_cli.main, ["--help"])
+        self.assertEqual(code, 0)
+        self.assertIn("usage: gms-mcp", stdout)
+        self.assertEqual(stderr, "")
+
+        code, stdout, stderr = _capture_output(mcp_cli.main, ["bogus"])
+        self.assertEqual(code, 2)
+        self.assertEqual(stdout, "")
+        self.assertIn("Unknown command: bogus", stderr)
+
+    def test_mcp_main_module_calls_main(self):
+        with patch("gms_mcp.cli.main", return_value=0) as mock_main:
+            with self.assertRaises(SystemExit) as exc:
+                runpy.run_module("gms_mcp.__main__", run_name="__main__")
+        self.assertEqual(exc.exception.code, 0)
+        mock_main.assert_called_once()
 
     def test_bootstrap_server_main_success_and_missing_dependency(self):
         with patch("gms_mcp.bootstrap_server._dbg"), patch(
