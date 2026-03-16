@@ -38,13 +38,14 @@ For Claude Code users, install the plugin for the best experience:
 
 This provides:
 - **Skills**: 18 workflow guides + 7 reference docs
-- **Hooks**: Automatic update checks and error notifications
+- **Hooks**: Once-daily update reminders and error notifications
 - **MCP Server**: Auto-configured via uvx (no pip install needed)
 
 ### For Other Tools (Cursor, VSCode, OpenClaw, etc.)
 
 ```bash
 pip install gms-mcp
+gms-mcp doctor   # manual local package/update check
 gms-mcp-init --cursor  # or --vscode, --windsurf, --openclaw, etc.
 ```
 
@@ -440,10 +441,12 @@ Pre-built, cacheable project data for agents:
 - `gms://system/updates`: Returns a human-readable message if a newer version of `gms-mcp` is available on PyPI or GitHub.
 
 ### Update Notifier
-The server automatically checks for updates on startup and during common operations:
+Shared update status is available through the MCP surfaces below, and supported client hooks can surface a once-daily reminder:
+- **CLI**: `gms-mcp doctor` is the standard manual local package/update check.
 - **Tool**: `gm_check_updates` returns structured update info.
-- **Auto-check**: `gm_project_info` includes an `updates` field.
+- **Auto-check**: `gm_project_info` includes a cached `updates` field.
 - **Resource**: `gms://system/updates` provides a quick text status.
+- Plain `pip` installs are not guaranteed a proactive reminder unless the client setup includes the bundled startup hook.
 
 ## CLI usage
 
