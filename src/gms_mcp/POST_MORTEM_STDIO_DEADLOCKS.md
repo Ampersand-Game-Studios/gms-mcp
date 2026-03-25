@@ -21,6 +21,16 @@ If any tool (or its dependencies) attempted to read from `stdin` (e.g., an `inpu
 1. Block forever waiting for user input that would never arrive.
 2. Consume raw MCP protocol bytes, corrupting the JSON-RPC stream and causing the client to desynchronize or hang.
 
+### 3. Direct-Mode Stdout Pollution
+Even when a tool runs in-process, the MCP server still owns `stdout`.
+That means helper code cannot treat the server process like a normal terminal:
+
+1. Background helper threads cannot `print(...)` after the tool response has already been sent.
+2. Optional services started in-process (such as the TCP bridge server) cannot write lifecycle logs to stdout.
+3. Child game processes launched from direct mode must not inherit the MCP server's stdio handles.
+
+Any of those will inject plain text into the JSON-RPC stream and cause the client to drop the transport.
+
 ## The Fixes
 
 ### 1. Isolated Stdin
@@ -36,7 +46,13 @@ Instead:
 ### 3. Preferred Direct Execution
 To bypass the overhead and fragility of subprocesses on Windows entirely, the server now defaults to **in-process execution** (`GMS_MCP_ENABLE_DIRECT=1`). This avoids the "cold start" cost of spawning new Python processes and ensures near-instant response times for most operations.
 
+### 4. Silent Background Helpers
+Bridge lifecycle events are now logged internally instead of printing to stdout/stderr.
+For macOS background local runs, Igor output is still collected for diagnostics, but it is no longer echoed once the MCP tool has returned.
+Spawned local game processes are launched with `stdin/stdout/stderr=DEVNULL` so the game cannot write into the MCP transport.
+
 ## Lessons Learned
 - **MCP is not a Terminal**: Do not treat stdio transport like a shell. It is a strictly framed protocol stream.
 - **Never share stdin**: Always isolate child processes from the protocol pipe.
+- **Never leak stdout after return**: background threads and optional in-process services must stay silent on stdio.
 - **Prefer In-Process**: When the tool logic is available as a library, in-process execution is significantly more robust than wrapping a CLI in a subprocess.

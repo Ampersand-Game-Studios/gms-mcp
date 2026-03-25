@@ -11,14 +11,20 @@ Protocol:
 - Game -> Server: RSP:<cmd_id>|<result>\n
 """
 
+import json
+import logging
+import queue
 import socket
 import threading
-import queue
 import time
-import json
 from dataclasses import dataclass, field
 from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime
+
+LOGGER = logging.getLogger("gms_helpers.bridge_server")
+if not LOGGER.handlers:
+    LOGGER.addHandler(logging.NullHandler())
+LOGGER.propagate = False
 
 
 @dataclass
@@ -88,6 +94,16 @@ class BridgeServer:
         self._on_connect: Optional[Callable[[], None]] = None
         self._on_disconnect: Optional[Callable[[], None]] = None
         self._on_log: Optional[Callable[[LogEntry], None]] = None
+
+    def _log(self, level: int, message: str, *args: Any, exc_info: bool = False) -> None:
+        """
+        BridgeServer may run inside a stdio MCP server process.
+        Never write directly to stdout/stderr from here.
+        """
+        try:
+            LOGGER.log(level, message, *args, exc_info=exc_info)
+        except Exception:
+            pass
     
     @property
     def is_running(self) -> bool:
@@ -128,11 +144,11 @@ class BridgeServer:
                 )
                 self._server_thread.start()
                 
-                print(f"[BRIDGE] Server started on {self.host}:{self.port}")
+                self._log(logging.INFO, "[BRIDGE] Server started on %s:%s", self.host, self.port)
                 return True
                 
             except Exception as e:
-                print(f"[BRIDGE] Failed to start server: {e}")
+                self._log(logging.ERROR, "[BRIDGE] Failed to start server: %s", e, exc_info=True)
                 self._cleanup_server()
                 return False
     
@@ -142,7 +158,7 @@ class BridgeServer:
             if not self._running:
                 return
             
-            print("[BRIDGE] Stopping server...")
+            self._log(logging.INFO, "[BRIDGE] Stopping server...")
             self._running = False
             
             # Close client connection
@@ -155,7 +171,7 @@ class BridgeServer:
             if self._server_thread and self._server_thread.is_alive():
                 self._server_thread.join(timeout=2.0)
             
-            print("[BRIDGE] Server stopped")
+            self._log(logging.INFO, "[BRIDGE] Server stopped")
     
     def _cleanup_server(self) -> None:
         """Clean up server socket."""
@@ -212,7 +228,7 @@ class BridgeServer:
                         self._client_socket = client_socket
                         self._connected = True
                     
-                    print(f"[BRIDGE] Game connected from {addr}")
+                    self._log(logging.INFO, "[BRIDGE] Game connected from %s", addr)
                     
                     if self._on_connect:
                         try:
@@ -241,7 +257,7 @@ class BridgeServer:
                     
             except Exception as e:
                 if self._running:
-                    print(f"[BRIDGE] Server error: {e}")
+                    self._log(logging.ERROR, "[BRIDGE] Server error: %s", e, exc_info=True)
                 break
     
     def _receive_loop(self) -> None:
@@ -257,7 +273,7 @@ class BridgeServer:
                     data = self._client_socket.recv(4096)
                     if not data:
                         # Connection closed
-                        print("[BRIDGE] Game disconnected")
+                        self._log(logging.INFO, "[BRIDGE] Game disconnected")
                         self._disconnect_client()
                         break
                     
@@ -279,7 +295,7 @@ class BridgeServer:
                     
             except Exception as e:
                 if self._running and self._connected:
-                    print(f"[BRIDGE] Receive error: {e}")
+                    self._log(logging.ERROR, "[BRIDGE] Receive error: %s", e, exc_info=True)
                 self._disconnect_client()
                 break
     
@@ -301,7 +317,7 @@ class BridgeServer:
                 try:
                     self._client_socket.sendall(message.encode('utf-8'))
                 except Exception as e:
-                    print(f"[BRIDGE] Send error: {e}")
+                    self._log(logging.ERROR, "[BRIDGE] Send error: %s", e, exc_info=True)
                     # Put command back for retry? Or mark as failed?
                     with self._command_lock:
                         if cmd_id in self._pending_commands:
@@ -310,7 +326,7 @@ class BridgeServer:
                     
             except Exception as e:
                 if self._running:
-                    print(f"[BRIDGE] Send loop error: {e}")
+                    self._log(logging.ERROR, "[BRIDGE] Send loop error: %s", e, exc_info=True)
                 break
     
     def _process_message(self, message: str) -> None:
@@ -355,7 +371,7 @@ class BridgeServer:
                         self._pending_commands[cmd_id].completed_at = time.time()
                         
         except Exception as e:
-            print(f"[BRIDGE] Error processing message: {e}")
+            self._log(logging.ERROR, "[BRIDGE] Error processing message: %s", e, exc_info=True)
     
     def get_logs(self, count: int = 50, since_index: int = 0) -> List[Dict[str, Any]]:
         """

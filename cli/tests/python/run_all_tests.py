@@ -51,6 +51,7 @@ MCP_REQUIRED_MODULES = ("mcp", "fastmcp")
 MCP_DEPENDENT_TESTS = {
     "test_bridge_one_shot_enable.py",
     "test_mcp_integration_tools.py",
+    "test_mcp_stdio_transport_regression.py",
 }
 
 def find_python_executable():

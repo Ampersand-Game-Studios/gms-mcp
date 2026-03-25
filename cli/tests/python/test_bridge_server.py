@@ -14,6 +14,8 @@ import socket
 import threading
 import time
 import unittest
+import contextlib
+import io
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -100,6 +102,35 @@ class TestBridgeServerBasic(unittest.TestCase):
         
         self.assertTrue(result)
         server.stop()
+
+    def test_server_lifecycle_does_not_write_stdio(self):
+        """Bridge lifecycle must stay silent for stdio-based MCP transport safety."""
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+            probe.bind(("127.0.0.1", 0))
+            port = probe.getsockname()[1]
+
+        server = BridgeServer(port=port)
+        stdout_buffer = io.StringIO()
+        stderr_buffer = io.StringIO()
+
+        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client.settimeout(2.0)
+            try:
+                self.assertTrue(server.start())
+                time.sleep(0.1)
+                client.connect(("127.0.0.1", port))
+                time.sleep(0.2)
+            finally:
+                try:
+                    client.close()
+                except Exception:
+                    pass
+                time.sleep(0.2)
+                server.stop()
+
+        self.assertEqual(stdout_buffer.getvalue(), "")
+        self.assertEqual(stderr_buffer.getvalue(), "")
         
     def test_server_status(self):
         """Test getting server status."""

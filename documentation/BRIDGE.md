@@ -208,6 +208,8 @@ Option B: Spawn it from your own bootstrap/controller object in GML.
   - `server_running: true`
   - `game_connected: true`
 
+When this is launched from an MCP client, bridge lifecycle logging stays off the JSON-RPC stdio transport. If the MCP session drops during `gm_run`, treat that as a transport bug rather than expected bridge output.
+
 If `game_connected` is false, the bridge object likely is not instantiated.
 
 ### Step 4: Verify command path

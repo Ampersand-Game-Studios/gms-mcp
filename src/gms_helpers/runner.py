@@ -266,11 +266,19 @@ class GameMakerRunner:
         return f"{action_name} failed for macOS with: {error}"
 
     def _start_game_process(self, launch_path: Path) -> subprocess.Popen:
-        """Start a game process with OS-appropriate process-group settings."""
+        """Start a game process without inheriting the caller's stdio handles."""
         try:
+            process_kwargs = self._normalize_path_for_popen()
+            process_kwargs.update(
+                {
+                    "stdin": subprocess.DEVNULL,
+                    "stdout": subprocess.DEVNULL,
+                    "stderr": subprocess.DEVNULL,
+                }
+            )
             return subprocess.Popen(
                 [str(launch_path)],
-                **self._normalize_path_for_popen()
+                **process_kwargs,
             )
         except OSError as exc:
             if platform.system() == "Darwin":
@@ -419,7 +427,7 @@ class GameMakerRunner:
         cmd.extend(["--", igor_platform, action])
         return cmd
 
-    def _stream_igor_output(self, process: subprocess.Popen, stage_label: str) -> List[str]:
+    def _stream_igor_output(self, process: subprocess.Popen, stage_label: str, *, emit_output: bool = True) -> List[str]:
         """Stream Igor stdout while lightly classifying lines for humans."""
         output_lines: List[str] = []
 
@@ -432,6 +440,8 @@ class GameMakerRunner:
                 continue
 
             output_lines.append(line)
+            if not emit_output:
+                continue
             lowered = line.lower()
             if "error" in lowered:
                 print(f"[ERROR] {line}")
@@ -478,12 +488,18 @@ class GameMakerRunner:
             return f"Local run failed with exit code {returncode}."
         return f"{stage_label.capitalize()} failed with exit code {returncode}."
 
-    def _collect_igor_output_async(self, process: subprocess.Popen, stage_label: str) -> tuple[List[str], threading.Thread]:
+    def _collect_igor_output_async(
+        self,
+        process: subprocess.Popen,
+        stage_label: str,
+        *,
+        emit_output: bool = True,
+    ) -> tuple[List[str], threading.Thread]:
         """Stream Igor output in a background thread while the caller polls side effects."""
         output_lines: List[str] = []
 
         def _reader() -> None:
-            output_lines.extend(self._stream_igor_output(process, stage_label))
+            output_lines.extend(self._stream_igor_output(process, stage_label, emit_output=emit_output))
 
         thread = threading.Thread(target=_reader, daemon=True)
         thread.start()
@@ -1052,7 +1068,11 @@ class GameMakerRunner:
                 }
 
                 if track_macos_runner and macos_game_path and macos_debug_log:
-                    output_lines, output_thread = self._collect_igor_output_async(self.game_process, "local run")
+                    output_lines, output_thread = self._collect_igor_output_async(
+                        self.game_process,
+                        "local run",
+                        emit_output=False,
+                    )
                     runner_pid, _runner_pids, _tail_pids = self._wait_for_macos_runner_start(
                         self.game_process,
                         macos_game_path,

@@ -4,9 +4,12 @@
 from __future__ import annotations
 
 import errno
+import contextlib
+import io
 import os
 import shutil
 import stat
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -198,6 +201,13 @@ class TestRunnerGapCoverage(unittest.TestCase):
                 with self.assertRaises(RuntimeError):
                     runner._run_igor_command(["/fake/Igor"])
 
+        with patch("gms_helpers.runner.subprocess.Popen", return_value=SimpleNamespace(pid=1)) as mock_popen:
+            runner._start_game_process(Path("/fake/game"))
+        _, kwargs = mock_popen.call_args
+        self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
+        self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
+        self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
+
     def test_streaming_ps_and_wait_helpers(self):
         runner = self._make_runner()
         process = SimpleNamespace(
@@ -223,6 +233,20 @@ class TestRunnerGapCoverage(unittest.TestCase):
         output_lines, thread = runner._collect_igor_output_async(async_process, "local compile validation")
         thread.join(timeout=2)
         self.assertEqual(output_lines, ["test run"])
+
+        silent_process = SimpleNamespace(stdout=iter(["quiet line\n"]))
+        stdout_buffer = io.StringIO()
+        stderr_buffer = io.StringIO()
+        with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+            silent_lines, silent_thread = runner._collect_igor_output_async(
+                silent_process,
+                "local run",
+                emit_output=False,
+            )
+            silent_thread.join(timeout=2)
+        self.assertEqual(silent_lines, ["quiet line"])
+        self.assertEqual(stdout_buffer.getvalue(), "")
+        self.assertEqual(stderr_buffer.getvalue(), "")
 
         game_path = Path("/tmp/game.ios")
         debug_log_path = Path("/tmp/debug.log")

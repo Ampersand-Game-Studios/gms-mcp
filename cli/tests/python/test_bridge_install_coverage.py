@@ -62,9 +62,10 @@ class TestBridgeServerCoverage(unittest.TestCase):
         fake_socket = MagicMock()
         fake_socket.bind.side_effect = OSError("bind fail")
         with patch("socket.socket", return_value=fake_socket):
-            result, output = _capture_output(server.start)
+            with self.assertLogs("gms_helpers.bridge_server", level="ERROR") as logs:
+                result = server.start()
         self.assertFalse(result)
-        self.assertIn("bind fail", output)
+        self.assertTrue(any("bind fail" in message for message in logs.output))
 
         server._server_socket = MagicMock()
         server._server_socket.close.side_effect = OSError("close fail")
@@ -100,8 +101,9 @@ class TestBridgeServerCoverage(unittest.TestCase):
         server._connected = True
         server._command_queue = MagicMock()
         server._command_queue.get.side_effect = [queue.Empty(), StopIteration()]
-        _result, output = _capture_output(server._send_loop)
-        self.assertIn("Send loop error", output)
+        with self.assertLogs("gms_helpers.bridge_server", level="ERROR") as logs:
+            server._send_loop()
+        self.assertTrue(any("Send loop error" in message for message in logs.output))
 
         server._running = True
         server._connected = True
@@ -110,8 +112,9 @@ class TestBridgeServerCoverage(unittest.TestCase):
         server._pending_commands = {"cmd_2": SimpleNamespace(error=None, completed_at=None)}
         server._client_socket = MagicMock()
         server._client_socket.sendall.side_effect = OSError("send fail")
-        _result, output = _capture_output(server._send_loop)
-        self.assertIn("Send error", output)
+        with self.assertLogs("gms_helpers.bridge_server", level="ERROR") as logs:
+            server._send_loop()
+        self.assertTrue(any("Send error" in message for message in logs.output))
         self.assertEqual(server._pending_commands["cmd_2"].error, "send fail")
 
         server.MAX_LOG_BUFFER = 1

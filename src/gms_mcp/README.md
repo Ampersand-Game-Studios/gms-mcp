@@ -43,7 +43,7 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
   - **Maintenance**: auto + diagnostics/lint/validate-json/list-orphans/prune-missing/validate-paths/dedupe-resources/sync-events/clean-old-files/clean-orphans/fix-issues
   - **Runtime Management**: list/pin/unpin/verify GameMaker runtimes
   - **Runner**: compile/run (with runtime version pinning) + stop/status
-  - **TCP Bridge (optional)**: live game commands + log capture via `gm_bridge_install`, `gm_bridge_status`, `gm_run_command`, `gm_run_logs` (see `documentation/BRIDGE.md`)
+  - **TCP Bridge (optional)**: live game commands + log capture via `gm_bridge_install`, `gm_bridge_status`, `gm_run_command`, `gm_run_logs` (see `documentation/BRIDGE.md`). Bridge lifecycle/events stay off MCP stdout so `gm_run(..., enable_bridge=true)` remains stdio-safe.
   - **Escape hatch**: `gm_cli` (run arbitrary `gms` args)
   - **Project info**: `gm_project_info`
 
@@ -121,3 +121,4 @@ After changing `.cursor/mcp.json`, **Reload Window** in Cursor to pick up MCP co
   - Most tools accept `output_mode`: `"full"` (default), `"tail"`, or `"none"`
   - `tail_lines` controls how many lines are returned in `"tail"` mode
   - `quiet=true` is a convenience alias for `"tail"` (unless you explicitly set `output_mode`)
+  - Direct/background runner paths also avoid stdout pollution: bridge lifecycle logging is internal, background Igor output is collected without echoing into the JSON-RPC stream, and spawned local game processes do not inherit MCP stdio.
