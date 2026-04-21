@@ -9,6 +9,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Callable, Optional, Tuple
 
+from ..telemetry import SUPPRESS_CLI_TELEMETRY_ENV_VAR
 from .project import _resolve_project_directory
 from .results import ToolRunResult
 
@@ -104,6 +105,7 @@ def _run_direct(handler: Callable[[argparse.Namespace], Any], args: argparse.Nam
         direct_used=True,
         exit_code=exit_code,
         error=error_text,
+        execution_mode="direct",
     )
 
 
@@ -120,7 +122,9 @@ def _run_gms_inprocess(cli_args: list[str], project_root: str | None) -> ToolRun
         from gms_helpers import gms as gms_module
 
         previous_argv = sys.argv[:]
+        previous_suppression = os.environ.get(SUPPRESS_CLI_TELEMETRY_ENV_VAR)
         try:
+            os.environ[SUPPRESS_CLI_TELEMETRY_ENV_VAR] = "1"
             sys.argv = ["gms", "--project-root", str(project_root_value), *cli_args]
             try:
                 return bool(gms_module.main())
@@ -129,6 +133,10 @@ def _run_gms_inprocess(cli_args: list[str], project_root: str | None) -> ToolRun
                 code = int(getattr(e, "code", 1) or 0)
                 return code == 0
         finally:
+            if previous_suppression is None:
+                os.environ.pop(SUPPRESS_CLI_TELEMETRY_ENV_VAR, None)
+            else:
+                os.environ[SUPPRESS_CLI_TELEMETRY_ENV_VAR] = previous_suppression
             sys.argv = previous_argv
 
     ok, stdout_text, stderr_text, _result_value, error_text, exit_code = _capture_output(_invoke)
@@ -139,5 +147,5 @@ def _run_gms_inprocess(cli_args: list[str], project_root: str | None) -> ToolRun
         direct_used=True,
         exit_code=exit_code if exit_code is not None else (0 if ok else 1),
         error=error_text,
+        execution_mode="direct:module",
     )
-

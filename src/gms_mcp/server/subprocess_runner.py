@@ -14,8 +14,9 @@ import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from ..telemetry import SUPPRESS_CLI_TELEMETRY_ENV_VAR
 from .debug import _dbg
-from .project import _resolve_project_directory
+from .project import _resolve_project_directory, _with_cli_pythonpath
 from .results import ToolRunResult
 
 
@@ -172,6 +173,8 @@ async def _run_cli_async(
         # -u: unbuffered for more predictable output when stdout/stderr are pipes
         cmd = [sys.executable, "-u", "-m", "gms_helpers.gms", "--project-root", str(project_root_value), *cli_args]
         execution_mode = "subprocess:python-module"
+    nested_cli_env = _with_cli_pythonpath(os.environ.copy())
+    nested_cli_env[SUPPRESS_CLI_TELEMETRY_ENV_VAR] = "1"
 
     effective_timeout = timeout_seconds
     if effective_timeout is None:
@@ -182,6 +185,7 @@ async def _run_cli_async(
     return await _run_subprocess_async(
         cmd,
         cwd=project_directory,
+        env=nested_cli_env,
         timeout_seconds=effective_timeout,
         heartbeat_seconds=heartbeat_seconds,
         tool_name=tool_name,
@@ -195,6 +199,7 @@ async def _run_subprocess_async(
     cmd: List[str],
     *,
     cwd: Path,
+    env: Dict[str, str] | None = None,
     timeout_seconds: int | None = None,
     heartbeat_seconds: float = 5.0,
     tool_name: str | None = None,
@@ -253,6 +258,7 @@ async def _run_subprocess_async(
         proc = subprocess.Popen(
             cmd,
             cwd=str(cwd),
+            env=env,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -378,4 +384,3 @@ async def _run_subprocess_async(
         log_file=str(log_path),
         execution_mode=execution_mode,
     )
-

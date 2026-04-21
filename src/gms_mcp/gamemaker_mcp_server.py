@@ -14,12 +14,177 @@ Implementation details live under `gms_mcp.server.*`.
 
 from __future__ import annotations
 
+import functools
+import inspect
 import os
 import sys
 import time
 
 from .server.debug import _dbg
 from .server.register_all import register_all
+from .telemetry import (
+    classify_error_family,
+    get_tool_execution_context,
+    maybe_start_background_flush,
+    queue_event,
+    reset_tool_execution_context,
+    resolve_state,
+)
+
+
+def _tool_family_for_function(func) -> str:
+    module_name = getattr(func, "__module__", "")
+    base = module_name.rsplit(".", 1)[-1]
+    mapping = {
+        "asset_creation": "asset",
+        "bridge": "bridge",
+        "code_intel": "code_intel",
+        "docs": "docs",
+        "events": "event",
+        "introspection": "introspection",
+        "maintenance": "maintenance",
+        "project_health": "health",
+        "rooms": "room",
+        "runner": "runner",
+        "runtime": "runtime",
+        "texture_groups": "texture_group",
+        "workflow": "workflow",
+    }
+    return mapping.get(base, base or "mcp")
+
+
+def _record_mcp_event(
+    *,
+    event_type: str,
+    action: str,
+    tool_name: str,
+    tool_family: str,
+    result: str,
+    duration_ms: int,
+    error_family: str | None = None,
+    execution_mode: str | None = None,
+) -> None:
+    state = resolve_state()
+    if not queue_event(
+        state=state,
+        surface="mcp",
+        event_type=event_type,
+        action=action,
+        tool_name=tool_name,
+        tool_family=tool_family,
+        result=result,
+        error_family=error_family,
+        duration_ms=duration_ms,
+        execution_mode=execution_mode,
+    ):
+        return
+    maybe_start_background_flush()
+
+
+def _result_from_value(value) -> str:
+    if isinstance(value, dict) and value.get("ok") is False:
+        return "error"
+    return "ok"
+
+
+def _wrap_tool_registration(mcp) -> None:
+    if not hasattr(mcp, "tool"):
+        return
+    original_tool = mcp.tool
+
+    def _instrument_callable(func, tool_name: str, tool_family: str):
+        if inspect.iscoroutinefunction(func):
+            @functools.wraps(func)
+            async def wrapped(*args, **kwargs):
+                reset_tool_execution_context()
+                start = time.monotonic()
+                try:
+                    result = await func(*args, **kwargs)
+                    duration_ms = int((time.monotonic() - start) * 1000)
+                    execution = get_tool_execution_context() or {}
+                    _record_mcp_event(
+                        event_type="mcp.tool",
+                        action=tool_name,
+                        tool_name=tool_name,
+                        tool_family=tool_family,
+                        result=execution.get("result") or _result_from_value(result),
+                        error_family=execution.get("error_family"),
+                        duration_ms=duration_ms,
+                        execution_mode=execution.get("execution_mode") or "inline",
+                    )
+                    return result
+                except Exception as exc:
+                    duration_ms = int((time.monotonic() - start) * 1000)
+                    _record_mcp_event(
+                        event_type="mcp.tool",
+                        action=tool_name,
+                        tool_name=tool_name,
+                        tool_family=tool_family,
+                        result="error",
+                        error_family=classify_error_family(exc),
+                        duration_ms=duration_ms,
+                        execution_mode="inline",
+                    )
+                    raise
+                finally:
+                    reset_tool_execution_context()
+
+            return wrapped
+
+        @functools.wraps(func)
+        def wrapped(*args, **kwargs):
+            reset_tool_execution_context()
+            start = time.monotonic()
+            try:
+                result = func(*args, **kwargs)
+                duration_ms = int((time.monotonic() - start) * 1000)
+                execution = get_tool_execution_context() or {}
+                _record_mcp_event(
+                    event_type="mcp.tool",
+                    action=tool_name,
+                    tool_name=tool_name,
+                    tool_family=tool_family,
+                    result=execution.get("result") or _result_from_value(result),
+                    error_family=execution.get("error_family"),
+                    duration_ms=duration_ms,
+                    execution_mode=execution.get("execution_mode") or "inline",
+                )
+                return result
+            except Exception as exc:
+                duration_ms = int((time.monotonic() - start) * 1000)
+                _record_mcp_event(
+                    event_type="mcp.tool",
+                    action=tool_name,
+                    tool_name=tool_name,
+                    tool_family=tool_family,
+                    result="error",
+                    error_family=classify_error_family(exc),
+                    duration_ms=duration_ms,
+                    execution_mode="inline",
+                )
+                raise
+            finally:
+                reset_tool_execution_context()
+
+        return wrapped
+
+    def instrumented_tool(*tool_args, **tool_kwargs):
+        decorator = original_tool(*tool_args, **tool_kwargs)
+
+        def _decorate(func):
+            registered = decorator(func)
+            tool_name = str(tool_kwargs.get("name") or getattr(func, "__name__", "tool"))
+            tool_family = _tool_family_for_function(func)
+            tool_manager = getattr(mcp, "_tool_manager", None)
+            if tool_manager is not None:
+                tool = tool_manager.get_tool(tool_name)
+                if tool is not None:
+                    tool.fn = _instrument_callable(tool.fn, tool_name, tool_family)
+            return registered
+
+        return _decorate
+
+    mcp.tool = instrumented_tool
 
 
 def build_server():
@@ -44,6 +209,7 @@ def build_server():
     globals()["Context"] = Context
 
     mcp = FastMCP("GameMaker MCP")
+    _wrap_tool_registration(mcp)
     register_all(mcp, Context)
 
     # region agent log
@@ -81,6 +247,15 @@ def main() -> int:
     # endregion
     try:
         server = build_server()
+        _record_mcp_event(
+            event_type="mcp.server_start",
+            action="server.start",
+            tool_name="server.start",
+            tool_family="server",
+            result="ok",
+            duration_ms=0,
+            execution_mode="stdio",
+        )
     except ModuleNotFoundError as e:
         sys.stderr.write(
             "MCP dependency is missing.\n"

@@ -3,6 +3,7 @@ import os
 import json
 import tempfile
 import io
+import sys
 from contextlib import redirect_stdout, contextmanager
 from pathlib import Path
 from unittest.mock import patch
@@ -134,6 +135,65 @@ class TestInstallAutodetect(unittest.TestCase):
         self.assertEqual(ret, 0)
         mock_cta.assert_called_once()
         self.assertTrue(mock_cta.call_args.kwargs["no_star_ask"])
+
+    def test_main_interactive_setup_prompts_for_telemetry(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            (workspace / "project.yyp").touch()
+            home_dir = Path(tmpdir) / "home"
+            fake_stdin = type("FakeStdin", (), {"isatty": lambda self: True})()
+
+            with temporary_home(home_dir), patch.dict(
+                os.environ,
+                {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
+                clear=False,
+            ), patch.object(sys, "stdin", fake_stdin), patch(
+                "builtins.input",
+                return_value="n",
+            ) as input_mock, patch("gms_mcp.install.maybe_print_star_cta", return_value=False), redirect_stdout(io.StringIO()):
+                ret = main(["--workspace-root", str(workspace), "--cursor", "--skip-config"])
+
+            self.assertEqual(ret, 0)
+            self.assertEqual(input_mock.call_count, 1)
+            telemetry_config = home_dir / ".gms-mcp" / "telemetry.json"
+            self.assertTrue(telemetry_config.exists())
+            payload = json.loads(telemetry_config.read_text(encoding="utf-8"))
+            self.assertEqual(payload["consent"], "disabled")
+
+    def test_main_codex_check_does_not_prompt_for_telemetry(self):
+        if _toml_parser is None:
+            self.skipTest("TOML parser unavailable in this runtime.")
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            (workspace / "project.yyp").touch()
+            local_codex = workspace / ".codex" / "mcp.toml"
+            local_codex.parent.mkdir(parents=True, exist_ok=True)
+            local_codex.write_text(
+                "\n".join(
+                    [
+                        "[mcp_servers.gms-check]",
+                        'command = "gms-mcp"',
+                        "args = []",
+                    ]
+                )
+                + "\n",
+                encoding="utf-8",
+            )
+            home_dir = Path(tmpdir) / "home"
+            fake_stdin = type("FakeStdin", (), {"isatty": lambda self: True})()
+
+            with temporary_home(home_dir), patch.dict(
+                os.environ,
+                {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
+                clear=False,
+            ), patch.object(sys, "stdin", fake_stdin), patch(
+                "builtins.input",
+                side_effect=AssertionError("telemetry prompt should not run"),
+            ), redirect_stdout(io.StringIO()):
+                ret = main(["--workspace-root", str(workspace), "--server-name", "gms-check", "--codex-check"])
+
+            self.assertEqual(ret, 0)
+            self.assertFalse((home_dir / ".gms-mcp" / "telemetry.json").exists())
 
 class TestClaudeCodeSupport(unittest.TestCase):
     """Tests for Claude Code plugin generation."""

@@ -14,6 +14,7 @@ import os
 import sys
 
 from .server.debug import _dbg
+from .telemetry import maybe_start_background_flush, queue_event, resolve_state
 
 
 def main() -> int:
@@ -37,6 +38,19 @@ def main() -> int:
     # endregion
     try:
         from .gamemaker_mcp_server import main as server_main
+        state = resolve_state()
+        if queue_event(
+            state=state,
+            surface="mcp",
+            event_type="mcp.server_start",
+            action="bootstrap.start",
+            tool_name="bootstrap.start",
+            tool_family="server",
+            result="ok",
+            duration_ms=0,
+            execution_mode="bootstrap",
+        ):
+            maybe_start_background_flush()
         # region agent log
         _dbg(
             "H1",

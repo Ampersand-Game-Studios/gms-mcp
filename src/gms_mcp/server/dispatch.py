@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 from typing import Any, Callable, Dict, List
 
+from ..telemetry import note_tool_execution
 from ..execution_policy import ExecutionMode, policy_manager
 from .direct import _run_direct
 from .output import _apply_output_mode
@@ -50,7 +51,7 @@ async def _run_with_fallback(
         effective_mode = ExecutionMode.SUBPROCESS
 
     if effective_mode == ExecutionMode.SUBPROCESS:
-        return _apply_output_mode(
+        result = _apply_output_mode(
             (
                 await _run_cli_async(
                     cli_args,
@@ -65,19 +66,35 @@ async def _run_with_fallback(
             max_chars=max_chars,
             quiet=quiet,
         )
+        note_tool_execution(
+            tool_name=derived_tool_name,
+            execution_mode=result.get("execution_mode") or "subprocess",
+            ok=bool(result.get("ok")),
+            timed_out=bool(result.get("timed_out")),
+            error=result.get("error"),
+        )
+        return result
 
     # ExecutionMode.DIRECT
     _ = ctx
 
     direct_result = _run_direct(direct_handler, direct_args, project_root)
     if direct_result.ok:
-        return _apply_output_mode(
+        result = _apply_output_mode(
             direct_result.as_dict(),
             output_mode=output_mode,
             tail_lines=tail_lines,
             max_chars=max_chars,
             quiet=quiet,
         )
+        note_tool_execution(
+            tool_name=derived_tool_name,
+            execution_mode=result.get("execution_mode") or "direct",
+            ok=bool(result.get("ok")),
+            timed_out=bool(result.get("timed_out")),
+            error=result.get("error"),
+        )
+        return result
 
     # If the direct call threw (or otherwise failed), fall back to subprocess for resilience.
     cli_result = await _run_cli_async(
@@ -88,11 +105,18 @@ async def _run_with_fallback(
         ctx=ctx,
     )
     cli_result.direct_error = direct_result.error or "Direct call failed"
-    return _apply_output_mode(
+    result = _apply_output_mode(
         cli_result.as_dict(),
         output_mode=output_mode,
         tail_lines=tail_lines,
         max_chars=max_chars,
         quiet=quiet,
     )
-
+    note_tool_execution(
+        tool_name=derived_tool_name,
+        execution_mode=result.get("execution_mode") or "subprocess",
+        ok=bool(result.get("ok")),
+        timed_out=bool(result.get("timed_out")),
+        error=result.get("error") or result.get("direct_error"),
+    )
+    return result

@@ -1,0 +1,23 @@
+name = "gms-mcp-telemetry-ingest"
+main = "src/index.js"
+compatibility_date = "2026-03-20"
+
+[vars]
+RAW_RETENTION_DAYS = "90"
+AGGREGATE_RETENTION_MONTHS = "24"
+
+[[queues.producers]]
+binding = "TELEMETRY_QUEUE"
+queue = "gms-mcp-telemetry-events"
+
+[[queues.consumers]]
+queue = "gms-mcp-telemetry-events"
+max_batch_size = 50
+max_batch_timeout = 5
+
+[[r2_buckets]]
+binding = "TELEMETRY_BUCKET"
+bucket_name = "gms-mcp-telemetry-prod"
+
+[triggers]
+crons = ["15 2 * * *"]

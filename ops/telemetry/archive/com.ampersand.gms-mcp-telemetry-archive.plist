@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.ampersand.gms-mcp-telemetry-archive</string>
+  <key>ProgramArguments</key>
+  <array>
+    <string>/Users/callum/Projects/Ampersand Game Studios/GMS MCP/gms-mcp/ops/telemetry/archive/run_telemetry_archive.sh</string>
+  </array>
+  <key>StartCalendarInterval</key>
+  <dict>
+    <key>Weekday</key>
+    <integer>1</integer>
+    <key>Hour</key>
+    <integer>3</integer>
+    <key>Minute</key>
+    <integer>30</integer>
+  </dict>
+  <key>RunAtLoad</key>
+  <false/>
+  <key>StandardOutPath</key>
+  <string>/Users/callum/Library/Logs/gms-mcp-telemetry-archive.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/callum/Library/Logs/gms-mcp-telemetry-archive.log</string>
+  <key>WorkingDirectory</key>
+  <string>/Users/callum/Projects/Ampersand Game Studios/GMS MCP/gms-mcp</string>
+</dict>
+</plist>

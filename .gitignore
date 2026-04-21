@@ -30,6 +30,8 @@ gamemaker/
 .mcp.json
 .claude-plugin/
 mcp-configs/
+ops/telemetry/cloudflare/node_modules/
+ops/telemetry/cloudflare/.wrangler/
 
 # Local environment (API keys, secrets)
 .env

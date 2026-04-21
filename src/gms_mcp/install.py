@@ -18,6 +18,7 @@ import shutil
 import sys
 import shlex
 import tempfile
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable, Optional
@@ -29,6 +30,15 @@ from .client_registry import (
     resolve_client_spec,
 )
 from .star_cta import HELP_EPILOG, maybe_print_star_cta
+from .telemetry import (
+    classify_error_family,
+    emit_consent_changed,
+    maybe_start_background_flush,
+    prompt_for_consent,
+    queue_event,
+    resolve_state,
+    should_prompt_for_consent,
+)
 
 if sys.version_info >= (3, 11):
     import tomllib as _toml_parser  # Python 3.11+
@@ -2003,6 +2013,59 @@ def _run_canonical_flow(
     return _print_standard_app_setup_summary(state)
 
 
+def _install_action_label(args: argparse.Namespace, *, only_checks: bool = False) -> tuple[str, str]:
+    if args.client:
+        if args.client == "codex" and args.action in {"check", "check-json"}:
+            return "init.codex_check", f"{args.client}.{args.action.replace('-', '_')}"
+        return "init.run", f"{args.client}.{args.action.replace('-', '_')}"
+
+    if only_checks and args.codex_check_json:
+        return "init.codex_check", "codex.check_json"
+    if only_checks and args.codex_check:
+        return "init.codex_check", "codex.check"
+    if args.codex_app_setup:
+        return "init.run", "codex.app_setup"
+    if args.antigravity_app_setup:
+        return "init.run", "antigravity.app_setup"
+    if args.codex_dry_run_only:
+        return "init.run", "codex.dry_run_only"
+    if args.codex:
+        return "init.run", "codex.setup"
+    if args.codex_global:
+        return "init.run", "codex.global_setup"
+    if args.cursor_global:
+        return "init.run", "cursor.global_setup"
+    if args.cursor:
+        return "init.run", "cursor.setup"
+    if args.claude_code_global:
+        return "init.run", "claude_code.global_setup"
+    if args.claude_code:
+        return "init.run", "claude_code.setup"
+    if args.antigravity_setup:
+        return "init.run", "antigravity.setup"
+    if args.antigravity_check_json:
+        return "init.run", "antigravity.check_json"
+    if args.antigravity_check:
+        return "init.run", "antigravity.check"
+    if args.openclaw:
+        return "init.run", "openclaw.setup"
+    if args.vscode:
+        return "init.run", "vscode.setup"
+    if args.windsurf:
+        return "init.run", "windsurf.setup"
+    if args.all:
+        return "init.run", "all"
+    return "init.run", "setup"
+
+
+def _should_prompt_after_init(*, args: argparse.Namespace, only_checks: bool, exit_code: int) -> bool:
+    if exit_code != 0:
+        return False
+    if bool(args.non_interactive) or bool(args.dry_run) or only_checks:
+        return False
+    return should_prompt_for_consent(cli_override=getattr(args, "telemetry", "inherit"), allow_prompt=True)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Generate MCP client configs for the GameMaker MCP server.",
@@ -2040,6 +2103,12 @@ def main(argv: list[str] | None = None) -> int:
         "--no-star-ask",
         action="store_true",
         help="Suppress the post-setup GitHub star note for this run.",
+    )
+    parser.add_argument(
+        "--telemetry",
+        choices=["inherit", "on", "off"],
+        default="inherit",
+        help="Telemetry override for this run (default: inherit).",
     )
     parser.add_argument(
         "--client",
@@ -2169,6 +2238,31 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+    start_time = time.monotonic()
+
+    def _finish(exit_code: int, *, only_checks: bool = False, error_family: str | None = None) -> int:
+        event_type, action = _install_action_label(args, only_checks=only_checks)
+        duration_ms = int((time.monotonic() - start_time) * 1000)
+        state = resolve_state(getattr(args, "telemetry", "inherit"))
+        queued = queue_event(
+            state=state,
+            surface="init",
+            event_type=event_type,
+            action=action,
+            tool_name=action,
+            tool_family="init",
+            result="ok" if exit_code == 0 else "error",
+            error_family=error_family if exit_code != 0 else None,
+            duration_ms=duration_ms,
+            execution_mode="inline",
+        )
+        if queued:
+            maybe_start_background_flush()
+        if _should_prompt_after_init(args=args, only_checks=only_checks, exit_code=exit_code):
+            enabled = prompt_for_consent()
+            if enabled:
+                emit_consent_changed("enable")
+        return exit_code
 
     workspace_root = Path(args.workspace_root).expanduser().resolve()
     dry_run = bool(args.dry_run)
@@ -2194,20 +2288,23 @@ def main(argv: list[str] | None = None) -> int:
             args.safe_profile
             or (spec.key == "antigravity" and args.scope == "global" and args.action in ("setup", "app-setup"))
         )
-        return _run_canonical_flow(
-            client=spec.key,
-            scope=args.scope,
-            action=args.action,
-            workspace_root=workspace_root,
-            gm_project_root=gm_project_root,
-            server_name=args.server_name,
-            command=command,
-            args_prefix=args_prefix,
-            dry_run=dry_run,
-            safe_profile=canonical_safe_profile,
-            config_path_override=args.config_path,
-            openclaw_install_skills=bool(args.openclaw_install_skills),
-            openclaw_skills_project=bool(args.openclaw_skills_project),
+        return _finish(
+            _run_canonical_flow(
+                client=spec.key,
+                scope=args.scope,
+                action=args.action,
+                workspace_root=workspace_root,
+                gm_project_root=gm_project_root,
+                server_name=args.server_name,
+                command=command,
+                args_prefix=args_prefix,
+                dry_run=dry_run,
+                safe_profile=canonical_safe_profile,
+                config_path_override=args.config_path,
+                openclaw_install_skills=bool(args.openclaw_install_skills),
+                openclaw_skills_project=bool(args.openclaw_skills_project),
+            ),
+            only_checks=args.action in {"check", "check-json"},
         )
 
     requested_any = (
@@ -2298,8 +2395,8 @@ def main(argv: list[str] | None = None) -> int:
         codex_exit = _run_requested_codex_checks()
         antigravity_exit = _run_requested_antigravity_checks()
         if codex_exit != 0:
-            return codex_exit
-        return antigravity_exit
+            return _finish(codex_exit, only_checks=True)
+        return _finish(antigravity_exit, only_checks=True)
 
     if args.all:
         args.cursor = True
@@ -2395,7 +2492,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         except (RuntimeError, ValueError) as exc:
             print(f"[ERROR] Could not generate Codex workspace config: {exc}")
-            return 2
+            return _finish(2, error_family=classify_error_family(exc))
         written.append(codex_path)
 
         if dry_run:
@@ -2442,7 +2539,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         except (RuntimeError, ValueError) as exc:
             print(f"[ERROR] Could not generate Codex global config: {exc}")
-            return 2
+            return _finish(2, error_family=classify_error_family(exc))
         written.append(codex_global_path)
 
         if dry_run:
@@ -2473,7 +2570,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         except (RuntimeError, ValueError) as exc:
             print(f"[ERROR] Could not preview Codex global config merge: {exc}")
-            return 2
+            return _finish(2, error_family=classify_error_family(exc))
         print(f"[INFO] Codex app setup global preview target: {codex_global_path}")
         print("[INFO] Codex app setup global final merged payload (preview):")
         print(codex_global_preview.rstrip())
@@ -2492,7 +2589,7 @@ def main(argv: list[str] | None = None) -> int:
             )
         except ValueError as exc:
             print(f"[ERROR] Could not generate Antigravity config: {exc}")
-            return 2
+            return _finish(2, error_family=classify_error_family(exc))
         written.append(antigravity_path)
         if dry_run:
             print(f"[DRY-RUN] Antigravity config would be merged into: {antigravity_path}")
@@ -2536,7 +2633,7 @@ def main(argv: list[str] | None = None) -> int:
     if dry_run:
         if args.codex_dry_run_only:
             print("[DRY-RUN] Codex dry-run-only mode complete. No files were written.")
-            return 0
+            return _finish(0)
         print("[DRY-RUN] No files were written.")
         print("[DRY-RUN] Target paths:")
         for p in written:
@@ -2582,20 +2679,22 @@ def main(argv: list[str] | None = None) -> int:
             print()
         check_exit = _run_requested_codex_checks()
         if check_exit != 0:
-            return check_exit
+            return _finish(check_exit)
         antigravity_check_exit = _run_requested_antigravity_checks()
         if antigravity_check_exit != 0:
-            return antigravity_check_exit
+            return _finish(antigravity_check_exit)
         if args.codex_app_setup:
             summary_code = _print_codex_app_setup_summary(workspace_root=workspace_root, server_name=args.server_name)
             if summary_code != 0:
-                return summary_code
+                return _finish(summary_code)
         if args.antigravity_app_setup:
-            return _print_antigravity_app_setup_summary(
-                config_path=antigravity_config_path,
-                server_name=args.server_name,
+            return _finish(
+                _print_antigravity_app_setup_summary(
+                    config_path=antigravity_config_path,
+                    server_name=args.server_name,
+                )
             )
-        return 0
+        return _finish(0)
 
     gm_note = str(gm_project_root) if gm_project_root else "(not selected; defaults to ${workspaceFolder})"
     print("[OK] Wrote MCP config(s):")
@@ -2622,24 +2721,24 @@ def main(argv: list[str] | None = None) -> int:
 
     check_exit = _run_requested_codex_checks()
     if check_exit != 0:
-        return check_exit
+        return _finish(check_exit)
     antigravity_check_exit = _run_requested_antigravity_checks()
     if antigravity_check_exit != 0:
-        return antigravity_check_exit
+        return _finish(antigravity_check_exit)
     if args.codex_app_setup:
         summary_code = _print_codex_app_setup_summary(workspace_root=workspace_root, server_name=args.server_name)
         if summary_code != 0:
-            return summary_code
+            return _finish(summary_code)
     if args.antigravity_app_setup:
         summary_code = _print_antigravity_app_setup_summary(
             config_path=antigravity_config_path,
             server_name=args.server_name,
         )
         if summary_code != 0:
-            return summary_code
+            return _finish(summary_code)
 
     maybe_print_star_cta(no_star_ask=bool(args.no_star_ask))
-    return 0
+    return _finish(0)
 
 
 if __name__ == "__main__":

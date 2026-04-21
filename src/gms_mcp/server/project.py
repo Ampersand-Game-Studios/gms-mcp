@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import sys
 from pathlib import Path
 from typing import Optional
 
@@ -40,9 +42,24 @@ def _resolve_repo_root(project_root: str | None) -> Path:
     return Path.cwd()
 
 
+def _cli_package_root() -> Path:
+    return Path(__file__).resolve().parents[2]
+
+
 def _ensure_cli_on_sys_path(_repo_root: Path) -> None:
-    # Compatibility shim (no-op in installed mode).
-    return None
+    package_root = str(_cli_package_root())
+    if package_root not in sys.path:
+        sys.path.insert(0, package_root)
+
+
+def _with_cli_pythonpath(env: dict[str, str] | None) -> dict[str, str]:
+    merged = dict(env or os.environ)
+    package_root = str(_cli_package_root())
+    current = merged.get("PYTHONPATH", "")
+    parts = [part for part in current.split(os.pathsep) if part]
+    if package_root not in parts:
+        merged["PYTHONPATH"] = os.pathsep.join([package_root, *parts]) if parts else package_root
+    return merged
 
 
 def _resolve_project_directory(project_root: str | None) -> Path:

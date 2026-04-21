@@ -16,6 +16,7 @@
 - **Introspection**: complete project inspection with support for all asset types (including extensions and datafiles).
 - **MCP Resources**: addressable project index and asset graph for high-performance agent context loading.
 - `gms-mcp-init`: generates shareable MCP config files for a workspace. Now auto-detects environment variables like `GMS_MCP_GMS_PATH` to include in the generated config.
+- **Privacy-Safe Telemetry (opt-in)**: `gms`, `gms-mcp-init`, and MCP usage can send anonymous usage metadata only after explicit consent.
 
 ## Install (recommended: pipx)
 
@@ -80,6 +81,40 @@ Codex helpers:
 - `gms-mcp-init --codex-check-json` prints the same check output in machine-readable JSON, with secret-like values redacted.
 - `gms-mcp-init --codex-dry-run-only` prints final merged payloads for workspace + global Codex config without writing files.
 - `gms-mcp-init --codex-app-setup` runs one-shot Codex app setup: writes workspace config, previews global merge, then prints check + readiness summary.
+
+## Telemetry
+
+Telemetry is `default off`.
+
+- Consent is user-scoped in `~/.gms-mcp/telemetry.json`
+- Interactive `gms` and `gms-mcp-init` runs can prompt once for consent
+- MCP server startup never prompts on stdio
+- By default telemetry excludes file paths, command arguments, stdout/stderr, project names, usernames, emails, hostnames, and persistent IDs
+
+CLI controls:
+
+```bash
+gms telemetry status
+gms telemetry enable
+gms telemetry enable --with-install-id
+gms telemetry disable
+gms telemetry flush
+gms telemetry clear
+```
+
+Runtime overrides:
+
+```bash
+gms --telemetry=off maintenance auto
+gms-mcp-init --telemetry=on --cursor
+GMS_MCP_TELEMETRY=off gms asset create script my_script
+```
+
+Dev/test endpoint override:
+
+```bash
+GMS_MCP_TELEMETRY_ENDPOINT=https://localhost:8787/v1/events gms telemetry flush
+```
 
 ## Local Development Setup
 

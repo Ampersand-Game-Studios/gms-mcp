@@ -5,11 +5,22 @@ Unified interface for all GameMaker development tools.
 """
 
 import argparse
-import sys
 import os
 import platform
+import sys
+import time
 
 from gms_mcp.star_cta import HELP_EPILOG
+from gms_mcp.telemetry import (
+    cli_telemetry_suppressed,
+    classify_error_family,
+    extract_cli_override,
+    maybe_start_background_flush,
+    queue_event,
+    resolve_state,
+    should_prompt_for_consent,
+    prompt_for_consent,
+)
 
 # Import utilities for directory validation
 from .utils import validate_working_directory, resolve_project_directory
@@ -48,6 +59,7 @@ Examples:
     # Global options
     parser.add_argument('--version', action='version', version='GMS Tools 2.0')
     parser.add_argument('--project-root', default='.', help='Project root directory (directory containing .yyp, or repo root containing gamemaker/)')
+    parser.add_argument('--telemetry', choices=['inherit', 'on', 'off'], default='inherit', help='Telemetry override for this run (default: inherit)')
     
     # Create subcommand parsers
     subparsers = parser.add_subparsers(dest='category', help='Tool categories')
@@ -65,6 +77,7 @@ Examples:
     setup_diagnostics_commands(subparsers)
     setup_symbol_commands(subparsers)
     setup_skills_commands(subparsers)
+    setup_telemetry_commands(subparsers)
     setup_doc_commands(subparsers)
 
     return parser
@@ -101,6 +114,29 @@ def setup_skills_commands(subparsers):
     uninstall_parser.add_argument('--openclaw', action='store_true',
                                   help='Remove from OpenClaw skills directories (./skills for --project, ~/.openclaw/skills for user scope)')
     uninstall_parser.set_defaults(func=handle_skills_uninstall)
+
+
+def setup_telemetry_commands(subparsers):
+    """Set up telemetry control commands."""
+    telemetry_parser = subparsers.add_parser('telemetry', help='Manage local telemetry consent and queued events')
+    telemetry_subparsers = telemetry_parser.add_subparsers(dest='telemetry_action', help='Telemetry actions')
+    telemetry_subparsers.required = True
+
+    enable_parser = telemetry_subparsers.add_parser('enable', help='Enable anonymous telemetry')
+    enable_parser.add_argument('--with-install-id', action='store_true', help='Also include a stable hashed install identifier')
+    enable_parser.set_defaults(func=handle_telemetry_enable)
+
+    disable_parser = telemetry_subparsers.add_parser('disable', help='Disable anonymous telemetry')
+    disable_parser.set_defaults(func=handle_telemetry_disable)
+
+    status_parser = telemetry_subparsers.add_parser('status', help='Show telemetry status')
+    status_parser.set_defaults(func=handle_telemetry_status)
+
+    flush_parser = telemetry_subparsers.add_parser('flush', help='Upload queued telemetry immediately')
+    flush_parser.set_defaults(func=handle_telemetry_flush)
+
+    clear_parser = telemetry_subparsers.add_parser('clear', help='Delete queued local telemetry')
+    clear_parser.set_defaults(func=handle_telemetry_clear)
 
 
 def setup_doc_commands(subparsers):
@@ -909,6 +945,13 @@ from .commands.symbol_commands import (
 from .commands.skills_commands import (
     handle_skills_install, handle_skills_list, handle_skills_uninstall
 )
+from .commands.telemetry_commands import (
+    handle_telemetry_clear,
+    handle_telemetry_disable,
+    handle_telemetry_enable,
+    handle_telemetry_flush,
+    handle_telemetry_status,
+)
 from .commands.doc_commands import (
     handle_doc_lookup, handle_doc_search, handle_doc_list,
     handle_doc_categories, handle_doc_cache_stats, handle_doc_cache_clear
@@ -920,35 +963,184 @@ from .commands.sprite_commands import (
 )
 
 
+_NON_PROJECT_CATEGORIES = {"skills", "telemetry"}
+_CLI_NAME_KEYS = [
+    "category",
+    "asset_action",
+    "asset_type",
+    "event_action",
+    "workflow_action",
+    "texture_action",
+    "sprite_action",
+    "room_action",
+    "room_layer_action",
+    "room_ops_action",
+    "room_instance_action",
+    "maintenance_action",
+    "runner_action",
+    "symbol_action",
+    "skills_action",
+    "telemetry_action",
+    "doc_action",
+    "cache_action",
+]
+
+
+def _promote_global_options(argv: list[str]) -> list[str]:
+    global_tokens: list[str] = []
+    remainder: list[str] = []
+    index = 0
+    while index < len(argv):
+        token = argv[index]
+        if token.startswith("--project-root=") or token.startswith("--telemetry="):
+            global_tokens.append(token)
+            index += 1
+            continue
+        if token in {"--project-root", "--telemetry"} and index + 1 < len(argv):
+            global_tokens.extend([token, argv[index + 1]])
+            index += 2
+            continue
+        remainder.append(token)
+        index += 1
+    return global_tokens + remainder
+
+
+def _is_non_project_command(argv: list[str]) -> bool:
+    return len(argv) > 0 and argv[0] in _NON_PROJECT_CATEGORIES
+
+
+def _cli_command_name(args: argparse.Namespace) -> str:
+    parts: list[str] = []
+    for key in _CLI_NAME_KEYS:
+        value = getattr(args, key, None)
+        if not value:
+            continue
+        text = str(value)
+        if text not in parts:
+            parts.append(text)
+    return ".".join(parts) if parts else "cli"
+
+
+def _cli_tool_family(args: argparse.Namespace) -> str:
+    category = getattr(args, "category", None)
+    if category:
+        return str(category)
+    return "meta"
+
+
+def _queue_cli_event(
+    *,
+    telemetry_override: str,
+    tool_name: str,
+    tool_family: str,
+    result: str,
+    duration_ms: int,
+    error_family: str | None = None,
+    execution_mode: str = "inline",
+) -> None:
+    if cli_telemetry_suppressed():
+        return
+    state = resolve_state(telemetry_override)
+    if not queue_event(
+        state=state,
+        surface="cli",
+        event_type="cli.command",
+        action=tool_name,
+        tool_name=tool_name,
+        tool_family=tool_family,
+        result=result,
+        error_family=error_family,
+        duration_ms=duration_ms,
+        execution_mode=execution_mode,
+    ):
+        return
+    maybe_start_background_flush()
+
+
+def _maybe_prompt_after_cli(*, telemetry_override: str, allow_prompt: bool) -> None:
+    if cli_telemetry_suppressed():
+        return
+    if not should_prompt_for_consent(cli_override=telemetry_override, allow_prompt=allow_prompt):
+        return
+    enabled = prompt_for_consent()
+    if enabled:
+        from gms_mcp.telemetry import emit_consent_changed
+
+        emit_consent_changed("enable")
+
 
 def main():
     """Main entry point for the master CLI."""
+    argv = _promote_global_options(sys.argv[1:])
     parser = create_parser()
+    telemetry_override = extract_cli_override(argv)
 
     # Allow help/version from any directory without requiring project discovery.
-    if any(a in ("-h", "--help", "--version") for a in sys.argv[1:]):
+    if any(a in ("-h", "--help", "--version") for a in argv):
+        start = time.monotonic()
         try:
-            parser.parse_args()
+            parser.parse_args(argv)
+            duration_ms = int((time.monotonic() - start) * 1000)
+            tool_name = "version" if "--version" in argv else "help"
+            _queue_cli_event(
+                telemetry_override=telemetry_override,
+                tool_name=tool_name,
+                tool_family="meta",
+                result="ok",
+                duration_ms=duration_ms,
+            )
             return True
         except SystemExit as e:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            tool_name = "version" if "--version" in argv else "help"
+            _queue_cli_event(
+                telemetry_override=telemetry_override,
+                tool_name=tool_name,
+                tool_family="meta",
+                result="ok" if int(getattr(e, "code", 1) or 0) == 0 else "error",
+                error_family=None if int(getattr(e, "code", 1) or 0) == 0 else "system_exit",
+                duration_ms=duration_ms,
+            )
             return int(getattr(e, "code", 1) or 0) == 0
 
     # Skills commands don't require a GameMaker project
-    if len(sys.argv) > 1 and sys.argv[1] == 'skills':
-        args = parser.parse_args()
+    if _is_non_project_command(argv):
+        args = parser.parse_args(argv)
+        start = time.monotonic()
+        tool_name = _cli_command_name(args)
+        tool_family = _cli_tool_family(args)
         try:
             result = args.func(args)
+            duration_ms = int((time.monotonic() - start) * 1000)
+            if getattr(args, "category", None) != "telemetry":
+                _queue_cli_event(
+                    telemetry_override=telemetry_override,
+                    tool_name=tool_name,
+                    tool_family=tool_family,
+                    result="ok" if not isinstance(result, dict) else ("ok" if result.get("success", True) else "error"),
+                    duration_ms=duration_ms,
+                )
+                _maybe_prompt_after_cli(telemetry_override=telemetry_override, allow_prompt=bool(result if not isinstance(result, dict) else result.get("success", True)))
             if isinstance(result, dict):
                 return result.get("success", True)
             return result
         except Exception as e:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            _queue_cli_event(
+                telemetry_override=telemetry_override,
+                tool_name=tool_name,
+                tool_family=tool_family,
+                result="error",
+                error_family=classify_error_family(e),
+                duration_ms=duration_ms,
+            )
             print(f"[ERROR] {e}")
             return False
 
     # Resolve project directory before parsing full args (subparsers are required).
     pre_parser = argparse.ArgumentParser(add_help=False)
     pre_parser.add_argument("--project-root", default=None)
-    pre_args, _ = pre_parser.parse_known_args(sys.argv[1:])
+    pre_args, _ = pre_parser.parse_known_args(argv)
 
     try:
         project_dir = resolve_project_directory(pre_args.project_root)
@@ -966,25 +1158,69 @@ def main():
         print(f"[ERROR] {e.message}")
         raise
         
-    args = parser.parse_args()
+    args = parser.parse_args(argv)
 
     # Normalize project_root after chdir so downstream handlers resolve correctly.
     # (If the user passed --project-root gamemaker from repo root, leaving it as-is would resolve to gamemaker/gamemaker)
     args.project_root = '.'
+    telemetry_override = getattr(args, "telemetry", telemetry_override)
+    tool_name = _cli_command_name(args)
+    tool_family = _cli_tool_family(args)
+    start = time.monotonic()
     
     # Route to appropriate handler
     try:
         result = args.func(args)
+        duration_ms = int((time.monotonic() - start) * 1000)
+        ok = result.success if hasattr(result, "success") else (result.get("success", True) if isinstance(result, dict) else bool(result))
+        _queue_cli_event(
+            telemetry_override=telemetry_override,
+            tool_name=tool_name,
+            tool_family=tool_family,
+            result="ok" if ok else "error",
+            duration_ms=duration_ms,
+        )
+        _maybe_prompt_after_cli(
+            telemetry_override=telemetry_override,
+            allow_prompt=ok and getattr(args, "category", None) != "telemetry",
+        )
         if hasattr(result, "success"):
             return result.success
         return result
     except GMSError as e:
+        duration_ms = int((time.monotonic() - start) * 1000)
+        _queue_cli_event(
+            telemetry_override=telemetry_override,
+            tool_name=tool_name,
+            tool_family=tool_family,
+            result="error",
+            error_family=classify_error_family(e),
+            duration_ms=duration_ms,
+        )
         print(f"[ERROR] {e.message}")
         raise
     except KeyboardInterrupt:
+        duration_ms = int((time.monotonic() - start) * 1000)
+        _queue_cli_event(
+            telemetry_override=telemetry_override,
+            tool_name=tool_name,
+            tool_family=tool_family,
+            result="cancelled",
+            error_family="cancelled",
+            duration_ms=duration_ms,
+        )
         print("\n[WARN]  Operation cancelled by user")
         return False
     except Exception as e:
+        duration_ms = int((time.monotonic() - start) * 1000)
+        _queue_cli_event(
+            telemetry_override=telemetry_override,
+            tool_name=tool_name,
+            tool_family=tool_family,
+            result="error",
+            error_family=classify_error_family(e),
+            duration_ms=duration_ms,
+        )
         print(f"[ERROR] Unexpected error: {e}")
         import traceback
         traceback.print_exc()

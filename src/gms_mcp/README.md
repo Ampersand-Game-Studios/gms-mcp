@@ -84,6 +84,24 @@ gms-mcp-init --client <client> --scope <workspace|global> --action <setup|check|
 
 See `documentation/CLIENT_SUPPORT_MATRIX.md` for the maintained capability matrix.
 
+### Telemetry
+
+Telemetry is opt-in and default-off.
+
+- Interactive `gms` and `gms-mcp-init` runs may prompt once for consent when no decision exists yet.
+- MCP server startup never prompts on stdio.
+- Runtime overrides:
+  - `--telemetry=inherit|on|off`
+  - `GMS_MCP_TELEMETRY=inherit|on|off`
+  - `GMS_MCP_TELEMETRY_ENDPOINT=<url>` for local backend testing only
+- Local controls:
+  - `gms telemetry status`
+  - `gms telemetry enable`
+  - `gms telemetry enable --with-install-id`
+  - `gms telemetry disable`
+  - `gms telemetry flush`
+  - `gms telemetry clear`
+
 **Environment Auto-detection**: `gms-mcp-init` now automatically detects and writes the following environment variables into the generated config if they are set in your current shell:
 - `GMS_MCP_GMS_PATH`
 - `GMS_MCP_DEFAULT_TIMEOUT_SECONDS`
@@ -107,6 +125,7 @@ After changing `.cursor/mcp.json`, **Reload Window** in Cursor to pick up MCP co
   - By default, tools use **isolated subprocess execution**. This ensures they are cancellable, avoid blocking the MCP server, and prevent "silent hangs" on Windows.
   - Subprocess execution (via `gm_cli` or default fallback) isolates the child process from MCP stdin (setting it to `DEVNULL`).
   - Streaming logs via `ctx.log()` is **disabled** during subprocess execution to prevent stdio deadlocks with MCP clients like Cursor.
+  - Direct/background runner paths also avoid stdout pollution: bridge lifecycle logging is internal, background Igor output is collected without echoing into the JSON-RPC stream, and spawned local game processes do not inherit MCP stdio.
   - Every invocation writes a complete diagnostic log file under **`.gms_mcp/logs/`** in the resolved project directory.
   - Tools apply **category-aware default max runtimes** (overrideable) to prevent indefinite blocking. Override globally with `GMS_MCP_DEFAULT_TIMEOUT_SECONDS`.
   - To bypass subprocess overhead and use faster **in-process execution**, set `GMS_MCP_ENABLE_DIRECT=1`. This is faster but less resilient to hangs in library code.
@@ -121,4 +140,3 @@ After changing `.cursor/mcp.json`, **Reload Window** in Cursor to pick up MCP co
   - Most tools accept `output_mode`: `"full"` (default), `"tail"`, or `"none"`
   - `tail_lines` controls how many lines are returned in `"tail"` mode
   - `quiet=true` is a convenience alias for `"tail"` (unless you explicitly set `output_mode`)
-  - Direct/background runner paths also avoid stdout pollution: bridge lifecycle logging is internal, background Igor output is collected without echoing into the JSON-RPC stream, and spawned local game processes do not inherit MCP stdio.
