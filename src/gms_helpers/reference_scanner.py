@@ -259,6 +259,18 @@ class ReferenceScanner:
                                 reference_type="script_sprite_reference",
                                 context=f"Script sprite reference"
                             ))
+                        
+                        # Script/function references
+                        elif asset_type == "script" and re.search(rf'\b{re.escape(old_name)}\b', line):
+                            new_line = re.sub(rf'\b{re.escape(old_name)}\b', new_name, line)
+                            self.references.append(AssetReference(
+                                file_path=script_file,
+                                line_number=i + 1,
+                                old_text=line.strip(),
+                                new_text=new_line.strip(),
+                                reference_type="script_script_reference",
+                                context=f"Script function reference"
+                            ))
                     
                     # TestEnum references (check separately from direct name references)
                     if asset_type == "object" and "TestEnum." in line and old_name.startswith("o_"):
@@ -305,6 +317,17 @@ class ReferenceScanner:
                                 new_text=new_line.strip(),
                                 reference_type="event_object_reference",
                                 context=f"Object event reference"
+                            ))
+                            
+                        elif asset_type == "script" and re.search(rf'\b{re.escape(old_name)}\b', line):
+                            new_line = re.sub(rf'\b{re.escape(old_name)}\b', new_name, line)
+                            self.references.append(AssetReference(
+                                file_path=event_file,
+                                line_number=i + 1,
+                                old_text=line.strip(),
+                                new_text=new_line.strip(),
+                                reference_type="event_script_reference",
+                                context=f"Object event script reference"
                             ))
                             
             except Exception as e:
@@ -386,6 +409,7 @@ class ReferenceScanner:
     def validate_no_stale_references(self, old_name: str) -> List[str]:
         """Validate that no stale references to the old name remain"""
         stale_references = []
+        stale_symbol = re.compile(rf'\b{re.escape(old_name)}\b')
         
         # Search all relevant files for any remaining references
         search_patterns = [
@@ -398,11 +422,11 @@ class ReferenceScanner:
                     with open(file_path, 'r', encoding='utf-8') as f:
                         content = f.read()
                     
-                    if old_name in content:
+                    if stale_symbol.search(content):
                         # Check if this is a legitimate reference or a stale one
                         lines = content.split('\n')
                         for i, line in enumerate(lines):
-                            if old_name in line:
+                            if stale_symbol.search(line):
                                 stale_references.append(f"{file_path}:{i+1}: {line.strip()}")
                                 
                 except Exception:

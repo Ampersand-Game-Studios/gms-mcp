@@ -263,6 +263,26 @@ class TestWorkflowEnhanced(unittest.TestCase):
             self.assertNotIn("TestEnum.test_old", updated_script_content,
                            "Script still contains old TestEnum enum - stale reference!")
 
+    def test_script_rename_updates_object_event_callers(self):
+        """Script renames must update GML callers in object event files."""
+        with TempProject() as proj:
+            old_script_name = "scr_agent_proof"
+            new_script_name = "scr_agent_proof_renamed"
+
+            script_yy, _script_gml = proj.create_script_with_asset_references(old_script_name, [])
+            object_asset = ObjectAsset()
+            object_asset.create_files(proj.dir, "o_agent_probe", "")
+            proj.add_resource_to_project("o_agent_probe", "objects/o_agent_probe/o_agent_probe.yy")
+
+            event_gml = proj.dir / "objects" / "o_agent_probe" / "Create_0.gml"
+            event_gml.write_text(f"proof_value = {old_script_name}();\n", encoding="utf-8")
+
+            rename_asset(proj.dir, f"scripts/{old_script_name}/{old_script_name}.yy", new_script_name)
+
+            updated_event = event_gml.read_text(encoding="utf-8")
+            self.assertIn(f"{new_script_name}()", updated_event)
+            self.assertNotIn(f"{old_script_name}()", updated_event)
+
     def test_asset_rename_updates_resource_order(self):
         """
         CRITICAL TEST: Asset renaming must update resource order files
@@ -544,6 +564,19 @@ class TestReferenceScanner(unittest.TestCase):
             sprite_data = load_json_loose(proj.dir / "sprites" / old_name / f"{old_name}.yy")
             self.assertEqual(sprite_data["sequence"]["%Name"], new_name,
                            "Atomic update failed - sequence name not updated!")
+
+    def test_stale_reference_validation_ignores_new_names_containing_old_name(self):
+        with TempProject() as proj:
+            script_yy, script_gml = proj.create_script_with_asset_references("scr_agent_proof_renamed", [])
+            script_gml.write_text(
+                "function scr_agent_proof_renamed() {\n    return scr_agent_proof_renamed();\n}\n",
+                encoding="utf-8",
+            )
+
+            scanner = ReferenceScanner(proj.dir)
+            stale_refs = scanner.validate_no_stale_references("scr_agent_proof")
+
+            self.assertEqual(stale_refs, [])
 
 
 if __name__ == "__main__":
