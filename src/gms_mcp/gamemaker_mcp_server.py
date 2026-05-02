@@ -94,8 +94,9 @@ def _wrap_tool_registration(mcp) -> None:
 
     def _instrument_callable(func, tool_name: str, tool_family: str):
         if inspect.iscoroutinefunction(func):
+
             @functools.wraps(func)
-            async def wrapped(*args, **kwargs):
+            async def async_wrapped(*args, **kwargs):
                 reset_tool_execution_context()
                 start = time.monotonic()
                 try:
@@ -129,10 +130,10 @@ def _wrap_tool_registration(mcp) -> None:
                 finally:
                     reset_tool_execution_context()
 
-            return wrapped
+            return async_wrapped
 
         @functools.wraps(func)
-        def wrapped(*args, **kwargs):
+        def sync_wrapped(*args, **kwargs):
             reset_tool_execution_context()
             start = time.monotonic()
             try:
@@ -166,7 +167,7 @@ def _wrap_tool_registration(mcp) -> None:
             finally:
                 reset_tool_execution_context()
 
-        return wrapped
+        return sync_wrapped
 
     def instrumented_tool(*tool_args, **tool_kwargs):
         decorator = original_tool(*tool_args, **tool_kwargs)
@@ -258,9 +259,7 @@ def main() -> int:
         )
     except ModuleNotFoundError as e:
         sys.stderr.write(
-            "MCP dependency is missing.\n"
-            "Install it with:\n"
-            f"  {sys.executable} -m pip install -U gms-mcp\n"
+            f"MCP dependency is missing.\nInstall it with:\n  {sys.executable} -m pip install -U gms-mcp\n"
         )
         sys.stderr.write(f"\nDetails: {e}\n")
         return 1
