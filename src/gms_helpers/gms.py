@@ -9,6 +9,7 @@ import os
 import platform
 import sys
 import time
+from pathlib import Path
 
 from gms_mcp.star_cta import HELP_EPILOG
 from gms_mcp.telemetry import (
@@ -1149,82 +1150,86 @@ def main():
         return False
 
     # Run the CLI from the resolved directory so all helper modules can keep using relative paths.
+    previous_cwd = Path.cwd()
     os.chdir(project_dir)
 
-    # Now validate and parse full args.
     try:
-        validate_working_directory()
-    except GMSError as e:
-        print(f"[ERROR] {e.message}")
-        raise
-        
-    args = parser.parse_args(argv)
+        # Now validate and parse full args.
+        try:
+            validate_working_directory()
+        except GMSError as e:
+            print(f"[ERROR] {e.message}")
+            raise
 
-    # Normalize project_root after chdir so downstream handlers resolve correctly.
-    # (If the user passed --project-root gamemaker from repo root, leaving it as-is would resolve to gamemaker/gamemaker)
-    args.project_root = '.'
-    telemetry_override = getattr(args, "telemetry", telemetry_override)
-    tool_name = _cli_command_name(args)
-    tool_family = _cli_tool_family(args)
-    start = time.monotonic()
-    
-    # Route to appropriate handler
-    try:
-        result = args.func(args)
-        duration_ms = int((time.monotonic() - start) * 1000)
-        ok = result.success if hasattr(result, "success") else (result.get("success", True) if isinstance(result, dict) else bool(result))
-        _queue_cli_event(
-            telemetry_override=telemetry_override,
-            tool_name=tool_name,
-            tool_family=tool_family,
-            result="ok" if ok else "error",
-            duration_ms=duration_ms,
-        )
-        _maybe_prompt_after_cli(
-            telemetry_override=telemetry_override,
-            allow_prompt=ok and getattr(args, "category", None) != "telemetry",
-        )
-        if hasattr(result, "success"):
-            return result.success
-        return result
-    except GMSError as e:
-        duration_ms = int((time.monotonic() - start) * 1000)
-        _queue_cli_event(
-            telemetry_override=telemetry_override,
-            tool_name=tool_name,
-            tool_family=tool_family,
-            result="error",
-            error_family=classify_error_family(e),
-            duration_ms=duration_ms,
-        )
-        print(f"[ERROR] {e.message}")
-        raise
-    except KeyboardInterrupt:
-        duration_ms = int((time.monotonic() - start) * 1000)
-        _queue_cli_event(
-            telemetry_override=telemetry_override,
-            tool_name=tool_name,
-            tool_family=tool_family,
-            result="cancelled",
-            error_family="cancelled",
-            duration_ms=duration_ms,
-        )
-        print("\n[WARN]  Operation cancelled by user")
-        return False
-    except Exception as e:
-        duration_ms = int((time.monotonic() - start) * 1000)
-        _queue_cli_event(
-            telemetry_override=telemetry_override,
-            tool_name=tool_name,
-            tool_family=tool_family,
-            result="error",
-            error_family=classify_error_family(e),
-            duration_ms=duration_ms,
-        )
-        print(f"[ERROR] Unexpected error: {e}")
-        import traceback
-        traceback.print_exc()
-        return False
+        args = parser.parse_args(argv)
+
+        # Normalize project_root after chdir so downstream handlers resolve correctly.
+        # (If the user passed --project-root gamemaker from repo root, leaving it as-is would resolve to gamemaker/gamemaker)
+        args.project_root = '.'
+        telemetry_override = getattr(args, "telemetry", telemetry_override)
+        tool_name = _cli_command_name(args)
+        tool_family = _cli_tool_family(args)
+        start = time.monotonic()
+
+        # Route to appropriate handler
+        try:
+            result = args.func(args)
+            duration_ms = int((time.monotonic() - start) * 1000)
+            ok = result.success if hasattr(result, "success") else (result.get("success", True) if isinstance(result, dict) else bool(result))
+            _queue_cli_event(
+                telemetry_override=telemetry_override,
+                tool_name=tool_name,
+                tool_family=tool_family,
+                result="ok" if ok else "error",
+                duration_ms=duration_ms,
+            )
+            _maybe_prompt_after_cli(
+                telemetry_override=telemetry_override,
+                allow_prompt=ok and getattr(args, "category", None) != "telemetry",
+            )
+            if hasattr(result, "success"):
+                return result.success
+            return result
+        except GMSError as e:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            _queue_cli_event(
+                telemetry_override=telemetry_override,
+                tool_name=tool_name,
+                tool_family=tool_family,
+                result="error",
+                error_family=classify_error_family(e),
+                duration_ms=duration_ms,
+            )
+            print(f"[ERROR] {e.message}")
+            raise
+        except KeyboardInterrupt:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            _queue_cli_event(
+                telemetry_override=telemetry_override,
+                tool_name=tool_name,
+                tool_family=tool_family,
+                result="cancelled",
+                error_family="cancelled",
+                duration_ms=duration_ms,
+            )
+            print("\n[WARN]  Operation cancelled by user")
+            return False
+        except Exception as e:
+            duration_ms = int((time.monotonic() - start) * 1000)
+            _queue_cli_event(
+                telemetry_override=telemetry_override,
+                tool_name=tool_name,
+                tool_family=tool_family,
+                result="error",
+                error_family=classify_error_family(e),
+                duration_ms=duration_ms,
+            )
+            print(f"[ERROR] Unexpected error: {e}")
+            import traceback
+            traceback.print_exc()
+            return False
+    finally:
+        os.chdir(previous_cwd)
 
 if __name__ == "__main__":
     try:

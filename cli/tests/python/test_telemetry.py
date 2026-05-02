@@ -240,6 +240,31 @@ class TestTelemetry(unittest.TestCase):
 
         self.assertTrue(second)
 
+    def test_gms_main_restores_cwd_after_project_command(self):
+        project_root = self.work_dir / "project"
+        _create_basic_gamemaker_project(project_root)
+        original_cwd = Path.cwd()
+
+        with temporary_home(self.home_dir), patch.dict(
+            os.environ,
+            {
+                "PYTEST_CURRENT_TEST": "",
+                "GMS_TEST_SUITE": "",
+                "CI": "",
+                "GITHUB_ACTIONS": "",
+                SUPPRESS_CLI_TELEMETRY_ENV_VAR: "1",
+            },
+            clear=False,
+        ), patch.object(
+            gms_module.sys,
+            "argv",
+            ["gms", "--project-root", str(project_root), "maintenance", "validate-json"],
+        ), redirect_stdout(io.StringIO()):
+            result = gms_module.main()
+
+        self.assertTrue(result)
+        self.assertEqual(Path.cwd(), original_cwd)
+
     def test_nested_cli_suppression_skips_prompt(self):
         fake_stdin = SimpleNamespace(isatty=lambda: True)
         with temporary_home(self.home_dir), patch.dict(
