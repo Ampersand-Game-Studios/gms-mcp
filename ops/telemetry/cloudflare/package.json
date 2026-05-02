@@ -5,9 +5,16 @@
   "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
-    "dev": "wrangler dev"
+    "dev": "wrangler dev",
+    "test": "node --test test/*.test.js",
+    "format": "biome format --write .",
+    "format:check": "biome format .",
+    "lint": "biome lint .",
+    "lint:fix": "biome lint --write .",
+    "check": "biome check ."
   },
   "devDependencies": {
-    "wrangler": "^4.14.0"
+    "wrangler": "^4.14.0",
+    "@biomejs/biome": "^2.2.0"
   }
 }

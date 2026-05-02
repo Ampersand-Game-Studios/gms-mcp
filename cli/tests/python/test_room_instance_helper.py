@@ -22,8 +22,15 @@ sys.path.insert(0, str(SRC_ROOT))
 
 # Import from the correct locations
 from gms_helpers.room_instance_helper import (
-    add_instance, remove_instance, list_instances, modify_instance, set_creation_code,
-    _find_room_file, _load_room_data, _save_room_data, _find_layer_by_name
+    add_instance,
+    remove_instance,
+    list_instances,
+    modify_instance,
+    set_creation_code,
+    _find_room_file,
+    _load_room_data,
+    _save_room_data,
+    _find_layer_by_name,
 )
 from gms_helpers.utils import load_json_loose, save_pretty_json, generate_uuid
 from gms_helpers.assets import RoomAsset
@@ -55,22 +62,19 @@ class TestRoomInstanceHelper(unittest.TestCase):
                     "name": "Instances",
                     "instances": [],
                     "visible": True,
-                    "resourceType": "GMRInstanceLayer"
+                    "resourceType": "GMRInstanceLayer",
                 }
             ],
-            "roomSettings": {
-                "Width": 800,
-                "Height": 600
-            },
+            "roomSettings": {"Width": 800, "Height": 600},
             "resourceType": "GMRoom",
-            "resourceVersion": "2.0"
+            "resourceVersion": "2.0",
         }
 
         # Save the room data
         room_path = Path("rooms/r_test/r_test.yy")
         room_path.parent.mkdir(parents=True, exist_ok=True)
         save_pretty_json(room_path, self.basic_room_data)
-        
+
         # Create a minimal object for testing
         obj_dir = Path("objects/o_player")
         obj_dir.mkdir(parents=True, exist_ok=True)
@@ -79,9 +83,9 @@ class TestRoomInstanceHelper(unittest.TestCase):
             "%Name": "o_player",
             "name": "o_player",
             "resourceType": "GMObject",
-            "resourceVersion": "2.0"
+            "resourceVersion": "2.0",
         }
-        with open(obj_dir / "o_player.yy", 'w') as f:
+        with open(obj_dir / "o_player.yy", "w") as f:
             json.dump(obj_data, f)
 
     def tearDown(self):
@@ -127,12 +131,12 @@ class TestRoomInstanceHelper(unittest.TestCase):
         """Test finding layers by name."""
         room_path = _find_room_file("r_test")
         room_data = _load_room_data(room_path)
-        
+
         # Should find existing layer
         layer = _find_layer_by_name(room_data, "Instances")
         self.assertIsNotNone(layer)
         self.assertEqual(layer["name"], "Instances")
-        
+
         # Should raise ValidationError for non-existent layer
         with self.assertRaises(ValidationError):
             _find_layer_by_name(room_data, "NonExistent")
@@ -155,12 +159,49 @@ class TestRoomInstanceHelper(unittest.TestCase):
         self.assertIsInstance(creation_order, list)
         self.assertTrue(
             any(
-                (isinstance(e, str) and e == result)
-                or (isinstance(e, dict) and e.get("name") == result)
+                (isinstance(e, str) and e == result) or (isinstance(e, dict) and e.get("name") == result)
                 for e in creation_order
             ),
             msg=str(creation_order),
         )
+
+    def test_add_instance_rejects_room_name_path_traversal(self):
+        """Room instance tools must not be able to mutate rooms outside the project."""
+        base = self.project_dir / "traversal_case"
+        project_dir = base / "workspace" / "project"
+        outside_room_dir = project_dir.parent / "victim"
+        outside_room_file = base / "victim.yy"
+        outside_room_data = {
+            "$GMRoom": "v1",
+            "%Name": "victim",
+            "name": "victim",
+            "layers": [
+                {
+                    "name": "Instances",
+                    "instances": [],
+                    "resourceType": "GMRInstanceLayer",
+                }
+            ],
+            "resourceType": "GMRoom",
+            "resourceVersion": "2.0",
+        }
+
+        project_dir.mkdir(parents=True)
+        (project_dir / "rooms").mkdir()
+        (project_dir / "test.yyp").write_text("{}")
+        outside_room_dir.mkdir(parents=True)
+        outside_room_file.write_text(json.dumps(outside_room_data), encoding="utf-8")
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(project_dir)
+            with self.assertRaises(ValidationError):
+                add_instance("../../victim", "o_player", 0, 0, "Instances")
+        finally:
+            os.chdir(old_cwd)
+
+        layers = json.loads(outside_room_file.read_text(encoding="utf-8"))["layers"]
+        self.assertEqual(layers[0]["instances"], [])
 
     def test_remove_instance_success(self):
         """Test successfully removing an instance from a room."""
@@ -183,8 +224,7 @@ class TestRoomInstanceHelper(unittest.TestCase):
         creation_order = room_data.get("instanceCreationOrder", [])
         self.assertFalse(
             any(
-                (isinstance(e, str) and e == instance_id)
-                or (isinstance(e, dict) and e.get("name") == instance_id)
+                (isinstance(e, str) and e == instance_id) or (isinstance(e, dict) and e.get("name") == instance_id)
                 for e in creation_order
             ),
             msg=str(creation_order),
@@ -218,9 +258,18 @@ class TestRoomInstanceHelperIntegration(unittest.TestCase):
         """Test that all expected functions can be imported."""
         try:
             from gms_helpers.room_instance_helper import (
-                add_instance, remove_instance, list_instances, modify_instance, set_creation_code,
-                _find_room_file, _load_room_data, _save_room_data, _find_layer_by_name, main
+                add_instance,
+                remove_instance,
+                list_instances,
+                modify_instance,
+                set_creation_code,
+                _find_room_file,
+                _load_room_data,
+                _save_room_data,
+                _find_layer_by_name,
+                main,
             )
+
             # All imports successful
             self.assertTrue(True)
         except ImportError as e:
@@ -238,10 +287,11 @@ class TestRoomInstanceHelperIntegration(unittest.TestCase):
     def test_main_function_exists(self):
         """Test that main function exists for CLI usage."""
         from gms_helpers.room_instance_helper import main
+
         self.assertTrue(callable(main))
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Set up test environment
     print("Running Room Instance Helper Tests...")
     print("=" * 50)

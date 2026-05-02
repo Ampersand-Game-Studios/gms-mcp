@@ -1,0 +1,66 @@
+{
+  "$schema": "https://biomejs.dev/schemas/2.2.0/schema.json",
+  "vcs": {
+    "enabled": false,
+    "clientKind": "git",
+    "useIgnoreFile": false
+  },
+  "files": {
+    "ignoreUnknown": true,
+    "includes": [
+      "**",
+      "!node_modules",
+      "!**/node_modules",
+      "!dist",
+      "!**/dist",
+      "!build",
+      "!**/build",
+      "!builds",
+      "!**/builds",
+      "!.next",
+      "!**/.next",
+      "!.vite",
+      "!**/.vite",
+      "!coverage",
+      "!**/coverage",
+      "!output",
+      "!**/output",
+      "!.nyc_output",
+      "!**/.nyc_output",
+      "!tmp",
+      "!**/tmp",
+      "!**/.build",
+      "!**/DerivedData",
+      "!**/SourcePackages",
+      "!**/ios/**/build",
+      "!**/evals/communication/email-cases.json",
+      "!**/.turbo",
+      "!**/.turbo/**",
+      "!**/dist-*",
+      "!**/dist-*/**",
+      "!**/android/app/src/main/assets/public",
+      "!**/android/app/src/main/assets/public/**",
+      "!**/ios/**/public",
+      "!**/ios/**/public/**"
+    ]
+  },
+  "formatter": {
+    "enabled": true,
+    "indentStyle": "space",
+    "indentWidth": 2,
+    "lineWidth": 100
+  },
+  "linter": {
+    "enabled": true,
+    "rules": {
+      "recommended": true
+    }
+  },
+  "javascript": {
+    "formatter": {
+      "quoteStyle": "single",
+      "semicolons": "always",
+      "trailingCommas": "es5"
+    }
+  }
+}

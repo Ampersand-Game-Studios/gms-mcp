@@ -12,6 +12,7 @@ This worker is the first-party telemetry backend for `gms-mcp`.
 ## Responsibilities
 
 - `fetch`: accept event batches, reject oversized or malformed payloads, drop unknown fields, and queue sanitized events only.
+- `fetch`: enforce a per-client in-worker ingest rate limit before queue writes.
 - `fetch`: expose authenticated archive export endpoints for the Mac mini at `/v1/archive/manifest` and `/v1/archive/object`.
 - `queue`: persist immutable raw NDJSON batches to R2 under `raw/YYYY/MM/DD/...`.
 - `scheduled`: roll up the previous day's raw events into `aggregates/YYYY/MM/DD/summary.json` and prune retention cutoffs.
@@ -37,7 +38,7 @@ npx wrangler deploy
 
 ## Recommended Cloudflare controls
 
-- Add a rate limit rule on `POST /v1/events`
+- Keep a Cloudflare rate limit rule on `POST /v1/events` as the outer enforcement layer
 - Add a WAF rule limited to the telemetry hostname
 - Disable or minimize request logging retention on the ingestion route
 - Keep the worker route separate from the marketing website zone rules

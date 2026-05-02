@@ -3,42 +3,47 @@ const MAX_EVENTS = 50;
 const MAX_REQUEST_BYTES = 256 * 1024;
 const MAX_ARCHIVE_DAYS = 31;
 const MAX_ARCHIVE_OBJECTS = 10000;
-const PRIMARY_HOSTNAME = "gms-mcp-telemetry.ampersandgamestudios.com";
-const DEV_HOSTS = new Set(["localhost", "127.0.0.1"]);
+const RATE_LIMIT_WINDOW_MS = 60 * 1000;
+const MAX_INGEST_REQUESTS_PER_WINDOW = 60;
+const MAX_INGEST_EVENTS_PER_WINDOW = 500;
+const MAX_RATE_LIMIT_KEYS = 5000;
+const PRIMARY_HOSTNAME = 'gms-mcp-telemetry.ampersandgamestudios.com';
+const DEV_HOSTS = new Set(['localhost', '127.0.0.1']);
+const ingestRateLimits = new Map();
 
 const EVENT_RULES = {
-  schema_version: { type: "integer", required: true },
-  event_id: { type: "string", required: true, maxLength: 64 },
-  session_id: { type: "string", required: true, maxLength: 64 },
-  timestamp: { type: "string", required: true, maxLength: 32 },
-  surface: { type: "string", required: true, maxLength: 16 },
-  event_type: { type: "string", required: true, maxLength: 32 },
-  action: { type: "string", required: true, maxLength: 64 },
-  tool_name: { type: "string", required: true, maxLength: 64 },
-  tool_family: { type: "string", required: true, maxLength: 32 },
-  result: { type: "string", required: true, maxLength: 16 },
-  error_family: { type: "string", required: false, maxLength: 32 },
-  duration_ms: { type: "integer", required: false },
-  duration_bucket: { type: "string", required: false, maxLength: 16 },
-  execution_mode: { type: "string", required: false, maxLength: 32 },
-  gms_mcp_version: { type: "string", required: true, maxLength: 32 },
-  os_family: { type: "string", required: true, maxLength: 16 },
-  python_version: { type: "string", required: true, maxLength: 16 },
-  interactive: { type: "boolean", required: true },
-  ci: { type: "boolean", required: true },
-  test_env: { type: "boolean", required: true },
-  install_hash: { type: "string", required: false, maxLength: 128 }
+  schema_version: { type: 'integer', required: true },
+  event_id: { type: 'string', required: true, maxLength: 64 },
+  session_id: { type: 'string', required: true, maxLength: 64 },
+  timestamp: { type: 'string', required: true, maxLength: 32 },
+  surface: { type: 'string', required: true, maxLength: 16 },
+  event_type: { type: 'string', required: true, maxLength: 32 },
+  action: { type: 'string', required: true, maxLength: 64 },
+  tool_name: { type: 'string', required: true, maxLength: 64 },
+  tool_family: { type: 'string', required: true, maxLength: 32 },
+  result: { type: 'string', required: true, maxLength: 16 },
+  error_family: { type: 'string', required: false, maxLength: 32 },
+  duration_ms: { type: 'integer', required: false },
+  duration_bucket: { type: 'string', required: false, maxLength: 16 },
+  execution_mode: { type: 'string', required: false, maxLength: 32 },
+  gms_mcp_version: { type: 'string', required: true, maxLength: 32 },
+  os_family: { type: 'string', required: true, maxLength: 16 },
+  python_version: { type: 'string', required: true, maxLength: 16 },
+  interactive: { type: 'boolean', required: true },
+  ci: { type: 'boolean', required: true },
+  test_env: { type: 'boolean', required: true },
+  install_hash: { type: 'string', required: false, maxLength: 128 },
 };
 
 function jsonResponse(status, payload) {
   return new Response(JSON.stringify(payload, null, 2), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" }
+    headers: { 'content-type': 'application/json; charset=utf-8' },
   });
 }
 
 function hostAllowed(request) {
-  let hostname = "";
+  let hostname = '';
   try {
     hostname = new URL(request.url).hostname.toLowerCase();
   } catch (_error) {
@@ -48,46 +53,120 @@ function hostAllowed(request) {
 }
 
 function parseBearerToken(request) {
-  const header = request.headers.get("authorization") || "";
-  if (!header.toLowerCase().startsWith("bearer ")) {
-    return "";
+  const header = request.headers.get('authorization') || '';
+  if (!header.toLowerCase().startsWith('bearer ')) {
+    return '';
   }
   return header.slice(7).trim();
 }
 
 function requireArchiveAuth(request, env) {
-  const expected = String(env.TELEMETRY_ARCHIVE_TOKEN || "").trim();
+  const expected = String(env.TELEMETRY_ARCHIVE_TOKEN || '').trim();
   if (!expected) {
-    return jsonResponse(503, { ok: false, error: "Archive export is not configured." });
+    return jsonResponse(503, { ok: false, error: 'Archive export is not configured.' });
   }
   const provided = parseBearerToken(request);
   if (!provided || provided !== expected) {
-    return jsonResponse(401, { ok: false, error: "Unauthorized." });
+    return jsonResponse(401, { ok: false, error: 'Unauthorized.' });
   }
   return null;
 }
 
+function clientRateKey(request) {
+  const forwardedFor = request.headers.get('x-forwarded-for') || '';
+  const firstForwarded = forwardedFor.split(',')[0].trim();
+  return request.headers.get('cf-connecting-ip') || firstForwarded || 'unknown';
+}
+
+function pruneRateLimitEntries(now) {
+  for (const [key, entry] of ingestRateLimits.entries()) {
+    if (now - entry.windowStart >= RATE_LIMIT_WINDOW_MS) {
+      ingestRateLimits.delete(key);
+    }
+  }
+  while (ingestRateLimits.size > MAX_RATE_LIMIT_KEYS) {
+    const oldestKey = ingestRateLimits.keys().next().value;
+    if (!oldestKey) {
+      break;
+    }
+    ingestRateLimits.delete(oldestKey);
+  }
+}
+
+function consumeIngestRateLimit(request, { requests = 0, events = 0 } = {}) {
+  const now = Date.now();
+  pruneRateLimitEntries(now);
+
+  const key = clientRateKey(request);
+  let entry = ingestRateLimits.get(key);
+  if (!entry || now - entry.windowStart >= RATE_LIMIT_WINDOW_MS) {
+    entry = { windowStart: now, requests: 0, events: 0 };
+  }
+
+  entry.requests += requests;
+  entry.events += events;
+  ingestRateLimits.set(key, entry);
+
+  if (
+    entry.requests > MAX_INGEST_REQUESTS_PER_WINDOW ||
+    entry.events > MAX_INGEST_EVENTS_PER_WINDOW
+  ) {
+    return jsonResponse(429, { ok: false, error: 'Rate limit exceeded.' });
+  }
+  return null;
+}
+
+async function readTextStreamWithLimit(stream) {
+  if (!stream) {
+    throw new Error('malformed_json');
+  }
+
+  const reader = stream.getReader();
+  const decoder = new TextDecoder();
+  let totalBytes = 0;
+  let text = '';
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) {
+        break;
+      }
+      totalBytes += value?.byteLength || 0;
+      if (totalBytes > MAX_REQUEST_BYTES) {
+        throw new Error('payload_too_large');
+      }
+      text += decoder.decode(value, { stream: true });
+    }
+    text += decoder.decode();
+    return text;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 async function readJsonBody(request) {
-  const contentLength = Number(request.headers.get("content-length") || "0");
+  const contentLength = Number(request.headers.get('content-length') || '0');
   if (contentLength > MAX_REQUEST_BYTES) {
-    throw new Error("payload_too_large");
+    throw new Error('payload_too_large');
   }
 
-  const encoding = (request.headers.get("content-encoding") || "").toLowerCase();
-  if (!encoding || encoding === "identity") {
-    return await request.json();
+  const encoding = (request.headers.get('content-encoding') || '').toLowerCase();
+  if (!encoding || encoding === 'identity') {
+    const text = await readTextStreamWithLimit(request.body);
+    return JSON.parse(text);
   }
-  if (encoding !== "gzip") {
-    throw new Error("unsupported_encoding");
+  if (encoding !== 'gzip') {
+    throw new Error('unsupported_encoding');
   }
 
-  const stream = request.body.pipeThrough(new DecompressionStream("gzip"));
-  const text = await new Response(stream).text();
+  const stream = request.body.pipeThrough(new DecompressionStream('gzip'));
+  const text = await readTextStreamWithLimit(stream);
   return JSON.parse(text);
 }
 
 function sanitizeEvent(event) {
-  if (!event || typeof event !== "object" || Array.isArray(event)) {
+  if (!event || typeof event !== 'object' || Array.isArray(event)) {
     return null;
   }
 
@@ -101,8 +180,8 @@ function sanitizeEvent(event) {
       continue;
     }
 
-    if (rule.type === "string") {
-      if (typeof value !== "string") {
+    if (rule.type === 'string') {
+      if (typeof value !== 'string') {
         return null;
       }
       const trimmed = value.trim();
@@ -113,7 +192,7 @@ function sanitizeEvent(event) {
       continue;
     }
 
-    if (rule.type === "integer") {
+    if (rule.type === 'integer') {
       if (!Number.isInteger(value)) {
         return null;
       }
@@ -121,8 +200,8 @@ function sanitizeEvent(event) {
       continue;
     }
 
-    if (rule.type === "boolean") {
-      if (typeof value !== "boolean") {
+    if (rule.type === 'boolean') {
+      if (typeof value !== 'boolean') {
         return null;
       }
       sanitized[key] = value;
@@ -138,12 +217,12 @@ function sanitizeEvent(event) {
 function utcParts(value) {
   const date = new Date(value);
   if (Number.isNaN(date.getTime())) {
-    throw new Error("invalid_timestamp");
+    throw new Error('invalid_timestamp');
   }
   return {
     year: String(date.getUTCFullYear()),
-    month: String(date.getUTCMonth() + 1).padStart(2, "0"),
-    day: String(date.getUTCDate()).padStart(2, "0")
+    month: String(date.getUTCMonth() + 1).padStart(2, '0'),
+    day: String(date.getUTCDate()).padStart(2, '0'),
   };
 }
 
@@ -153,12 +232,12 @@ function prefixForDate(kind, value) {
 }
 
 async function gzipText(text) {
-  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream("gzip"));
+  const stream = new Blob([text]).stream().pipeThrough(new CompressionStream('gzip'));
   return await new Response(stream).arrayBuffer();
 }
 
 async function gunzipToText(buffer) {
-  const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream("gzip"));
+  const stream = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip'));
   return await new Response(stream).text();
 }
 
@@ -167,7 +246,7 @@ function buildDailyAggregate(dayIso, events) {
     events: 0,
     ok: 0,
     error: 0,
-    cancelled: 0
+    cancelled: 0,
   };
   const byEventType = {};
   const byTool = {};
@@ -175,9 +254,9 @@ function buildDailyAggregate(dayIso, events) {
 
   for (const event of events) {
     totals.events += 1;
-    if (event.result === "ok") {
+    if (event.result === 'ok') {
       totals.ok += 1;
-    } else if (event.result === "cancelled") {
+    } else if (event.result === 'cancelled') {
       totals.cancelled += 1;
     } else {
       totals.error += 1;
@@ -194,12 +273,12 @@ function buildDailyAggregate(dayIso, events) {
       error: 0,
       cancelled: 0,
       total_duration_ms: 0,
-      max_duration_ms: 0
+      max_duration_ms: 0,
     };
     tool.total += 1;
-    if (event.result === "ok") {
+    if (event.result === 'ok') {
       tool.ok += 1;
-    } else if (event.result === "cancelled") {
+    } else if (event.result === 'cancelled') {
       tool.cancelled += 1;
     } else {
       tool.error += 1;
@@ -218,7 +297,7 @@ function buildDailyAggregate(dayIso, events) {
     totals,
     by_event_type: byEventType,
     by_surface: bySurface,
-    by_tool: Object.values(byTool).sort((left, right) => right.total - left.total)
+    by_tool: Object.values(byTool).sort((left, right) => right.total - left.total),
   };
 }
 
@@ -244,7 +323,7 @@ async function listObjects(bucket, prefix) {
       objects.push({
         key: object.key,
         size: object.size || 0,
-        uploaded: object.uploaded ? new Date(object.uploaded).toISOString() : null
+        uploaded: object.uploaded ? new Date(object.uploaded).toISOString() : null,
       });
     }
     cursor = page.truncated ? page.cursor : undefined;
@@ -262,7 +341,7 @@ async function loadEventsForPrefix(bucket, prefix) {
     }
     const compressed = await object.arrayBuffer();
     const text = await gunzipToText(compressed);
-    for (const line of text.split("\n")) {
+    for (const line of text.split('\n')) {
       const trimmed = line.trim();
       if (!trimmed) {
         continue;
@@ -286,7 +365,7 @@ async function deletePrefixForDate(bucket, kind, value) {
 }
 
 function monthsToDays(months) {
-  return Number.parseInt(months || "24", 10) * 31;
+  return Number.parseInt(months || '24', 10) * 31;
 }
 
 function daysToMilliseconds(days) {
@@ -295,29 +374,30 @@ function daysToMilliseconds(days) {
 
 function parseDateOnly(value) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) {
-    throw new Error("invalid_date");
+    throw new Error('invalid_date');
   }
   const parsed = new Date(`${value}T00:00:00.000Z`);
   if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== value) {
-    throw new Error("invalid_date");
+    throw new Error('invalid_date');
   }
   return parsed;
 }
 
 function normalizeArchiveRange(searchParams) {
-  const startRaw = searchParams.get("start_date");
-  const endRaw = searchParams.get("end_date");
+  const startRaw = searchParams.get('start_date');
+  const endRaw = searchParams.get('end_date');
   if (!startRaw || !endRaw) {
-    throw new Error("missing_dates");
+    throw new Error('missing_dates');
   }
   const startDate = parseDateOnly(startRaw);
   const endDate = parseDateOnly(endRaw);
   if (endDate.getTime() < startDate.getTime()) {
-    throw new Error("invalid_range");
+    throw new Error('invalid_range');
   }
-  const totalDays = Math.floor((endDate.getTime() - startDate.getTime()) / daysToMilliseconds(1)) + 1;
+  const totalDays =
+    Math.floor((endDate.getTime() - startDate.getTime()) / daysToMilliseconds(1)) + 1;
   if (totalDays > MAX_ARCHIVE_DAYS) {
-    throw new Error("range_too_large");
+    throw new Error('range_too_large');
   }
   return { startDate, endDate, totalDays };
 }
@@ -327,7 +407,13 @@ function nextUtcDay(value) {
 }
 
 function isAllowedArchiveKey(key) {
-  return typeof key === "string" && key.length > 0 && key.length <= 1024 && !key.includes("..") && (key.startsWith("raw/") || key.startsWith("aggregates/"));
+  return (
+    typeof key === 'string' &&
+    key.length > 0 &&
+    key.length <= 1024 &&
+    !key.includes('..') &&
+    (key.startsWith('raw/') || key.startsWith('aggregates/'))
+  );
 }
 
 async function handleArchiveManifest(request, env) {
@@ -342,28 +428,35 @@ async function handleArchiveManifest(request, env) {
     range = normalizeArchiveRange(url.searchParams);
   } catch (error) {
     const reason = String(error.message);
-    if (reason === "missing_dates") {
-      return jsonResponse(400, { ok: false, error: "Expected start_date and end_date." });
+    if (reason === 'missing_dates') {
+      return jsonResponse(400, { ok: false, error: 'Expected start_date and end_date.' });
     }
-    if (reason === "range_too_large") {
-      return jsonResponse(400, { ok: false, error: "Requested range is too large." });
+    if (reason === 'range_too_large') {
+      return jsonResponse(400, { ok: false, error: 'Requested range is too large.' });
     }
-    return jsonResponse(400, { ok: false, error: "Invalid archive date range." });
+    return jsonResponse(400, { ok: false, error: 'Invalid archive date range.' });
   }
 
   const objects = [];
-  for (let current = range.startDate; current.getTime() <= range.endDate.getTime(); current = nextUtcDay(current)) {
+  for (
+    let current = range.startDate;
+    current.getTime() <= range.endDate.getTime();
+    current = nextUtcDay(current)
+  ) {
     const dayIso = current.toISOString();
-    for (const kind of ["raw", "aggregates"]) {
+    for (const kind of ['raw', 'aggregates']) {
       const entries = await listObjects(env.TELEMETRY_BUCKET, prefixForDate(kind, dayIso));
       for (const entry of entries) {
         objects.push({
           key: entry.key,
           size: entry.size,
-          uploaded_at: entry.uploaded
+          uploaded_at: entry.uploaded,
         });
         if (objects.length > MAX_ARCHIVE_OBJECTS) {
-          return jsonResponse(413, { ok: false, error: "Requested archive contains too many objects." });
+          return jsonResponse(413, {
+            ok: false,
+            error: 'Requested archive contains too many objects.',
+          });
         }
       }
     }
@@ -375,10 +468,10 @@ async function handleArchiveManifest(request, env) {
     generated_at: new Date().toISOString(),
     range: {
       start_date: range.startDate.toISOString().slice(0, 10),
-      end_date: range.endDate.toISOString().slice(0, 10)
+      end_date: range.endDate.toISOString().slice(0, 10),
     },
     object_count: objects.length,
-    objects
+    objects,
   });
 }
 
@@ -389,64 +482,78 @@ async function handleArchiveObject(request, env) {
   }
 
   const url = new URL(request.url);
-  const key = url.searchParams.get("key") || "";
+  const key = url.searchParams.get('key') || '';
   if (!isAllowedArchiveKey(key)) {
-    return jsonResponse(400, { ok: false, error: "Invalid object key." });
+    return jsonResponse(400, { ok: false, error: 'Invalid object key.' });
   }
 
   const object = await env.TELEMETRY_BUCKET.get(key);
   if (!object) {
-    return jsonResponse(404, { ok: false, error: "Telemetry object not found." });
+    return jsonResponse(404, { ok: false, error: 'Telemetry object not found.' });
   }
 
   const headers = new Headers({
-    "cache-control": "private, no-store",
-    "x-telemetry-object-key": key
+    'cache-control': 'private, no-store',
+    'x-telemetry-object-key': key,
   });
   if (object.httpMetadata?.contentType) {
-    headers.set("content-type", object.httpMetadata.contentType);
+    headers.set('content-type', object.httpMetadata.contentType);
   }
   if (object.httpMetadata?.contentEncoding) {
-    headers.set("content-encoding", object.httpMetadata.contentEncoding);
+    headers.set('content-encoding', object.httpMetadata.contentEncoding);
   }
 
   return new Response(object.body, {
     status: 200,
-    headers
+    headers,
   });
 }
 
 async function handleIngest(request, env) {
+  const requestRateFailure = consumeIngestRateLimit(request, { requests: 1 });
+  if (requestRateFailure) {
+    return requestRateFailure;
+  }
+
   let payload;
   try {
     payload = await readJsonBody(request);
   } catch (error) {
-    if (String(error.message) === "payload_too_large") {
-      return jsonResponse(413, { ok: false, error: "Payload too large." });
+    if (String(error.message) === 'payload_too_large') {
+      return jsonResponse(413, { ok: false, error: 'Payload too large.' });
     }
-    if (String(error.message) === "unsupported_encoding") {
-      return jsonResponse(415, { ok: false, error: "Unsupported content encoding." });
+    if (String(error.message) === 'unsupported_encoding') {
+      return jsonResponse(415, { ok: false, error: 'Unsupported content encoding.' });
     }
-    return jsonResponse(400, { ok: false, error: "Malformed JSON payload." });
+    return jsonResponse(400, { ok: false, error: 'Malformed JSON payload.' });
   }
 
   const events = Array.isArray(payload?.events) ? payload.events : null;
   if (!events || events.length === 0 || events.length > MAX_EVENTS) {
-    return jsonResponse(400, { ok: false, error: "Expected 1-50 events." });
+    return jsonResponse(400, { ok: false, error: 'Expected 1-50 events.' });
   }
 
   const sanitized = events.map(sanitizeEvent).filter(Boolean);
   if (sanitized.length === 0) {
-    return jsonResponse(400, { ok: false, error: "No valid events were supplied." });
+    return jsonResponse(400, { ok: false, error: 'No valid events were supplied.' });
+  }
+
+  const eventRateFailure = consumeIngestRateLimit(request, { events: sanitized.length });
+  if (eventRateFailure) {
+    return eventRateFailure;
   }
 
   await env.TELEMETRY_QUEUE.send({
     schema_version: SCHEMA_VERSION,
     received_at: new Date().toISOString(),
-    events: sanitized
+    events: sanitized,
   });
 
-  return jsonResponse(202, { ok: true, accepted: sanitized.length, dropped: events.length - sanitized.length });
+  return jsonResponse(202, {
+    ok: true,
+    accepted: sanitized.length,
+    dropped: events.length - sanitized.length,
+  });
 }
 
 async function handleQueue(batch, env) {
@@ -457,19 +564,19 @@ async function handleQueue(batch, env) {
       continue;
     }
     const receivedAt = body.received_at || new Date().toISOString();
-    const prefix = prefixForDate("raw", receivedAt);
+    const prefix = prefixForDate('raw', receivedAt);
     const key = `${prefix}${Date.now()}-${crypto.randomUUID()}.ndjson.gz`;
-    const ndjson = `${body.events.map((event) => JSON.stringify(event)).join("\n")}\n`;
+    const ndjson = `${body.events.map((event) => JSON.stringify(event)).join('\n')}\n`;
     const compressed = await gzipText(ndjson);
     await env.TELEMETRY_BUCKET.put(key, compressed, {
       httpMetadata: {
-        contentType: "application/x-ndjson",
-        contentEncoding: "gzip"
+        contentType: 'application/x-ndjson',
+        contentEncoding: 'gzip',
       },
       customMetadata: {
         schema_version: String(SCHEMA_VERSION),
-        event_count: String(body.events.length)
-      }
+        event_count: String(body.events.length),
+      },
     });
     message.ack();
   }
@@ -477,43 +584,47 @@ async function handleQueue(batch, env) {
 
 async function handleScheduled(env) {
   const now = new Date();
-  const yesterday = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1));
+  const yesterday = new Date(
+    Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate() - 1)
+  );
   const dayIso = yesterday.toISOString();
-  const rawPrefix = prefixForDate("raw", dayIso);
+  const rawPrefix = prefixForDate('raw', dayIso);
   const events = await loadEventsForPrefix(env.TELEMETRY_BUCKET, rawPrefix);
   const summary = buildDailyAggregate(dayIso.slice(0, 10), events);
-  const aggregateKey = `${prefixForDate("aggregates", dayIso)}summary.json`;
+  const aggregateKey = `${prefixForDate('aggregates', dayIso)}summary.json`;
   await env.TELEMETRY_BUCKET.put(aggregateKey, JSON.stringify(summary, null, 2), {
-    httpMetadata: { contentType: "application/json" }
+    httpMetadata: { contentType: 'application/json' },
   });
 
-  const rawRetentionDays = Number.parseInt(env.RAW_RETENTION_DAYS || "90", 10);
-  const aggregateRetentionDays = monthsToDays(env.AGGREGATE_RETENTION_MONTHS || "24");
+  const rawRetentionDays = Number.parseInt(env.RAW_RETENTION_DAYS || '90', 10);
+  const aggregateRetentionDays = monthsToDays(env.AGGREGATE_RETENTION_MONTHS || '24');
   const rawCutoff = new Date(yesterday.getTime() - daysToMilliseconds(rawRetentionDays));
-  const aggregateCutoff = new Date(yesterday.getTime() - daysToMilliseconds(aggregateRetentionDays));
-  await deletePrefixForDate(env.TELEMETRY_BUCKET, "raw", rawCutoff.toISOString());
-  await deletePrefixForDate(env.TELEMETRY_BUCKET, "aggregates", aggregateCutoff.toISOString());
+  const aggregateCutoff = new Date(
+    yesterday.getTime() - daysToMilliseconds(aggregateRetentionDays)
+  );
+  await deletePrefixForDate(env.TELEMETRY_BUCKET, 'raw', rawCutoff.toISOString());
+  await deletePrefixForDate(env.TELEMETRY_BUCKET, 'aggregates', aggregateCutoff.toISOString());
 }
 
 export default {
   async fetch(request, env) {
     const url = new URL(request.url);
     if (!hostAllowed(request)) {
-      return jsonResponse(403, { ok: false, error: "Forbidden host." });
+      return jsonResponse(403, { ok: false, error: 'Forbidden host.' });
     }
-    if (request.method === "POST" && url.pathname === "/v1/events") {
+    if (request.method === 'POST' && url.pathname === '/v1/events') {
       return handleIngest(request, env);
     }
-    if (request.method === "GET" && url.pathname === "/v1/archive/manifest") {
+    if (request.method === 'GET' && url.pathname === '/v1/archive/manifest') {
       return handleArchiveManifest(request, env);
     }
-    if (request.method === "GET" && url.pathname === "/v1/archive/object") {
+    if (request.method === 'GET' && url.pathname === '/v1/archive/object') {
       return handleArchiveObject(request, env);
     }
-    if (request.method === "GET" && url.pathname === "/health") {
-      return jsonResponse(200, { ok: true, service: "gms-mcp-telemetry-ingest" });
+    if (request.method === 'GET' && url.pathname === '/health') {
+      return jsonResponse(200, { ok: true, service: 'gms-mcp-telemetry-ingest' });
     }
-    return jsonResponse(404, { ok: false, error: "Not found." });
+    return jsonResponse(404, { ok: false, error: 'Not found.' });
   },
 
   async queue(batch, env) {
@@ -522,5 +633,5 @@ export default {
 
   async scheduled(_controller, env) {
     await handleScheduled(env);
-  }
+  },
 };

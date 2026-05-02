@@ -159,9 +159,7 @@ class TestCreateCommands(unittest.TestCase):
         script_instance.create_files.assert_called_once_with(
             Path("."), "PlayerData", "folders/Test.yy", is_constructor=True
         )
-        update_yyp.assert_called_once_with(
-            {"id": {"name": "PlayerData", "path": "scripts/PlayerData/PlayerData.yy"}}
-        )
+        update_yyp.assert_called_once_with({"id": {"name": "PlayerData", "path": "scripts/PlayerData/PlayerData.yy"}})
         self.assertEqual(run_maintenance.call_count, 2)
 
     def test_create_asset_wrappers_success_paths(self):
@@ -201,8 +199,22 @@ class TestCreateCommands(unittest.TestCase):
                 "class_name": "FontAsset",
                 "name": "fnt_ui",
                 "path": "fonts/fnt_ui/fnt_ui.yy",
-                "extra": {"font_name": "Futura", "size": 24, "bold": True, "italic": True, "aa_level": 2, "uses_sdf": False},
-                "kwargs": {"font_name": "Futura", "size": 24, "bold": True, "italic": True, "aa_level": 2, "uses_sdf": False},
+                "extra": {
+                    "font_name": "Futura",
+                    "size": 24,
+                    "bold": True,
+                    "italic": True,
+                    "aa_level": 2,
+                    "uses_sdf": False,
+                },
+                "kwargs": {
+                    "font_name": "Futura",
+                    "size": 24,
+                    "bold": True,
+                    "italic": True,
+                    "aa_level": 2,
+                    "uses_sdf": False,
+                },
                 "validate_type": "font",
                 "success_text": "Font 'fnt_ui' created successfully",
             },
@@ -231,8 +243,22 @@ class TestCreateCommands(unittest.TestCase):
                 "class_name": "SoundAsset",
                 "name": "snd_boom",
                 "path": "sounds/snd_boom/snd_boom.yy",
-                "extra": {"volume": 0.7, "pitch": 1.2, "sound_type": 2, "bitrate": 192, "sample_rate": 22050, "format": 1},
-                "kwargs": {"volume": 0.7, "pitch": 1.2, "sound_type": 2, "bitrate": 192, "sample_rate": 22050, "format": 1},
+                "extra": {
+                    "volume": 0.7,
+                    "pitch": 1.2,
+                    "sound_type": 2,
+                    "bitrate": 192,
+                    "sample_rate": 22050,
+                    "format": 1,
+                },
+                "kwargs": {
+                    "volume": 0.7,
+                    "pitch": 1.2,
+                    "sound_type": 2,
+                    "bitrate": 192,
+                    "sample_rate": 22050,
+                    "format": 1,
+                },
                 "validate_type": "sound",
                 "success_text": "Sound 'snd_boom' created successfully",
             },
@@ -319,7 +345,9 @@ class TestCreateCommands(unittest.TestCase):
                     )
                     validate_name = stack.enter_context(patch("gms_helpers.asset_helper.validate_name"))
                     validate_parent = stack.enter_context(patch("gms_helpers.asset_helper.validate_parent_path"))
-                    update_yyp = stack.enter_context(patch("gms_helpers.asset_helper.update_yyp_file", return_value=True))
+                    update_yyp = stack.enter_context(
+                        patch("gms_helpers.asset_helper.update_yyp_file", return_value=True)
+                    )
                     asset_cls = stack.enter_context(patch(f"gms_helpers.asset_helper.{case['class_name']}"))
                     asset_instance = asset_cls.return_value
                     asset_instance.create_files.return_value = case["path"]
@@ -363,12 +391,17 @@ class TestCreateCommands(unittest.TestCase):
 
     def test_create_wrapper_returns_false_on_failed_yyp_update(self):
         args = _create_args("spr_fail")
-        with patch("gms_helpers.asset_helper.run_auto_maintenance", side_effect=[_maintenance_result(), _maintenance_result()]), \
-             patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=True), \
-             patch("gms_helpers.asset_helper.validate_name"), \
-             patch("gms_helpers.asset_helper.validate_parent_path"), \
-             patch("gms_helpers.asset_helper.update_yyp_file", return_value=False), \
-             patch("gms_helpers.asset_helper.SpriteAsset") as sprite_cls:
+        with (
+            patch(
+                "gms_helpers.asset_helper.run_auto_maintenance",
+                side_effect=[_maintenance_result(), _maintenance_result()],
+            ),
+            patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=True),
+            patch("gms_helpers.asset_helper.validate_name"),
+            patch("gms_helpers.asset_helper.validate_parent_path"),
+            patch("gms_helpers.asset_helper.update_yyp_file", return_value=False),
+            patch("gms_helpers.asset_helper.SpriteAsset") as sprite_cls,
+        ):
             sprite_cls.return_value.create_files.return_value = "sprites/spr_fail/spr_fail.yy"
 
             result, output = _capture_output(asset_helper.create_sprite, args)
@@ -378,9 +411,11 @@ class TestCreateCommands(unittest.TestCase):
 
     def test_create_wrapper_returns_maintenance_failure_when_precheck_fails(self):
         args = _create_args("o_guard")
-        with patch("gms_helpers.asset_helper.run_auto_maintenance", return_value=_maintenance_result()), \
-             patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=False), \
-             patch("gms_helpers.asset_helper.handle_maintenance_failure", return_value=False) as failure_handler:
+        with (
+            patch("gms_helpers.asset_helper.run_auto_maintenance", return_value=_maintenance_result()),
+            patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=False),
+            patch("gms_helpers.asset_helper.handle_maintenance_failure", return_value=False) as failure_handler,
+        ):
             result = asset_helper.create_object(args)
 
         self.assertFalse(result)
@@ -408,8 +443,10 @@ class TestDeleteAndMain(unittest.TestCase):
             old_cwd = Path.cwd()
             os.chdir(root)
             try:
-                with patch("gms_helpers.utils.find_yyp_file", return_value=root / "demo.yyp"), \
-                     patch("gms_helpers.utils.load_json", return_value=project_data):
+                with (
+                    patch("gms_helpers.utils.find_yyp_file", return_value=root / "demo.yyp"),
+                    patch("gms_helpers.utils.load_json", return_value=project_data),
+                ):
                     result, output = _capture_output(asset_helper.delete_asset, args)
             finally:
                 os.chdir(old_cwd)
@@ -438,14 +475,16 @@ class TestDeleteAndMain(unittest.TestCase):
             old_cwd = Path.cwd()
             os.chdir(root)
             try:
-                with patch(
-                    "gms_helpers.asset_helper.run_auto_maintenance",
-                    side_effect=[_maintenance_result(), _maintenance_result()],
-                ) as run_maintenance, \
-                     patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=True), \
-                     patch("gms_helpers.utils.find_yyp_file", return_value=root / "demo.yyp"), \
-                     patch("gms_helpers.utils.load_json", return_value=json.loads(json.dumps(project_data))), \
-                     patch("gms_helpers.utils.save_json") as save_json:
+                with (
+                    patch(
+                        "gms_helpers.asset_helper.run_auto_maintenance",
+                        side_effect=[_maintenance_result(), _maintenance_result()],
+                    ) as run_maintenance,
+                    patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=True),
+                    patch("gms_helpers.utils.find_yyp_file", return_value=root / "demo.yyp"),
+                    patch("gms_helpers.utils.load_json", return_value=json.loads(json.dumps(project_data))),
+                    patch("gms_helpers.utils.save_json") as save_json,
+                ):
                     result, output = _capture_output(asset_helper.delete_asset, args)
             finally:
                 os.chdir(old_cwd)
@@ -469,10 +508,39 @@ class TestDeleteAndMain(unittest.TestCase):
         self.assertFalse(result)
         self.assertIn("Unsupported asset type", output)
 
+    def test_delete_asset_rejects_path_traversal_name(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            project = root / "project"
+            victim = root / "victim"
+            project.mkdir()
+            victim.mkdir()
+            args = SimpleNamespace(
+                asset_type="script",
+                name="../../victim",
+                dry_run=False,
+                skip_maintenance=True,
+                no_auto_fix=False,
+                maintenance_verbose=True,
+            )
+
+            old_cwd = Path.cwd()
+            os.chdir(project)
+            try:
+                result, output = _capture_output(asset_helper.delete_asset, args)
+            finally:
+                os.chdir(old_cwd)
+
+            self.assertFalse(result)
+            self.assertIn("Invalid asset name", output)
+            self.assertTrue(victim.exists())
+
     def test_main_builds_parser_and_routes_command(self):
-        with patch.object(sys, "argv", ["asset_helper", "maint", "lint"]), \
-             patch("gms_helpers.asset_helper.validate_working_directory"), \
-             patch("gms_helpers.asset_helper.maint_lint_command", return_value=True) as maint_lint:
+        with (
+            patch.object(sys, "argv", ["asset_helper", "maint", "lint"]),
+            patch("gms_helpers.asset_helper.validate_working_directory"),
+            patch("gms_helpers.asset_helper.maint_lint_command", return_value=True) as maint_lint,
+        ):
             result = asset_helper.main()
 
         self.assertTrue(result)
@@ -480,22 +548,28 @@ class TestDeleteAndMain(unittest.TestCase):
 
     def test_main_propagates_gms_error_and_handles_interrupt_and_unexpected(self):
         error = GMSError("broken")
-        with patch.object(sys, "argv", ["asset_helper", "maint", "lint"]), \
-             patch("gms_helpers.asset_helper.validate_working_directory"), \
-             patch("gms_helpers.asset_helper.maint_lint_command", side_effect=error):
+        with (
+            patch.object(sys, "argv", ["asset_helper", "maint", "lint"]),
+            patch("gms_helpers.asset_helper.validate_working_directory"),
+            patch("gms_helpers.asset_helper.maint_lint_command", side_effect=error),
+        ):
             with self.assertRaises(GMSError):
                 asset_helper.main()
 
-        with patch.object(sys, "argv", ["asset_helper", "maint", "lint"]), \
-             patch("gms_helpers.asset_helper.validate_working_directory"), \
-             patch("gms_helpers.asset_helper.maint_lint_command", side_effect=KeyboardInterrupt):
+        with (
+            patch.object(sys, "argv", ["asset_helper", "maint", "lint"]),
+            patch("gms_helpers.asset_helper.validate_working_directory"),
+            patch("gms_helpers.asset_helper.maint_lint_command", side_effect=KeyboardInterrupt),
+        ):
             result, output = _capture_output(asset_helper.main)
             self.assertFalse(result)
             self.assertIn("Operation cancelled.", output)
 
-        with patch.object(sys, "argv", ["asset_helper", "maint", "lint"]), \
-             patch("gms_helpers.asset_helper.validate_working_directory"), \
-             patch("gms_helpers.asset_helper.maint_lint_command", side_effect=RuntimeError("boom")):
+        with (
+            patch.object(sys, "argv", ["asset_helper", "maint", "lint"]),
+            patch("gms_helpers.asset_helper.validate_working_directory"),
+            patch("gms_helpers.asset_helper.maint_lint_command", side_effect=RuntimeError("boom")),
+        ):
             result, output = _capture_output(asset_helper.main)
             self.assertFalse(result)
             self.assertIn("Unexpected error: boom", output)
@@ -503,27 +577,38 @@ class TestDeleteAndMain(unittest.TestCase):
 
 class TestMaintenanceCommands(unittest.TestCase):
     def test_basic_maintenance_commands(self):
-        with patch("gms_helpers.asset_helper.lint_project", return_value=[SimpleNamespace(severity="warning")]), \
-             patch("gms_helpers.asset_helper.print_lint_report"):
+        with (
+            patch("gms_helpers.asset_helper.lint_project", return_value=[SimpleNamespace(severity="warning")]),
+            patch("gms_helpers.asset_helper.print_lint_report"),
+        ):
             result, output = _capture_output(asset_helper.maint_lint_command, SimpleNamespace(fix=False))
         self.assertTrue(result)
         self.assertIn("Scanning project for issues", output)
 
-        with patch("gms_helpers.maintenance.tidy_json.validate_project_json", return_value=[("a.yy", True), ("b.yy", False)]), \
-             patch("gms_helpers.maintenance.tidy_json.print_json_validation_report"):
+        with (
+            patch(
+                "gms_helpers.maintenance.tidy_json.validate_project_json",
+                return_value=[("a.yy", True), ("b.yy", False)],
+            ),
+            patch("gms_helpers.maintenance.tidy_json.print_json_validation_report"),
+        ):
             result, output = _capture_output(asset_helper.maint_validate_json_command, SimpleNamespace())
         self.assertFalse(result)
         self.assertIn("Validating JSON syntax", output)
 
-        with patch("gms_helpers.asset_helper.find_orphaned_assets", return_value=[("obj", "object")]), \
-             patch("gms_helpers.asset_helper.find_missing_assets", return_value=["missing.yy"]), \
-             patch("gms_helpers.asset_helper.print_orphan_report"):
+        with (
+            patch("gms_helpers.asset_helper.find_orphaned_assets", return_value=[("obj", "object")]),
+            patch("gms_helpers.asset_helper.find_missing_assets", return_value=["missing.yy"]),
+            patch("gms_helpers.asset_helper.print_orphan_report"),
+        ):
             result, output = _capture_output(asset_helper.maint_list_orphans_command, SimpleNamespace())
         self.assertTrue(result)
         self.assertIn("orphaned and missing assets", output)
 
-        with patch("gms_helpers.asset_helper.prune_missing_assets", return_value=["ghost.yy"]), \
-             patch("gms_helpers.asset_helper.print_prune_report"):
+        with (
+            patch("gms_helpers.asset_helper.prune_missing_assets", return_value=["ghost.yy"]),
+            patch("gms_helpers.asset_helper.print_prune_report"),
+        ):
             result, output = _capture_output(
                 asset_helper.maint_prune_missing_command,
                 SimpleNamespace(dry_run=True),
@@ -532,8 +617,10 @@ class TestMaintenanceCommands(unittest.TestCase):
         self.assertIn("Scanning for missing asset references", output)
 
         issues = [SimpleNamespace(severity="error"), SimpleNamespace(severity="warning")]
-        with patch("gms_helpers.asset_helper.validate_folder_paths", return_value=issues), \
-             patch("gms_helpers.asset_helper.print_path_validation_report"):
+        with (
+            patch("gms_helpers.asset_helper.validate_folder_paths", return_value=issues),
+            patch("gms_helpers.asset_helper.print_path_validation_report"),
+        ):
             result, output = _capture_output(
                 asset_helper.maint_validate_paths_command,
                 SimpleNamespace(strict_disk_check=True, include_parent_folders=True),
@@ -544,13 +631,15 @@ class TestMaintenanceCommands(unittest.TestCase):
     def test_dedupe_resources_and_fix_issues(self):
         args = SimpleNamespace(dry_run=True, auto=False)
         project_data = {"resources": []}
-        with patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"), \
-             patch("gms_helpers.utils.load_json", return_value=project_data), \
-             patch(
-                 "gms_helpers.utils.dedupe_resources",
-                 return_value=(project_data, 2, ["dup 1", "dup 2"]),
-             ), \
-             patch("gms_helpers.utils.save_json") as save_json:
+        with (
+            patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"),
+            patch("gms_helpers.utils.load_json", return_value=project_data),
+            patch(
+                "gms_helpers.utils.dedupe_resources",
+                return_value=(project_data, 2, ["dup 1", "dup 2"]),
+            ),
+            patch("gms_helpers.utils.save_json") as save_json,
+        ):
             result, output = _capture_output(asset_helper.maint_dedupe_resources_command, args)
         self.assertTrue(result)
         self.assertIn("Would remove 2 duplicate resource entries", output)
@@ -563,8 +652,13 @@ class TestMaintenanceCommands(unittest.TestCase):
         run_maintenance.assert_called_once_with(".", fix_issues=True, verbose=True)
 
     def test_sync_events_command_handles_specific_and_all_objects(self):
-        with patch("gms_helpers.maintenance.event_sync.sync_object_events", return_value={"orphaned_found": 1, "orphaned_fixed": 1, "missing_found": 1, "missing_created": 1}), \
-             patch("gms_helpers.asset_helper.os.path.exists", return_value=True):
+        with (
+            patch(
+                "gms_helpers.maintenance.event_sync.sync_object_events",
+                return_value={"orphaned_found": 1, "orphaned_fixed": 1, "missing_found": 1, "missing_created": 1},
+            ),
+            patch("gms_helpers.asset_helper.os.path.exists", return_value=True),
+        ):
             result, output = _capture_output(
                 asset_helper.maint_sync_events_command,
                 SimpleNamespace(fix=True, object="o_player"),
@@ -573,7 +667,16 @@ class TestMaintenanceCommands(unittest.TestCase):
         self.assertIn("o_player", output)
         self.assertIn("CREATED", output)
 
-        with patch("gms_helpers.maintenance.event_sync.sync_all_object_events", return_value={"objects_processed": 4, "orphaned_found": 0, "orphaned_fixed": 0, "missing_found": 0, "missing_created": 0}):
+        with patch(
+            "gms_helpers.maintenance.event_sync.sync_all_object_events",
+            return_value={
+                "objects_processed": 4,
+                "orphaned_found": 0,
+                "orphaned_fixed": 0,
+                "missing_found": 0,
+                "missing_created": 0,
+            },
+        ):
             result, output = _capture_output(
                 asset_helper.maint_sync_events_command,
                 SimpleNamespace(fix=False, object=None),
@@ -657,13 +760,21 @@ class TestMaintenanceCommands(unittest.TestCase):
             saved = json.loads(output_file.read_text(encoding="utf-8"))
             self.assertEqual(saved["counts"]["truly_orphan"], 2)
 
-        with patch("gms_helpers.asset_helper.resolve_project_directory", return_value=Path("/tmp/project")), \
-             patch("gms_helpers.asset_helper.find_orphaned_assets", return_value=[("objects/o_ghost/o_ghost.yy", "object")]), \
-             patch("gms_helpers.asset_helper.get_keep_patterns", return_value=[]), \
-             patch(
-                 "gms_helpers.asset_helper.move_to_trash",
-                 return_value={"errors": ["warn"], "moved_count": 1, "trash_folder": "/tmp/project/.maintenance_trash/trash_1"},
-             ):
+        with (
+            patch("gms_helpers.asset_helper.resolve_project_directory", return_value=Path("/tmp/project")),
+            patch(
+                "gms_helpers.asset_helper.find_orphaned_assets", return_value=[("objects/o_ghost/o_ghost.yy", "object")]
+            ),
+            patch("gms_helpers.asset_helper.get_keep_patterns", return_value=[]),
+            patch(
+                "gms_helpers.asset_helper.move_to_trash",
+                return_value={
+                    "errors": ["warn"],
+                    "moved_count": 1,
+                    "trash_folder": "/tmp/project/.maintenance_trash/trash_1",
+                },
+            ),
+        ):
             result, output = _capture_output(
                 asset_helper.maint_purge_command,
                 SimpleNamespace(apply=True, delete=True, keep=[], project_root="/tmp/project"),
@@ -702,8 +813,10 @@ class TestMaintenanceCommands(unittest.TestCase):
         self.assertTrue(result)
         self.assertIn("Maintenance system initialized", output)
 
-        with patch("gms_helpers.asset_helper.resolve_project_directory", return_value=Path("/tmp/project")), \
-             patch("gms_helpers.asset_helper.find_orphaned_assets", return_value=[]):
+        with (
+            patch("gms_helpers.asset_helper.resolve_project_directory", return_value=Path("/tmp/project")),
+            patch("gms_helpers.asset_helper.find_orphaned_assets", return_value=[]),
+        ):
             result, output = _capture_output(
                 asset_helper.maint_purge_command,
                 SimpleNamespace(apply=False, delete=False, keep=[], project_root="/tmp/project"),

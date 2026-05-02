@@ -53,11 +53,13 @@ from .results import OperationResult, AssetResult, MaintenanceResult
 # Optional extras - tqdm + colorama
 # ---------------------------------------------------------------------------
 
+
 def _try_import(name: str):
     try:
         return __import__(name)
     except ModuleNotFoundError:
         return None
+
 
 tqdm = _try_import("tqdm")
 colorama = _try_import("colorama")
@@ -71,6 +73,7 @@ def _c(text: str, colour: str | None = None):
         return text
     return getattr(colorama.Fore, colour.upper(), "") + text + colorama.Style.RESET_ALL
 
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -78,7 +81,10 @@ def _c(text: str, colour: str | None = None):
 
 def _asset_from_path(project_root: Path, asset_path: str):
     """Return (asset_type, asset_folder_path, asset_name) using .yyp-style path."""
+    project_root = Path(project_root).resolve()
     p = Path(asset_path)
+    if p.is_absolute() or any(part in {"", ".", ".."} for part in p.parts):
+        raise InvalidAssetTypeError(f"Invalid asset path '{asset_path}'. Path traversal is not allowed.")
     if len(p.parts) < 2:
         raise InvalidAssetTypeError(f"Invalid asset path '{asset_path}'. Expected '<folder>/<name>/<name>.yy'.")
     plural = p.parts[0]
@@ -101,23 +107,53 @@ def _asset_from_path(project_root: Path, asset_path: str):
     asset_type = mapping.get(plural, plural)
     if asset_type not in ASSET_TYPES:
         raise InvalidAssetTypeError(f"Unrecognised asset path prefix '{plural}'.")
-    folder_path = project_root / plural / p.parts[1]
-    asset_name = p.parts[1]
+    if plural == "folders":
+        if len(p.parts) != 2 or p.suffix != ".yy":
+            raise InvalidAssetTypeError(f"Invalid folder path '{asset_path}'. Expected 'folders/<name>.yy'.")
+        asset_name = p.stem
+        folder_path = (project_root / plural / p.parts[1]).resolve()
+    else:
+        if len(p.parts) != 3 or p.parts[2] != f"{p.parts[1]}.yy":
+            raise InvalidAssetTypeError(f"Invalid asset path '{asset_path}'. Expected '<folder>/<name>/<name>.yy'.")
+        asset_name = p.parts[1]
+        folder_path = (project_root / plural / asset_name).resolve()
+    try:
+        folder_path.relative_to(project_root)
+    except ValueError as exc:
+        raise InvalidAssetTypeError(
+            f"Invalid asset path '{asset_path}'. Resolved path escapes the project root."
+        ) from exc
     return asset_type, folder_path, asset_name
+
+
+def _validate_asset_name(name: str) -> str:
+    candidate = str(name).strip()
+    path = Path(candidate)
+    if not candidate or path.is_absolute() or len(path.parts) != 1 or candidate in {".", ".."}:
+        raise InvalidAssetTypeError(f"Invalid asset name '{name}'. Path separators are not allowed.")
+    return candidate
 
 
 # ---------------------------------------------------------------------------
 # C-1: Duplicate Asset
 # ---------------------------------------------------------------------------
 
+
 def duplicate_asset(project_root: Path, asset_path: str, new_name: str, *, yes: bool = False) -> AssetResult:
     project_root = Path(project_root)
     asset_type, src_folder, old_name = _asset_from_path(project_root, asset_path)
+    new_name = _validate_asset_name(new_name)
 
     # Get the plural form for directory path
-    plural_mapping = {"script": "scripts", "object": "objects", "sprite": "sprites", "room": "rooms", "folder": "folders"}
+    plural_mapping = {
+        "script": "scripts",
+        "object": "objects",
+        "sprite": "sprites",
+        "room": "rooms",
+        "folder": "folders",
+    }
     asset_dir = plural_mapping.get(asset_type, asset_type + "s")
-    
+
     dst_folder = project_root / asset_dir / new_name
     if dst_folder.exists():
         raise AssetExistsError(f"Destination asset '{new_name}' already exists.")
@@ -159,16 +195,18 @@ def duplicate_asset(project_root: Path, asset_path: str, new_name: str, *, yes: 
 
     message = f"[OK] Duplicated asset -> {new_name}"
     print(_c(message, "green"))
-    
+
     warnings = []
     # Run post-operation maintenance (disabled in test environments)
     import os
-    if not os.environ.get('PYTEST_CURRENT_TEST'):
+
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from .auto_maintenance import run_auto_maintenance
+
             print(_c("[MAINT] Running post-duplicate maintenance...", "blue"))
             m_result = run_auto_maintenance(str(project_root), fix_issues=True, verbose=True)
-            
+
             if m_result.has_errors:
                 warn_msg = "Asset duplicated but maintenance found issues."
                 print(_c(f"[WARN] {warn_msg}", "yellow"))
@@ -180,14 +218,14 @@ def duplicate_asset(project_root: Path, asset_path: str, new_name: str, *, yes: 
             pass
     else:
         print(_c("[OK] Asset duplicated successfully! (maintenance skipped in test)", "green"))
-        
+
     return AssetResult(
         success=True,
         message=message,
         warnings=warnings,
         asset_name=new_name,
         asset_type=asset_type,
-        asset_path=rel_path
+        asset_path=rel_path,
     )
 
 
@@ -195,14 +233,22 @@ def duplicate_asset(project_root: Path, asset_path: str, new_name: str, *, yes: 
 # C-2: Rename Asset
 # ---------------------------------------------------------------------------
 
+
 def rename_asset(project_root: Path, asset_path: str, new_name: str) -> AssetResult:
     project_root = Path(project_root)
     asset_type, src_folder, old_name = _asset_from_path(project_root, asset_path)
+    new_name = _validate_asset_name(new_name)
 
     # Get the plural form for directory path
-    plural_mapping = {"script": "scripts", "object": "objects", "sprite": "sprites", "room": "rooms", "folder": "folders"}
+    plural_mapping = {
+        "script": "scripts",
+        "object": "objects",
+        "sprite": "sprites",
+        "room": "rooms",
+        "folder": "folders",
+    }
     asset_dir = plural_mapping.get(asset_type, asset_type + "s")
-    
+
     dst_folder = project_root / asset_dir / new_name
     if dst_folder.exists():
         raise AssetExistsError(f"Destination name '{new_name}' already exists.")
@@ -235,7 +281,7 @@ def rename_asset(project_root: Path, asset_path: str, new_name: str) -> AssetRes
     yyp_data = load_json_loose(yyp_path)
     if yyp_data is None:
         raise JSONParseError(f"Could not load {yyp_path} for updating")
-    
+
     new_rel_path = f"{asset_dir}/{new_name}/{new_name}.yy"
     for res in yyp_data.get("resources", []):
         if res["id"]["path"] == asset_path:
@@ -248,11 +294,12 @@ def rename_asset(project_root: Path, asset_path: str, new_name: str) -> AssetRes
 
     message = f"[OK] Renamed {old_name} -> {new_name}"
     print(_c(message, "green"))
-    
+
     warnings = []
     # COMPREHENSIVE REFERENCE UPDATE: Scan and update ALL references to the old asset
     try:
         from .reference_scanner import comprehensive_rename_asset
+
         print(_c("[SCAN] Performing comprehensive reference scan and update...", "blue"))
         ref_success = comprehensive_rename_asset(project_root, old_name, new_name, asset_type)
         if not ref_success:
@@ -263,6 +310,7 @@ def rename_asset(project_root: Path, asset_path: str, new_name: str) -> AssetRes
         try:
             # Try absolute import for test environments
             from reference_scanner import comprehensive_rename_asset
+
             print(_c("[SCAN] Performing comprehensive reference scan and update...", "blue"))
             ref_success = comprehensive_rename_asset(project_root, old_name, new_name, asset_type)
             if not ref_success:
@@ -273,15 +321,17 @@ def rename_asset(project_root: Path, asset_path: str, new_name: str) -> AssetRes
             warn_msg = "Reference scanner not available - manual reference checks may be needed"
             print(_c(f"[WARN] {warn_msg}", "yellow"))
             warnings.append(warn_msg)
-    
+
     # Run post-operation maintenance (disabled in test environments)
     import os
-    if not os.environ.get('PYTEST_CURRENT_TEST'):
+
+    if not os.environ.get("PYTEST_CURRENT_TEST"):
         try:
             from .auto_maintenance import run_auto_maintenance
+
             print(_c("[MAINT] Running post-rename maintenance...", "blue"))
             m_result = run_auto_maintenance(str(project_root), fix_issues=True, verbose=True)
-            
+
             if m_result.has_errors:
                 warn_msg = "Asset renamed but maintenance found issues."
                 print(_c(f"[WARN] {warn_msg}", "yellow"))
@@ -293,19 +343,21 @@ def rename_asset(project_root: Path, asset_path: str, new_name: str) -> AssetRes
             pass
     else:
         print(_c("[OK] Asset renamed successfully! (maintenance skipped in test)", "green"))
-        
+
     return AssetResult(
         success=True,
         message=message,
         warnings=warnings,
         asset_name=new_name,
         asset_type=asset_type,
-        asset_path=new_rel_path
+        asset_path=new_rel_path,
     )
+
 
 # ---------------------------------------------------------------------------
 # C-3: Delete Asset
 # ---------------------------------------------------------------------------
+
 
 def delete_asset(project_root: Path, asset_path: str, *, dry_run: bool = False) -> OperationResult:
     project_root = Path(project_root)
@@ -324,10 +376,10 @@ def delete_asset(project_root: Path, asset_path: str, *, dry_run: bool = False) 
     yyp_data = load_json_loose(yyp_path)
     if yyp_data is None:
         raise JSONParseError(f"Could not load {yyp_path} for updating")
-        
+
     resources_before = len(yyp_data.get("resources", []))
     yyp_data["resources"] = [r for r in yyp_data.get("resources", []) if r["id"]["name"] != asset_name]
-    
+
     warnings = []
     if len(yyp_data["resources"]) != resources_before:
         if dry_run:
@@ -335,14 +387,15 @@ def delete_asset(project_root: Path, asset_path: str, *, dry_run: bool = False) 
         else:
             save_pretty_json_gm(yyp_path, yyp_data)
             print(_c("Removed .yyp entry", "red"))
-    
+
     # Run post-operation maintenance (only if not dry run)
     if not dry_run:
         try:
             from .auto_maintenance import run_auto_maintenance
+
             print(_c("[MAINT] Running post-delete maintenance...", "blue"))
             m_result = run_auto_maintenance(str(project_root), fix_issues=True, verbose=True)
-            
+
             if m_result.has_errors:
                 warn_msg = "Asset deleted but maintenance found issues."
                 print(_c(f"[WARN] {warn_msg}", "yellow"))
@@ -352,12 +405,8 @@ def delete_asset(project_root: Path, asset_path: str, *, dry_run: bool = False) 
         except ImportError:
             # Fallback if auto_maintenance not available
             pass
-            
-    return OperationResult(
-        success=True,
-        message=message,
-        warnings=warnings
-    )
+
+    return OperationResult(success=True, message=message, warnings=warnings)
 
 
 def _resolve_asset_path(project_root: Path, asset_type: str, asset_name: str) -> Optional[str]:
@@ -378,9 +427,7 @@ def _collect_incoming_dependencies(project_root: Path, asset_name: str) -> List[
     from .introspection import build_asset_graph
 
     graph = build_asset_graph(project_root, deep=True)
-    node_by_id = {
-        node.get("id"): node for node in graph.get("nodes", []) if isinstance(node, dict)
-    }
+    node_by_id = {node.get("id"): node for node in graph.get("nodes", []) if isinstance(node, dict)}
 
     incoming: List[Dict[str, Any]] = []
     for edge in graph.get("edges", []):
@@ -480,9 +527,7 @@ def safe_delete_asset(
     cleaned_refs: Dict[str, Any] = {"replacements": 0, "files": []}
 
     if blocked:
-        warnings.append(
-            "Deletion blocked because dependent assets reference this target. Use force=True to continue."
-        )
+        warnings.append("Deletion blocked because dependent assets reference this target. Use force=True to continue.")
 
     if dry_run or blocked:
         message = (
@@ -508,9 +553,7 @@ def safe_delete_asset(
 
     if clean_refs and dependencies:
         cleaned_refs = _cleanup_symbol_references(project_root, asset_name)
-        warnings.append(
-            "Reference cleanup is best-effort and currently rewrites direct GML symbol tokens only."
-        )
+        warnings.append("Reference cleanup is best-effort and currently rewrites direct GML symbol tokens only.")
 
     delete_result = delete_asset(project_root, asset_path, dry_run=False)
     warnings.extend(delete_result.warnings)
@@ -532,13 +575,17 @@ def safe_delete_asset(
         "message": delete_result.message,
     }
 
+
 # ---------------------------------------------------------------------------
 # C-4: Swap Sprite PNG
 # ---------------------------------------------------------------------------
 
-def swap_sprite_png(project_root: Path, sprite_asset_path: str, png_source: Path, frame_index: int = 0) -> OperationResult:
+
+def swap_sprite_png(
+    project_root: Path, sprite_asset_path: str, png_source: Path, frame_index: int = 0
+) -> OperationResult:
     """Replace a sprite frame's PNG source.
-    
+
     Args:
         project_root: Project root directory
         sprite_asset_path: Sprite asset path (e.g., "sprites/spr_player/spr_player.yy")
@@ -554,15 +601,15 @@ def swap_sprite_png(project_root: Path, sprite_asset_path: str, png_source: Path
     yy_data = load_json_loose(yy_path)
     if yy_data is None:
         raise JSONParseError(f"Could not load {yy_path}")
-    
+
     # Validate frame_index
     frame_count = len(yy_data["frames"])
     if frame_index < 0 or frame_index >= frame_count:
         raise ValueError(
             f"Invalid frame_index {frame_index}: sprite '{sprite_name}' has "
-            f"{frame_count} frame(s) (valid: 0-{frame_count-1})"
+            f"{frame_count} frame(s) (valid: 0-{frame_count - 1})"
         )
-        
+
     frame_uuid = yy_data["frames"][frame_index]["name"]
     layer_uuid = yy_data["layers"][0]["name"]
     target_png = folder_path / f"{frame_uuid}.png"
@@ -578,7 +625,9 @@ def swap_sprite_png(project_root: Path, sprite_asset_path: str, png_source: Path
     # If the user accidentally points at the current sprite frame PNG, treat as a no-op.
     try:
         if png_source.resolve() == target_png.resolve():
-            message = f"[OK] Sprite image for {sprite_name} frame {frame_index} already matches the provided PNG (no-op)"
+            message = (
+                f"[OK] Sprite image for {sprite_name} frame {frame_index} already matches the provided PNG (no-op)"
+            )
             print(_c(message, "green"))
             return OperationResult(success=True, message=message)
     except Exception:
@@ -600,11 +649,11 @@ def swap_sprite_png(project_root: Path, sprite_asset_path: str, png_source: Path
                         tmp_png.unlink()
                     except Exception:
                         pass
-            
+
             # Also update the layer PNG if it exists
             if layer_png.parent.exists():
                 shutil.copy2(png_source, layer_png)
-            
+
             frame_msg = f" frame {frame_index}" if frame_count > 1 else ""
             message = f"[OK] Replaced sprite image for {sprite_name}{frame_msg}"
             print(_c(message, "green"))
@@ -621,9 +670,11 @@ def swap_sprite_png(project_root: Path, sprite_asset_path: str, png_source: Path
         f"Close GameMaker/Explorer preview and retry. Last error: {last_err}"
     )
 
+
 # ---------------------------------------------------------------------------
 # C-5: Project Linter
 # ---------------------------------------------------------------------------
+
 
 def lint_project(project_root: Path) -> MaintenanceResult:
     """Check for common project issues."""
@@ -670,30 +721,23 @@ def lint_project(project_root: Path) -> MaintenanceResult:
     if not problems:
         message = "[OK] Project looks good!"
         print(_c(message, "green"))
-        return MaintenanceResult(
-            success=True,
-            message=message,
-            issues_found=0,
-            issues_fixed=0
-        )
+        return MaintenanceResult(success=True, message=message, issues_found=0, issues_fixed=0)
 
     for p in problems:
         print(_c("[ERROR] " + p, "red"))
-    
+
     error_msg = f"Found {len(problems)} problem(s)"
     print(_c(error_msg, "red"))
-    
+
     return MaintenanceResult(
-        success=False,
-        message=error_msg,
-        issues_found=len(problems),
-        issues_fixed=0,
-        details=problems
+        success=False, message=error_msg, issues_found=len(problems), issues_fixed=0, details=problems
     )
+
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
 
 def _copy_tree(src: Path, dst: Path):
     """Recursive copy with optional progress bar."""
@@ -728,4 +772,4 @@ def _patch_gml_stub(gml_file: Path, new_name: str):
 
 
 if __name__ == "__main__":
-    print("This module is intended to be imported, not run directly. Use cli_ext.py instead.") 
+    print("This module is intended to be imported, not run directly. Use cli_ext.py instead.")

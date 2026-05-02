@@ -12,6 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 # Add src directory to the path
 import sys
+
 SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
@@ -20,8 +21,10 @@ from gms_helpers.workflow import duplicate_asset, rename_asset, delete_asset, li
 from gms_helpers.utils import save_pretty_json, load_json_loose
 from gms_helpers.assets import ScriptAsset
 
+
 class TempProject:
     """Context manager to build a tiny GM project for testing."""
+
     def __enter__(self):
         self.original_cwd = os.getcwd()  # Save current directory
         self.dir = Path(tempfile.mkdtemp())
@@ -32,9 +35,11 @@ class TempProject:
         save_pretty_json(self.dir / "test.yyp", {"resources": [], "Folders": []})
         os.chdir(self.dir)  # Change to temp directory
         return self.dir
+
     def __exit__(self, exc_type, exc, tb):
         os.chdir(self.original_cwd)  # Restore original directory
         shutil.rmtree(self.dir)
+
 
 class TestWorkflow(unittest.TestCase):
     def _register_resource(self, project_root: Path, name: str, rel_path: str):
@@ -78,6 +83,14 @@ class TestWorkflow(unittest.TestCase):
             result = lint_project(proj)
             self.assertTrue(result.success)
             self.assertEqual(result.issues_found, 0)
+
+    def test_delete_rejects_path_traversal_before_filesystem_mutation(self):
+        with TempProject() as proj:
+            with self.assertRaisesRegex(Exception, "Path traversal"):
+                delete_asset(proj, "scripts/../anything/anything.yy", dry_run=False)
+
+            self.assertTrue(proj.exists())
+            self.assertTrue((proj / "test.yyp").exists())
 
     def test_safe_delete_dry_run_blocked_by_dependencies(self):
         with TempProject() as proj:
@@ -150,6 +163,7 @@ class TestWorkflow(unittest.TestCase):
             updated = caller_gml.read_text(encoding="utf-8")
             self.assertNotIn("scr_target", updated)
             self.assertIn("undefined", updated)
+
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

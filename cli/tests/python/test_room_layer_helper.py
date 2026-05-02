@@ -22,9 +22,15 @@ sys.path.insert(0, str(SRC_ROOT))
 
 # Import from the correct locations
 from gms_helpers.room_layer_helper import (
-    add_layer, remove_layer, list_layers, reorder_layer,
-    _find_room_file, _load_room_data, _save_room_data,
-    create_layer_data, LAYER_TYPES
+    add_layer,
+    remove_layer,
+    list_layers,
+    reorder_layer,
+    _find_room_file,
+    _load_room_data,
+    _save_room_data,
+    create_layer_data,
+    LAYER_TYPES,
 )
 from gms_helpers.utils import load_json_loose, save_pretty_json, generate_uuid
 from gms_helpers.assets import RoomAsset
@@ -56,15 +62,12 @@ class TestRoomLayerHelper(unittest.TestCase):
                     "name": "Instances",
                     "instances": [],
                     "visible": True,
-                    "resourceType": "GMRInstanceLayer"
+                    "resourceType": "GMRInstanceLayer",
                 }
             ],
-            "roomSettings": {
-                "Width": 800,
-                "Height": 600
-            },
+            "roomSettings": {"Width": 800, "Height": 600},
             "resourceType": "GMRoom",
-            "resourceVersion": "2.0"
+            "resourceVersion": "2.0",
         }
 
         # Save the room data
@@ -140,10 +143,41 @@ class TestRoomLayerHelper(unittest.TestCase):
         """Test adding layer with duplicate name raises ValidationError."""
         # Add a layer first
         add_layer("r_test", "test_duplicate", "instance", 100)
-        
+
         # Try to add another layer with the same name - should raise ValidationError
         with self.assertRaises(ValidationError):
             add_layer("r_test", "test_duplicate", "instance", 200)
+
+    def test_add_layer_rejects_room_name_path_traversal(self):
+        """Room names must not be able to mutate .yy files outside the project."""
+        base = self.project_dir / "traversal_case"
+        project_dir = base / "workspace" / "project"
+        outside_room_dir = project_dir.parent / "victim"
+        outside_room_file = base / "victim.yy"
+        outside_room_data = {
+            "$GMRoom": "v1",
+            "%Name": "victim",
+            "name": "victim",
+            "layers": [],
+            "resourceType": "GMRoom",
+            "resourceVersion": "2.0",
+        }
+
+        project_dir.mkdir(parents=True)
+        (project_dir / "rooms").mkdir()
+        (project_dir / "test.yyp").write_text("{}")
+        outside_room_dir.mkdir(parents=True)
+        outside_room_file.write_text(json.dumps(outside_room_data), encoding="utf-8")
+
+        old_cwd = os.getcwd()
+        try:
+            os.chdir(project_dir)
+            with self.assertRaises(ValidationError):
+                add_layer("../../victim", "escaped", "instance", 0)
+        finally:
+            os.chdir(old_cwd)
+
+        self.assertEqual(json.loads(outside_room_file.read_text(encoding="utf-8"))["layers"], [])
 
     def test_remove_layer_success(self):
         """Test successfully removing a layer from a room."""
@@ -178,7 +212,7 @@ class TestRoomLayerHelper(unittest.TestCase):
 
     def test_layer_types_constants(self):
         """Test that LAYER_TYPES constant contains expected values."""
-        expected_types = {'background', 'instance', 'asset', 'tile', 'path', 'effect'}
+        expected_types = {"background", "instance", "asset", "tile", "path", "effect"}
         actual_types = set(LAYER_TYPES.keys())
         self.assertEqual(actual_types, expected_types)
 
@@ -190,10 +224,18 @@ class TestRoomLayerHelperIntegration(unittest.TestCase):
         """Test that all expected functions can be imported."""
         try:
             from gms_helpers.room_layer_helper import (
-                add_layer, remove_layer, list_layers, reorder_layer,
-                _find_room_file, _load_room_data, _save_room_data,
-                create_layer_data, main, LAYER_TYPES
+                add_layer,
+                remove_layer,
+                list_layers,
+                reorder_layer,
+                _find_room_file,
+                _load_room_data,
+                _save_room_data,
+                create_layer_data,
+                main,
+                LAYER_TYPES,
             )
+
             # All imports successful
             self.assertTrue(True)
         except ImportError as e:
@@ -212,6 +254,7 @@ class TestRoomLayerHelperIntegration(unittest.TestCase):
     def test_main_function_exists(self):
         """Test that main function exists for CLI usage."""
         from gms_helpers.room_layer_helper import main
+
         self.assertTrue(callable(main))
 
     def test_layer_types_mapping(self):
@@ -219,8 +262,8 @@ class TestRoomLayerHelperIntegration(unittest.TestCase):
         from gms_helpers.room_layer_helper import LAYER_TYPES
 
         # Test that all expected layer types are present
-        expected_keys = {'background', 'instance', 'asset', 'tile', 'path', 'effect'}
-        
+        expected_keys = {"background", "instance", "asset", "tile", "path", "effect"}
+
         for key in expected_keys:
             self.assertIn(key, LAYER_TYPES)
 
@@ -241,7 +284,7 @@ class TestRoomLayerHelperIntegration(unittest.TestCase):
         self.assertEqual(high_layer["depth"], 10000)
 
 
-if __name__ == '__main__':
+if __name__ == "__main__":
     # Set up test environment
     print("Running Room Layer Helper Tests...")
     print("=" * 50)
