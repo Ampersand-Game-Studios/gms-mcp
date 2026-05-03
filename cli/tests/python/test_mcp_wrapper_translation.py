@@ -221,6 +221,11 @@ class TestMaintenanceWrappers(MCPToolTestCase):
                     ["maintenance", "sync-events", "--object", "o_player"],
                 ),
                 (
+                    "gm_maintenance_normalize_names",
+                    {"fix": True, "asset_type": "room", "project_root": "/tmp/project"},
+                    ["maintenance", "normalize-names", "--fix", "--asset-type", "room"],
+                ),
+                (
                     "gm_maintenance_clean_old_files",
                     {"delete": False, "project_root": "/tmp/project"},
                     ["maintenance", "clean-old-files"],
@@ -244,6 +249,7 @@ class TestMaintenanceWrappers(MCPToolTestCase):
                 ("gm_maintenance_prune_missing", {"dry_run": False, "project_root": "/tmp/project"}),
                 ("gm_maintenance_dedupe_resources", {"auto": False, "dry_run": False, "project_root": "/tmp/project"}),
                 ("gm_maintenance_sync_events", {"fix": True, "object": "", "project_root": "/tmp/project"}),
+                ("gm_maintenance_normalize_names", {"fix": True, "asset_type": "", "project_root": "/tmp/project"}),
                 ("gm_maintenance_clean_old_files", {"delete": True, "project_root": "/tmp/project"}),
                 ("gm_maintenance_clean_orphans", {"delete": True, "project_root": "/tmp/project"}),
                 ("gm_maintenance_fix_issues", {"verbose": True, "project_root": "/tmp/project"}),

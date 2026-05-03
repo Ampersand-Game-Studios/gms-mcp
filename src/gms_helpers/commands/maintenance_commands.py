@@ -2,6 +2,7 @@
 
 from ..auto_maintenance import run_auto_maintenance
 from ..health import gm_mcp_health
+from ..maintenance.normalize_names import normalize_asset_names
 from ..asset_helper import (
     maint_lint_command,
     maint_validate_json_command,
@@ -54,6 +55,38 @@ def handle_maintenance_validate_paths(args):
 def handle_maintenance_dedupe_resources(args):
     """Handle resource deduplication."""
     return maint_dedupe_resources_command(args)
+
+
+def handle_maintenance_normalize_names(args):
+    """Handle opt-in asset naming normalization."""
+    result = normalize_asset_names(
+        project_root=getattr(args, "project_root", "."),
+        fix=getattr(args, "fix", False),
+        asset_type=getattr(args, "asset_type", None),
+    )
+
+    if not result.get("ok"):
+        print(f"[ERROR] {result.get('error', 'Name normalization failed')}")
+        for item in result.get("failed", []):
+            print(f"  [FAIL] {item['asset_name']} -> {item.get('target_name', '?')}: {item.get('reason', '')}")
+        return False
+
+    planned = result.get("planned", [])
+    skipped = result.get("skipped", [])
+    if result.get("dry_run", True):
+        print(f"[DRY-RUN] {len(planned)} asset rename(s) planned.")
+        for item in planned:
+            print(f"  {item['asset_type']}: {item['asset_name']} -> {item['target_name']} ({item['asset_path']})")
+        if skipped:
+            print(f"[WARN] {len(skipped)} asset(s) skipped.")
+        return True
+
+    print(f"[OK] Applied {result.get('changed_count', 0)} asset rename(s).")
+    for item in result.get("applied", []):
+        print(f"  {item['asset_type']}: {item['asset_name']} -> {item['target_name']}")
+    if skipped:
+        print(f"[WARN] {len(skipped)} asset(s) skipped.")
+    return True
 
 
 def handle_maintenance_sync_events(args):

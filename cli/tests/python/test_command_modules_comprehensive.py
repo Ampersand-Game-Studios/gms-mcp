@@ -55,6 +55,7 @@ from gms_helpers.commands.maintenance_commands import (
     handle_maintenance_prune_missing,
     handle_maintenance_validate_paths,
     handle_maintenance_dedupe_resources,
+    handle_maintenance_normalize_names,
     handle_maintenance_sync_events,
     handle_maintenance_clean_old_files,
     handle_maintenance_clean_orphans,
@@ -161,6 +162,31 @@ class TestRoomCommands(unittest.TestCase):
 
         self.assertTrue(result)
         mock_add.assert_called_once_with("r_test", "Instances_New", "instance", 100)
+
+
+class TestMaintenanceCommands(unittest.TestCase):
+    """Test maintenance command functions."""
+
+    def setUp(self):
+        self.test_args = Mock()
+
+    @patch("gms_helpers.commands.maintenance_commands.normalize_asset_names")
+    def test_handle_maintenance_normalize_names(self, mock_normalize):
+        """Test naming normalization handler."""
+        mock_normalize.return_value = {
+            "ok": True,
+            "dry_run": True,
+            "planned": [],
+            "skipped": [],
+        }
+        self.test_args.project_root = "."
+        self.test_args.fix = False
+        self.test_args.asset_type = "room"
+
+        result = handle_maintenance_normalize_names(self.test_args)
+
+        self.assertTrue(result)
+        mock_normalize.assert_called_once_with(project_root=".", fix=False, asset_type="room")
 
 
 if __name__ == "__main__":

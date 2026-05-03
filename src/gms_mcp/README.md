@@ -40,7 +40,7 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
     - `gms-mcp doctor --full`: Full health check including runtime selection and bridge status
     - `gm_check_updates`: Manually check for updates on PyPI and GitHub
     - `gm_project_info`: Includes a cached `updates` summary
-  - **Maintenance**: auto + diagnostics/lint/validate-json/list-orphans/prune-missing/validate-paths/dedupe-resources/sync-events/clean-old-files/clean-orphans/fix-issues
+  - **Maintenance**: auto + diagnostics/lint/validate-json/list-orphans/prune-missing/validate-paths/dedupe-resources/normalize-names/sync-events/clean-old-files/clean-orphans/fix-issues
   - **Runtime Management**: list/pin/unpin/verify GameMaker runtimes
   - **Runner**: compile/run (with runtime version pinning) + stop/status
   - **TCP Bridge (optional)**: live game commands + log capture via `gm_bridge_install`, `gm_bridge_status`, `gm_run_command`, `gm_run_logs` (see `documentation/BRIDGE.md`). Bridge lifecycle/events stay off MCP stdout so `gm_run(..., enable_bridge=true)` remains stdio-safe.

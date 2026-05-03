@@ -995,6 +995,15 @@ def setup_maintenance_commands(subparsers):
     )
     dedupe_parser.set_defaults(func=handle_maintenance_dedupe_resources)
 
+    # Normalize names
+    normalize_parser = maint_subparsers.add_parser(
+        "normalize-names",
+        help="Plan or apply naming-convention asset renames",
+    )
+    normalize_parser.add_argument("--fix", action="store_true", help="Apply planned renames")
+    normalize_parser.add_argument("--asset-type", help="Only normalize one asset type, such as room or object")
+    normalize_parser.set_defaults(func=handle_maintenance_normalize_names)
+
     # Sync events
     sync_events_parser = maint_subparsers.add_parser("sync-events", help="Synchronize object events")
     sync_events_parser.add_argument("--fix", action="store_true", help="Actually fix issues (default is dry-run)")
@@ -1157,6 +1166,7 @@ from .commands.maintenance_commands import (
     handle_maintenance_prune_missing,
     handle_maintenance_validate_paths,
     handle_maintenance_dedupe_resources,
+    handle_maintenance_normalize_names,
     handle_maintenance_sync_events,
     handle_maintenance_clean_old_files,
     handle_maintenance_clean_orphans,

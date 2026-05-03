@@ -338,6 +338,18 @@ class TestCommandWrappers(unittest.TestCase):
                 self.assertTrue(getattr(maintenance_commands, wrapper)(SimpleNamespace()))
                 handler.assert_called_once()
 
+        with patch.object(
+            maintenance_commands,
+            "normalize_asset_names",
+            return_value={"ok": True, "dry_run": True, "planned": [], "skipped": []},
+        ) as normalize_asset_names:
+            self.assertTrue(
+                maintenance_commands.handle_maintenance_normalize_names(
+                    SimpleNamespace(project_root="/tmp/project", fix=False, asset_type="room")
+                )
+            )
+        normalize_asset_names.assert_called_once_with(project_root="/tmp/project", fix=False, asset_type="room")
+
         health_result = SimpleNamespace(details=["ok one", "ok two"], success=True)
         with (
             patch.object(maintenance_commands, "gm_mcp_health", return_value=health_result),

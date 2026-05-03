@@ -8,6 +8,7 @@ from .maintenance_commands import (
     handle_maintenance_prune_missing,
     handle_maintenance_validate_paths,
     handle_maintenance_dedupe_resources,
+    handle_maintenance_normalize_names,
     handle_maintenance_sync_events,
     handle_maintenance_clean_old_files,
     handle_maintenance_clean_orphans,

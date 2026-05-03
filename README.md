@@ -9,6 +9,7 @@
 - **TCP Bridge (optional)**: live, bidirectional game communication (commands + log capture) via `gm_bridge_install`, `gm_run_command`, and `gm_run_logs`. Bridge lifecycle logging stays off the MCP stdio transport so `gm_run(..., enable_bridge=true)` does not corrupt JSON-RPC. See `documentation/BRIDGE.md`.
 - **Reliability-First Architecture**: Custom exception hierarchy, typed result objects, and an execution policy manager replace monolithic exit calls and raw dictionaries. This enables structured error handling, consistent tool integration, and optimized performance (Fast assets, Resilient runner).
 - **Health & Diagnostics**: `gm_mcp_health` provides a one-click diagnostic tool to verify the local GameMaker environment. `gm_diagnostics` provides structured, machine-readable project diagnostics (JSON, naming, orphans, references) compatible with IDE problem panels.
+- **Imported Template Cleanup**: `gms maintenance normalize-names` / `gm_maintenance_normalize_names` plans naming-convention renames, and applies them only when explicitly requested.
 - **Runtime Management**: `gm_runtime_list`, `gm_runtime_pin`, and `gm_runtime_verify` allow precise control over which GameMaker runtime version is used for builds and execution.
 - **Cross-Platform Runner Defaults**: `gm_run` / `gm_compile` now default to the host OS target platform (`macOS`, `Linux`, or `Windows`) when not explicitly provided.
 - **macOS Local Runner Behavior**: local `gm_run` / `gm_compile` use Igor's run-based path for IDE-equivalent validation without Developer ID packaging, and macOS background run sessions now track and stop the real `Mac_Runner` process cleanly. Packaged temp-output runs still resolve `.app` bundles via `Contents/MacOS/` when `PackageZip` is used.
@@ -109,6 +110,18 @@ gms --telemetry=off maintenance auto
 gms-mcp-init --telemetry=on --cursor
 GMS_MCP_TELEMETRY=off gms asset create script my_script
 ```
+
+## Imported Template Cleanup
+
+GameMaker's blank template may create assets like `room1` that violate stricter project naming rules. Keep lint strict, then normalize imported/template assets explicitly:
+
+```bash
+gms maintenance normalize-names
+gms maintenance normalize-names --fix
+gms maintenance normalize-names --asset-type room --fix
+```
+
+The command uses the project's `.gms-mcp.json` naming config, defaults to dry-run, detects collisions, and performs real renames through the same reference-aware workflow as `gms workflow rename`.
 
 Dev/test endpoint override:
 

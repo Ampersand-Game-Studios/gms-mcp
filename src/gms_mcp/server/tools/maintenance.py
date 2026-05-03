@@ -310,6 +310,50 @@ def register(mcp: Any, ContextType: Any) -> None:
         )
 
     @mcp.tool()
+    async def gm_maintenance_normalize_names(
+        fix: bool = False,
+        asset_type: str = "",
+        project_root: str = ".",
+        prefer_cli: bool = False,
+        output_mode: str = "full",
+        tail_lines: int = 120,
+        quiet: bool = False,
+        ctx: Context | None = None,
+    ) -> Dict[str, Any]:
+        """Plan or apply naming-convention asset renames."""
+        repo_root = _resolve_repo_root(project_root)
+        _ensure_cli_on_sys_path(repo_root)
+        from gms_helpers.commands.maintenance_commands import handle_maintenance_normalize_names
+
+        args = argparse.Namespace(
+            fix=fix,
+            asset_type=asset_type if asset_type else None,
+            project_root=project_root,
+        )
+        cli_args = ["maintenance", "normalize-names"]
+        if fix:
+            cli_args.append("--fix")
+        if asset_type:
+            cli_args.extend(["--asset-type", asset_type])
+        if fix and _requires_dry_run_for_tool("gm_maintenance_normalize_names"):
+            return _dry_run_policy_blocked_result(
+                "gm_maintenance_normalize_names",
+                "Use fix=false, add gm_maintenance_normalize_names to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
+            )
+
+        return await _run_with_fallback(
+            direct_handler=handle_maintenance_normalize_names,
+            direct_args=args,
+            cli_args=cli_args,
+            project_root=project_root,
+            prefer_cli=prefer_cli,
+            output_mode=output_mode,
+            tail_lines=tail_lines,
+            quiet=quiet,
+            ctx=ctx,
+        )
+
+    @mcp.tool()
     async def gm_maintenance_clean_old_files(
         delete: bool = False,
         project_root: str = ".",
