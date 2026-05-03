@@ -153,12 +153,16 @@ class TestUtilsCoverage(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
                 resolve_project_directory(self.temp_dir / "missing-explicit")
 
-        with patch("gms_helpers.utils._list_yyp_files", return_value=[]), patch(
-            "gms_helpers.utils._search_upwards_for_yyp",
-            return_value=None,
-        ), patch(
-            "gms_helpers.utils._search_upwards_for_gamemaker_yyp",
-            return_value=None,
+        with (
+            patch("gms_helpers.utils._list_yyp_files", return_value=[]),
+            patch(
+                "gms_helpers.utils._search_upwards_for_yyp",
+                return_value=None,
+            ),
+            patch(
+                "gms_helpers.utils._search_upwards_for_gamemaker_yyp",
+                return_value=None,
+            ),
         ):
             with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
                 resolve_project_directory(self.temp_dir / "missing")
@@ -204,90 +208,130 @@ class TestUtilsCoverage(unittest.TestCase):
         )
         self.assertEqual(path_conflict[1], "path_conflict")
 
-        with patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"), patch(
-            "gms_helpers.utils.load_json",
-            side_effect=RuntimeError("load fail"),
+        with (
+            patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"),
+            patch(
+                "gms_helpers.utils.load_json",
+                side_effect=RuntimeError("load fail"),
+            ),
         ):
             result, output = _capture_output(update_yyp_file, {"id": {"name": "foo", "path": "foo.yy"}})
         self.assertFalse(result)
         self.assertIn("load fail", output)
 
-        with patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"), patch(
-            "gms_helpers.utils.load_json",
-            return_value={"resources": [{"id": {"name": "foo", "path": "old.yy"}}]},
+        with (
+            patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"),
+            patch(
+                "gms_helpers.utils.load_json",
+                return_value={"resources": [{"id": {"name": "foo", "path": "old.yy"}}]},
+            ),
         ):
             result, output = _capture_output(update_yyp_file, {"id": {"name": "foo", "path": "new.yy"}})
         self.assertFalse(result)
         self.assertIn("dedupe-resources", output)
 
-        with patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"), patch(
-            "gms_helpers.utils.load_json",
-            return_value={"resources": []},
-        ), patch("gms_helpers.utils.save_json", side_effect=RuntimeError("save fail")):
+        with (
+            patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"),
+            patch(
+                "gms_helpers.utils.load_json",
+                return_value={"resources": []},
+            ),
+            patch("gms_helpers.utils.save_json", side_effect=RuntimeError("save fail")),
+        ):
             result, output = _capture_output(update_yyp_file, {"id": {"name": "foo", "path": "foo.yy"}})
         self.assertFalse(result)
         self.assertIn("save fail", output)
 
-        with patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"), patch(
-            "gms_helpers.utils.load_json",
-            return_value={"Folders": [{"folderPath": "folders/A.yy"}]},
+        with (
+            patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"),
+            patch(
+                "gms_helpers.utils.load_json",
+                return_value={"Folders": [{"folderPath": "folders/A.yy"}]},
+            ),
         ):
             self.assertTrue(validate_parent_path("folders/A.yy"))
 
-        with patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"), patch(
-            "gms_helpers.utils.load_json",
-            return_value={"Folders": [{"folderPath": "folders/A.yy"}]},
+        with (
+            patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"),
+            patch(
+                "gms_helpers.utils.load_json",
+                return_value={"Folders": [{"folderPath": "folders/A.yy"}]},
+            ),
         ):
             with self.assertRaises(ValidationError):
                 validate_parent_path("folders/B.yy")
 
-        with patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"), patch(
-            "gms_helpers.utils.load_json",
-            side_effect=GMSError("boom"),
+        with (
+            patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"),
+            patch(
+                "gms_helpers.utils.load_json",
+                side_effect=GMSError("boom"),
+            ),
         ):
             with self.assertRaises(GMSError):
                 validate_parent_path("folders/A.yy")
 
-        with patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"), patch(
-            "gms_helpers.utils.load_json",
-            side_effect=RuntimeError("bad"),
+        with (
+            patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"),
+            patch(
+                "gms_helpers.utils.load_json",
+                side_effect=RuntimeError("bad"),
+            ),
         ):
             with self.assertRaises(ValidationError):
                 validate_parent_path("folders/A.yy")
 
         project_file = self.temp_dir / "resource.yy"
-        project_file.write_text(json.dumps({"parent": {"path": "folders/A.yy"}, "resourceType": "GMObject"}), encoding="utf-8")
-        with patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"), patch(
-            "gms_helpers.utils.load_json",
-            side_effect=[
-                {"Folders": [{"folderPath": "folders/A.yy", "name": "Folder A"}], "resources": [{"id": {"name": "obj", "path": str(project_file)}}]},
-                {"parent": {"path": "folders/A.yy"}, "resourceType": "GMObject"},
-            ],
+        project_file.write_text(
+            json.dumps({"parent": {"path": "folders/A.yy"}, "resourceType": "GMObject"}), encoding="utf-8"
+        )
+        with (
+            patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"),
+            patch(
+                "gms_helpers.utils.load_json",
+                side_effect=[
+                    {
+                        "Folders": [{"folderPath": "folders/A.yy", "name": "Folder A"}],
+                        "resources": [{"id": {"name": "obj", "path": str(project_file)}}],
+                    },
+                    {"parent": {"path": "folders/A.yy"}, "resourceType": "GMObject"},
+                ],
+            ),
         ):
             success, message, assets = remove_folder_from_yyp("folders/A.yy", force=False, dry_run=False)
         self.assertFalse(success)
         self.assertIn("contains 1 assets", message)
         self.assertEqual(assets[0]["name"], "obj")
 
-        with patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"), patch(
-            "gms_helpers.utils.load_json",
-            return_value={"Folders": [{"folderPath": "folders/A.yy", "name": "Folder A"}], "resources": []},
+        with (
+            patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"),
+            patch(
+                "gms_helpers.utils.load_json",
+                return_value={"Folders": [{"folderPath": "folders/A.yy", "name": "Folder A"}], "resources": []},
+            ),
         ):
             success, message, _assets = remove_folder_from_yyp("folders/A.yy", force=False, dry_run=True)
         self.assertTrue(success)
         self.assertIn("Would remove folder", message)
 
-        with patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"), patch(
-            "gms_helpers.utils.load_json",
-            return_value={"Folders": [{"folderPath": "folders/A.yy", "name": "Folder A"}], "resources": []},
-        ), patch("gms_helpers.utils.save_json", side_effect=RuntimeError("save fail")):
+        with (
+            patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"),
+            patch(
+                "gms_helpers.utils.load_json",
+                return_value={"Folders": [{"folderPath": "folders/A.yy", "name": "Folder A"}], "resources": []},
+            ),
+            patch("gms_helpers.utils.save_json", side_effect=RuntimeError("save fail")),
+        ):
             success, message, _assets = remove_folder_from_yyp("folders/A.yy", force=True, dry_run=False)
         self.assertFalse(success)
         self.assertIn("save fail", message)
 
-        with patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"), patch(
-            "gms_helpers.utils.load_json",
-            side_effect=RuntimeError("list fail"),
+        with (
+            patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"),
+            patch(
+                "gms_helpers.utils.load_json",
+                side_effect=RuntimeError("list fail"),
+            ),
         ):
             success, folders, message = list_folders_in_yyp()
         self.assertFalse(success)
@@ -333,7 +377,10 @@ class TestRoomHelperCoverage(unittest.TestCase):
         room_dir = self.temp_dir / "rooms" / "r_old"
         room_dir.mkdir()
         (room_dir / "r_old.yy").touch()
-        with patch("gms_helpers.room_helper.duplicate_asset", return_value=SimpleNamespace(success=False, message="duplicate failed")):
+        with patch(
+            "gms_helpers.room_helper.duplicate_asset",
+            return_value=SimpleNamespace(success=False, message="duplicate failed"),
+        ):
             result, output = _capture_output(room_helper.duplicate_room, "r_old", "r_copy")
         self.assertFalse(result)
         self.assertIn("Failed to duplicate room", output)
@@ -347,7 +394,9 @@ class TestRoomHelperCoverage(unittest.TestCase):
         self.assertFalse(result)
         self.assertIn("bad rename", output)
 
-        with patch("gms_helpers.room_helper.rename_asset", return_value=SimpleNamespace(success=False, message="rename failed")):
+        with patch(
+            "gms_helpers.room_helper.rename_asset", return_value=SimpleNamespace(success=False, message="rename failed")
+        ):
             result, output = _capture_output(room_helper.rename_room, "r_old", "r_renamed")
         self.assertFalse(result)
         self.assertIn("Failed to rename room", output)
@@ -431,30 +480,36 @@ class TestRoomHelperCoverage(unittest.TestCase):
             result, _output = _capture_output(room_helper.main)
         self.assertFalse(result)
 
-        with patch.object(sys, "argv", ["room_helper", "list"]), patch(
-            "gms_helpers.room_helper.validate_working_directory"
-        ), patch(
-            "argparse.ArgumentParser.parse_args",
-            return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(GMSError("boom"))),
+        with (
+            patch.object(sys, "argv", ["room_helper", "list"]),
+            patch("gms_helpers.room_helper.validate_working_directory"),
+            patch(
+                "argparse.ArgumentParser.parse_args",
+                return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(GMSError("boom"))),
+            ),
         ):
             with self.assertRaises(GMSError):
                 room_helper.main()
 
-        with patch.object(sys, "argv", ["room_helper", "list"]), patch(
-            "gms_helpers.room_helper.validate_working_directory"
-        ), patch(
-            "argparse.ArgumentParser.parse_args",
-            return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(RuntimeError("boom"))),
+        with (
+            patch.object(sys, "argv", ["room_helper", "list"]),
+            patch("gms_helpers.room_helper.validate_working_directory"),
+            patch(
+                "argparse.ArgumentParser.parse_args",
+                return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(RuntimeError("boom"))),
+            ),
         ):
             result, output = _capture_output(room_helper.main)
         self.assertFalse(result)
         self.assertIn("Unexpected error", output)
 
-        with patch.object(sys, "argv", ["room_helper", "list"]), patch(
-            "gms_helpers.room_helper.validate_working_directory"
-        ), patch(
-            "argparse.ArgumentParser.parse_args",
-            return_value=SimpleNamespace(),
+        with (
+            patch.object(sys, "argv", ["room_helper", "list"]),
+            patch("gms_helpers.room_helper.validate_working_directory"),
+            patch(
+                "argparse.ArgumentParser.parse_args",
+                return_value=SimpleNamespace(),
+            ),
         ):
             result, _output = _capture_output(room_helper.main)
         self.assertFalse(result)
@@ -463,21 +518,27 @@ class TestRoomHelperCoverage(unittest.TestCase):
             _run_room_helper_as_main(["room_helper"])
         self.assertEqual(false_exit.exception.code, 1)
 
-        with patch(
-            "gms_helpers.room_helper.validate_working_directory"
-        ), patch(
-            "argparse.ArgumentParser.parse_args",
-            return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(ProjectNotFoundError("missing project"))),
-        ), self.assertRaises(SystemExit) as gms_error_exit:
+        with (
+            patch("gms_helpers.room_helper.validate_working_directory"),
+            patch(
+                "argparse.ArgumentParser.parse_args",
+                return_value=SimpleNamespace(
+                    func=lambda _args: (_ for _ in ()).throw(ProjectNotFoundError("missing project"))
+                ),
+            ),
+            self.assertRaises(SystemExit) as gms_error_exit,
+        ):
             _run_room_helper_as_main(["room_helper", "list"])
         self.assertEqual(gms_error_exit.exception.code, ProjectNotFoundError.exit_code)
 
-        with patch(
-            "gms_helpers.room_helper.validate_working_directory"
-        ), patch(
-            "argparse.ArgumentParser.parse_args",
-            return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(RuntimeError("kaboom"))),
-        ), self.assertRaises(SystemExit) as generic_error_exit:
+        with (
+            patch("gms_helpers.room_helper.validate_working_directory"),
+            patch(
+                "argparse.ArgumentParser.parse_args",
+                return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(RuntimeError("kaboom"))),
+            ),
+            self.assertRaises(SystemExit) as generic_error_exit,
+        ):
             _run_room_helper_as_main(["room_helper", "list"])
         self.assertEqual(generic_error_exit.exception.code, 1)
 
@@ -535,7 +596,12 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
             room_instance_helper.add_instance("r_test", "o_player", 1, 2, "Background")
 
         self.room_path.write_text(
-            json.dumps({"layers": [{"name": "Instances", "resourceType": "GMRInstanceLayer"}], "instanceCreationOrder": ["inst_existing"]}),
+            json.dumps(
+                {
+                    "layers": [{"name": "Instances", "resourceType": "GMRInstanceLayer"}],
+                    "instanceCreationOrder": ["inst_existing"],
+                }
+            ),
             encoding="utf-8",
         )
         with patch("uuid.uuid4", return_value=SimpleNamespace(hex="abc123")):
@@ -567,7 +633,17 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
                         {
                             "name": "Instances",
                             "resourceType": "GMRInstanceLayer",
-                            "instances": [{"name": "inst_mod", "x": 0, "y": 0, "scaleX": 1, "scaleY": 1, "rotation": 0, "objectId": {"name": "o_old"}}],
+                            "instances": [
+                                {
+                                    "name": "inst_mod",
+                                    "x": 0,
+                                    "y": 0,
+                                    "scaleX": 1,
+                                    "scaleY": 1,
+                                    "rotation": 0,
+                                    "objectId": {"name": "o_old"},
+                                }
+                            ],
                         }
                     ]
                 }
@@ -623,20 +699,24 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
             result, _output = _capture_output(room_instance_helper.main)
         self.assertFalse(result)
 
-        with patch.object(sys, "argv", ["room_instance_helper", "list-instances"]), patch(
-            "gms_helpers.room_instance_helper.validate_working_directory"
-        ), patch(
-            "argparse.ArgumentParser.parse_args",
-            return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(GMSError("boom"))),
+        with (
+            patch.object(sys, "argv", ["room_instance_helper", "list-instances"]),
+            patch("gms_helpers.room_instance_helper.validate_working_directory"),
+            patch(
+                "argparse.ArgumentParser.parse_args",
+                return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(GMSError("boom"))),
+            ),
         ):
             with self.assertRaises(GMSError):
                 room_instance_helper.main()
 
-        with patch.object(sys, "argv", ["room_instance_helper", "list-instances"]), patch(
-            "gms_helpers.room_instance_helper.validate_working_directory"
-        ), patch(
-            "argparse.ArgumentParser.parse_args",
-            return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(RuntimeError("boom"))),
+        with (
+            patch.object(sys, "argv", ["room_instance_helper", "list-instances"]),
+            patch("gms_helpers.room_instance_helper.validate_working_directory"),
+            patch(
+                "argparse.ArgumentParser.parse_args",
+                return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(RuntimeError("boom"))),
+            ),
         ):
             result, output = _capture_output(room_instance_helper.main)
         self.assertFalse(result)
@@ -682,7 +762,9 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
             "gms_helpers.maintenance.event_sync.resolve_project_directory",
             return_value=empty_project,
         ):
-            self.assertEqual(event_sync.sync_all_object_events(str(empty_project), dry_run=True)["objects_processed"], 0)
+            self.assertEqual(
+                event_sync.sync_all_object_events(str(empty_project), dry_run=True)["objects_processed"], 0
+            )
 
         all_stats, output = _capture_output(event_sync.sync_all_object_events, str(self.temp_dir), True)
         self.assertEqual(all_stats["objects_processed"], 1)

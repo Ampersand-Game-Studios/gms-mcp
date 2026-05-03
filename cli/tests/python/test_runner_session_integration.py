@@ -30,33 +30,31 @@ from gms_helpers.run_session import RunSessionManager
 
 class TestRunnerSessionIntegration(unittest.TestCase):
     """Tests for GameMakerRunner's session management integration."""
-    
+
     def setUp(self):
         """Create a temporary directory for test project."""
         self.temp_dir = tempfile.mkdtemp()
         self.project_root = Path(self.temp_dir)
-        
+
         # Create a minimal .yyp file so GameMakerRunner initializes
         yyp_path = self.project_root / "test_project.yyp"
         yyp_path.write_text('{"name": "test_project", "resources": []}')
-        
+
     def tearDown(self):
         """Clean up temporary directory."""
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
-        
+
     def test_runner_has_session_manager(self):
         """Test that GameMakerRunner creates a session manager."""
         runner = GameMakerRunner(self.project_root)
         self.assertIsInstance(runner._session_manager, RunSessionManager)
-        
+
     def test_runner_session_manager_uses_project_root(self):
         """Test session manager uses correct project root."""
         runner = GameMakerRunner(self.project_root)
-        self.assertEqual(
-            runner._session_manager.project_root,
-            self.project_root.resolve()
-        )
+        self.assertEqual(runner._session_manager.project_root, self.project_root.resolve())
 
 
 class TestRunnerLicenseDiscovery(unittest.TestCase):
@@ -69,6 +67,7 @@ class TestRunnerLicenseDiscovery(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     @patch("gms_helpers.runner.platform.system", return_value="Darwin")
@@ -82,54 +81,55 @@ class TestRunnerLicenseDiscovery(unittest.TestCase):
         with patch.object(Path, "home", return_value=Path(self.tmp_dir)):
             found = runner.find_license_file()
             self.assertEqual(found, license_file)
-        
+
 
 class TestRunnerStopGame(unittest.TestCase):
     """Tests for stop_game using session manager."""
-    
+
     def setUp(self):
         """Create a temporary directory for test project."""
         self.temp_dir = tempfile.mkdtemp()
         self.project_root = Path(self.temp_dir)
-        
+
         # Create a minimal .yyp file
         yyp_path = self.project_root / "test_project.yyp"
         yyp_path.write_text('{"name": "test_project", "resources": []}')
-        
+
     def tearDown(self):
         """Clean up temporary directory."""
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
-        
+
     def test_stop_game_returns_dict(self):
         """Test stop_game returns a dict (not bool like before)."""
         runner = GameMakerRunner(self.project_root)
         result = runner.stop_game()
-        
+
         self.assertIsInstance(result, dict)
         self.assertIn("ok", result)
         self.assertIn("message", result)
-        
+
     def test_stop_game_no_session(self):
         """Test stop_game when no session exists."""
         runner = GameMakerRunner(self.project_root)
         result = runner.stop_game()
-        
+
         self.assertFalse(result["ok"])
         self.assertIn("No game session", result["message"])
-        
+
     def test_stop_game_with_dead_session(self):
         """Test stop_game when session exists but process is dead."""
         runner = GameMakerRunner(self.project_root)
-        
+
         # Create a session with a fake PID
         runner._session_manager.create_session(
             pid=999999999,
             exe_path="/fake/game.exe",
         )
-        
+
         result = runner.stop_game()
-        
+
         self.assertTrue(result["ok"])
         self.assertIn("already stopped", result["message"])
 
@@ -144,7 +144,9 @@ class TestRunnerStopGame(unittest.TestCase):
             log_file=str(self.project_root / "output" / "test_project" / "debug.log"),
         )
 
-        with patch.object(runner, "_stop_macos_run_session", return_value={"ok": True, "message": "stopped"}) as mock_stop:
+        with patch.object(
+            runner, "_stop_macos_run_session", return_value={"ok": True, "message": "stopped"}
+        ) as mock_stop:
             result = runner.stop_game()
 
         self.assertTrue(result["ok"])
@@ -183,97 +185,101 @@ class TestRunnerStopGame(unittest.TestCase):
 
 class TestRunnerIsGameRunning(unittest.TestCase):
     """Tests for is_game_running using session manager."""
-    
+
     def setUp(self):
         """Create a temporary directory for test project."""
         self.temp_dir = tempfile.mkdtemp()
         self.project_root = Path(self.temp_dir)
-        
+
         # Create a minimal .yyp file
         yyp_path = self.project_root / "test_project.yyp"
         yyp_path.write_text('{"name": "test_project", "resources": []}')
-        
+
     def tearDown(self):
         """Clean up temporary directory."""
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
-        
+
     def test_is_game_running_no_session(self):
         """Test is_game_running returns False when no session."""
         runner = GameMakerRunner(self.project_root)
         self.assertFalse(runner.is_game_running())
-        
+
     def test_is_game_running_dead_process(self):
         """Test is_game_running returns False when process is dead."""
         runner = GameMakerRunner(self.project_root)
-        
+
         # Create a session with a fake PID
         runner._session_manager.create_session(
             pid=999999999,
             exe_path="/fake/game.exe",
         )
-        
+
         self.assertFalse(runner.is_game_running())
-        
+
     def test_is_game_running_current_process(self):
         """Test is_game_running returns True for live process."""
         import os
+
         runner = GameMakerRunner(self.project_root)
-        
+
         # Create a session with current PID (known to be alive)
         runner._session_manager.create_session(
             pid=os.getpid(),
             exe_path="/current/process.exe",
         )
-        
+
         self.assertTrue(runner.is_game_running())
 
 
 class TestRunnerGetGameStatus(unittest.TestCase):
     """Tests for get_game_status method."""
-    
+
     def setUp(self):
         """Create a temporary directory for test project."""
         self.temp_dir = tempfile.mkdtemp()
         self.project_root = Path(self.temp_dir)
-        
+
         # Create a minimal .yyp file
         yyp_path = self.project_root / "test_project.yyp"
         yyp_path.write_text('{"name": "test_project", "resources": []}')
-        
+
     def tearDown(self):
         """Clean up temporary directory."""
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
-        
+
     def test_get_game_status_returns_dict(self):
         """Test get_game_status returns a dict."""
         runner = GameMakerRunner(self.project_root)
         status = runner.get_game_status()
-        
+
         self.assertIsInstance(status, dict)
-        
+
     def test_get_game_status_no_session(self):
         """Test get_game_status when no session exists."""
         runner = GameMakerRunner(self.project_root)
         status = runner.get_game_status()
-        
+
         self.assertFalse(status["has_session"])
         self.assertFalse(status["running"])
-        
+
     def test_get_game_status_with_session(self):
         """Test get_game_status when session exists."""
         import os
+
         runner = GameMakerRunner(self.project_root)
-        
+
         # Create a session
         session = runner._session_manager.create_session(
             pid=os.getpid(),
             exe_path="/status/test.exe",
         )
-        
+
         status = runner.get_game_status()
-        
+
         self.assertTrue(status["has_session"])
         self.assertTrue(status["running"])
         self.assertEqual(status["pid"], os.getpid())
@@ -282,40 +288,41 @@ class TestRunnerGetGameStatus(unittest.TestCase):
 
 class TestRunnerCrossInstancePersistence(unittest.TestCase):
     """Test that sessions persist across GameMakerRunner instances."""
-    
+
     def setUp(self):
         """Create a temporary directory for test project."""
         self.temp_dir = tempfile.mkdtemp()
         self.project_root = Path(self.temp_dir)
-        
+
         # Create a minimal .yyp file
         yyp_path = self.project_root / "test_project.yyp"
         yyp_path.write_text('{"name": "test_project", "resources": []}')
-        
+
     def tearDown(self):
         """Clean up temporary directory."""
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
-        
+
     def test_session_visible_to_new_runner_instance(self):
         """Test that session created by one runner is visible to another."""
         import os
-        
+
         # Create session with first runner
         runner1 = GameMakerRunner(self.project_root)
         runner1._session_manager.create_session(
             pid=os.getpid(),
             exe_path="/persist/game.exe",
         )
-        
+
         # Delete first runner
         del runner1
-        
+
         # Create new runner - should see the session
         runner2 = GameMakerRunner(self.project_root)
-        
+
         self.assertTrue(runner2.is_game_running())
-        
+
     def test_stop_works_across_instances(self):
         """Test that stop_game works on session from different instance."""
         # Create session with first runner
@@ -325,35 +332,36 @@ class TestRunnerCrossInstancePersistence(unittest.TestCase):
             exe_path="/cross/instance.exe",
         )
         del runner1
-        
+
         # Stop with new runner
         runner2 = GameMakerRunner(self.project_root)
         result = runner2.stop_game()
-        
+
         self.assertTrue(result["ok"])
-        
+
         # Session should be cleared
         self.assertFalse(runner2.is_game_running())
 
 
 class TestRunnerBackgroundMode(unittest.TestCase):
     """Tests for background mode functionality."""
-    
+
     def setUp(self):
         """Create a temporary directory for test project."""
         self.temp_dir = tempfile.mkdtemp()
         self.project_root = Path(self.temp_dir)
-        
+
         # Create a minimal .yyp file
         yyp_path = self.project_root / "test_project.yyp"
         yyp_path.write_text('{"name": "test_project", "resources": []}')
-        
+
     def tearDown(self):
         """Clean up temporary directory."""
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
-        
-    @patch.object(GameMakerRunner, '_run_project_ide_temp_approach')
+
+    @patch.object(GameMakerRunner, "_run_project_ide_temp_approach")
     def test_background_true_returns_dict(self, mock_run):
         """Test that background=True returns a dict with session info."""
         mock_run.return_value = {
@@ -363,26 +371,26 @@ class TestRunnerBackgroundMode(unittest.TestCase):
             "run_id": "test_run_123",
             "message": "Game started in background",
         }
-        
+
         runner = GameMakerRunner(self.project_root)
         result = runner.run_project_direct(platform_target="Windows", background=True)
-        
+
         self.assertIsInstance(result, dict)
         self.assertTrue(result.get("background"))
-        
-    @patch.object(GameMakerRunner, '_run_project_ide_temp_approach')
+
+    @patch.object(GameMakerRunner, "_run_project_ide_temp_approach")
     def test_background_false_returns_bool_or_dict(self, mock_run):
         """Test that background=False behavior (can return bool or dict)."""
         mock_run.return_value = True
-        
+
         runner = GameMakerRunner(self.project_root)
         result = runner.run_project_direct(platform_target="Windows", background=False)
-        
+
         # Should call the method and return its result
         mock_run.assert_called_once()
 
-    @patch.object(GameMakerRunner, '_run_project_classic_approach')
-    @patch.object(GameMakerRunner, '_run_project_ide_temp_approach')
+    @patch.object(GameMakerRunner, "_run_project_classic_approach")
+    @patch.object(GameMakerRunner, "_run_project_ide_temp_approach")
     def test_macos_temp_output_routes_to_classic_approach(self, mock_temp, mock_classic):
         """macOS temp output should use the local Run path instead of PackageZip."""
         mock_classic.return_value = True
@@ -394,8 +402,8 @@ class TestRunnerBackgroundMode(unittest.TestCase):
         mock_classic.assert_called_once_with("macOS", "VM", False)
         mock_temp.assert_not_called()
 
-    @patch.object(GameMakerRunner, '_run_project_classic_approach')
-    @patch.object(GameMakerRunner, '_run_project_ide_temp_approach')
+    @patch.object(GameMakerRunner, "_run_project_classic_approach")
+    @patch.object(GameMakerRunner, "_run_project_ide_temp_approach")
     def test_windows_temp_output_still_routes_to_ide_temp_approach(self, mock_temp, mock_classic):
         """Non-mac temp output should keep the existing IDE-temp pipeline."""
         mock_temp.return_value = True
@@ -433,8 +441,12 @@ class TestRunnerBackgroundMode(unittest.TestCase):
         session = runner._session_manager.get_current_session()
         self.assertIsNotNone(session)
         self.assertEqual(session.pid, 222)
-        self.assertEqual(Path(session.exe_path).resolve(), (self.project_root / "output" / "test_project" / "game.ios").resolve())
-        self.assertEqual(Path(session.log_file).resolve(), (self.project_root / "output" / "test_project" / "debug.log").resolve())
+        self.assertEqual(
+            Path(session.exe_path).resolve(), (self.project_root / "output" / "test_project" / "game.ios").resolve()
+        )
+        self.assertEqual(
+            Path(session.log_file).resolve(), (self.project_root / "output" / "test_project" / "debug.log").resolve()
+        )
 
 
 class TestRunnerLaunchTargetDetection(unittest.TestCase):
@@ -451,6 +463,7 @@ class TestRunnerLaunchTargetDetection(unittest.TestCase):
     def tearDown(self):
         """Clean up temporary directory."""
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_find_launch_target_windows_exe(self):
@@ -496,10 +509,7 @@ class TestRunnerLaunchTargetDetection(unittest.TestCase):
 
         launch_marker = self.project_root / "smoke_launch.marker"
         binary_path = app_dir / "SmokeGame"
-        binary_path.write_text(
-            "#!/bin/sh\n"
-            f"printf 'ok' > \"{launch_marker}\"\n"
-        )
+        binary_path.write_text(f"#!/bin/sh\nprintf 'ok' > \"{launch_marker}\"\n")
         binary_path.chmod(0o755)
 
         resolved_launch = self.runner._find_launch_target(build_dir, "SmokeGame", "macOS")
@@ -526,6 +536,7 @@ class TestRunnerLaunchGuards(unittest.TestCase):
     def tearDown(self):
         """Clean up temporary directory."""
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     @patch("gms_helpers.runner.platform.system", return_value="Darwin")
@@ -572,8 +583,6 @@ class TestRunnerPlatformDefaults(unittest.TestCase):
         self.assertEqual(normalize_platform_target("ios"), "iOS")
 
 
-
-
 class TestRunnerPrefabsPath(unittest.TestCase):
     """Tests for get_prefabs_path method."""
 
@@ -589,6 +598,7 @@ class TestRunnerPrefabsPath(unittest.TestCase):
     def tearDown(self):
         """Clean up temporary directory."""
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_get_prefabs_path_returns_path_or_none(self):
@@ -599,7 +609,7 @@ class TestRunnerPrefabsPath(unittest.TestCase):
         # Result should be either a Path object or None
         self.assertTrue(result is None or isinstance(result, Path))
 
-    @patch.dict('os.environ', {'GMS_PREFABS_PATH': ''})
+    @patch.dict("os.environ", {"GMS_PREFABS_PATH": ""})
     def test_get_prefabs_path_empty_env_var(self):
         """Test get_prefabs_path with empty env var falls back to defaults."""
         runner = GameMakerRunner(self.project_root)
@@ -610,11 +620,12 @@ class TestRunnerPrefabsPath(unittest.TestCase):
     def test_get_prefabs_path_with_valid_env_var(self):
         """Test get_prefabs_path uses GMS_PREFABS_PATH environment variable."""
         import os
+
         # Create a temporary prefabs directory
         prefabs_dir = Path(self.temp_dir) / "custom_prefabs"
         prefabs_dir.mkdir()
 
-        with patch.dict('os.environ', {'GMS_PREFABS_PATH': str(prefabs_dir)}):
+        with patch.dict("os.environ", {"GMS_PREFABS_PATH": str(prefabs_dir)}):
             runner = GameMakerRunner(self.project_root)
             result = runner.get_prefabs_path()
 
@@ -622,14 +633,14 @@ class TestRunnerPrefabsPath(unittest.TestCase):
 
     def test_get_prefabs_path_env_var_nonexistent_path(self):
         """Test get_prefabs_path ignores non-existent env var path."""
-        with patch.dict('os.environ', {'GMS_PREFABS_PATH': '/nonexistent/path/prefabs'}):
+        with patch.dict("os.environ", {"GMS_PREFABS_PATH": "/nonexistent/path/prefabs"}):
             runner = GameMakerRunner(self.project_root)
             result = runner.get_prefabs_path()
 
             # Should fall back to default paths (which may or may not exist)
             # The env path should NOT be returned since it doesn't exist
             if result is not None:
-                self.assertNotEqual(str(result), '/nonexistent/path/prefabs')
+                self.assertNotEqual(str(result), "/nonexistent/path/prefabs")
 
 
 class TestRunnerIgorCommandPrefabs(unittest.TestCase):
@@ -651,30 +662,31 @@ class TestRunnerIgorCommandPrefabs(unittest.TestCase):
     def tearDown(self):
         """Clean up temporary directory."""
         import shutil
+
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    @patch.object(GameMakerRunner, 'find_gamemaker_runtime')
-    @patch.object(GameMakerRunner, 'find_license_file')
+    @patch.object(GameMakerRunner, "find_gamemaker_runtime")
+    @patch.object(GameMakerRunner, "find_license_file")
     def test_build_igor_command_includes_prefabs(self, mock_license, mock_runtime):
         """Test build_igor_command includes --pf flag when prefabs path exists."""
         # Mock runtime and license
         mock_runtime.return_value = Path("/fake/Igor.exe")
         mock_license.return_value = Path("/fake/licence.plist")
 
-        with patch.dict('os.environ', {'GMS_PREFABS_PATH': str(self.prefabs_dir)}):
+        with patch.dict("os.environ", {"GMS_PREFABS_PATH": str(self.prefabs_dir)}):
             runner = GameMakerRunner(self.project_root)
             runner.runtime_path = Path("/fake/runtime")
 
             cmd = runner.build_igor_command(action="Run")
 
             # Check that --pf flag is in the command
-            cmd_str = ' '.join(cmd)
-            self.assertIn('--pf=', cmd_str)
+            cmd_str = " ".join(cmd)
+            self.assertIn("--pf=", cmd_str)
             self.assertIn(str(self.prefabs_dir), cmd_str)
 
-    @patch.object(GameMakerRunner, 'find_gamemaker_runtime')
-    @patch.object(GameMakerRunner, 'find_license_file')
-    @patch.object(GameMakerRunner, 'get_prefabs_path')
+    @patch.object(GameMakerRunner, "find_gamemaker_runtime")
+    @patch.object(GameMakerRunner, "find_license_file")
+    @patch.object(GameMakerRunner, "get_prefabs_path")
     def test_build_igor_command_no_prefabs_when_none(self, mock_prefabs, mock_license, mock_runtime):
         """Test build_igor_command omits --pf flag when no prefabs path."""
         # Mock runtime and license
@@ -688,8 +700,9 @@ class TestRunnerIgorCommandPrefabs(unittest.TestCase):
         cmd = runner.build_igor_command(action="Run")
 
         # Check that --pf flag is NOT in the command
-        cmd_str = ' '.join(cmd)
-        self.assertNotIn('--pf=', cmd_str)
+        cmd_str = " ".join(cmd)
+        self.assertNotIn("--pf=", cmd_str)
+
 
 if __name__ == "__main__":
     unittest.main()

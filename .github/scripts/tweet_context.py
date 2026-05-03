@@ -70,10 +70,18 @@ TOPIC_CATEGORIES = {
     "asset_creation": {
         "name": "Asset Creation",
         "tools": [
-            "gm_create_script", "gm_create_object", "gm_create_sprite",
-            "gm_create_room", "gm_create_font", "gm_create_shader",
-            "gm_create_sound", "gm_create_path", "gm_create_tileset",
-            "gm_create_timeline", "gm_create_sequence", "gm_create_note",
+            "gm_create_script",
+            "gm_create_object",
+            "gm_create_sprite",
+            "gm_create_room",
+            "gm_create_font",
+            "gm_create_shader",
+            "gm_create_sound",
+            "gm_create_path",
+            "gm_create_tileset",
+            "gm_create_timeline",
+            "gm_create_sequence",
+            "gm_create_note",
         ],
         "angles": [
             "Describe an enemy type, get a working object with events and variables set up",
@@ -87,9 +95,13 @@ TOPIC_CATEGORIES = {
     "maintenance": {
         "name": "Project Maintenance",
         "tools": [
-            "gm_maintenance_auto", "gm_maintenance_lint", "gm_maintenance_list_orphans",
-            "gm_maintenance_fix_issues", "gm_maintenance_validate_json",
-            "gm_maintenance_dedupe_resources", "gm_maintenance_purge",
+            "gm_maintenance_auto",
+            "gm_maintenance_lint",
+            "gm_maintenance_list_orphans",
+            "gm_maintenance_fix_issues",
+            "gm_maintenance_validate_json",
+            "gm_maintenance_dedupe_resources",
+            "gm_maintenance_purge",
         ],
         "angles": [
             "That sprite you deleted 3 months ago? It's still referenced in 4 places. Now you can find them",
@@ -115,8 +127,12 @@ TOPIC_CATEGORIES = {
     "room_operations": {
         "name": "Room Operations",
         "tools": [
-            "gm_room_layer_add", "gm_room_layer_remove", "gm_room_instance_add",
-            "gm_room_ops_duplicate", "gm_room_ops_rename", "gm_room_ops_delete",
+            "gm_room_layer_add",
+            "gm_room_layer_remove",
+            "gm_room_instance_add",
+            "gm_room_ops_duplicate",
+            "gm_room_ops_rename",
+            "gm_room_ops_delete",
         ],
         "angles": [
             "Procedurally place 50 enemies across your level without clicking 50 times",
@@ -142,8 +158,12 @@ TOPIC_CATEGORIES = {
     "introspection": {
         "name": "Project Introspection",
         "tools": [
-            "gm_list_assets", "gm_read_asset", "gm_search_references",
-            "gm_get_asset_graph", "gm_get_project_stats", "gm_project_info",
+            "gm_list_assets",
+            "gm_read_asset",
+            "gm_search_references",
+            "gm_get_asset_graph",
+            "gm_get_project_stats",
+            "gm_project_info",
         ],
         "angles": [
             "Before deleting that old sprite - see everything that references it first",
@@ -246,25 +266,25 @@ HASHTAGS = ["#gamedev", "#GameMaker", "#indiedev", "#GML", "#GameMakerStudio2"]
 
 # Opening pattern types to encourage variety (20 options)
 OPENING_PATTERNS = [
-    "statement",      # Direct statement about a feature: "gms-mcp can X"
-    "scenario",       # "When X happens, you can Y"
-    "discovery",      # "TIL: ...", "Discovered that..."
-    "comparison",     # "Used to X, now Y"
-    "question",       # "Need to X? Here's how"
-    "workflow",       # "My workflow: ..."
-    "tip",            # "Quick tip: ..."
-    "result",         # "Just X'd and Y happened" - outcome focus
-    "capability",     # "You can now X" - feature announcement style
-    "pain_point",     # "Hate when X? Y fixes that" - relatable frustration
-    "speed",          # "X in seconds" - emphasize speed
-    "count",          # "Found 40 orphaned scripts" - concrete numbers
-    "tool_spotlight", # "gm_find_references is..." - tool-first framing
-    "use_case",       # "For large projects..." - audience targeting
-    "contrast",       # "Instead of X, just Y" - alternative approach
-    "command",        # "Run gm_maintenance_auto..." - imperative/instructional
-    "hypothetical",   # "Imagine if your AI could..." - possibilities
-    "observation",    # "Noticed that X..." - casual insight
-    "shortcut",       # "Skip the menu diving..." - efficiency angle
+    "statement",  # Direct statement about a feature: "gms-mcp can X"
+    "scenario",  # "When X happens, you can Y"
+    "discovery",  # "TIL: ...", "Discovered that..."
+    "comparison",  # "Used to X, now Y"
+    "question",  # "Need to X? Here's how"
+    "workflow",  # "My workflow: ..."
+    "tip",  # "Quick tip: ..."
+    "result",  # "Just X'd and Y happened" - outcome focus
+    "capability",  # "You can now X" - feature announcement style
+    "pain_point",  # "Hate when X? Y fixes that" - relatable frustration
+    "speed",  # "X in seconds" - emphasize speed
+    "count",  # "Found 40 orphaned scripts" - concrete numbers
+    "tool_spotlight",  # "gm_find_references is..." - tool-first framing
+    "use_case",  # "For large projects..." - audience targeting
+    "contrast",  # "Instead of X, just Y" - alternative approach
+    "command",  # "Run gm_maintenance_auto..." - imperative/instructional
+    "hypothetical",  # "Imagine if your AI could..." - possibilities
+    "observation",  # "Noticed that X..." - casual insight
+    "shortcut",  # "Skip the menu diving..." - efficiency angle
     # NOTE: Removed "confession" pattern - it encouraged fake human experience framing
 ]
 
@@ -310,7 +330,9 @@ def parse_changelog_released() -> list[dict]:
             pattern = rf"### {subsection}\n(.*?)(?=###|\Z)"
             sub_match = re.search(pattern, section, re.DOTALL)
             if sub_match:
-                items = re.findall(r"^- \*\*(.+?)\*\*:?\s*(.+?)(?=\n-|\Z)", sub_match.group(1), re.MULTILINE | re.DOTALL)
+                items = re.findall(
+                    r"^- \*\*(.+?)\*\*:?\s*(.+?)(?=\n-|\Z)", sub_match.group(1), re.MULTILINE | re.DOTALL
+                )
                 entry[subsection.lower()] = [{"title": t.strip(), "desc": d.strip()[:200]} for t, d in items]
 
         entries.append(entry)
@@ -351,10 +373,7 @@ def get_readme_summary() -> str:
 def select_topic(topic_coverage: dict[str, Optional[str]]) -> str:
     """Select the least recently covered topic."""
     # Sort by last coverage time (None = never covered = highest priority)
-    sorted_topics = sorted(
-        topic_coverage.items(),
-        key=lambda x: x[1] if x[1] else "1970-01-01T00:00:00Z"
-    )
+    sorted_topics = sorted(topic_coverage.items(), key=lambda x: x[1] if x[1] else "1970-01-01T00:00:00Z")
 
     # Return the least recently covered topic
     return sorted_topics[0][0]
@@ -363,10 +382,7 @@ def select_topic(topic_coverage: dict[str, Optional[str]]) -> str:
 def select_format(format_coverage: dict[str, Optional[str]]) -> str:
     """Select the least recently used tweet format."""
     # Sort by last usage time (None = never used = highest priority)
-    sorted_formats = sorted(
-        format_coverage.items(),
-        key=lambda x: x[1] if x[1] else "1970-01-01T00:00:00Z"
-    )
+    sorted_formats = sorted(format_coverage.items(), key=lambda x: x[1] if x[1] else "1970-01-01T00:00:00Z")
 
     # Return the least recently used format
     return sorted_formats[0][0]
@@ -379,10 +395,7 @@ def initialize_format_coverage() -> dict[str, Optional[str]]:
 
 def initialize_angle_coverage() -> dict[str, dict[str, Optional[str]]]:
     """Track when each angle within each topic was last used."""
-    return {
-        topic: {str(i): None for i in range(len(cat["angles"]))}
-        for topic, cat in TOPIC_CATEGORIES.items()
-    }
+    return {topic: {str(i): None for i in range(len(cat["angles"]))} for topic, cat in TOPIC_CATEGORIES.items()}
 
 
 def select_angle(topic: str, angle_coverage: dict) -> tuple[int, str]:
@@ -392,10 +405,7 @@ def select_angle(topic: str, angle_coverage: dict) -> tuple[int, str]:
     if not topic_angles:
         topic_angles = {str(i): None for i in range(len(TOPIC_CATEGORIES[topic]["angles"]))}
 
-    sorted_angles = sorted(
-        topic_angles.items(),
-        key=lambda x: x[1] if x[1] else "1970-01-01T00:00:00Z"
-    )
+    sorted_angles = sorted(topic_angles.items(), key=lambda x: x[1] if x[1] else "1970-01-01T00:00:00Z")
     angle_idx = int(sorted_angles[0][0])
     return angle_idx, TOPIC_CATEGORIES[topic]["angles"][angle_idx]
 
@@ -414,7 +424,7 @@ def get_time_slot() -> str:
 def extract_opening_pattern(text: str) -> str:
     """Extract opening clause up to first punctuation or 8 words."""
     # Match up to first sentence-ending punctuation
-    match = re.match(r'^([^.?!]+[.?!]?)', text)
+    match = re.match(r"^([^.?!]+[.?!]?)", text)
     if match:
         opening = match.group(1).strip()
         words = opening.split()[:8]
@@ -434,10 +444,7 @@ def select_opening_pattern(opening_coverage: dict) -> str:
         if pattern not in opening_coverage:
             opening_coverage[pattern] = None
 
-    sorted_patterns = sorted(
-        opening_coverage.items(),
-        key=lambda x: x[1] if x[1] else "1970-01-01T00:00:00Z"
-    )
+    sorted_patterns = sorted(opening_coverage.items(), key=lambda x: x[1] if x[1] else "1970-01-01T00:00:00Z")
     return sorted_patterns[0][0]
 
 
@@ -472,7 +479,7 @@ def build_context_for_claude(
     recent_text = ""
     if recent_tweets:
         for t in recent_tweets[-15:]:
-            preview = t.get('preview', 'No preview')
+            preview = t.get("preview", "No preview")
             recent_text += f"- {preview}\n"
     else:
         recent_text = "No recent tweets"
@@ -480,7 +487,7 @@ def build_context_for_claude(
     # Extract opening patterns from recent tweets to avoid
     recent_openings = []
     for t in recent_tweets[-10:]:
-        content = t.get('content') or t.get('preview', '')
+        content = t.get("content") or t.get("preview", "")
         if content:
             opening = extract_opening_pattern(content)
             if opening and opening not in recent_openings:
@@ -491,7 +498,7 @@ def build_context_for_claude(
     # Extract recently featured tools
     recent_tools = set()
     for t in recent_tweets[-10:]:
-        recent_tools.update(t.get('tools_mentioned', []))
+        recent_tools.update(t.get("tools_mentioned", []))
 
     tools_to_avoid = ", ".join(sorted(recent_tools)) if recent_tools else "None"
 
@@ -534,13 +541,13 @@ def build_context_for_claude(
 
     return f"""PROJECT: gms-mcp - GameMaker CLI and MCP server for AI-assisted game development
 
-TOPIC: {category['name']}
+TOPIC: {category["name"]}
 Tools: {topic_tools}
 Angle to explore: {selected_angle}
 
-TWEET FORMAT TO USE: {format_info['name']}
-How to write it: {format_info['template']}
-Example of this format: "{format_info['example']}"
+TWEET FORMAT TO USE: {format_info["name"]}
+How to write it: {format_info["template"]}
+Example of this format: "{format_info["example"]}"
 
 SUGGESTED OPENING STYLE: {suggested_opening or "any"}
 {opening_guidance}

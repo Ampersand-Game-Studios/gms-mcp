@@ -59,7 +59,7 @@ def _to_igor_platform(platform_target: str) -> str:
 
 class GameMakerRunner:
     """Handles GameMaker project compilation and execution."""
-    
+
     def __init__(self, project_root: Path, runtime_version: Optional[str] = None):
         self.project_root = Path(project_root).resolve()
         self.runtime_version = runtime_version
@@ -71,19 +71,19 @@ class GameMakerRunner:
         self.last_failure_message: Optional[str] = None
         self._runtime_manager = RuntimeManager(self.project_root)
         self._session_manager = RunSessionManager(self.project_root)
-        
+
     def find_project_file(self) -> Path:
         """Find the .yyp file in the project root."""
         if self.yyp_file:
             return self.yyp_file
-            
+
         # First try the current directory
         try:
             self.yyp_file = find_yyp(self.project_root)
             return self.yyp_file
         except SystemExit:
             pass
-        
+
         # If not found, check if we're in root and need to look in gamemaker/ subdirectory
         gamemaker_subdir = self.project_root / "gamemaker"
         if gamemaker_subdir.exists() and gamemaker_subdir.is_dir():
@@ -94,20 +94,20 @@ class GameMakerRunner:
                 return self.yyp_file
             except SystemExit:
                 pass
-        
+
         raise FileNotFoundError(f"No .yyp file found in {self.project_root} or {self.project_root}/gamemaker")
-    
+
     def find_gamemaker_runtime(self) -> Optional[Path]:
         """Locate GameMaker runtime and Igor binary using RuntimeManager."""
         if self.igor_path:
             return self.igor_path
-            
+
         runtime_info = self._runtime_manager.select(self.runtime_version)
         if runtime_info and runtime_info.is_valid:
             self.igor_path = Path(runtime_info.igor_path)
             self.runtime_path = Path(runtime_info.path)
             return self.igor_path
-            
+
         return None
 
     def get_prefabs_path(self) -> Optional[Path]:
@@ -181,11 +181,11 @@ class GameMakerRunner:
             return matches[0]
 
         system = platform.system()
-        
+
         if system == "Windows":
             base_paths = [
                 Path.home() / "AppData/Roaming/GameMakerStudio2",
-                Path("C:/Users") / os.getenv("USERNAME", "") / "AppData/Roaming/GameMakerStudio2"
+                Path("C:/Users") / os.getenv("USERNAME", "") / "AppData/Roaming/GameMakerStudio2",
             ]
         elif system == "Darwin":
             base_paths = [
@@ -194,17 +194,15 @@ class GameMakerRunner:
                 Path("/Users/Shared/GameMakerStudio2"),
             ]
         else:  # Linux
-            base_paths = [
-                Path.home() / ".config/GameMakerStudio2"
-            ]
-        
+            base_paths = [Path.home() / ".config/GameMakerStudio2"]
+
         for base_path in base_paths:
             if not base_path.exists():
                 continue
-                
+
             # Look for user directories (usually username_number format)
             user_dirs = [d for d in base_path.iterdir() if d.is_dir()]
-            
+
             for user_dir in user_dirs:
                 license_file = _find_in_directory(user_dir)
                 if license_file:
@@ -214,7 +212,7 @@ class GameMakerRunner:
             license_file = _find_in_directory(base_path)
             if license_file:
                 return license_file
-        
+
         return None
 
     def _normalize_path_for_popen(self) -> dict:
@@ -236,7 +234,7 @@ class GameMakerRunner:
 
         guidance = [
             "- Verify execute permission is set on the file (`chmod +x`).",
-            "- If the file was downloaded, clear quarantine metadata (`xattr -dr com.apple.quarantine \"<path>\"`).",
+            '- If the file was downloaded, clear quarantine metadata (`xattr -dr com.apple.quarantine "<path>"`).',
             "- Reinstall or trust the GameMaker runtime if the binary is unsigned.",
             "- Try running from an accessible folder and avoid macOS protected paths.",
         ]
@@ -251,9 +249,7 @@ class GameMakerRunner:
 
         if "operation not permitted" in error_text or "sandbox" in error_text:
             return (
-                f"{action_name} was blocked by macOS sandbox rules.\n"
-                f"Path: {launch_target}\n"
-                f"Remediation:\n{remediation}"
+                f"{action_name} was blocked by macOS sandbox rules.\nPath: {launch_target}\nRemediation:\n{remediation}"
             )
 
         if "code signature" in error_text or "codesign" in error_text:
@@ -287,7 +283,13 @@ class GameMakerRunner:
 
     def _run_igor_command(self, cmd: List[str]) -> subprocess.Popen:
         """Start an Igor command with shared process settings."""
-        process_kwargs = {"stdout": subprocess.PIPE, "stderr": subprocess.STDOUT, "text": True, "bufsize": 1, "universal_newlines": True}
+        process_kwargs = {
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.STDOUT,
+            "text": True,
+            "bufsize": 1,
+            "universal_newlines": True,
+        }
         process_kwargs.update(self._normalize_path_for_popen())
         try:
             return subprocess.Popen(cmd, **process_kwargs)
@@ -302,7 +304,7 @@ class GameMakerRunner:
                     )
                 ) from exc
             raise
-    
+
     def _find_macos_app_binary(self, app_bundle: Path) -> Optional[Path]:
         """Return the first executable inside a macOS .app bundle."""
         macos_dir = app_bundle / "Contents" / "MacOS"
@@ -427,7 +429,9 @@ class GameMakerRunner:
         cmd.extend(["--", igor_platform, action])
         return cmd
 
-    def _stream_igor_output(self, process: subprocess.Popen, stage_label: str, *, emit_output: bool = True) -> List[str]:
+    def _stream_igor_output(
+        self, process: subprocess.Popen, stage_label: str, *, emit_output: bool = True
+    ) -> List[str]:
         """Stream Igor stdout while lightly classifying lines for humans."""
         output_lines: List[str] = []
 
@@ -744,11 +748,12 @@ class GameMakerRunner:
         """
         return self._build_platform_action_command("Run", "macOS", runtime_type)
 
-    def build_igor_command(self, action: str = "Run", platform_target: Optional[str] = None,
-                          runtime_type: str = "VM", **kwargs) -> List[str]:
+    def build_igor_command(
+        self, action: str = "Run", platform_target: Optional[str] = None, runtime_type: str = "VM", **kwargs
+    ) -> List[str]:
         """Build Igor command line."""
         return self._build_platform_action_command(action, platform_target, runtime_type)
-    
+
     def compile_project(self, platform_target: Optional[str] = None, runtime_type: str = "VM") -> bool:
         """Compile the GameMaker project."""
         platform_target = normalize_platform_target(platform_target)
@@ -774,14 +779,18 @@ class GameMakerRunner:
                 try:
                     process = self._run_igor_command(cmd)
                     output_lines, output_thread = self._collect_igor_output_async(process, "local compile validation")
-                    reached_main_loop = self._wait_for_macos_main_loop(process, debug_log, start_offset, timeout_seconds=90.0)
+                    reached_main_loop = self._wait_for_macos_main_loop(
+                        process, debug_log, start_offset, timeout_seconds=90.0
+                    )
                     timed_out = (not reached_main_loop) and process.poll() is None
                 finally:
                     if process is not None and process.poll() is None:
                         print("[BUILD] Stopping macOS local validation run...")
                         stop_ok = self._stop_platform_process("macOS", runtime_type)
                         if not stop_ok:
-                            print("[WARN] Igor Stop command did not report success; terminating validation process directly.")
+                            print(
+                                "[WARN] Igor Stop command did not report success; terminating validation process directly."
+                            )
                             process.terminate()
                         try:
                             process.wait(timeout=10)
@@ -849,16 +858,18 @@ class GameMakerRunner:
             self._remember_failure(failure_message)
             print(f"[ERROR] {failure_message}")
             return False
-                
+
         except Exception as e:
             self._remember_failure(str(e))
             print(f"[ERROR] Compilation error: {e}")
             return False
-    
-    def run_project_direct(self, platform_target: Optional[str] = None, runtime_type="VM", background=False, output_location="temp"):
+
+    def run_project_direct(
+        self, platform_target: Optional[str] = None, runtime_type="VM", background=False, output_location="temp"
+    ):
         """
         Run the project directly.
-        
+
         Args:
             platform_target: Target platform (default: host OS)
             runtime_type: Runtime type VM or YYC (default: VM)
@@ -875,7 +886,7 @@ class GameMakerRunner:
             return self._run_project_ide_temp_approach(platform_target, runtime_type, background)
         else:  # output_location == "project"
             return self._run_project_classic_approach(platform_target, runtime_type, background)
-    
+
     def _run_project_ide_temp_approach(self, platform_target="Windows", runtime_type="VM", background=False):
         """
         Run the project using IDE-temp approach:
@@ -888,17 +899,17 @@ class GameMakerRunner:
         try:
             import os
             import subprocess
-            
+
             print("[RUN] Starting game using IDE-temp approach...")
             self._clear_last_result("package/export")
-            
+
             # Step 1: Build PackageZip command to compile to IDE temp directory
             print("[PACKAGE] Packaging project to IDE temp directory...")
-            
+
             project_file = self.find_project_file()
             system_temp = self._system_temp_root()
             project_name = project_file.stem
-            
+
             # Use IDE temp directory structure
             ide_temp_dir = system_temp / "GameMakerStudio2" / project_name
             ide_temp_dir.mkdir(parents=True, exist_ok=True)
@@ -915,17 +926,17 @@ class GameMakerRunner:
                 runtime_type,
                 extra_args=extra_args,
             )
-            
+
             print(f"[CMD] Package command: {' '.join(cmd)}")
-            
+
             # Run packaging
             process = self._run_igor_command(cmd)
-            
+
             # Stream compilation output
             output_lines = self._stream_igor_output(process, "package/export")
-            
+
             process.wait()
-            
+
             # PackageZip might fail at the end when trying to create zip, but executable creation usually succeeds
             if process.returncode != 0:
                 failure_message = self._build_stage_failure_message(
@@ -944,7 +955,7 @@ class GameMakerRunner:
                     stderr=subprocess.DEVNULL,
                     check=False,
                 )
-            
+
             # Step 2: Find the runnable artifact from PackageZip output.
             launch_path = self._find_launch_target(ide_temp_dir, project_name, platform_target)
 
@@ -961,21 +972,21 @@ class GameMakerRunner:
                 for file in sorted(ide_temp_dir.iterdir()):
                     print(f"  - {file.name}")
                 return False
-                
+
             print(f"[OK] Game packaged successfully: {launch_path}")
-            
+
             # Step 3: Run the game binary directly.
             print("[RUN] Starting game...")
-            
+
             # Change to the game directory and run the executable
             original_cwd = os.getcwd()
             try:
                 os.chdir(ide_temp_dir)
-                
+
                 self.game_process = self._start_game_process(launch_path)
-                
+
                 print(f"[OK] Game started! PID: {self.game_process.pid}")
-                
+
                 # Create a persistent session so stop/status can find this process later
                 session = self._session_manager.create_session(
                     pid=self.game_process.pid,
@@ -983,7 +994,7 @@ class GameMakerRunner:
                     platform_target=platform_target,
                     runtime_type=runtime_type,
                 )
-                
+
                 if background:
                     # Background mode: return immediately without waiting
                     print("[OK] Game running in background mode.")
@@ -998,31 +1009,31 @@ class GameMakerRunner:
                         "exe_path": str(launch_path),
                         "message": f"Game started in background (PID: {self.game_process.pid})",
                     }
-                
+
                 # Foreground mode: wait for game to finish
                 print("   Game is running...")
                 print("   Close the game window to return to console.")
-                
+
                 self.game_process.wait()
-                
+
                 # Clean up session after game exits
                 self._session_manager.clear_session()
-                
+
                 if self.game_process.returncode == 0:
                     print("[OK] Game finished successfully!")
                     return True
                 else:
                     print(f"[ERROR] Game exited with code {self.game_process.returncode}")
                     return False
-                    
+
             finally:
                 os.chdir(original_cwd)
-                
+
         except Exception as e:
             self._remember_failure(str(e))
             print(f"[ERROR] Error running project: {e}")
             return False
-    
+
     def _run_project_classic_approach(self, platform_target="Windows", runtime_type="VM", background=False):
         """
         Run the project using the classic approach:
@@ -1034,11 +1045,11 @@ class GameMakerRunner:
         try:
             print("[RUN] Starting game using classic approach...")
             self._clear_last_result("local run")
-            
+
             cmd = self._build_platform_action_command("Run", platform_target, runtime_type)
-            
+
             print(f"[CMD] Run command: {' '.join(cmd)}")
-            
+
             project_file = self.find_project_file()
             project_name = project_file.stem
             macos_debug_log: Optional[Path] = None
@@ -1137,7 +1148,7 @@ class GameMakerRunner:
                 platform_target=platform_target,
                 runtime_type=runtime_type,
             )
-            
+
             # Foreground mode: stream output and wait
             if self.game_process.stdout:
                 for line in self.game_process.stdout:
@@ -1152,12 +1163,12 @@ class GameMakerRunner:
                             print(f"[BUILD] {line}")
                         else:
                             print(f"   {line}")
-            
+
             self.game_process.wait()
-            
+
             # Clean up session after game exits
             self._session_manager.clear_session()
-            
+
             if self.game_process.returncode == 0:
                 print("[OK] Game finished successfully!")
                 return True
@@ -1170,29 +1181,34 @@ class GameMakerRunner:
             self._remember_failure(failure_message)
             print(f"[ERROR] {failure_message}")
             return False
-                 
+
         except Exception as e:
             self._remember_failure(str(e))
             print(f"[ERROR] Error running project: {e}")
             return False
-    
+
     def stop_game(self) -> Dict[str, Any]:
         """
         Stop the running game.
-        
+
         Uses the session manager to find and stop the game process,
         even if this is a new GameMakerRunner instance.
-        
+
         Returns:
             Dict with result of stop operation
         """
         session = self._session_manager.get_current_session()
-        if session and session.platform_target == "macOS" and session.log_file and session.exe_path.endswith("game.ios"):
+        if (
+            session
+            and session.platform_target == "macOS"
+            and session.log_file
+            and session.exe_path.endswith("game.ios")
+        ):
             result = self._stop_macos_run_session(session)
         else:
             # First, try to use the session manager (works across instances)
             result = self._session_manager.stop_game()
-        
+
         # Also clean up our local reference if we have one
         if self.game_process is not None:
             try:
@@ -1205,26 +1221,26 @@ class GameMakerRunner:
             except Exception:
                 pass
             self.game_process = None
-        
+
         return result
-    
+
     def is_game_running(self) -> bool:
         """
         Check if game is currently running.
-        
+
         Uses the session manager to check, even if this is a new
         GameMakerRunner instance.
-        
+
         Returns:
             True if game is running, False otherwise
         """
         status = self._session_manager.get_session_status()
         return status.get("running", False)
-    
+
     def get_game_status(self) -> Dict[str, Any]:
         """
         Get detailed status of the running game.
-        
+
         Returns:
             Dict with session info and running status
         """
@@ -1232,19 +1248,25 @@ class GameMakerRunner:
 
 
 # Convenience functions for command-line usage
-def compile_project(project_root: str = ".", platform: Optional[str] = None,
-                   runtime: str = "VM", runtime_version: Optional[str] = None) -> bool:
+def compile_project(
+    project_root: str = ".", platform: Optional[str] = None, runtime: str = "VM", runtime_version: Optional[str] = None
+) -> bool:
     """Compile GameMaker project."""
     runner = GameMakerRunner(Path(project_root), runtime_version=runtime_version)
     return runner.compile_project(platform, runtime)
 
 
-def run_project(project_root: str = ".", platform: Optional[str] = None,
-               runtime: str = "VM", background: bool = False, output_location: str = "temp",
-               runtime_version: Optional[str] = None):
+def run_project(
+    project_root: str = ".",
+    platform: Optional[str] = None,
+    runtime: str = "VM",
+    background: bool = False,
+    output_location: str = "temp",
+    runtime_version: Optional[str] = None,
+):
     """
     Run GameMaker project directly (like IDE does).
-    
+
     Args:
         project_root: Path to project root
         platform: Target platform (default: host OS)
@@ -1252,7 +1274,7 @@ def run_project(project_root: str = ".", platform: Optional[str] = None,
         background: If True, return immediately without waiting for game to exit
         output_location: 'temp' (IDE-style) or 'project' (classic output folder)
         runtime_version: Specific runtime version to use
-        
+
     Returns:
         If background=False: bool (True if game exited successfully)
         If background=True: dict with session info (pid, run_id, etc.)
@@ -1264,10 +1286,10 @@ def run_project(project_root: str = ".", platform: Optional[str] = None,
 def stop_project(project_root: str = ".") -> Dict[str, Any]:
     """
     Stop running GameMaker project.
-    
+
     Uses persistent session tracking to find and stop the game,
     even if called from a different process or after restart.
-    
+
     Returns:
         Dict with result of stop operation
     """
@@ -1278,12 +1300,12 @@ def stop_project(project_root: str = ".") -> Dict[str, Any]:
 def get_project_status(project_root: str = ".") -> Dict[str, Any]:
     """
     Get status of running GameMaker project.
-    
+
     Uses persistent session tracking to check game status,
     even if called from a different process or after restart.
-    
+
     Returns:
         Dict with session info and running status
     """
     runner = GameMakerRunner(Path(project_root))
-    return runner.get_game_status() 
+    return runner.get_game_status()

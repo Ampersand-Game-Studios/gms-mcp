@@ -31,7 +31,7 @@ async def _run_with_fallback(
         # We intentionally ignore flags/values so policies like "run-compile"
         # keep applying even when the CLI invocation includes options.
         head: List[str] = []
-        for token in (cli_args or []):
+        for token in cli_args or []:
             if not token:
                 continue
             if token.startswith("-"):

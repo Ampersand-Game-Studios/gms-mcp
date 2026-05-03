@@ -1,4 +1,5 @@
 """Health check and telemetry for GMS MCP."""
+
 from __future__ import annotations
 
 import platform
@@ -188,6 +189,7 @@ def gm_mcp_health(project_root: Optional[str] = None) -> MaintenanceResult:
         details=report.flatten_details(),
         data=report.to_dict(),
     )
+
 
 if __name__ == "__main__":
     try:

@@ -266,4 +266,3 @@ def register(mcp: Any, ContextType: Any) -> None:
         result.setdefault("project_directory", str(project_directory))
         result.setdefault("yyp", yyp_path.name)
         return result
-

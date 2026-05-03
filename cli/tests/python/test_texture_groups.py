@@ -105,16 +105,16 @@ class TestTextureGroups(unittest.TestCase):
 
         self._write_sprite(
             top_name="Default",
-            cfg_desktop="{ \"name\":\"game\", \"path\":\"texturegroups/game\" }",
+            cfg_desktop='{ "name":"game", "path":"texturegroups/game" }',
         )
         self._write_font(
             top_value=None,
-            cfg_desktop="{ \"name\":\"fonts\", \"path\":\"texturegroups/fonts\" }",
+            cfg_desktop='{ "name":"fonts", "path":"texturegroups/fonts" }',
         )
         # Tileset intentionally mismatched + contains a missing group reference in config.
         self._write_tileset(
             top_name="game",
-            cfg_desktop="{ \"name\":\"missing_group\", \"path\":\"texturegroups/missing_group\" }",
+            cfg_desktop='{ "name":"missing_group", "path":"texturegroups/missing_group" }',
         )
 
     def tearDown(self):
@@ -291,4 +291,3 @@ class TestTextureGroups(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

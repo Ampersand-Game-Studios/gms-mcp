@@ -240,7 +240,9 @@ class TestMainFunction(unittest.TestCase):
 
         self.assertEqual(result, 0)
         self.assertEqual(post_tweet.TWEET_FILE.read_text(), tweet_content)
-        history = json.loads(post_tweet.HISTORY_FILE.read_text()) if post_tweet.HISTORY_FILE.exists() else {"posted": []}
+        history = (
+            json.loads(post_tweet.HISTORY_FILE.read_text()) if post_tweet.HISTORY_FILE.exists() else {"posted": []}
+        )
         self.assertEqual(history["posted"], [])
 
 

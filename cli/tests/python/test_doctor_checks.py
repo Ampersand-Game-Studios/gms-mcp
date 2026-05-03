@@ -26,48 +26,62 @@ def _check(
 
 class TestDoctorChecks(unittest.TestCase):
     def test_build_doctor_report_project_mode_includes_health_checks(self):
-        with patch(
-            "gms_mcp.doctor_checks._build_package_check",
-            return_value=_check(check_id="package", name="package"),
-        ), patch(
-            "gms_mcp.doctor_checks._build_project_detection_check",
-            return_value=(_check(check_id="project_detection", name="project"), Path("/tmp/project")),
-        ), patch(
-            "gms_mcp.doctor_checks._build_updates_check",
-            return_value=_check(check_id="updates", name="updates"),
-        ), patch(
-            "gms_mcp.doctor_checks._build_health_checks",
-            return_value=[
-                _check(check_id="health_runtime", name="runtime"),
-                _check(check_id="health_license", name="license", status="error"),
-            ],
+        with (
+            patch(
+                "gms_mcp.doctor_checks._build_package_check",
+                return_value=_check(check_id="package", name="package"),
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_project_detection_check",
+                return_value=(_check(check_id="project_detection", name="project"), Path("/tmp/project")),
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_updates_check",
+                return_value=_check(check_id="updates", name="updates"),
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_health_checks",
+                return_value=[
+                    _check(check_id="health_runtime", name="runtime"),
+                    _check(check_id="health_license", name="license", status="error"),
+                ],
+            ),
         ):
             report = doctor_checks_module.build_doctor_report(project=True)
 
-        self.assertEqual([check["name"] for check in report["checks"]], ["package", "project", "updates", "runtime", "license"])
+        self.assertEqual(
+            [check["name"] for check in report["checks"]], ["package", "project", "updates", "runtime", "license"]
+        )
         self.assertEqual(report["overall_status"], "error")
         self.assertEqual(report["exit_code"], 2)
         self.assertEqual(report["command"]["project"], True)
 
     def test_build_doctor_report_full_mode_adds_runtime_and_bridge(self):
-        with patch(
-            "gms_mcp.doctor_checks._build_package_check",
-            return_value=_check(check_id="package", name="package"),
-        ), patch(
-            "gms_mcp.doctor_checks._build_project_detection_check",
-            return_value=(_check(check_id="project_detection", name="project"), Path("/tmp/project")),
-        ), patch(
-            "gms_mcp.doctor_checks._build_updates_check",
-            return_value=_check(check_id="updates", name="updates", status="warning"),
-        ), patch(
-            "gms_mcp.doctor_checks._build_health_checks",
-            return_value=[_check(check_id="health_runtime", name="runtime")],
-        ), patch(
-            "gms_mcp.doctor_checks._build_runtime_selection_check",
-            return_value=_check(check_id="runtime_selection", name="runtime-selection"),
-        ), patch(
-            "gms_mcp.doctor_checks._build_bridge_check",
-            return_value=_check(check_id="bridge", name="bridge", status="info"),
+        with (
+            patch(
+                "gms_mcp.doctor_checks._build_package_check",
+                return_value=_check(check_id="package", name="package"),
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_project_detection_check",
+                return_value=(_check(check_id="project_detection", name="project"), Path("/tmp/project")),
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_updates_check",
+                return_value=_check(check_id="updates", name="updates", status="warning"),
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_health_checks",
+                return_value=[_check(check_id="health_runtime", name="runtime")],
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_runtime_selection_check",
+                return_value=_check(check_id="runtime_selection", name="runtime-selection"),
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_bridge_check",
+                return_value=_check(check_id="bridge", name="bridge", status="info"),
+            ),
         ):
             report = doctor_checks_module.build_doctor_report(project=True, full=True)
 
@@ -80,42 +94,56 @@ class TestDoctorChecks(unittest.TestCase):
         self.assertEqual(report["command"]["full"], True)
 
     def test_build_doctor_report_client_mode_adds_client_checks(self):
-        with patch(
-            "gms_mcp.doctor_checks._build_package_check",
-            return_value=_check(check_id="package", name="package"),
-        ), patch(
-            "gms_mcp.doctor_checks._build_project_detection_check",
-            return_value=(_check(check_id="project_detection", name="project", status="info"), None),
-        ), patch(
-            "gms_mcp.doctor_checks._build_updates_check",
-            return_value=_check(check_id="updates", name="updates"),
-        ), patch(
-            "gms_mcp.doctor_checks._build_client_checks",
-            return_value=[_check(check_id="client_codex", name="client-codex", scope="client")],
+        with (
+            patch(
+                "gms_mcp.doctor_checks._build_package_check",
+                return_value=_check(check_id="package", name="package"),
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_project_detection_check",
+                return_value=(_check(check_id="project_detection", name="project", status="info"), None),
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_updates_check",
+                return_value=_check(check_id="updates", name="updates"),
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_client_checks",
+                return_value=[_check(check_id="client_codex", name="client-codex", scope="client")],
+            ),
         ):
             report = doctor_checks_module.build_doctor_report(client="codex", server_name="gms-app")
 
-        self.assertEqual([check["name"] for check in report["checks"]], ["package", "project", "updates", "client-codex"])
+        self.assertEqual(
+            [check["name"] for check in report["checks"]], ["package", "project", "updates", "client-codex"]
+        )
         self.assertEqual(report["command"]["client"], "codex")
         self.assertEqual(report["command"]["server_name"], "gms-app")
         self.assertEqual(report["exit_code"], 0)
 
     def test_build_doctor_report_client_mode_supports_claude(self):
-        with patch(
-            "gms_mcp.doctor_checks._build_package_check",
-            return_value=_check(check_id="package", name="package"),
-        ), patch(
-            "gms_mcp.doctor_checks._build_project_detection_check",
-            return_value=(_check(check_id="project_detection", name="project", status="info"), None),
-        ), patch(
-            "gms_mcp.doctor_checks._build_updates_check",
-            return_value=_check(check_id="updates", name="updates"),
-        ), patch(
-            "gms_mcp.doctor_checks._build_client_checks",
-            return_value=[
-                _check(check_id="client_claude_code", name="client-claude-code", scope="client"),
-                _check(check_id="client_claude_desktop", name="client-claude-desktop", scope="client", status="warning"),
-            ],
+        with (
+            patch(
+                "gms_mcp.doctor_checks._build_package_check",
+                return_value=_check(check_id="package", name="package"),
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_project_detection_check",
+                return_value=(_check(check_id="project_detection", name="project", status="info"), None),
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_updates_check",
+                return_value=_check(check_id="updates", name="updates"),
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_client_checks",
+                return_value=[
+                    _check(check_id="client_claude_code", name="client-claude-code", scope="client"),
+                    _check(
+                        check_id="client_claude_desktop", name="client-claude-desktop", scope="client", status="warning"
+                    ),
+                ],
+            ),
         ):
             report = doctor_checks_module.build_doctor_report(client="claude")
 
@@ -129,19 +157,24 @@ class TestDoctorChecks(unittest.TestCase):
     def test_build_doctor_report_client_mode_uses_requested_project_root_for_workspace(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace_root = Path(temp_dir)
-            with patch(
-                "gms_mcp.doctor_checks._build_package_check",
-                return_value=_check(check_id="package", name="package"),
-            ), patch(
-                "gms_mcp.doctor_checks._build_project_detection_check",
-                return_value=(_check(check_id="project_detection", name="project"), workspace_root / "gamemaker"),
-            ), patch(
-                "gms_mcp.doctor_checks._build_updates_check",
-                return_value=_check(check_id="updates", name="updates"),
-            ), patch(
-                "gms_mcp.doctor_checks._build_client_checks",
-                return_value=[_check(check_id="client_codex", name="client-codex", scope="client")],
-            ) as build_client_checks:
+            with (
+                patch(
+                    "gms_mcp.doctor_checks._build_package_check",
+                    return_value=_check(check_id="package", name="package"),
+                ),
+                patch(
+                    "gms_mcp.doctor_checks._build_project_detection_check",
+                    return_value=(_check(check_id="project_detection", name="project"), workspace_root / "gamemaker"),
+                ),
+                patch(
+                    "gms_mcp.doctor_checks._build_updates_check",
+                    return_value=_check(check_id="updates", name="updates"),
+                ),
+                patch(
+                    "gms_mcp.doctor_checks._build_client_checks",
+                    return_value=[_check(check_id="client_codex", name="client-codex", scope="client")],
+                ) as build_client_checks,
+            ):
                 doctor_checks_module.build_doctor_report(client="codex", project_root=str(workspace_root))
 
         build_client_checks.assert_called_once_with(
@@ -151,19 +184,25 @@ class TestDoctorChecks(unittest.TestCase):
         )
 
     def test_build_doctor_report_client_mode_defaults_to_cwd_workspace(self):
-        with patch(
-            "gms_mcp.doctor_checks._build_package_check",
-            return_value=_check(check_id="package", name="package"),
-        ), patch(
-            "gms_mcp.doctor_checks._build_project_detection_check",
-            return_value=(_check(check_id="project_detection", name="project"), Path("/tmp/workspace/gamemaker")),
-        ), patch(
-            "gms_mcp.doctor_checks._build_updates_check",
-            return_value=_check(check_id="updates", name="updates"),
-        ), patch(
-            "gms_mcp.doctor_checks._build_client_checks",
-            return_value=[_check(check_id="client_codex", name="client-codex", scope="client")],
-        ) as build_client_checks, patch("gms_mcp.doctor_checks.Path.cwd", return_value=Path("/tmp/current-workspace")):
+        with (
+            patch(
+                "gms_mcp.doctor_checks._build_package_check",
+                return_value=_check(check_id="package", name="package"),
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_project_detection_check",
+                return_value=(_check(check_id="project_detection", name="project"), Path("/tmp/workspace/gamemaker")),
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_updates_check",
+                return_value=_check(check_id="updates", name="updates"),
+            ),
+            patch(
+                "gms_mcp.doctor_checks._build_client_checks",
+                return_value=[_check(check_id="client_codex", name="client-codex", scope="client")],
+            ) as build_client_checks,
+            patch("gms_mcp.doctor_checks.Path.cwd", return_value=Path("/tmp/current-workspace")),
+        ):
             doctor_checks_module.build_doctor_report(client="codex")
 
         build_client_checks.assert_called_once_with(

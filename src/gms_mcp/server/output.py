@@ -52,4 +52,3 @@ def _apply_output_mode(
     result["stdout_truncated"] = stdout_truncated or (tail_lines > 0 and len(stdout_text.splitlines()) > tail_lines)
     result["stderr_truncated"] = stderr_truncated or (tail_lines > 0 and len(stderr_text.splitlines()) > tail_lines)
     return result
-

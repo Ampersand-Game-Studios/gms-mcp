@@ -8,15 +8,15 @@ from gms_mcp.update_notifier import check_for_updates, mark_update_notified
 
 class TestUpdateNotifier(unittest.TestCase):
     def test_update_available_pypi(self):
-        with tempfile.TemporaryDirectory() as tmpdir, patch(
-            "gms_mcp.update_notifier.Path.home", return_value=Path(tmpdir)
-        ), patch("gms_mcp.update_notifier.get_current_version", return_value="1.0.0"), patch(
-            "gms_mcp.update_notifier.get_upgrade_command", return_value="pipx upgrade gms-mcp"
-        ), patch("gms_mcp.update_notifier._utc_now", return_value=1_000.0), patch(
-            "gms_mcp.update_notifier.get_latest_version_pypi", return_value="1.1.0"
-        ) as pypi, patch(
-            "gms_mcp.update_notifier.get_latest_version_github"
-        ) as github:
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("gms_mcp.update_notifier.Path.home", return_value=Path(tmpdir)),
+            patch("gms_mcp.update_notifier.get_current_version", return_value="1.0.0"),
+            patch("gms_mcp.update_notifier.get_upgrade_command", return_value="pipx upgrade gms-mcp"),
+            patch("gms_mcp.update_notifier._utc_now", return_value=1_000.0),
+            patch("gms_mcp.update_notifier.get_latest_version_pypi", return_value="1.1.0") as pypi,
+            patch("gms_mcp.update_notifier.get_latest_version_github") as github,
+        ):
             result = check_for_updates(force_refresh=True)
 
         self.assertTrue(result["update_available"])
@@ -30,12 +30,13 @@ class TestUpdateNotifier(unittest.TestCase):
         github.assert_not_called()
 
     def test_update_available_github_after_pypi_no_change(self):
-        with tempfile.TemporaryDirectory() as tmpdir, patch(
-            "gms_mcp.update_notifier.Path.home", return_value=Path(tmpdir)
-        ), patch("gms_mcp.update_notifier.get_current_version", return_value="1.0.0"), patch(
-            "gms_mcp.update_notifier._utc_now", return_value=1_000.0
-        ), patch("gms_mcp.update_notifier.get_latest_version_pypi", return_value="1.0.0"), patch(
-            "gms_mcp.update_notifier.get_latest_version_github", return_value="1.2.0"
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("gms_mcp.update_notifier.Path.home", return_value=Path(tmpdir)),
+            patch("gms_mcp.update_notifier.get_current_version", return_value="1.0.0"),
+            patch("gms_mcp.update_notifier._utc_now", return_value=1_000.0),
+            patch("gms_mcp.update_notifier.get_latest_version_pypi", return_value="1.0.0"),
+            patch("gms_mcp.update_notifier.get_latest_version_github", return_value="1.2.0"),
         ):
             result = check_for_updates(force_refresh=True)
 
@@ -45,12 +46,13 @@ class TestUpdateNotifier(unittest.TestCase):
         self.assertEqual(result["source"], "GitHub")
 
     def test_no_update_needed(self):
-        with tempfile.TemporaryDirectory() as tmpdir, patch(
-            "gms_mcp.update_notifier.Path.home", return_value=Path(tmpdir)
-        ), patch("gms_mcp.update_notifier.get_current_version", return_value="1.1.0"), patch(
-            "gms_mcp.update_notifier._utc_now", return_value=1_000.0
-        ), patch("gms_mcp.update_notifier.get_latest_version_pypi", return_value="1.1.0"), patch(
-            "gms_mcp.update_notifier.get_latest_version_github", return_value="1.1.0"
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("gms_mcp.update_notifier.Path.home", return_value=Path(tmpdir)),
+            patch("gms_mcp.update_notifier.get_current_version", return_value="1.1.0"),
+            patch("gms_mcp.update_notifier._utc_now", return_value=1_000.0),
+            patch("gms_mcp.update_notifier.get_latest_version_pypi", return_value="1.1.0"),
+            patch("gms_mcp.update_notifier.get_latest_version_github", return_value="1.1.0"),
         ):
             result = check_for_updates(force_refresh=True)
 
@@ -59,22 +61,25 @@ class TestUpdateNotifier(unittest.TestCase):
         self.assertIn("latest version", result["message"])
 
     def test_refresh_failure_uses_cache_and_recomputes_status(self):
-        with tempfile.TemporaryDirectory() as tmpdir, patch(
-            "gms_mcp.update_notifier.Path.home", return_value=Path(tmpdir)
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("gms_mcp.update_notifier.Path.home", return_value=Path(tmpdir)),
         ):
-            with patch("gms_mcp.update_notifier.get_current_version", return_value="1.0.0"), patch(
-                "gms_mcp.update_notifier._utc_now", return_value=1_000.0
-            ), patch("gms_mcp.update_notifier.get_latest_version_pypi", return_value="1.3.0"), patch(
-                "gms_mcp.update_notifier.get_latest_version_github"
+            with (
+                patch("gms_mcp.update_notifier.get_current_version", return_value="1.0.0"),
+                patch("gms_mcp.update_notifier._utc_now", return_value=1_000.0),
+                patch("gms_mcp.update_notifier.get_latest_version_pypi", return_value="1.3.0"),
+                patch("gms_mcp.update_notifier.get_latest_version_github"),
             ):
                 first = check_for_updates(force_refresh=True)
 
             self.assertTrue(first["update_available"])
 
-            with patch("gms_mcp.update_notifier.get_current_version", return_value="1.3.0"), patch(
-                "gms_mcp.update_notifier._utc_now", return_value=1_000.0 + 90_000.0
-            ), patch("gms_mcp.update_notifier.get_latest_version_pypi", return_value=None), patch(
-                "gms_mcp.update_notifier.get_latest_version_github", return_value=None
+            with (
+                patch("gms_mcp.update_notifier.get_current_version", return_value="1.3.0"),
+                patch("gms_mcp.update_notifier._utc_now", return_value=1_000.0 + 90_000.0),
+                patch("gms_mcp.update_notifier.get_latest_version_pypi", return_value=None),
+                patch("gms_mcp.update_notifier.get_latest_version_github", return_value=None),
             ):
                 second = check_for_updates()
 
@@ -84,11 +89,13 @@ class TestUpdateNotifier(unittest.TestCase):
         self.assertFalse(second["notification_due"])
 
     def test_no_cache_network_failure_reports_unknown(self):
-        with tempfile.TemporaryDirectory() as tmpdir, patch(
-            "gms_mcp.update_notifier.Path.home", return_value=Path(tmpdir)
-        ), patch("gms_mcp.update_notifier.get_current_version", return_value="1.0.0"), patch(
-            "gms_mcp.update_notifier.get_latest_version_pypi", return_value=None
-        ), patch("gms_mcp.update_notifier.get_latest_version_github", return_value=None):
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("gms_mcp.update_notifier.Path.home", return_value=Path(tmpdir)),
+            patch("gms_mcp.update_notifier.get_current_version", return_value="1.0.0"),
+            patch("gms_mcp.update_notifier.get_latest_version_pypi", return_value=None),
+            patch("gms_mcp.update_notifier.get_latest_version_github", return_value=None),
+        ):
             result = check_for_updates(force_refresh=True)
 
         self.assertEqual(result["status"], "unknown")
@@ -96,13 +103,15 @@ class TestUpdateNotifier(unittest.TestCase):
         self.assertIn("Unable to check", result["message"])
 
     def test_mark_update_notified_suppresses_repeat_notice(self):
-        with tempfile.TemporaryDirectory() as tmpdir, patch(
-            "gms_mcp.update_notifier.Path.home", return_value=Path(tmpdir)
+        with (
+            tempfile.TemporaryDirectory() as tmpdir,
+            patch("gms_mcp.update_notifier.Path.home", return_value=Path(tmpdir)),
         ):
-            with patch("gms_mcp.update_notifier.get_current_version", return_value="1.0.0"), patch(
-                "gms_mcp.update_notifier._utc_now", return_value=1_000.0
-            ), patch("gms_mcp.update_notifier.get_latest_version_pypi", return_value="1.1.0"), patch(
-                "gms_mcp.update_notifier.get_latest_version_github"
+            with (
+                patch("gms_mcp.update_notifier.get_current_version", return_value="1.0.0"),
+                patch("gms_mcp.update_notifier._utc_now", return_value=1_000.0),
+                patch("gms_mcp.update_notifier.get_latest_version_pypi", return_value="1.1.0"),
+                patch("gms_mcp.update_notifier.get_latest_version_github"),
             ):
                 first = check_for_updates(force_refresh=True)
 
@@ -111,8 +120,9 @@ class TestUpdateNotifier(unittest.TestCase):
             with patch("gms_mcp.update_notifier._utc_now", return_value=1_100.0):
                 mark_update_notified(first)
 
-            with patch("gms_mcp.update_notifier.get_current_version", return_value="1.0.0"), patch(
-                "gms_mcp.update_notifier._utc_now", return_value=1_200.0
+            with (
+                patch("gms_mcp.update_notifier.get_current_version", return_value="1.0.0"),
+                patch("gms_mcp.update_notifier._utc_now", return_value=1_200.0),
             ):
                 second = check_for_updates()
 

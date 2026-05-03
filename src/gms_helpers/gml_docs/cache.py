@@ -113,10 +113,7 @@ class DocCache:
                 return None
 
             entries = data.get("entries", {})
-            self._index = {
-                name: FunctionIndexEntry.from_dict(entry)
-                for name, entry in entries.items()
-            }
+            self._index = {name: FunctionIndexEntry.from_dict(entry) for name, entry in entries.items()}
             self._index_loaded_at = time.time()
             return self._index
         except (json.JSONDecodeError, KeyError, TypeError):

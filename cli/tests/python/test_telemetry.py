@@ -110,7 +110,12 @@ class TestTelemetry(unittest.TestCase):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def _telemetry_env(self) -> dict[str, str]:
-        env = {**os.environ, "PYTHONPATH": str(self.repo_root / "src"), "HOME": str(self.home_dir), "USERPROFILE": str(self.home_dir)}
+        env = {
+            **os.environ,
+            "PYTHONPATH": str(self.repo_root / "src"),
+            "HOME": str(self.home_dir),
+            "USERPROFILE": str(self.home_dir),
+        }
         env["PYTEST_CURRENT_TEST"] = ""
         env["GMS_TEST_SUITE"] = ""
         env["CI"] = ""
@@ -118,10 +123,13 @@ class TestTelemetry(unittest.TestCase):
         return env
 
     def test_enable_with_install_hash_persists_config(self):
-        with temporary_home(self.home_dir), patch.dict(
-            os.environ,
-            {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
-            clear=False,
+        with (
+            temporary_home(self.home_dir),
+            patch.dict(
+                os.environ,
+                {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
+                clear=False,
+            ),
         ):
             config = enable_telemetry(include_install_hash=True)
             state = resolve_state()
@@ -133,11 +141,15 @@ class TestTelemetry(unittest.TestCase):
         self.assertTrue(state.include_install_hash)
 
     def test_prompt_for_consent_blank_persists_disabled(self):
-        with temporary_home(self.home_dir), patch.dict(
-            os.environ,
-            {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
-            clear=False,
-        ), patch("builtins.input", return_value=""):
+        with (
+            temporary_home(self.home_dir),
+            patch.dict(
+                os.environ,
+                {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
+                clear=False,
+            ),
+            patch("builtins.input", return_value=""),
+        ):
             enabled = prompt_for_consent()
             config = load_config()
 
@@ -146,11 +158,15 @@ class TestTelemetry(unittest.TestCase):
         self.assertFalse(config.include_install_hash)
 
     def test_flush_spool_uploads_and_clears_events(self):
-        with temporary_home(self.home_dir), patch.dict(
-            os.environ,
-            {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
-            clear=False,
-        ), patch("urllib.request.urlopen", return_value=_FakeResponse()):
+        with (
+            temporary_home(self.home_dir),
+            patch.dict(
+                os.environ,
+                {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
+                clear=False,
+            ),
+            patch("urllib.request.urlopen", return_value=_FakeResponse()),
+        ):
             state = enable_telemetry(include_install_hash=False)
             queued = queue_event(
                 state=resolve_state(),
@@ -173,10 +189,13 @@ class TestTelemetry(unittest.TestCase):
         self.assertEqual(remaining, 0)
 
     def test_clear_spool_removes_queued_events(self):
-        with temporary_home(self.home_dir), patch.dict(
-            os.environ,
-            {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
-            clear=False,
+        with (
+            temporary_home(self.home_dir),
+            patch.dict(
+                os.environ,
+                {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
+                clear=False,
+            ),
         ):
             enable_telemetry(include_install_hash=False)
             queue_event(
@@ -211,15 +230,22 @@ class TestTelemetry(unittest.TestCase):
 
     def test_gms_prompts_once_after_successful_interactive_run(self):
         fake_stdin = SimpleNamespace(isatty=lambda: True)
-        with temporary_home(self.home_dir), patch.dict(
-            os.environ,
-            {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
-            clear=False,
-        ), patch.object(gms_module.sys, "stdin", fake_stdin), patch.object(
-            gms_module.sys,
-            "argv",
-            ["gms", "skills", "list"],
-        ), patch("builtins.input", return_value="n") as prompt_mock, redirect_stdout(io.StringIO()):
+        with (
+            temporary_home(self.home_dir),
+            patch.dict(
+                os.environ,
+                {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
+                clear=False,
+            ),
+            patch.object(gms_module.sys, "stdin", fake_stdin),
+            patch.object(
+                gms_module.sys,
+                "argv",
+                ["gms", "skills", "list"],
+            ),
+            patch("builtins.input", return_value="n") as prompt_mock,
+            redirect_stdout(io.StringIO()),
+        ):
             first = gms_module.main()
             first_config = load_config()
 
@@ -227,15 +253,22 @@ class TestTelemetry(unittest.TestCase):
         self.assertEqual(prompt_mock.call_count, 1)
         self.assertEqual(first_config.consent, "disabled")
 
-        with temporary_home(self.home_dir), patch.dict(
-            os.environ,
-            {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
-            clear=False,
-        ), patch.object(gms_module.sys, "stdin", fake_stdin), patch.object(
-            gms_module.sys,
-            "argv",
-            ["gms", "skills", "list"],
-        ), patch("builtins.input", side_effect=AssertionError("prompt should not repeat")), redirect_stdout(io.StringIO()):
+        with (
+            temporary_home(self.home_dir),
+            patch.dict(
+                os.environ,
+                {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
+                clear=False,
+            ),
+            patch.object(gms_module.sys, "stdin", fake_stdin),
+            patch.object(
+                gms_module.sys,
+                "argv",
+                ["gms", "skills", "list"],
+            ),
+            patch("builtins.input", side_effect=AssertionError("prompt should not repeat")),
+            redirect_stdout(io.StringIO()),
+        ):
             second = gms_module.main()
 
         self.assertTrue(second)
@@ -245,21 +278,26 @@ class TestTelemetry(unittest.TestCase):
         _create_basic_gamemaker_project(project_root)
         original_cwd = Path.cwd()
 
-        with temporary_home(self.home_dir), patch.dict(
-            os.environ,
-            {
-                "PYTEST_CURRENT_TEST": "",
-                "GMS_TEST_SUITE": "",
-                "CI": "",
-                "GITHUB_ACTIONS": "",
-                SUPPRESS_CLI_TELEMETRY_ENV_VAR: "1",
-            },
-            clear=False,
-        ), patch.object(
-            gms_module.sys,
-            "argv",
-            ["gms", "--project-root", str(project_root), "maintenance", "validate-json"],
-        ), redirect_stdout(io.StringIO()):
+        with (
+            temporary_home(self.home_dir),
+            patch.dict(
+                os.environ,
+                {
+                    "PYTEST_CURRENT_TEST": "",
+                    "GMS_TEST_SUITE": "",
+                    "CI": "",
+                    "GITHUB_ACTIONS": "",
+                    SUPPRESS_CLI_TELEMETRY_ENV_VAR: "1",
+                },
+                clear=False,
+            ),
+            patch.object(
+                gms_module.sys,
+                "argv",
+                ["gms", "--project-root", str(project_root), "maintenance", "validate-json"],
+            ),
+            redirect_stdout(io.StringIO()),
+        ):
             result = gms_module.main()
 
         self.assertTrue(result)
@@ -267,21 +305,28 @@ class TestTelemetry(unittest.TestCase):
 
     def test_nested_cli_suppression_skips_prompt(self):
         fake_stdin = SimpleNamespace(isatty=lambda: True)
-        with temporary_home(self.home_dir), patch.dict(
-            os.environ,
-            {
-                "PYTEST_CURRENT_TEST": "",
-                "GMS_TEST_SUITE": "",
-                "CI": "",
-                "GITHUB_ACTIONS": "",
-                SUPPRESS_CLI_TELEMETRY_ENV_VAR: "1",
-            },
-            clear=False,
-        ), patch.object(gms_module.sys, "stdin", fake_stdin), patch.object(
-            gms_module.sys,
-            "argv",
-            ["gms", "skills", "list"],
-        ), patch("builtins.input", side_effect=AssertionError("nested CLI should not prompt")), redirect_stdout(io.StringIO()):
+        with (
+            temporary_home(self.home_dir),
+            patch.dict(
+                os.environ,
+                {
+                    "PYTEST_CURRENT_TEST": "",
+                    "GMS_TEST_SUITE": "",
+                    "CI": "",
+                    "GITHUB_ACTIONS": "",
+                    SUPPRESS_CLI_TELEMETRY_ENV_VAR: "1",
+                },
+                clear=False,
+            ),
+            patch.object(gms_module.sys, "stdin", fake_stdin),
+            patch.object(
+                gms_module.sys,
+                "argv",
+                ["gms", "skills", "list"],
+            ),
+            patch("builtins.input", side_effect=AssertionError("nested CLI should not prompt")),
+            redirect_stdout(io.StringIO()),
+        ):
             result = gms_module.main()
 
         self.assertTrue(result)
@@ -291,10 +336,13 @@ class TestTelemetry(unittest.TestCase):
         project_root = self.work_dir / "project"
         _create_basic_gamemaker_project(project_root)
 
-        with temporary_home(self.home_dir), patch.dict(
-            os.environ,
-            {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
-            clear=False,
+        with (
+            temporary_home(self.home_dir),
+            patch.dict(
+                os.environ,
+                {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
+                clear=False,
+            ),
         ):
             enable_telemetry(include_install_hash=False)
             result = _run_gms_inprocess(["telemetry", "status"], str(project_root))
@@ -307,10 +355,13 @@ class TestTelemetry(unittest.TestCase):
         project_root = self.work_dir / "project"
         _create_basic_gamemaker_project(project_root)
 
-        with temporary_home(self.home_dir), patch.dict(
-            os.environ,
-            {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
-            clear=False,
+        with (
+            temporary_home(self.home_dir),
+            patch.dict(
+                os.environ,
+                {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
+                clear=False,
+            ),
         ):
             enable_telemetry(include_install_hash=False)
             result = asyncio.run(

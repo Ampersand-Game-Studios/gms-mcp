@@ -163,9 +163,20 @@ class TestRunnerGapCoverage(unittest.TestCase):
     def test_launch_guidance_and_launch_target_helpers(self):
         runner = self._make_runner()
         target = Path("/fake/app")
-        self.assertIn("permission", runner._build_macos_launch_guidance(target, OSError(errno.EACCES, "Permission denied"), "game").lower())
-        self.assertIn("sandbox", runner._build_macos_launch_guidance(target, OSError(errno.EPERM, "operation not permitted"), "runtime").lower())
-        self.assertIn("code signing", runner._build_macos_launch_guidance(target, OSError(2, "code signature invalid"), "runtime").lower())
+        self.assertIn(
+            "permission",
+            runner._build_macos_launch_guidance(target, OSError(errno.EACCES, "Permission denied"), "game").lower(),
+        )
+        self.assertIn(
+            "sandbox",
+            runner._build_macos_launch_guidance(
+                target, OSError(errno.EPERM, "operation not permitted"), "runtime"
+            ).lower(),
+        )
+        self.assertIn(
+            "code signing",
+            runner._build_macos_launch_guidance(target, OSError(2, "code signature invalid"), "runtime").lower(),
+        )
 
         app_bundle = self.project_root / "Game.app" / "Contents" / "MacOS"
         app_bundle.mkdir(parents=True)
@@ -225,7 +236,9 @@ class TestRunnerGapCoverage(unittest.TestCase):
         self.assertEqual(len(lines), 5)
         self.assertTrue(runner._is_macos_signing_failure(["codesign failed"]))
         self.assertFalse(runner._is_macos_signing_failure(["all good"]))
-        self.assertIn("Local compile validation failed", runner._build_stage_failure_message("local compile validation", 2, []))
+        self.assertIn(
+            "Local compile validation failed", runner._build_stage_failure_message("local compile validation", 2, [])
+        )
         self.assertIn("Local run failed", runner._build_stage_failure_message("local run", 3, []))
         self.assertIn("Compile failed", runner._build_stage_failure_message("compile", 4, []))
 
@@ -250,10 +263,7 @@ class TestRunnerGapCoverage(unittest.TestCase):
 
         game_path = Path("/tmp/game.ios")
         debug_log_path = Path("/tmp/debug.log")
-        ps_output = (
-            f"101 /tmp/Game.app/Contents/MacOS/Mac_Runner {game_path}\n"
-            f"102 tail -F {debug_log_path}\n"
-        )
+        ps_output = f"101 /tmp/Game.app/Contents/MacOS/Mac_Runner {game_path}\n102 tail -F {debug_log_path}\n"
         with patch("gms_helpers.runner.subprocess.run", return_value=SimpleNamespace(stdout=ps_output)):
             runner_pids, tail_pids = runner._find_macos_validation_helper_pids(game_path, debug_log_path)
         self.assertEqual(runner_pids, {101})
@@ -317,7 +327,11 @@ class TestRunnerGapCoverage(unittest.TestCase):
             with patch.object(runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"):
                 with patch.object(runner, "_macos_debug_log_path", return_value=self.project_root / "debug.log"):
                     with patch.object(runner, "_run_igor_command", return_value=fake_process):
-                        with patch.object(runner, "_collect_igor_output_async", return_value=([], MagicMock(join=lambda timeout=0: None))):
+                        with patch.object(
+                            runner,
+                            "_collect_igor_output_async",
+                            return_value=([], MagicMock(join=lambda timeout=0: None)),
+                        ):
                             with patch.object(runner, "_wait_for_macos_main_loop", return_value=False):
                                 with patch.object(runner, "_stop_platform_process", return_value=True):
                                     with patch.object(runner, "_cleanup_macos_validation_helpers"):
@@ -351,7 +365,9 @@ class TestRunnerGapCoverage(unittest.TestCase):
                         with patch.object(runner, "_stream_igor_output", return_value=[]):
                             with patch.object(runner, "_find_launch_target", return_value=launch_path):
                                 with patch.object(runner, "_start_game_process", return_value=launch_process):
-                                    result = runner._run_project_ide_temp_approach(platform_target="Windows", background=True)
+                                    result = runner._run_project_ide_temp_approach(
+                                        platform_target="Windows", background=True
+                                    )
         self.assertTrue(result["ok"])
         self.assertEqual(result["pid"], 777)
 

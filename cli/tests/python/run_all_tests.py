@@ -11,6 +11,7 @@ from pathlib import Path
 import shutil
 from typing import Optional, Tuple
 
+
 def _configure_windows_console() -> None:
     """Apply UTF-8 console settings for standalone Windows execution."""
     if sys.platform != "win32":
@@ -18,6 +19,7 @@ def _configure_windows_console() -> None:
 
     # Set stdout/stderr to UTF-8 encoding
     import io
+
     if hasattr(sys.stdout, "buffer"):
         sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8")
     if hasattr(sys.stderr, "buffer"):
@@ -29,10 +31,12 @@ def _configure_windows_console() -> None:
     # Try to set console codepage to UTF-8 (Windows 10+)
     try:
         import ctypes
+
         kernel32 = ctypes.windll.kernel32
         kernel32.SetConsoleOutputCP(65001)  # UTF-8 codepage
     except Exception:
         pass  # Ignore if this fails on older Windows versions
+
 
 # Ensure the src directory is on PYTHONPATH for all child processes so that
 # imports like `gms_helpers` are resolved regardless of the working directory.
@@ -45,7 +49,9 @@ for p in (PROJECT_ROOT, src_dir):
     if str(p) not in pythonpath_parts:
         to_add.append(str(p))
 if to_add:
-    os.environ["PYTHONPATH"] = os.pathsep.join([*to_add, current_pythonpath]) if current_pythonpath else os.pathsep.join(to_add)
+    os.environ["PYTHONPATH"] = (
+        os.pathsep.join([*to_add, current_pythonpath]) if current_pythonpath else os.pathsep.join(to_add)
+    )
 
 MCP_REQUIRED_MODULES = ("mcp", "fastmcp")
 MCP_DEPENDENT_TESTS = {
@@ -54,28 +60,31 @@ MCP_DEPENDENT_TESTS = {
     "test_mcp_stdio_transport_regression.py",
 }
 
+
 def find_python_executable():
     """Find the best Python executable to use"""
     # Try different Python executables in order of preference
     candidates = [
         sys.executable,  # Current Python interpreter
-        "python",        # Standard command
-        "python3",       # Linux/Mac standard
-        "py",           # Windows launcher
+        "python",  # Standard command
+        "python3",  # Linux/Mac standard
+        "py",  # Windows launcher
     ]
 
     # Add common Windows system installs if on Windows
-    if os.name == 'nt':
-        candidates.extend([
-            r"C:\Python311\python.exe",  # Common Windows install
-            r"C:\Program Files\Python311\python.exe",  # System install
-            r"C:\Python313\python.exe",  # Newer version
-            r"C:\Program Files\Python313\python.exe",  # Newer system install
-        ])
+    if os.name == "nt":
+        candidates.extend(
+            [
+                r"C:\Python311\python.exe",  # Common Windows install
+                r"C:\Program Files\Python311\python.exe",  # System install
+                r"C:\Python313\python.exe",  # Newer version
+                r"C:\Program Files\Python313\python.exe",  # Newer system install
+            ]
+        )
 
     # Check for environment override
-    if 'PYTHON_EXEC_OVERRIDE' in os.environ:
-        candidates.insert(1, os.environ['PYTHON_EXEC_OVERRIDE'])
+    if "PYTHON_EXEC_OVERRIDE" in os.environ:
+        candidates.insert(1, os.environ["PYTHON_EXEC_OVERRIDE"])
 
     for candidate in candidates:
         if candidate == sys.executable:
@@ -97,7 +106,11 @@ def _python_version_tuple(python_exe: str) -> Optional[Tuple[int, int, int]]:
     """Return interpreter version as (major, minor, patch), or None if unavailable."""
     try:
         result = subprocess.run(
-            [python_exe, "-c", "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}')"],
+            [
+                python_exe,
+                "-c",
+                "import sys; print(f'{sys.version_info[0]}.{sys.version_info[1]}.{sys.version_info[2]}')",
+            ],
             capture_output=True,
             text=True,
         )
@@ -138,6 +151,7 @@ def _determine_mcp_test_mode(python_exe: str) -> str:
         return "uv"
     return "skip"
 
+
 def _test_requires_pytest(test_file_path: Path) -> bool:
     """Best-effort detection for tests that need pytest collection/runtime."""
     try:
@@ -146,6 +160,7 @@ def _test_requires_pytest(test_file_path: Path) -> bool:
         return False
     markers = ("import pytest", "from pytest", "@pytest.")
     return any(marker in content for marker in markers)
+
 
 def _python_has_pytest(python_exe: str) -> bool:
     try:
@@ -157,6 +172,7 @@ def _python_has_pytest(python_exe: str) -> bool:
         return result.returncode == 0
     except Exception:
         return False
+
 
 def _build_test_command(test_file_path: Path, python_exe: str):
     """Build the command used to execute a test file."""
@@ -173,11 +189,12 @@ def _build_test_command(test_file_path: Path, python_exe: str):
 
     return None, "pytest-missing"
 
+
 def run_test_file(test_file_path, *, mcp_test_mode: str):
     """Run a single test file and return results"""
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print(f"[RUN] {test_file_path.name}")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     python_exe = find_python_executable()
 
@@ -219,10 +236,7 @@ def run_test_file(test_file_path, *, mcp_test_mode: str):
         else:
             command, mode = _build_test_command(test_file_path, python_exe)
         if command is None:
-            print(
-                f"[ERROR] {test_file_path.name} requires pytest, but pytest is unavailable "
-                "and uv is not installed."
-            )
+            print(f"[ERROR] {test_file_path.name} requires pytest, but pytest is unavailable and uv is not installed.")
             return "fail", 1
 
         print(f"[MODE] {mode}")
@@ -239,6 +253,7 @@ def run_test_file(test_file_path, *, mcp_test_mode: str):
     except Exception as e:
         print(f"[ERROR] Error running {test_file_path.name}: {e}")
         return "fail", -1
+
 
 def main():
     """Main test runner function"""
@@ -301,9 +316,9 @@ def main():
         results.append((test_file.name, status, exit_code))
 
     # Print summary
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("TEST SUMMARY")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
 
     passed = sum(1 for _, status, _ in results if status == "pass")
     skipped = sum(1 for _, status, _ in results if status == "skip")
@@ -329,6 +344,7 @@ def main():
     else:
         print(f"\n{failed} test file(s) failed")
         return 1
+
 
 if __name__ == "__main__":
     sys.exit(main())

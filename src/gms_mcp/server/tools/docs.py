@@ -30,6 +30,7 @@ def register(mcp: Any, ContextType: Any) -> None:
             function is not found.
         """
         from gms_helpers.gml_docs import lookup
+
         return lookup(function_name, force_refresh=force_refresh)
 
     @mcp.tool()
@@ -52,6 +53,7 @@ def register(mcp: Any, ContextType: Any) -> None:
             Dictionary with matching functions sorted by relevance.
         """
         from gms_helpers.gml_docs import search
+
         return search(query, category=category, limit=limit)
 
     @mcp.tool()
@@ -72,6 +74,7 @@ def register(mcp: Any, ContextType: Any) -> None:
             Dictionary with list of functions matching the filters.
         """
         from gms_helpers.gml_docs import list_functions
+
         return list_functions(category=category, pattern=pattern, limit=limit)
 
     @mcp.tool()
@@ -83,6 +86,7 @@ def register(mcp: Any, ContextType: Any) -> None:
             Dictionary with all available categories and their function counts.
         """
         from gms_helpers.gml_docs import list_categories
+
         return list_categories()
 
     @mcp.tool()
@@ -94,6 +98,7 @@ def register(mcp: Any, ContextType: Any) -> None:
             Dictionary with cache size, age, and function counts.
         """
         from gms_helpers.gml_docs import get_cache_stats
+
         return get_cache_stats()
 
     @mcp.tool()
@@ -108,4 +113,5 @@ def register(mcp: Any, ContextType: Any) -> None:
             Dictionary with statistics about what was cleared.
         """
         from gms_helpers.gml_docs import clear_cache
+
         return clear_cache(functions_only=functions_only)

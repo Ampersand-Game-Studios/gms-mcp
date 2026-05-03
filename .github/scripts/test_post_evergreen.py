@@ -295,10 +295,13 @@ class TestExecute(unittest.TestCase):
             "X_EVERGREEN_EXPERIMENT_START_UTC": (now - timedelta(days=1)).isoformat(),
             "X_EVERGREEN_EXPERIMENT_END_UTC": (now + timedelta(days=1)).isoformat(),
         }
-        with patch.dict(os.environ, env, clear=False), patch.object(
-            post_evergreen,
-            "post_to_x",
-            return_value=(False, "x_server_error", None),
+        with (
+            patch.dict(os.environ, env, clear=False),
+            patch.object(
+                post_evergreen,
+                "post_to_x",
+                return_value=(False, "x_server_error", None),
+            ),
         ):
             result = post_evergreen.execute(args)
 

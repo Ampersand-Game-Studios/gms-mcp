@@ -400,7 +400,9 @@ class MCPToolSmokeRunner:
             return set()
         return {k for k in properties.keys() if isinstance(k, str)}
 
-    def _with_project(self, tool_name: str, project_root: Path, payload: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
+    def _with_project(
+        self, tool_name: str, project_root: Path, payload: Optional[Dict[str, Any]] = None
+    ) -> Dict[str, Any]:
         args = dict(payload or {})
         if "project_root" in self._schema_properties(tool_name):
             args.setdefault("project_root", str(project_root))
@@ -415,10 +417,7 @@ class MCPToolSmokeRunner:
                 missing.append(f"{tool} (required: {sorted(required)})")
         if missing:
             joined = "\n".join(f"- {entry}" for entry in missing)
-            raise RuntimeError(
-                "Smoke runner missing scenario coverage for required-arg tools:\n"
-                f"{joined}"
-            )
+            raise RuntimeError(f"Smoke runner missing scenario coverage for required-arg tools:\n{joined}")
 
     async def _call_tool(self, tool_name: str, args: Dict[str, Any]) -> Any:
         raw = await self.mcp.call_tool(tool_name, args)
@@ -915,7 +914,12 @@ class MCPToolSmokeRunner:
         args = self._with_project(
             "gm_texture_group_update",
             project_root,
-            {"name": group, "patch": {"autocrop": False, "border": 4}, "update_existing_configs": True, "dry_run": False},
+            {
+                "name": group,
+                "patch": {"autocrop": False, "border": 4},
+                "update_existing_configs": True,
+                "dry_run": False,
+            },
         )
         result = await self._call_tool("gm_texture_group_update", args)
         return args, result

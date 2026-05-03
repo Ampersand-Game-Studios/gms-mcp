@@ -56,9 +56,12 @@ class TestBridgeToolWrappers(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertIn("Uninstallation failed", result["message"])
 
-        with patch("gms_helpers.bridge_installer.get_bridge_status", return_value={"installed": True}), patch(
-            "gms_helpers.bridge_server.get_bridge_server",
-            return_value=None,
+        with (
+            patch("gms_helpers.bridge_installer.get_bridge_status", return_value={"installed": True}),
+            patch(
+                "gms_helpers.bridge_server.get_bridge_server",
+                return_value=None,
+            ),
         ):
             result = self.call_tool("gm_bridge_status", project_root="/tmp/project")
         self.assertTrue(result["ok"])
@@ -81,9 +84,12 @@ class TestBridgeToolWrappers(unittest.TestCase):
 
             yyp_path = project_root / "game.yyp"
             yyp_path.write_text("{}", encoding="utf-8")
-            with patch("gms_mcp.server.tools.bridge._resolve_project_directory", return_value=project_root), patch(
-                "gms_helpers.utils.load_json_loose",
-                return_value={},
+            with (
+                patch("gms_mcp.server.tools.bridge._resolve_project_directory", return_value=project_root),
+                patch(
+                    "gms_helpers.utils.load_json_loose",
+                    return_value={},
+                ),
             ):
                 result = self.call_tool("gm_bridge_enable_one_shot", project_root=str(project_root))
             self.assertFalse(result["ok"])
@@ -94,9 +100,12 @@ class TestBridgeToolWrappers(unittest.TestCase):
                     {"id": {"name": "r_start", "path": "rooms/r_start/r_start.yy"}},
                 ]
             }
-            with patch("gms_mcp.server.tools.bridge._resolve_project_directory", return_value=project_root), patch(
-                "gms_helpers.utils.load_json_loose",
-                return_value=yyp_data,
+            with (
+                patch("gms_mcp.server.tools.bridge._resolve_project_directory", return_value=project_root),
+                patch(
+                    "gms_helpers.utils.load_json_loose",
+                    return_value=yyp_data,
+                ),
             ):
                 result = self.call_tool("gm_bridge_enable_one_shot", project_root=str(project_root))
             self.assertFalse(result["ok"])
@@ -106,12 +115,16 @@ class TestBridgeToolWrappers(unittest.TestCase):
             room_dir.mkdir(parents=True)
             room_file = room_dir / "r_start.yy"
             room_file.write_text("{}", encoding="utf-8")
-            with patch("gms_mcp.server.tools.bridge._resolve_project_directory", return_value=project_root), patch(
-                "gms_helpers.utils.load_json_loose",
-                return_value={"RoomOrderNodes": [{"roomId": {"name": "r_start"}}]},
-            ), patch(
-                "gms_helpers.bridge_installer.install_bridge",
-                return_value={"ok": False, "error": "install failed"},
+            with (
+                patch("gms_mcp.server.tools.bridge._resolve_project_directory", return_value=project_root),
+                patch(
+                    "gms_helpers.utils.load_json_loose",
+                    return_value={"RoomOrderNodes": [{"roomId": {"name": "r_start"}}]},
+                ),
+                patch(
+                    "gms_helpers.bridge_installer.install_bridge",
+                    return_value={"ok": False, "error": "install failed"},
+                ),
             ):
                 result = self.call_tool("gm_bridge_enable_one_shot", project_root=str(project_root))
             self.assertFalse(result["ok"])
@@ -129,20 +142,27 @@ class TestBridgeToolWrappers(unittest.TestCase):
 
             yyp_data = {"RoomOrderNodes": [{"roomId": {"name": "r_start"}}]}
             room_without_layer = {"layers": [], "instanceCreationOrder": None}
-            with patch("gms_mcp.server.tools.bridge._resolve_project_directory", return_value=project_root), patch(
-                "gms_helpers.utils.load_json_loose",
-                side_effect=[yyp_data, room_without_layer, room_without_layer, room_without_layer],
-            ), patch(
-                "gms_helpers.bridge_installer.install_bridge",
-                return_value={"ok": True},
-            ), patch(
-                "gms_helpers.room_layer_helper.add_layer",
-            ) as mock_add_layer, patch(
-                "gms_helpers.room_instance_helper.add_instance",
-                return_value="inst_bridge",
-            ), patch(
-                "gms_helpers.utils.save_json_loose",
-            ) as mock_save:
+            with (
+                patch("gms_mcp.server.tools.bridge._resolve_project_directory", return_value=project_root),
+                patch(
+                    "gms_helpers.utils.load_json_loose",
+                    side_effect=[yyp_data, room_without_layer, room_without_layer, room_without_layer],
+                ),
+                patch(
+                    "gms_helpers.bridge_installer.install_bridge",
+                    return_value={"ok": True},
+                ),
+                patch(
+                    "gms_helpers.room_layer_helper.add_layer",
+                ) as mock_add_layer,
+                patch(
+                    "gms_helpers.room_instance_helper.add_instance",
+                    return_value="inst_bridge",
+                ),
+                patch(
+                    "gms_helpers.utils.save_json_loose",
+                ) as mock_save,
+            ):
                 result = self.call_tool("gm_bridge_enable_one_shot", project_root=str(project_root))
             self.assertTrue(result["ok"])
             mock_add_layer.assert_called_once_with("r_start", "Instances", "instance", 0)
@@ -152,20 +172,27 @@ class TestBridgeToolWrappers(unittest.TestCase):
                 "layers": [{"name": "Instances", "resourceType": "GMRInstanceLayer", "instances": []}],
                 "instanceCreationOrder": ["inst_existing"],
             }
-            with patch("gms_mcp.server.tools.bridge._resolve_project_directory", return_value=project_root), patch(
-                "gms_helpers.utils.load_json_loose",
-                side_effect=[yyp_data, room_with_string_order, room_with_string_order, room_with_string_order],
-            ), patch(
-                "gms_helpers.bridge_installer.install_bridge",
-                return_value={"ok": True},
-            ), patch(
-                "gms_helpers.room_layer_helper.add_layer",
-            ) as mock_add_layer, patch(
-                "gms_helpers.room_instance_helper.add_instance",
-                return_value="inst_bridge_2",
-            ), patch(
-                "gms_helpers.utils.save_json_loose",
-            ) as mock_save:
+            with (
+                patch("gms_mcp.server.tools.bridge._resolve_project_directory", return_value=project_root),
+                patch(
+                    "gms_helpers.utils.load_json_loose",
+                    side_effect=[yyp_data, room_with_string_order, room_with_string_order, room_with_string_order],
+                ),
+                patch(
+                    "gms_helpers.bridge_installer.install_bridge",
+                    return_value={"ok": True},
+                ),
+                patch(
+                    "gms_helpers.room_layer_helper.add_layer",
+                ) as mock_add_layer,
+                patch(
+                    "gms_helpers.room_instance_helper.add_instance",
+                    return_value="inst_bridge_2",
+                ),
+                patch(
+                    "gms_helpers.utils.save_json_loose",
+                ) as mock_save,
+            ):
                 result = self.call_tool("gm_bridge_enable_one_shot", project_root=str(project_root))
             self.assertTrue(result["ok"])
             mock_add_layer.assert_not_called()

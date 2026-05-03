@@ -8,6 +8,7 @@ from typing import List, Optional
 
 class SymbolKind(Enum):
     """Types of symbols that can be indexed."""
+
     FUNCTION = "function"
     SCRIPT = "script"
     ENUM = "enum"
@@ -20,12 +21,13 @@ class SymbolKind(Enum):
 @dataclass
 class SymbolLocation:
     """Location of a symbol in a file."""
+
     file_path: Path
     line: int
     column: int = 0
     end_line: Optional[int] = None
     end_column: Optional[int] = None
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         result = {
@@ -43,13 +45,14 @@ class SymbolLocation:
 @dataclass
 class Symbol:
     """A symbol definition in GML code."""
+
     name: str
     kind: SymbolKind
     location: SymbolLocation
     doc_comment: Optional[str] = None
     parameters: List[str] = field(default_factory=list)
     parent_enum: Optional[str] = None  # For enum values
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         result = {
@@ -66,13 +69,14 @@ class Symbol:
         return result
 
 
-@dataclass  
+@dataclass
 class SymbolReference:
     """A reference to a symbol (usage site)."""
+
     symbol_name: str
     location: SymbolLocation
     context: Optional[str] = None  # Line of code for context
-    
+
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         result = {

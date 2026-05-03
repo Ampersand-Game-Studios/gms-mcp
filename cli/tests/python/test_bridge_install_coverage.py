@@ -127,9 +127,12 @@ class TestBridgeServerCoverage(unittest.TestCase):
     def test_command_timeout_disconnect_and_async_branches(self):
         server = BridgeServer(port=6542)
         server._connected = True
-        with patch("time.sleep", side_effect=lambda _seconds: None), patch(
-            "time.time",
-            side_effect=[0.0, 0.0, 10.0, 10.0],
+        with (
+            patch("time.sleep", side_effect=lambda _seconds: None),
+            patch(
+                "time.time",
+                side_effect=[0.0, 0.0, 10.0, 10.0],
+            ),
         ):
             result = server.send_command("ping", timeout=0.1)
         self.assertFalse(result.success)
@@ -142,9 +145,12 @@ class TestBridgeServerCoverage(unittest.TestCase):
         def disconnecting_sleep(_seconds):
             server._connected = False
 
-        with patch("time.sleep", side_effect=disconnecting_sleep), patch(
-            "time.time",
-            side_effect=lambda: next(time_values),
+        with (
+            patch("time.sleep", side_effect=disconnecting_sleep),
+            patch(
+                "time.time",
+                side_effect=lambda: next(time_values),
+            ),
         ):
             result = server.send_command("ping", timeout=0.5)
         self.assertFalse(result.success)
@@ -183,10 +189,14 @@ class TestInstallCoverage(unittest.TestCase):
         )
         self.assertEqual(entry["command"], "cmd")
         self.assertIsNone(
-            install_module._resolve_json_entry_root({"gms": {"command": "cmd"}}, server_name="gms", allow_plain_top_level=False)
+            install_module._resolve_json_entry_root(
+                {"gms": {"command": "cmd"}}, server_name="gms", allow_plain_top_level=False
+            )
         )
         self.assertEqual(
-            install_module._resolve_json_entry_root({"gms": {"command": "cmd"}}, server_name="gms", allow_plain_top_level=True)["command"],
+            install_module._resolve_json_entry_root(
+                {"gms": {"command": "cmd"}}, server_name="gms", allow_plain_top_level=True
+            )["command"],
             "cmd",
         )
 
@@ -204,7 +214,9 @@ class TestInstallCoverage(unittest.TestCase):
         install_module._apply_safe_profile_env(env, enabled=True)
         self.assertEqual(env["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"], "600")
 
-        result = install_module._validate_common_entry({"command": "", "args": "bad", "env": {}}, require_project_root=True)
+        result = install_module._validate_common_entry(
+            {"command": "", "args": "bad", "env": {}}, require_project_root=True
+        )
         self.assertFalse(result.ready)
         self.assertGreater(len(result.problems), 1)
 
@@ -235,7 +247,11 @@ class TestInstallCoverage(unittest.TestCase):
             merged = install_module._render_antigravity_merged_config(
                 output_path=output_path,
                 server_name="gms",
-                server_entry={"command": "cmd", "args": [], "env": {"GM_PROJECT_ROOT": "/tmp", "PYTHONUNBUFFERED": "1"}},
+                server_entry={
+                    "command": "cmd",
+                    "args": [],
+                    "env": {"GM_PROJECT_ROOT": "/tmp", "PYTHONUNBUFFERED": "1"},
+                },
             )
             self.assertIn("gms", merged["mcpServers"])
 
@@ -249,10 +265,14 @@ class TestInstallCoverage(unittest.TestCase):
                 install_module._parse_json_object_or_raise(text="[]", source_label=str(malformed))
 
             with self.assertRaises(ValueError):
-                install_module._validate_antigravity_sections(parsed={"mcpServers": []}, source_label="bad", server_name="gms")
+                install_module._validate_antigravity_sections(
+                    parsed={"mcpServers": []}, source_label="bad", server_name="gms"
+                )
 
             with self.assertRaises(ValueError):
-                install_module._validate_codex_sections(parsed={"mcp_servers": []}, source_label="bad", server_name="gms")
+                install_module._validate_codex_sections(
+                    parsed={"mcp_servers": []}, source_label="bad", server_name="gms"
+                )
 
             workspace = Path(temp_dir) / "workspace"
             workspace.mkdir()
@@ -307,7 +327,10 @@ class TestInstallCoverage(unittest.TestCase):
 
         with patch("gms_mcp.install.resolve_client_spec") as resolve_spec:
             resolve_spec.return_value = SimpleNamespace(key="client", workspace_supported=False, global_supported=True)
-            self.assertIn("does not support workspace", install_module._scope_not_applicable_reason(client="client", scope="workspace"))
+            self.assertIn(
+                "does not support workspace",
+                install_module._scope_not_applicable_reason(client="client", scope="workspace"),
+            )
 
         real_import = builtins.__import__
 
@@ -358,7 +381,10 @@ class TestInstallCoverage(unittest.TestCase):
         self.assertEqual(result, 2)
         self.assertIn("Unsupported action", output)
 
-        with patch("gms_mcp.install.CLIENT_ACTIONS", ["setup", "check"]), patch("gms_mcp.install.CLIENT_SCOPES", ["workspace"]):
+        with (
+            patch("gms_mcp.install.CLIENT_ACTIONS", ["setup", "check"]),
+            patch("gms_mcp.install.CLIENT_SCOPES", ["workspace"]),
+        ):
             result, output = _capture_output(
                 install_module._run_canonical_flow,
                 client="cursor",
@@ -381,9 +407,12 @@ class TestInstallCoverage(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
             (workspace / "game.yyp").touch()
-            with patch("gms_mcp.install._print_codex_check", return_value=0), patch(
-                "gms_mcp.install._print_antigravity_check",
-                return_value=0,
+            with (
+                patch("gms_mcp.install._print_codex_check", return_value=0),
+                patch(
+                    "gms_mcp.install._print_antigravity_check",
+                    return_value=0,
+                ),
             ):
                 result = install_module.main(
                     [
@@ -404,11 +433,15 @@ class TestInstallCoverage(unittest.TestCase):
                 candidate.mkdir()
 
             fake_stdin = SimpleNamespace(isatty=lambda: True)
-            with patch("gms_mcp.install._detect_gm_project_roots", return_value=candidates), patch.object(
-                install_module.sys,
-                "stdin",
-                fake_stdin,
-            ), patch("builtins.input", side_effect=["bad", "9", "2"]):
+            with (
+                patch("gms_mcp.install._detect_gm_project_roots", return_value=candidates),
+                patch.object(
+                    install_module.sys,
+                    "stdin",
+                    fake_stdin,
+                ),
+                patch("builtins.input", side_effect=["bad", "9", "2"]),
+            ):
                 selected, output = _capture_output(
                     install_module._select_gm_project_root,
                     workspace_root=workspace,
@@ -420,11 +453,15 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertIn("Enter a number", output)
             self.assertIn("Out of range", output)
 
-            with patch("gms_mcp.install._detect_gm_project_roots", return_value=candidates), patch.object(
-                install_module.sys,
-                "stdin",
-                fake_stdin,
-            ), patch("builtins.input", return_value=""):
+            with (
+                patch("gms_mcp.install._detect_gm_project_roots", return_value=candidates),
+                patch.object(
+                    install_module.sys,
+                    "stdin",
+                    fake_stdin,
+                ),
+                patch("builtins.input", return_value=""),
+            ):
                 selected, _output = _capture_output(
                     install_module._select_gm_project_root,
                     workspace_root=workspace,
@@ -433,7 +470,10 @@ class TestInstallCoverage(unittest.TestCase):
                 )
             self.assertIsNone(selected[0])
 
-            with patch.object(install_module.sys, "stdin", fake_stdin), patch("builtins.input", side_effect=["maybe", "n"]):
+            with (
+                patch.object(install_module.sys, "stdin", fake_stdin),
+                patch("builtins.input", side_effect=["maybe", "n"]),
+            ):
                 result, output = _capture_output(
                     install_module._setup_project_config,
                     gm_project_root=workspace,
@@ -447,9 +487,13 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertIn("Skipping config file creation.", output)
 
             config_path = workspace / install_module.PROJECT_CONFIG_FILE
-            with patch.object(install_module.sys, "stdin", fake_stdin), patch("builtins.input", return_value="y"), patch(
-                "gms_mcp.install.create_default_config_file",
-                return_value=config_path,
+            with (
+                patch.object(install_module.sys, "stdin", fake_stdin),
+                patch("builtins.input", return_value="y"),
+                patch(
+                    "gms_mcp.install.create_default_config_file",
+                    return_value=config_path,
+                ),
             ):
                 result, output = _capture_output(
                     install_module._setup_project_config,
@@ -462,9 +506,13 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertEqual(result, config_path)
             self.assertIn("Created project config", output)
 
-            with patch.object(install_module.sys, "stdin", fake_stdin), patch("builtins.input", return_value="y"), patch(
-                "gms_mcp.install.create_default_config_file",
-                side_effect=FileExistsError("exists"),
+            with (
+                patch.object(install_module.sys, "stdin", fake_stdin),
+                patch("builtins.input", return_value="y"),
+                patch(
+                    "gms_mcp.install.create_default_config_file",
+                    side_effect=FileExistsError("exists"),
+                ),
             ):
                 result, output = _capture_output(
                     install_module._setup_project_config,
@@ -477,9 +525,13 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertEqual(result, config_path)
             self.assertIn("already exists", output)
 
-            with patch.object(install_module.sys, "stdin", fake_stdin), patch("builtins.input", return_value="y"), patch(
-                "gms_mcp.install.create_default_config_file",
-                side_effect=RuntimeError("boom"),
+            with (
+                patch.object(install_module.sys, "stdin", fake_stdin),
+                patch("builtins.input", return_value="y"),
+                patch(
+                    "gms_mcp.install.create_default_config_file",
+                    side_effect=RuntimeError("boom"),
+                ),
             ):
                 result, output = _capture_output(
                     install_module._setup_project_config,
@@ -537,9 +589,12 @@ class TestInstallCoverage(unittest.TestCase):
             global_relpath=".fake/config.json",
             resolve_path=lambda **_kwargs: Path("/tmp/unused"),
         )
-        with patch("gms_mcp.install.resolve_client_spec", return_value=fake_spec), patch(
-            "gms_mcp.install._scope_not_applicable_reason",
-            return_value="not applicable",
+        with (
+            patch("gms_mcp.install.resolve_client_spec", return_value=fake_spec),
+            patch(
+                "gms_mcp.install._scope_not_applicable_reason",
+                return_value="not applicable",
+            ),
         ):
             state = install_module._collect_client_check_state(
                 client="fake",
@@ -551,9 +606,12 @@ class TestInstallCoverage(unittest.TestCase):
         self.assertTrue(state.readiness.not_applicable)
         self.assertTrue(state.path.replace("\\", "/").endswith("custom/config.json"))
 
-        with patch("gms_mcp.install.resolve_client_spec", return_value=fake_spec), patch(
-            "gms_mcp.install._scope_not_applicable_reason",
-            return_value="not applicable",
+        with (
+            patch("gms_mcp.install.resolve_client_spec", return_value=fake_spec),
+            patch(
+                "gms_mcp.install._scope_not_applicable_reason",
+                return_value="not applicable",
+            ),
         ):
             state = install_module._collect_client_check_state(
                 client="fake",
@@ -564,9 +622,12 @@ class TestInstallCoverage(unittest.TestCase):
             )
         self.assertTrue(state.path.replace("\\", "/").endswith("configs/workspace.json"))
 
-        with patch("gms_mcp.install.resolve_client_spec", return_value=fake_spec), patch(
-            "gms_mcp.install._scope_not_applicable_reason",
-            return_value="not applicable",
+        with (
+            patch("gms_mcp.install.resolve_client_spec", return_value=fake_spec),
+            patch(
+                "gms_mcp.install._scope_not_applicable_reason",
+                return_value="not applicable",
+            ),
         ):
             with temporary_home(Path(tempfile.mkdtemp())):
                 state = install_module._collect_client_check_state(
@@ -598,9 +659,12 @@ class TestInstallCoverage(unittest.TestCase):
             gm_project_root = workspace / "gamemaker"
             gm_project_root.mkdir()
 
-            with patch("gms_mcp.install._generate_cursor_config"), patch(
-                "gms_mcp.install._make_server_config",
-                return_value={"mcpServers": {"gms": {"command": "gms-mcp"}}},
+            with (
+                patch("gms_mcp.install._generate_cursor_config"),
+                patch(
+                    "gms_mcp.install._make_server_config",
+                    return_value={"mcpServers": {"gms": {"command": "gms-mcp"}}},
+                ),
             ):
                 result, output = _capture_output(
                     install_module._run_setup_for_client,
@@ -697,9 +761,12 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertIn("Antigravity config would be merged into", output)
 
-            with patch("gms_mcp.install._write_json"), patch(
-                "gms_mcp.install._make_antigravity_server_config",
-                return_value={"mcpServers": {"gms": {"command": "gms-mcp"}}},
+            with (
+                patch("gms_mcp.install._write_json"),
+                patch(
+                    "gms_mcp.install._make_antigravity_server_config",
+                    return_value={"mcpServers": {"gms": {"command": "gms-mcp"}}},
+                ),
             ):
                 result, output = _capture_output(
                     install_module._run_setup_for_client,
@@ -717,12 +784,16 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertIn("Antigravity workspace config would be written to", output)
 
-            with patch("gms_mcp.install._generate_claude_code_plugin"), patch(
-                "gms_mcp.install._build_claude_plugin_manifest",
-                return_value={"name": "gms"},
-            ), patch(
-                "gms_mcp.install._make_claude_code_mcp_config",
-                return_value={"gms": {"command": "gms-mcp"}},
+            with (
+                patch("gms_mcp.install._generate_claude_code_plugin"),
+                patch(
+                    "gms_mcp.install._build_claude_plugin_manifest",
+                    return_value={"name": "gms"},
+                ),
+                patch(
+                    "gms_mcp.install._make_claude_code_mcp_config",
+                    return_value={"gms": {"command": "gms-mcp"}},
+                ),
             ):
                 result, output = _capture_output(
                     install_module._run_setup_for_client,
@@ -740,12 +811,16 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertIn("Claude Code config would be written to", output)
 
-            with patch("gms_mcp.install._generate_claude_code_plugin"), patch(
-                "gms_mcp.install._build_claude_plugin_manifest",
-                return_value={"name": "gms"},
-            ), patch(
-                "gms_mcp.install._make_claude_code_mcp_config",
-                return_value={"gms": {"command": "gms-mcp"}},
+            with (
+                patch("gms_mcp.install._generate_claude_code_plugin"),
+                patch(
+                    "gms_mcp.install._build_claude_plugin_manifest",
+                    return_value={"name": "gms"},
+                ),
+                patch(
+                    "gms_mcp.install._make_claude_code_mcp_config",
+                    return_value={"gms": {"command": "gms-mcp"}},
+                ),
             ):
                 result, output = _capture_output(
                     install_module._run_setup_for_client,
@@ -763,9 +838,12 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertIn("Claude Desktop plugin would be synced to", output)
 
-            with patch("gms_mcp.install._write_json"), patch(
-                "gms_mcp.install._make_server_config",
-                return_value={"mcpServers": {"gms": {"command": "gms-mcp"}}},
+            with (
+                patch("gms_mcp.install._write_json"),
+                patch(
+                    "gms_mcp.install._make_server_config",
+                    return_value={"mcpServers": {"gms": {"command": "gms-mcp"}}},
+                ),
             ):
                 result, output = _capture_output(
                     install_module._run_setup_for_client,
@@ -794,9 +872,12 @@ class TestInstallCoverage(unittest.TestCase):
             readiness=install_module.ReadinessResult(ready=True, problems=[]),
         )
 
-        with patch("gms_mcp.install._collect_client_check_state", return_value=state), patch(
-            "gms_mcp.install._print_standard_check",
-            return_value=11,
+        with (
+            patch("gms_mcp.install._collect_client_check_state", return_value=state),
+            patch(
+                "gms_mcp.install._print_standard_check",
+                return_value=11,
+            ),
         ):
             result = install_module._run_canonical_flow(
                 client="openclaw",
@@ -815,9 +896,12 @@ class TestInstallCoverage(unittest.TestCase):
             )
         self.assertEqual(result, 11)
 
-        with patch("gms_mcp.install._collect_client_check_state", return_value=state), patch(
-            "gms_mcp.install._print_standard_check_json",
-            return_value=12,
+        with (
+            patch("gms_mcp.install._collect_client_check_state", return_value=state),
+            patch(
+                "gms_mcp.install._print_standard_check_json",
+                return_value=12,
+            ),
         ):
             result = install_module._run_canonical_flow(
                 client="openclaw",
@@ -854,12 +938,16 @@ class TestInstallCoverage(unittest.TestCase):
             )
         self.assertEqual(result, 2)
 
-        with patch("gms_mcp.install._run_setup_for_client", return_value=0), patch(
-            "gms_mcp.install.resolve_client_spec",
-            return_value=SimpleNamespace(key="openclaw"),
-        ), patch(
-            "gms_mcp.install._maybe_install_openclaw_skills",
-            return_value=2,
+        with (
+            patch("gms_mcp.install._run_setup_for_client", return_value=0),
+            patch(
+                "gms_mcp.install.resolve_client_spec",
+                return_value=SimpleNamespace(key="openclaw"),
+            ),
+            patch(
+                "gms_mcp.install._maybe_install_openclaw_skills",
+                return_value=2,
+            ),
         ):
             result = install_module._run_canonical_flow(
                 client="openclaw",
@@ -878,21 +966,28 @@ class TestInstallCoverage(unittest.TestCase):
             )
         self.assertEqual(result, 2)
 
-        with patch("gms_mcp.install._run_setup_for_client", return_value=0), patch(
-            "gms_mcp.install.resolve_client_spec",
-            return_value=SimpleNamespace(key="openclaw"),
-        ), patch(
-            "gms_mcp.install._maybe_install_openclaw_skills",
-            return_value=0,
-        ), patch(
-            "gms_mcp.install._collect_client_check_state",
-            return_value=state,
-        ), patch(
-            "gms_mcp.install._print_standard_check",
-            return_value=0,
-        ), patch(
-            "gms_mcp.install._print_standard_app_setup_summary",
-            return_value=13,
+        with (
+            patch("gms_mcp.install._run_setup_for_client", return_value=0),
+            patch(
+                "gms_mcp.install.resolve_client_spec",
+                return_value=SimpleNamespace(key="openclaw"),
+            ),
+            patch(
+                "gms_mcp.install._maybe_install_openclaw_skills",
+                return_value=0,
+            ),
+            patch(
+                "gms_mcp.install._collect_client_check_state",
+                return_value=state,
+            ),
+            patch(
+                "gms_mcp.install._print_standard_check",
+                return_value=0,
+            ),
+            patch(
+                "gms_mcp.install._print_standard_app_setup_summary",
+                return_value=13,
+            ),
         ):
             result = install_module._run_canonical_flow(
                 client="openclaw",
@@ -915,13 +1010,17 @@ class TestInstallCoverage(unittest.TestCase):
             workspace = Path(temp_dir)
             (workspace / "project.yyp").touch()
 
-            with patch("gms_mcp.install._select_gm_project_root", return_value=(None, [])), patch(
-                "gms_mcp.install._resolve_launcher",
-                return_value=("python3", ["-m", "gms_mcp.bootstrap_server"]),
-            ), patch(
-                "gms_mcp.install._run_canonical_flow",
-                return_value=7,
-            ) as mock_flow:
+            with (
+                patch("gms_mcp.install._select_gm_project_root", return_value=(None, [])),
+                patch(
+                    "gms_mcp.install._resolve_launcher",
+                    return_value=("python3", ["-m", "gms_mcp.bootstrap_server"]),
+                ),
+                patch(
+                    "gms_mcp.install._run_canonical_flow",
+                    return_value=7,
+                ) as mock_flow,
+            ):
                 result, output = _capture_output(
                     install_module.main,
                     [
@@ -944,12 +1043,17 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertIn("not found; using 'python3' instead", output)
             self.assertTrue(mock_flow.call_args.kwargs["safe_profile"])
 
-            with patch("gms_mcp.install._select_gm_project_root", return_value=(None, [])), patch(
-                "gms_mcp.install._resolve_launcher",
-                return_value=("gms-mcp", []),
-            ), patch("gms_mcp.install.shutil.which", return_value=None), patch(
-                "gms_mcp.install._generate_cursor_config",
-                return_value=workspace / ".cursor" / "mcp.json",
+            with (
+                patch("gms_mcp.install._select_gm_project_root", return_value=(None, [])),
+                patch(
+                    "gms_mcp.install._resolve_launcher",
+                    return_value=("gms-mcp", []),
+                ),
+                patch("gms_mcp.install.shutil.which", return_value=None),
+                patch(
+                    "gms_mcp.install._generate_cursor_config",
+                    return_value=workspace / ".cursor" / "mcp.json",
+                ),
             ):
                 result, output = _capture_output(
                     install_module.main,
@@ -964,10 +1068,14 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertIn("'gms-mcp' not found on PATH", output)
             self.assertIn(f".cursor{os.sep}mcp.json", output)
 
-            with patch("gms_mcp.install._select_gm_project_root", return_value=(None, [])), patch(
-                "gms_mcp.install._resolve_launcher",
-                return_value=("gms-mcp", []),
-            ), patch("gms_mcp.install._print_codex_check_json", return_value=5):
+            with (
+                patch("gms_mcp.install._select_gm_project_root", return_value=(None, [])),
+                patch(
+                    "gms_mcp.install._resolve_launcher",
+                    return_value=("gms-mcp", []),
+                ),
+                patch("gms_mcp.install._print_codex_check_json", return_value=5),
+            ):
                 result = install_module.main(
                     [
                         "--workspace-root",
@@ -978,10 +1086,14 @@ class TestInstallCoverage(unittest.TestCase):
                 )
             self.assertEqual(result, 5)
 
-            with patch("gms_mcp.install._select_gm_project_root", return_value=(None, [])), patch(
-                "gms_mcp.install._resolve_launcher",
-                return_value=("gms-mcp", []),
-            ), patch("gms_mcp.install._print_antigravity_check_json", return_value=6):
+            with (
+                patch("gms_mcp.install._select_gm_project_root", return_value=(None, [])),
+                patch(
+                    "gms_mcp.install._resolve_launcher",
+                    return_value=("gms-mcp", []),
+                ),
+                patch("gms_mcp.install._print_antigravity_check_json", return_value=6),
+            ):
                 result = install_module.main(
                     [
                         "--workspace-root",
@@ -992,20 +1104,25 @@ class TestInstallCoverage(unittest.TestCase):
                 )
             self.assertEqual(result, 6)
 
-            with patch("gms_mcp.install._select_gm_project_root", return_value=(None, [])), patch(
-                "gms_mcp.install._resolve_launcher",
-                return_value=("gms-mcp", []),
-            ), patch(
-                "gms_mcp.install._generate_cursor_config",
-                return_value=workspace / ".cursor" / "mcp.json",
-            ), patch(
-                "gms_mcp.install._generate_example_configs",
-                return_value=[
-                    workspace / "mcp-configs" / "vscode.mcp.json",
-                    workspace / "mcp-configs" / "windsurf.mcp.json",
-                    workspace / "mcp-configs" / "antigravity.mcp.json",
-                    workspace / "mcp-configs" / "openclaw.mcp.json",
-                ],
+            with (
+                patch("gms_mcp.install._select_gm_project_root", return_value=(None, [])),
+                patch(
+                    "gms_mcp.install._resolve_launcher",
+                    return_value=("gms-mcp", []),
+                ),
+                patch(
+                    "gms_mcp.install._generate_cursor_config",
+                    return_value=workspace / ".cursor" / "mcp.json",
+                ),
+                patch(
+                    "gms_mcp.install._generate_example_configs",
+                    return_value=[
+                        workspace / "mcp-configs" / "vscode.mcp.json",
+                        workspace / "mcp-configs" / "windsurf.mcp.json",
+                        workspace / "mcp-configs" / "antigravity.mcp.json",
+                        workspace / "mcp-configs" / "openclaw.mcp.json",
+                    ],
+                ),
             ):
                 result, output = _capture_output(
                     install_module.main,

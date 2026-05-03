@@ -11,31 +11,17 @@ from gms_mcp import doctor as doctor_module
 
 class TestDoctorCLI(unittest.TestCase):
     def test_build_doctor_report_shape(self):
-        with patch("gms_mcp.doctor_checks.get_current_version", return_value="1.0.0"), patch(
-            "gms_mcp.doctor_checks.get_install_location", return_value="/tmp/site-packages"
-        ), patch(
-            "gms_mcp.doctor_checks.resolve_project_directory", side_effect=FileNotFoundError("no project")
-        ), patch(
-            "gms_mcp.doctor_checks.find_yyp_name", return_value="game.yyp"
-        ), patch(
-            "gms_mcp.doctor_checks.get_update_status",
-            return_value=type(
-                "UpdateStatusStub",
-                (),
-                {
-                    "status": "warn",
-                    "message": "A newer version is available",
-                    "current_version": "1.0.0",
-                    "latest_version": "1.1.0",
-                    "source": "PyPI",
-                    "url": "https://pypi.org/project/gms-mcp/",
-                    "checked_at": "2026-03-16T00:00:00Z",
-                    "used_cache": True,
-                    "last_notified_at": None,
-                    "notification_due": True,
-                    "update_available": True,
-                    "upgrade_command": "python3 -m pip install -U gms-mcp",
-                    "to_dict": lambda self: {
+        with (
+            patch("gms_mcp.doctor_checks.get_current_version", return_value="1.0.0"),
+            patch("gms_mcp.doctor_checks.get_install_location", return_value="/tmp/site-packages"),
+            patch("gms_mcp.doctor_checks.resolve_project_directory", side_effect=FileNotFoundError("no project")),
+            patch("gms_mcp.doctor_checks.find_yyp_name", return_value="game.yyp"),
+            patch(
+                "gms_mcp.doctor_checks.get_update_status",
+                return_value=type(
+                    "UpdateStatusStub",
+                    (),
+                    {
                         "status": "warn",
                         "message": "A newer version is available",
                         "current_version": "1.0.0",
@@ -48,9 +34,23 @@ class TestDoctorCLI(unittest.TestCase):
                         "notification_due": True,
                         "update_available": True,
                         "upgrade_command": "python3 -m pip install -U gms-mcp",
+                        "to_dict": lambda self: {
+                            "status": "warn",
+                            "message": "A newer version is available",
+                            "current_version": "1.0.0",
+                            "latest_version": "1.1.0",
+                            "source": "PyPI",
+                            "url": "https://pypi.org/project/gms-mcp/",
+                            "checked_at": "2026-03-16T00:00:00Z",
+                            "used_cache": True,
+                            "last_notified_at": None,
+                            "notification_due": True,
+                            "update_available": True,
+                            "upgrade_command": "python3 -m pip install -U gms-mcp",
+                        },
                     },
-                },
-            )(),
+                )(),
+            ),
         ):
             report = doctor_module.build_doctor_report()
 
@@ -164,9 +164,11 @@ class TestDoctorCLI(unittest.TestCase):
             },
         )()
         buffer = io.StringIO()
-        with patch("gms_mcp.doctor.get_update_status", return_value=update_status), patch(
-            "gms_mcp.doctor.mark_update_notified"
-        ) as mark_notified, redirect_stdout(buffer):
+        with (
+            patch("gms_mcp.doctor.get_update_status", return_value=update_status),
+            patch("gms_mcp.doctor.mark_update_notified") as mark_notified,
+            redirect_stdout(buffer),
+        ):
             code = doctor_module.main(["--notify"])
 
         self.assertEqual(code, 0)
@@ -188,9 +190,11 @@ class TestDoctorCLI(unittest.TestCase):
             },
         )()
         buffer = io.StringIO()
-        with patch("gms_mcp.doctor.get_update_status", return_value=update_status), patch(
-            "gms_mcp.doctor.mark_update_notified"
-        ) as mark_notified, redirect_stdout(buffer):
+        with (
+            patch("gms_mcp.doctor.get_update_status", return_value=update_status),
+            patch("gms_mcp.doctor.mark_update_notified") as mark_notified,
+            redirect_stdout(buffer),
+        ):
             code = doctor_module.main(["--notify"])
 
         self.assertEqual(code, 0)

@@ -206,7 +206,9 @@ class TestTextureGroups95Coverage(unittest.TestCase):
 
         self.assertEqual(get_project_configs({"configs": []}), [])
         self.assertEqual(
-            get_project_configs({"configs": {"name": "Default", "children": [None, {"name": "desktop", "children": []}]}}),
+            get_project_configs(
+                {"configs": {"name": "Default", "children": [None, {"name": "desktop", "children": []}]}}
+            ),
             ["desktop"],
         )
         self.assertIsNotNone(find_texture_group({"TextureGroups": [{"name": None}, {"name": "UI"}]}, "UI"))
@@ -241,7 +243,13 @@ class TestTextureGroups95Coverage(unittest.TestCase):
         self.assertTrue(changed)
 
         changed, warnings = _replace_asset_group_references(
-            {"ConfigValues": {"desktop": "bad", "mobile": {}, "ios": {"textureGroupId": '{ "name":"old", "path":"texturegroups/old" }'}}},
+            {
+                "ConfigValues": {
+                    "desktop": "bad",
+                    "mobile": {},
+                    "ios": {"textureGroupId": '{ "name":"old", "path":"texturegroups/old" }'},
+                }
+            },
             from_group="old",
             to_group="new",
             include_top_level=False,
@@ -253,20 +261,60 @@ class TestTextureGroups95Coverage(unittest.TestCase):
 
         with patch(
             "gms_helpers.texture_groups.list_assets_by_type",
-            return_value={"sprite": [{"name": "spr_ok", "path": "sprites/spr_ok/spr_ok.yy"}], "font": "bad", "script": [{}]},
+            return_value={
+                "sprite": [{"name": "spr_ok", "path": "sprites/spr_ok/spr_ok.yy"}],
+                "font": "bad",
+                "script": [{}],
+            },
         ):
             self.assertEqual(len(_iter_resource_assets(self.project_root, asset_types=["sprite"])), 1)
             self.assertEqual(len(_iter_resource_assets(self.project_root)), 1)
 
     def test_members_scan_create_update_assign_and_rename_branches(self):
-        with patch("gms_helpers.texture_groups._iter_resource_assets", return_value=[{"name": "bad", "path": "bad.yy", "type": "sprite"}, {"name": "spr_ok", "path": "sprites/spr_ok/spr_ok.yy", "type": "sprite"}]):
-            with patch("gms_helpers.texture_groups.read_asset_yy", side_effect=[None, {"textureGroupId": {"name": "ghost", "path": "texturegroups/ghost"}, "ConfigValues": {"desktop": None, "mobile": {"textureGroupId": '{ "name":"ghost", "path":"texturegroups/ghost" }'}}}]):
+        with patch(
+            "gms_helpers.texture_groups._iter_resource_assets",
+            return_value=[
+                {"name": "bad", "path": "bad.yy", "type": "sprite"},
+                {"name": "spr_ok", "path": "sprites/spr_ok/spr_ok.yy", "type": "sprite"},
+            ],
+        ):
+            with patch(
+                "gms_helpers.texture_groups.read_asset_yy",
+                side_effect=[
+                    None,
+                    {
+                        "textureGroupId": {"name": "ghost", "path": "texturegroups/ghost"},
+                        "ConfigValues": {
+                            "desktop": None,
+                            "mobile": {"textureGroupId": '{ "name":"ghost", "path":"texturegroups/ghost" }'},
+                        },
+                    },
+                ],
+            ):
                 members = texture_group_members(self.project_root, "ghost", configs=["desktop"])
         self.assertTrue(any("not defined" in warning for warning in members["warnings"]))
         self.assertEqual(members["members"][0]["config_groups"], {"desktop": None})
 
-        with patch("gms_helpers.texture_groups._iter_resource_assets", return_value=[{"name": "bad", "path": "bad.yy", "type": "sprite"}, {"name": "spr_ok", "path": "sprites/spr_ok/spr_ok.yy", "type": "sprite"}]):
-            with patch("gms_helpers.texture_groups.read_asset_yy", side_effect=[None, {"textureGroupId": {"name": "ghost", "path": "texturegroups/ghost"}, "ConfigValues": {"desktop": None, "mobile": {"textureGroupId": '{ "name":"ghost", "path":"texturegroups/ghost" }'}}}]):
+        with patch(
+            "gms_helpers.texture_groups._iter_resource_assets",
+            return_value=[
+                {"name": "bad", "path": "bad.yy", "type": "sprite"},
+                {"name": "spr_ok", "path": "sprites/spr_ok/spr_ok.yy", "type": "sprite"},
+            ],
+        ):
+            with patch(
+                "gms_helpers.texture_groups.read_asset_yy",
+                side_effect=[
+                    None,
+                    {
+                        "textureGroupId": {"name": "ghost", "path": "texturegroups/ghost"},
+                        "ConfigValues": {
+                            "desktop": None,
+                            "mobile": {"textureGroupId": '{ "name":"ghost", "path":"texturegroups/ghost" }'},
+                        },
+                    },
+                ],
+            ):
                 scan = texture_group_scan(self.project_root, configs=["desktop"], include_assets=True)
         self.assertIn("ghost", scan["missing_groups_referenced"])
         self.assertEqual(scan["assets"][0]["config_groups"], {})
@@ -314,7 +362,13 @@ class TestTextureGroups95Coverage(unittest.TestCase):
 
         self._write_yyp(
             {
-                "TextureGroups": [{"name": "Default", "%Name": "Default", "ConfigValues": {"desktop": "bad", "ios": {"loadType": "default"}}}],
+                "TextureGroups": [
+                    {
+                        "name": "Default",
+                        "%Name": "Default",
+                        "ConfigValues": {"desktop": "bad", "ios": {"loadType": "default"}},
+                    }
+                ],
                 "configs": {"name": "Default", "children": [{"name": "desktop", "children": []}]},
             }
         )
@@ -333,16 +387,39 @@ class TestTextureGroups95Coverage(unittest.TestCase):
                 "configs": {"name": "Default", "children": [{"name": "desktop", "children": []}]},
                 "resources": [{"id": {"name": "spr_ok", "path": "sprites/spr_ok/spr_ok.yy"}}],
                 "TextureGroups": [
-                    {"name": "Default", "%Name": "Default", "groupParent": "old", "ConfigValues": {"desktop": {"groupParent": "old"}}},
-                    {"name": "old", "%Name": "old", "groupParent": "old", "ConfigValues": {"desktop": {"groupParent": "old"}}},
+                    {
+                        "name": "Default",
+                        "%Name": "Default",
+                        "groupParent": "old",
+                        "ConfigValues": {"desktop": {"groupParent": "old"}},
+                    },
+                    {
+                        "name": "old",
+                        "%Name": "old",
+                        "groupParent": "old",
+                        "ConfigValues": {"desktop": {"groupParent": "old"}},
+                    },
                 ],
             }
         )
-        with patch("gms_helpers.texture_groups._iter_resource_assets", return_value=[{"name": "bad", "path": "bad.yy", "type": "sprite"}, {"name": "spr_ok", "path": "sprites/spr_ok/spr_ok.yy", "type": "sprite"}]):
-            with patch("gms_helpers.texture_groups.read_asset_yy", side_effect=["bad", {"textureGroupId": {"name": "old", "path": "texturegroups/old"}}]):
+        with patch(
+            "gms_helpers.texture_groups._iter_resource_assets",
+            return_value=[
+                {"name": "bad", "path": "bad.yy", "type": "sprite"},
+                {"name": "spr_ok", "path": "sprites/spr_ok/spr_ok.yy", "type": "sprite"},
+            ],
+        ):
+            with patch(
+                "gms_helpers.texture_groups.read_asset_yy",
+                side_effect=["bad", {"textureGroupId": {"name": "old", "path": "texturegroups/old"}}],
+            ):
                 with patch("gms_helpers.texture_groups.get_asset_yy_path", side_effect=[None, self.sprite_yy]):
-                    with patch("gms_helpers.texture_groups._replace_asset_group_references", return_value=(True, ["warned"])):
-                        rename_res = texture_group_rename(self.project_root, "old", "new", update_references=True, dry_run=True)
+                    with patch(
+                        "gms_helpers.texture_groups._replace_asset_group_references", return_value=(True, ["warned"])
+                    ):
+                        rename_res = texture_group_rename(
+                            self.project_root, "old", "new", update_references=True, dry_run=True
+                        )
         self.assertTrue(rename_res["ok"])
         self.assertTrue(any("warned" in warning for warning in rename_res["warnings"]))
 
@@ -361,7 +438,13 @@ class TestTextureGroups95Coverage(unittest.TestCase):
                 return {"textureGroupId": {"name": "old", "path": "texturegroups/old"}, "ConfigValues": {}}
             return {"textureGroupId": {"name": "other", "path": "texturegroups/other"}, "ConfigValues": {}}
 
-        with patch("gms_helpers.texture_groups._iter_resource_assets", return_value=[{"name": "spr_ok", "path": "sprites/spr_ok/spr_ok.yy", "type": "sprite"}, {"name": "other", "path": "sprites/other/other.yy", "type": "sprite"}]):
+        with patch(
+            "gms_helpers.texture_groups._iter_resource_assets",
+            return_value=[
+                {"name": "spr_ok", "path": "sprites/spr_ok/spr_ok.yy", "type": "sprite"},
+                {"name": "other", "path": "sprites/other/other.yy", "type": "sprite"},
+            ],
+        ):
             with patch("gms_helpers.texture_groups.read_asset_yy", side_effect=assign_reader):
                 with patch("gms_helpers.texture_groups.get_asset_yy_path", side_effect=[None]):
                     assign_res = texture_group_assign(
@@ -520,7 +603,12 @@ class TestWorkflow95Coverage(unittest.TestCase):
             with patch("builtins.__import__", side_effect=import_with_absolute_fallback):
                 with patch.dict(os.environ, {"PYTEST_CURRENT_TEST": ""}, clear=True):
                     result = rename_asset(self.project_root, rename_source, "scan_done")
-        self.assertTrue(any("fully updated" in warning or "Reference scanner not available" in warning for warning in result.warnings))
+        self.assertTrue(
+            any(
+                "fully updated" in warning or "Reference scanner not available" in warning
+                for warning in result.warnings
+            )
+        )
 
         delete_source = self._register_script("delete_me")
 
@@ -572,7 +660,12 @@ class TestWorkflow95Coverage(unittest.TestCase):
         bad_yy = self.project_root / "scripts" / "bad" / "bad.yy"
         bad_yy.parent.mkdir(parents=True)
         bad_yy.write_text("{bad json", encoding="utf-8")
-        with patch("gms_helpers.workflow.load_json_loose", side_effect=lambda path_obj: (_ for _ in ()).throw(ValueError("broken")) if Path(path_obj) == bad_yy else real_loader(path_obj)):
+        with patch(
+            "gms_helpers.workflow.load_json_loose",
+            side_effect=lambda path_obj: (
+                (_ for _ in ()).throw(ValueError("broken")) if Path(path_obj) == bad_yy else real_loader(path_obj)
+            ),
+        ):
             lint_result = lint_project(self.project_root)
         self.assertFalse(lint_result.success)
 

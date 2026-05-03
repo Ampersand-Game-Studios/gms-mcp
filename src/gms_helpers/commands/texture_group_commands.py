@@ -119,7 +119,9 @@ def handle_texture_groups_members(args) -> OperationResult:
         print(f"[WARN]  {w}")
     print(f"[OK] Members of '{group}': {result.get('count', 0)}")
     for m in result.get("members", []) or []:
-        print(f"- {m.get('type')} {m.get('name')} ({m.get('path')}) top={m.get('top_level_group')} cfg={m.get('config_groups')}")
+        print(
+            f"- {m.get('type')} {m.get('name')} ({m.get('path')}) top={m.get('top_level_group')} cfg={m.get('config_groups')}"
+        )
     return OperationResult(success=True, message="Listed texture group members")
 
 
@@ -267,4 +269,3 @@ def handle_texture_groups_assign(args) -> OperationResult:
     if dry_run:
         print(f"[DRY] Would change: {result.get('changed_files')}")
     return OperationResult(success=True, message=result.get("message", "Assigned"))
-

@@ -22,19 +22,19 @@ def register(mcp: Any, ContextType: Any) -> None:
         """
         from gms_helpers.runtime_manager import RuntimeManager
         from pathlib import Path
-        
+
         project_directory = _resolve_project_directory_no_deps(project_root)
         manager = RuntimeManager(project_directory)
-        
+
         installed = manager.list_installed()
         pinned = manager.get_pinned()
         active = manager.select()
-        
+
         return {
             "runtimes": [r.to_dict() for r in installed],
             "pinned_version": pinned,
             "active_version": active.version if active else None,
-            "count": len(installed)
+            "count": len(installed),
         }
 
     @mcp.tool()
@@ -48,16 +48,16 @@ def register(mcp: Any, ContextType: Any) -> None:
         """
         from gms_helpers.runtime_manager import RuntimeManager
         from pathlib import Path
-        
+
         project_directory = _resolve_project_directory_no_deps(project_root)
         manager = RuntimeManager(project_directory)
-        
+
         success = manager.pin(version)
-        
+
         return {
             "ok": success,
             "pinned_version": version if success else None,
-            "error": None if success else f"Runtime version {version} is not installed or invalid."
+            "error": None if success else f"Runtime version {version} is not installed or invalid.",
         }
 
     @mcp.tool()
@@ -70,15 +70,15 @@ def register(mcp: Any, ContextType: Any) -> None:
         """
         from gms_helpers.runtime_manager import RuntimeManager
         from pathlib import Path
-        
+
         project_directory = _resolve_project_directory_no_deps(project_root)
         manager = RuntimeManager(project_directory)
-        
+
         success = manager.unpin()
-        
+
         return {
             "ok": True,  # Always true even if no pin existed
-            "message": "Runtime pin removed." if success else "No runtime pin existed."
+            "message": "Runtime pin removed." if success else "No runtime pin existed.",
         }
 
     @mcp.tool()
@@ -93,8 +93,8 @@ def register(mcp: Any, ContextType: Any) -> None:
         """
         from gms_helpers.runtime_manager import RuntimeManager
         from pathlib import Path
-        
+
         project_directory = _resolve_project_directory_no_deps(project_root)
         manager = RuntimeManager(project_directory)
-        
+
         return manager.verify(version)

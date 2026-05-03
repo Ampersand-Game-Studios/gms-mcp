@@ -102,8 +102,24 @@ class TestMainFlow(unittest.TestCase):
     def test_main_generates_outputs(self):
         # Baseline: 100 views, 5 engagement. Experiment: 120 views, 6 engagement.
         fake_metrics = {
-            "1001": {"views": 100, "likes": 5, "replies": 0, "retweets": 0, "quotes": 0, "bookmarks": 0, "engagement": 5},
-            "2001": {"views": 120, "likes": 6, "replies": 0, "retweets": 0, "quotes": 0, "bookmarks": 0, "engagement": 6},
+            "1001": {
+                "views": 100,
+                "likes": 5,
+                "replies": 0,
+                "retweets": 0,
+                "quotes": 0,
+                "bookmarks": 0,
+                "engagement": 5,
+            },
+            "2001": {
+                "views": 120,
+                "likes": 6,
+                "replies": 0,
+                "retweets": 0,
+                "quotes": 0,
+                "bookmarks": 0,
+                "engagement": 6,
+            },
         }
 
         def fake_fetch(tweet_id):

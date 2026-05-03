@@ -86,6 +86,7 @@ class TestRunWithFallbackDefaults(unittest.TestCase):
         with patch.dict(os.environ, {"GMS_MCP_ENABLE_DIRECT": "1"}, clear=True):
             # Re-initialize policy manager to pick up env var
             from gms_mcp.execution_policy import PolicyManager
+
             with patch("gms_mcp.server.dispatch.policy_manager", PolicyManager()):
                 with patch("gms_mcp.server.dispatch._run_direct", return_value=direct_result) as mock_direct:
                     with patch("gms_mcp.server.dispatch._run_cli_async", side_effect=_fake_cli) as mock_cli:

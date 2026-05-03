@@ -165,7 +165,9 @@ def register(mcp: Any, ContextType: Any) -> None:
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.room_commands import handle_room_layer_add
 
-        args = argparse.Namespace(room_name=room_name, layer_type=layer_type, layer_name=layer_name, depth=depth, project_root=project_root)
+        args = argparse.Namespace(
+            room_name=room_name, layer_type=layer_type, layer_name=layer_name, depth=depth, project_root=project_root
+        )
         cli_args = ["room", "layer", "add", room_name, layer_type, layer_name]
         if depth:
             cli_args.extend(["--depth", str(depth)])
@@ -262,7 +264,14 @@ def register(mcp: Any, ContextType: Any) -> None:
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.room_commands import handle_room_instance_add
 
-        args = argparse.Namespace(room_name=room_name, object_name=object_name, x=x, y=y, layer=layer if layer else None, project_root=project_root)
+        args = argparse.Namespace(
+            room_name=room_name,
+            object_name=object_name,
+            x=x,
+            y=y,
+            layer=layer if layer else None,
+            project_root=project_root,
+        )
         cli_args = ["room", "instance", "add", room_name, object_name, str(x), str(y)]
         if layer:
             cli_args.extend(["--layer", layer])

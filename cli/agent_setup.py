@@ -21,12 +21,3 @@ from gms_helpers.agent_setup import main as _main  # noqa: E402
 
 if __name__ == "__main__":
     raise SystemExit(0 if _main() else 1)
-
-
-
-
-
-
-
-
-

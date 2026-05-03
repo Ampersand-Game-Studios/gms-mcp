@@ -23,14 +23,8 @@ class TestGmlDocsModule(unittest.TestCase):
 
     def test_gml_docs_module_imports(self):
         """Test that gml_docs module can be imported."""
-        from gms_helpers.gml_docs import (
-            lookup,
-            search,
-            list_functions,
-            list_categories,
-            clear_cache,
-            get_cache_stats
-        )
+        from gms_helpers.gml_docs import lookup, search, list_functions, list_categories, clear_cache, get_cache_stats
+
         # Verify they're callable
         self.assertTrue(callable(lookup))
         self.assertTrue(callable(search))
@@ -42,17 +36,15 @@ class TestGmlDocsModule(unittest.TestCase):
     def test_cache_module_imports(self):
         """Test that cache module classes can be imported."""
         from gms_helpers.gml_docs.cache import DocCache, CachedDoc, FunctionIndexEntry
+
         self.assertTrue(DocCache)
         self.assertTrue(CachedDoc)
         self.assertTrue(FunctionIndexEntry)
 
     def test_fetcher_module_imports(self):
         """Test that fetcher module functions can be imported."""
-        from gms_helpers.gml_docs.fetcher import (
-            fetch_function_index,
-            fetch_function_doc,
-            GMLDocParser
-        )
+        from gms_helpers.gml_docs.fetcher import fetch_function_index, fetch_function_doc, GMLDocParser
+
         self.assertTrue(callable(fetch_function_index))
         self.assertTrue(callable(fetch_function_doc))
         self.assertTrue(GMLDocParser)
@@ -70,13 +62,7 @@ class TestGmlDocsCLI(unittest.TestCase):
     def run_gms_command(self, args):
         """Run a gms command and return result."""
         cmd = [self.python_exe, "-m", "gms_helpers.gms"] + args
-        result = subprocess.run(
-            cmd,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            env=self.env
-        )
+        result = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", env=self.env)
         return result.returncode, result.stdout, result.stderr
 
     def test_doc_help(self):
@@ -148,8 +134,9 @@ class TestDocCommandHandlers(unittest.TestCase):
             handle_doc_list,
             handle_doc_categories,
             handle_doc_cache_stats,
-            handle_doc_cache_clear
+            handle_doc_cache_clear,
         )
+
         self.assertTrue(callable(handle_doc_lookup))
         self.assertTrue(callable(handle_doc_search))
         self.assertTrue(callable(handle_doc_list))
@@ -171,11 +158,12 @@ class TestCacheDataclasses(unittest.TestCase):
     def test_function_index_entry_creation(self):
         """Test FunctionIndexEntry dataclass."""
         from gms_helpers.gml_docs.cache import FunctionIndexEntry
+
         entry = FunctionIndexEntry(
             name="draw_sprite",
             category="Drawing",
             subcategory="Sprites_And_Tiles",
-            url="https://manual.gamemaker.io/monthly/en/GameMaker_Language/GML_Reference/Drawing/Sprites_And_Tiles/draw_sprite.htm"
+            url="https://manual.gamemaker.io/monthly/en/GameMaker_Language/GML_Reference/Drawing/Sprites_And_Tiles/draw_sprite.htm",
         )
         self.assertEqual(entry.name, "draw_sprite")
         self.assertEqual(entry.category, "Drawing")
@@ -185,6 +173,7 @@ class TestCacheDataclasses(unittest.TestCase):
     def test_cached_doc_creation(self):
         """Test CachedDoc dataclass."""
         from gms_helpers.gml_docs.cache import CachedDoc
+
         doc = CachedDoc(
             name="draw_sprite",
             category="Drawing",
@@ -195,7 +184,7 @@ class TestCacheDataclasses(unittest.TestCase):
             parameters=[{"name": "sprite", "type": "Sprite", "description": "The sprite to draw"}],
             returns="N/A",
             examples=[],
-            cached_at=1234567890.0
+            cached_at=1234567890.0,
         )
         self.assertEqual(doc.name, "draw_sprite")
         self.assertEqual(doc.category, "Drawing")
@@ -224,6 +213,7 @@ class TestDocCacheClass(unittest.TestCase):
     def test_cache_initialization(self):
         """Test DocCache initializes correctly."""
         from gms_helpers.gml_docs.cache import DocCache
+
         cache = DocCache(cache_dir=self.cache_dir)
         self.assertTrue(self.cache_dir.exists())
         self.assertTrue((self.cache_dir / "functions").exists())
@@ -231,6 +221,7 @@ class TestDocCacheClass(unittest.TestCase):
     def test_cache_stats_empty(self):
         """Test cache stats on empty cache."""
         from gms_helpers.gml_docs.cache import DocCache
+
         cache = DocCache(cache_dir=self.cache_dir)
         stats = cache.get_stats()
         self.assertEqual(stats["index_function_count"], 0)
@@ -239,6 +230,7 @@ class TestDocCacheClass(unittest.TestCase):
     def test_cache_clear(self):
         """Test clearing the cache."""
         from gms_helpers.gml_docs.cache import DocCache, clear_cache
+
         cache = DocCache(cache_dir=self.cache_dir)
         # Clear should work even on empty cache
         # Note: clear_cache() is a module-level function that operates on default cache

@@ -8,4 +8,3 @@ if TYPE_CHECKING:
     from mcp.server.fastmcp import Context as Context
 else:
     Context = Any  # type: ignore[misc,assignment]
-

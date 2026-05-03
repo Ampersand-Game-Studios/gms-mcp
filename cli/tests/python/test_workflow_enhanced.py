@@ -21,6 +21,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 
 # Add src directory to the path
 import sys
+
 SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
@@ -35,6 +36,7 @@ from gms_helpers.assets import ScriptAsset, SpriteAsset, ObjectAsset
 
 class TempProject:
     """Enhanced test project with realistic GameMaker structure"""
+
     def __enter__(self):
         self.original_cwd = os.getcwd()
         self.dir = Path(tempfile.mkdtemp())
@@ -52,10 +54,7 @@ class TempProject:
         save_pretty_json_gm(self.dir / "test.yyp", self.yyp_data)
 
         # Create resource order file
-        self.resource_order_data = {
-            "FolderOrderSettings": [],
-            "ResourceOrderSettings": []
-        }
+        self.resource_order_data = {"FolderOrderSettings": [], "ResourceOrderSettings": []}
         save_pretty_json_gm(self.dir / "test.resource_order", self.resource_order_data)
 
         os.chdir(self.dir)
@@ -78,7 +77,7 @@ class TempProject:
             "sequence": {
                 "$GMSequence": "",
                 "%Name": sprite_name,  # This should update during rename!
-                "name": sprite_name,   # This should update during rename!
+                "name": sprite_name,  # This should update during rename!
                 "spriteId": {
                     "name": sprite_name,
                     "path": f"sprites/{sprite_name}/{sprite_name}.yy",
@@ -95,13 +94,13 @@ class TempProject:
                                     "resourceVersion": "2.0",
                                     "Id": {
                                         "name": "frame_0",
-                                        "path": f"sprites/{sprite_name}/frame_0.png"  # Path should update!
-                                    }
+                                        "path": f"sprites/{sprite_name}/frame_0.png",  # Path should update!
+                                    },
                                 }
-                            }
+                            },
                         }
-                    ]
-                }
+                    ],
+                },
             },
             "parent": {
                 "name": "Sprites",
@@ -159,21 +158,12 @@ class TempProject:
     def add_resource_to_project(self, name: str, path: str):
         """Add resource to .yyp and .resource_order files"""
         # Add to .yyp
-        resource_entry = {
-            "id": {
-                "name": name,
-                "path": path
-            }
-        }
+        resource_entry = {"id": {"name": name, "path": path}}
         self.yyp_data["resources"].append(resource_entry)
         save_pretty_json_gm(self.dir / "test.yyp", self.yyp_data)
 
         # Add to resource order
-        order_entry = {
-            "name": name,
-            "order": len(self.resource_order_data["ResourceOrderSettings"]),
-            "path": path
-        }
+        order_entry = {"name": name, "order": len(self.resource_order_data["ResourceOrderSettings"]), "path": path}
         self.resource_order_data["ResourceOrderSettings"].append(order_entry)
         save_pretty_json_gm(self.dir / "test.resource_order", self.resource_order_data)
 
@@ -207,17 +197,21 @@ class TestWorkflowEnhanced(unittest.TestCase):
             sprite_data = load_json_loose(renamed_sprite_yy)
 
             # These should be updated by the reference scanner
-            self.assertEqual(sprite_data["sequence"]["%Name"], new_name,
-                           "Sprite sequence %Name was not updated - reference scanner failed!")
-            self.assertEqual(sprite_data["sequence"]["name"], new_name,
-                           "Sprite sequence name was not updated - reference scanner failed!")
+            self.assertEqual(
+                sprite_data["sequence"]["%Name"],
+                new_name,
+                "Sprite sequence %Name was not updated - reference scanner failed!",
+            )
+            self.assertEqual(
+                sprite_data["sequence"]["name"],
+                new_name,
+                "Sprite sequence name was not updated - reference scanner failed!",
+            )
 
             # Keyframe paths should be updated
             keyframe_path = sprite_data["sequence"]["keyframes"]["keyframes"][0]["channels"]["0"]["Id"]["path"]
-            self.assertIn(new_name, keyframe_path,
-                         "Sprite keyframe path was not updated - reference scanner failed!")
-            self.assertNotIn(old_name, keyframe_path,
-                           "Sprite keyframe path still contains old name - stale reference!")
+            self.assertIn(new_name, keyframe_path, "Sprite keyframe path was not updated - reference scanner failed!")
+            self.assertNotIn(old_name, keyframe_path, "Sprite keyframe path still contains old name - stale reference!")
 
     def test_asset_rename_updates_script_references(self):
         """
@@ -236,8 +230,7 @@ class TestWorkflowEnhanced(unittest.TestCase):
 
             # Create script that references the object
             script_yy, script_gml = proj.create_script_with_asset_references(
-                "ui_test_script",
-                [old_object_name, "TestEnum.test_old"]
+                "ui_test_script", [old_object_name, "TestEnum.test_old"]
             )
 
             # Verify initial script content
@@ -252,16 +245,26 @@ class TestWorkflowEnhanced(unittest.TestCase):
             updated_script_content = script_gml.read_text()
 
             # Object reference should be updated
-            self.assertIn(new_object_name, updated_script_content,
-                         "Script object reference was not updated - reference scanner failed!")
-            self.assertNotIn(old_object_name, updated_script_content,
-                           "Script still contains old object reference - stale reference!")
+            self.assertIn(
+                new_object_name,
+                updated_script_content,
+                "Script object reference was not updated - reference scanner failed!",
+            )
+            self.assertNotIn(
+                old_object_name, updated_script_content, "Script still contains old object reference - stale reference!"
+            )
 
             # UIGroup enum should be updated (test_old -> test_new)
-            self.assertIn("TestEnum.test_new", updated_script_content,
-                         "Script TestEnum enum was not updated - reference scanner failed!")
-            self.assertNotIn("TestEnum.test_old", updated_script_content,
-                           "Script still contains old TestEnum enum - stale reference!")
+            self.assertIn(
+                "TestEnum.test_new",
+                updated_script_content,
+                "Script TestEnum enum was not updated - reference scanner failed!",
+            )
+            self.assertNotIn(
+                "TestEnum.test_old",
+                updated_script_content,
+                "Script still contains old TestEnum enum - stale reference!",
+            )
 
     def test_script_rename_updates_object_event_callers(self):
         """Script renames must update GML callers in object event files."""
@@ -297,8 +300,9 @@ class TestWorkflowEnhanced(unittest.TestCase):
 
             # Verify initial resource order
             resource_order_data = load_json_loose(proj.dir / "test.resource_order")
-            old_entry = next((entry for entry in resource_order_data["ResourceOrderSettings"]
-                             if entry["name"] == old_name), None)
+            old_entry = next(
+                (entry for entry in resource_order_data["ResourceOrderSettings"] if entry["name"] == old_name), None
+            )
             self.assertIsNotNone(old_entry, "Resource order entry not found")
             self.assertIn(old_name, old_entry["path"])
 
@@ -309,16 +313,16 @@ class TestWorkflowEnhanced(unittest.TestCase):
             updated_resource_order = load_json_loose(proj.dir / "test.resource_order")
 
             # Old entry should be gone
-            old_entry_after = next((entry for entry in updated_resource_order["ResourceOrderSettings"]
-                                   if entry["name"] == old_name), None)
-            self.assertIsNone(old_entry_after,
-                             "Resource order still contains old entry - reference scanner failed!")
+            old_entry_after = next(
+                (entry for entry in updated_resource_order["ResourceOrderSettings"] if entry["name"] == old_name), None
+            )
+            self.assertIsNone(old_entry_after, "Resource order still contains old entry - reference scanner failed!")
 
             # New entry should exist
-            new_entry = next((entry for entry in updated_resource_order["ResourceOrderSettings"]
-                             if entry["name"] == new_name), None)
-            self.assertIsNotNone(new_entry,
-                               "Resource order does not contain new entry - reference scanner failed!")
+            new_entry = next(
+                (entry for entry in updated_resource_order["ResourceOrderSettings"] if entry["name"] == new_name), None
+            )
+            self.assertIsNotNone(new_entry, "Resource order does not contain new entry - reference scanner failed!")
             self.assertIn(new_name, new_entry["path"])
             self.assertNotIn(old_name, new_entry["path"])
 
@@ -335,9 +339,7 @@ class TestWorkflowEnhanced(unittest.TestCase):
             sprite_yy = proj.create_sprite_with_sequences(old_name)
 
             # Create script that references the sprite
-            script_yy, script_gml = proj.create_script_with_asset_references(
-                "test_script", [old_name]
-            )
+            script_yy, script_gml = proj.create_script_with_asset_references("test_script", [old_name])
 
             # Use reference scanner to find all references
             scanner = ReferenceScanner(proj.dir)
@@ -347,26 +349,30 @@ class TestWorkflowEnhanced(unittest.TestCase):
             reference_types = [ref.reference_type for ref in references]
 
             # Should find project file references
-            self.assertIn("project_resource_name", reference_types,
-                         "Reference scanner missed project resource name reference!")
-            self.assertIn("project_resource_path", reference_types,
-                         "Reference scanner missed project resource path reference!")
+            self.assertIn(
+                "project_resource_name", reference_types, "Reference scanner missed project resource name reference!"
+            )
+            self.assertIn(
+                "project_resource_path", reference_types, "Reference scanner missed project resource path reference!"
+            )
 
             # Should find resource order references
-            self.assertIn("resource_order", reference_types,
-                         "Reference scanner missed resource order reference!")
+            self.assertIn("resource_order", reference_types, "Reference scanner missed resource order reference!")
 
             # Should find sprite internal references
-            self.assertIn("sprite_sequence_name", reference_types,
-                         "Reference scanner missed sprite sequence name reference!")
+            self.assertIn(
+                "sprite_sequence_name", reference_types, "Reference scanner missed sprite sequence name reference!"
+            )
 
             # Should find script references
-            self.assertIn("script_sprite_reference", reference_types,
-                         "Reference scanner missed script sprite reference!")
+            self.assertIn(
+                "script_sprite_reference", reference_types, "Reference scanner missed script sprite reference!"
+            )
 
             # Verify reference count is reasonable (multiple references expected)
-            self.assertGreaterEqual(len(references), 4,
-                                  f"Reference scanner found only {len(references)} references, expected at least 4!")
+            self.assertGreaterEqual(
+                len(references), 4, f"Reference scanner found only {len(references)} references, expected at least 4!"
+            )
 
     def test_comprehensive_rename_validates_no_stale_references(self):
         """
@@ -391,15 +397,15 @@ class TestWorkflowEnhanced(unittest.TestCase):
             success = comprehensive_rename_asset(proj.dir, old_name, new_name, "object")
 
             # CRITICAL: Should return True (no stale references)
-            self.assertTrue(success,
-                          "Comprehensive rename failed - stale references remain!")
+            self.assertTrue(success, "Comprehensive rename failed - stale references remain!")
 
             # Additional validation: manual check for stale references
             scanner = ReferenceScanner(proj.dir)
             stale_refs = scanner.validate_no_stale_references(old_name)
 
-            self.assertEqual(len(stale_refs), 0,
-                           f"Found {len(stale_refs)} stale references after comprehensive rename: {stale_refs}")
+            self.assertEqual(
+                len(stale_refs), 0, f"Found {len(stale_refs)} stale references after comprehensive rename: {stale_refs}"
+            )
 
     def test_sprite_creation_json_format(self):
         """Test that sprite creation generates valid JSON without extra fields"""
@@ -428,9 +434,22 @@ class TestWorkflowEnhanced(unittest.TestCase):
             self.assertNotIn("%Name", track, "Track should NOT have %Name field - this causes JSON parsing errors!")
 
             # Verify required fields exist
-            required_fields = ["builtinName", "events", "inheritsTrackColour", "interpolation",
-                             "isCreationTrack", "keyframes", "modifiers", "name",
-                             "resourceType", "resourceVersion", "spriteId", "trackColour", "tracks", "traits"]
+            required_fields = [
+                "builtinName",
+                "events",
+                "inheritsTrackColour",
+                "interpolation",
+                "isCreationTrack",
+                "keyframes",
+                "modifiers",
+                "name",
+                "resourceType",
+                "resourceVersion",
+                "spriteId",
+                "trackColour",
+                "tracks",
+                "traits",
+            ]
             for field in required_fields:
                 self.assertIn(field, track, f"Track missing required field: {field}")
 
@@ -451,22 +470,23 @@ class TestWorkflowEnhanced(unittest.TestCase):
                 "$GMSprite": "",
                 "name": old_name,
                 "sequence": {
-                    "tracks": [{
-                        "$GMSpriteFramesTrack": "",
-                        "keyframes": {
-                            "Keyframes": [{
-                                "Channels": {
-                                    "0": {
-                                        "Id": {
-                                            "name": "test-uuid",
-                                            "path": f"sprites/{old_name}/{old_name}.yy"
+                    "tracks": [
+                        {
+                            "$GMSpriteFramesTrack": "",
+                            "keyframes": {
+                                "Keyframes": [
+                                    {
+                                        "Channels": {
+                                            "0": {
+                                                "Id": {"name": "test-uuid", "path": f"sprites/{old_name}/{old_name}.yy"}
+                                            }
                                         }
                                     }
-                                }
-                            }]
+                                ]
+                            },
                         }
-                    }]
-                }
+                    ]
+                },
             }
 
             sprite_file = sprite_dir / f"{old_name}.yy"
@@ -478,8 +498,7 @@ class TestWorkflowEnhanced(unittest.TestCase):
 
             # Should find the keyframe path reference (full path, not just filename)
             yy_path_refs = [ref for ref in references if ref.reference_type == "sprite_keyframe_path"]
-            self.assertGreater(len(yy_path_refs), 0,
-                             "Reference scanner should find internal .yy path references!")
+            self.assertGreater(len(yy_path_refs), 0, "Reference scanner should find internal .yy path references!")
 
             # Verify it found the correct reference
             found_ref = yy_path_refs[0]
@@ -512,10 +531,14 @@ class TestWorkflowEnhanced(unittest.TestCase):
             expected_structure_path = sprite_dir / "layers" / image_uuid / f"{layer_uuid}.png"
             wrong_structure_path = sprite_dir / "layers" / layer_uuid / f"{image_uuid}.png"
 
-            self.assertTrue(expected_structure_path.exists(),
-                          f"Layer image should exist at layers/{image_uuid}/{layer_uuid}.png (frame_uuid/layer_uuid.png)")
-            self.assertFalse(wrong_structure_path.exists(),
-                           f"Layer image should NOT exist at layers/{layer_uuid}/{image_uuid}.png (wrong structure)")
+            self.assertTrue(
+                expected_structure_path.exists(),
+                f"Layer image should exist at layers/{image_uuid}/{layer_uuid}.png (frame_uuid/layer_uuid.png)",
+            )
+            self.assertFalse(
+                wrong_structure_path.exists(),
+                f"Layer image should NOT exist at layers/{layer_uuid}/{image_uuid}.png (wrong structure)",
+            )
 
             # Verify the main image also exists
             main_image_path = sprite_dir / f"{image_uuid}.png"
@@ -562,8 +585,9 @@ class TestReferenceScanner(unittest.TestCase):
 
             # Verify updates were applied
             sprite_data = load_json_loose(proj.dir / "sprites" / old_name / f"{old_name}.yy")
-            self.assertEqual(sprite_data["sequence"]["%Name"], new_name,
-                           "Atomic update failed - sequence name not updated!")
+            self.assertEqual(
+                sprite_data["sequence"]["%Name"], new_name, "Atomic update failed - sequence name not updated!"
+            )
 
     def test_stale_reference_validation_ignores_new_names_containing_old_name(self):
         with TempProject() as proj:

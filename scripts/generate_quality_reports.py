@@ -363,12 +363,14 @@ def categorize_tool(name: str) -> str:
         return "Workflow"
     if name.startswith("gm_room_"):
         return "Room Management"
-    if name.startswith((
-        "gm_list_",
-        "gm_read_",
-        "gm_search_",
-        "gm_get_",
-    )):
+    if name.startswith(
+        (
+            "gm_list_",
+            "gm_read_",
+            "gm_search_",
+            "gm_get_",
+        )
+    ):
         return "Introspection"
     return "Other"
 
@@ -419,9 +421,7 @@ def write_coverage_report(coverage: Dict[str, object], junit: Dict[str, object],
     ]
 
     for entry in coverage["modules"]:
-        notes = (
-            "" if entry["coverage"] >= 75 else "Low coverage area, likely heavy external integration paths."
-        )
+        notes = "" if entry["coverage"] >= 75 else "Low coverage area, likely heavy external integration paths."
         lines.append(f"| `{entry['module']}` | {entry['coverage']:.1f}% | {notes} |")
 
     lines.append("")
@@ -487,7 +487,9 @@ def write_tool_report(
         lines.append("")
 
     lines.append("## Notes")
-    lines.append("- Coverage is computed from static test-source references and executed pytest results, not from a dedicated MCP test framework.")
+    lines.append(
+        "- Coverage is computed from static test-source references and executed pytest results, not from a dedicated MCP test framework."
+    )
     lines.append("- Keep this report as an implementation-time signal; update when coverage tooling changes.")
 
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")

@@ -166,7 +166,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a GameMaker sprite asset with optional multi-frame support.
-        
+
         Args:
             name: Sprite asset name (e.g., spr_player)
             parent_path: Parent folder path (e.g., "folders/Sprites.yy")
@@ -371,7 +371,20 @@ def register(mcp: Any, ContextType: Any) -> None:
             project_root=project_root,
         )
 
-        cli_args = ["asset", "create", "font", name, "--parent-path", parent_path, "--font-name", font_name, "--size", str(size), "--aa-level", str(aa_level)]
+        cli_args = [
+            "asset",
+            "create",
+            "font",
+            name,
+            "--parent-path",
+            parent_path,
+            "--font-name",
+            font_name,
+            "--size",
+            str(size),
+            "--aa-level",
+            str(aa_level),
+        ]
         if bold:
             cli_args.append("--bold")
         if italic:
@@ -476,7 +489,18 @@ def register(mcp: Any, ContextType: Any) -> None:
             maintenance_verbose=maintenance_verbose,
             project_root=project_root,
         )
-        cli_args = ["asset", "create", "animcurve", name, "--parent-path", parent_path, "--curve-type", curve_type, "--channel-name", channel_name]
+        cli_args = [
+            "asset",
+            "create",
+            "animcurve",
+            name,
+            "--parent-path",
+            parent_path,
+            "--curve-type",
+            curve_type,
+            "--channel-name",
+            channel_name,
+        ]
         if skip_maintenance:
             cli_args.append("--skip-maintenance")
         if no_auto_fix:
@@ -607,7 +631,18 @@ def register(mcp: Any, ContextType: Any) -> None:
             maintenance_verbose=maintenance_verbose,
             project_root=project_root,
         )
-        cli_args = ["asset", "create", "path", name, "--parent-path", parent_path, "--precision", str(precision), "--path-type", path_type]
+        cli_args = [
+            "asset",
+            "create",
+            "path",
+            name,
+            "--parent-path",
+            parent_path,
+            "--precision",
+            str(precision),
+            "--path-type",
+            path_type,
+        ]
         if closed:
             cli_args.append("--closed")
         if skip_maintenance:

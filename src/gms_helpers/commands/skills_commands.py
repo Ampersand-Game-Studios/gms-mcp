@@ -64,7 +64,7 @@ def handle_skills_install(args) -> Dict[str, Any]:
     project = bool(getattr(args, "project", False))
     target_dir = get_target_dir(project=project, openclaw=openclaw)
     legacy_dir = _legacy_openclaw_project_dir(openclaw=openclaw, project=project)
-    force = getattr(args, 'force', False)
+    force = getattr(args, "force", False)
 
     if not source_dir.exists():
         print(f"[ERROR] Skills source directory not found: {source_dir}")
@@ -109,12 +109,7 @@ def handle_skills_install(args) -> Dict[str, Any]:
     if not copied and not skipped:
         print("[WARN]  No skill files found to install")
 
-    return {
-        "success": True,
-        "target_dir": str(target_dir),
-        "copied": copied,
-        "skipped": skipped
-    }
+    return {"success": True, "target_dir": str(target_dir), "copied": copied, "skipped": skipped}
 
 
 def handle_skills_list(args) -> Dict[str, Any]:
@@ -127,7 +122,7 @@ def handle_skills_list(args) -> Dict[str, Any]:
     project_dir = get_target_dir(project=True, openclaw=openclaw)
     legacy_project_dir = _legacy_openclaw_project_dir(openclaw=openclaw, project=True)
 
-    installed_only = getattr(args, 'installed', False)
+    installed_only = getattr(args, "installed", False)
 
     skills = []
 
@@ -141,9 +136,7 @@ def handle_skills_list(args) -> Dict[str, Any]:
 
         user_installed = (user_dir / relative_path).exists()
         project_installed = (project_dir / relative_path).exists()
-        legacy_project_installed = bool(
-            legacy_project_dir and (legacy_project_dir / relative_path).exists()
-        )
+        legacy_project_installed = bool(legacy_project_dir and (legacy_project_dir / relative_path).exists())
 
         skill_info = {
             "name": str(relative_path),
@@ -152,9 +145,7 @@ def handle_skills_list(args) -> Dict[str, Any]:
             "legacy_project_installed": legacy_project_installed,
         }
 
-        if installed_only and not (
-            user_installed or project_installed or legacy_project_installed
-        ):
+        if installed_only and not (user_installed or project_installed or legacy_project_installed):
             continue
 
         skills.append(skill_info)
@@ -233,5 +224,5 @@ def handle_skills_uninstall(args) -> Dict[str, Any]:
         "removed": True,
         "target_dir": str(target_dir),
         "removed_dirs": [str(d) for d in existing_dirs],
-        "file_count": file_count
+        "file_count": file_count,
     }

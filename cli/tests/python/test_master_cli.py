@@ -7,6 +7,7 @@ import sys
 import os
 from pathlib import Path
 
+
 class TestMasterCLI(unittest.TestCase):
     """Test the master CLI functionality."""
 
@@ -22,7 +23,9 @@ class TestMasterCLI(unittest.TestCase):
         # Run from gamemaker directory so CLI tools find the .yyp file
         repo_root = Path(__file__).resolve().parents[3]
         gamemaker_dir = repo_root / "gamemaker"
-        result = subprocess.run(cmd, cwd=str(gamemaker_dir), capture_output=True, text=True, encoding='utf-8', env=self.env)
+        result = subprocess.run(
+            cmd, cwd=str(gamemaker_dir), capture_output=True, text=True, encoding="utf-8", env=self.env
+        )
         return result.returncode, result.stdout, result.stderr
 
     def test_help_commands(self):
@@ -146,6 +149,7 @@ class TestMasterCLI(unittest.TestCase):
         # We don't check returncode as it depends on project state
         # Just ensure the option is accepted
         self.assertNotIn("unrecognized arguments", stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

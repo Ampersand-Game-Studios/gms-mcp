@@ -23,15 +23,17 @@ class TestRunAllTestsRunner(unittest.TestCase):
         self.assertEqual(mode, "native")
 
     def test_determine_mcp_mode_uv(self):
-        with patch.object(run_all_tests, "_python_has_module", return_value=False), patch(
-            "shutil.which", return_value="/usr/bin/uv"
+        with (
+            patch.object(run_all_tests, "_python_has_module", return_value=False),
+            patch("shutil.which", return_value="/usr/bin/uv"),
         ):
             mode = run_all_tests._determine_mcp_test_mode("python3")
         self.assertEqual(mode, "uv")
 
     def test_determine_mcp_mode_skip(self):
-        with patch.object(run_all_tests, "_python_has_module", return_value=False), patch(
-            "shutil.which", return_value=None
+        with (
+            patch.object(run_all_tests, "_python_has_module", return_value=False),
+            patch("shutil.which", return_value=None),
         ):
             mode = run_all_tests._determine_mcp_test_mode("python3")
         self.assertEqual(mode, "skip")

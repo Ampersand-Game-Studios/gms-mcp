@@ -26,7 +26,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     ) -> Dict[str, Any]:
         """
         Build or rebuild the GML symbol index for code intelligence features.
-        
+
         Args:
             force: If True, rebuild from scratch. If False, use cache if valid.
         """
@@ -38,11 +38,11 @@ def register(mcp: Any, ContextType: Any) -> None:
             project_root=_resolve_project_directory(project_root),
             force=force,
         )
-        
+
         cli_args = ["symbol", "build"]
         if force:
             cli_args.append("--force")
-        
+
         return await _run_with_fallback(
             direct_handler=handle_build_index,
             direct_args=args,
@@ -68,7 +68,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     ) -> Dict[str, Any]:
         """
         Find definition(s) of a GML symbol (function, enum, macro, globalvar).
-        
+
         Args:
             symbol_name: Name of the symbol to find.
         """
@@ -80,9 +80,9 @@ def register(mcp: Any, ContextType: Any) -> None:
             project_root=_resolve_project_directory(project_root),
             symbol_name=symbol_name,
         )
-        
+
         cli_args = ["symbol", "find-definition", symbol_name]
-        
+
         return await _run_with_fallback(
             direct_handler=handle_find_definition,
             direct_args=args,
@@ -109,7 +109,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     ) -> Dict[str, Any]:
         """
         Find all references to a GML symbol.
-        
+
         Args:
             symbol_name: Name of the symbol to find references for.
             max_results: Maximum number of references to return.
@@ -123,9 +123,9 @@ def register(mcp: Any, ContextType: Any) -> None:
             symbol_name=symbol_name,
             max_results=max_results,
         )
-        
+
         cli_args = ["symbol", "find-references", symbol_name, "--max", str(max_results)]
-        
+
         return await _run_with_fallback(
             direct_handler=handle_find_references,
             direct_args=args,
@@ -154,7 +154,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     ) -> Dict[str, Any]:
         """
         List all GML symbols in the project, optionally filtered.
-        
+
         Args:
             kind: Filter by symbol kind (function, enum, macro, globalvar, constructor).
             name_filter: Filter symbols by name (case-insensitive substring match).
@@ -172,7 +172,7 @@ def register(mcp: Any, ContextType: Any) -> None:
             file_filter=file_filter,
             max_results=max_results,
         )
-        
+
         cli_args = ["symbol", "list"]
         if kind:
             cli_args.extend(["--kind", kind])
@@ -181,7 +181,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         if file_filter:
             cli_args.extend(["--file", file_filter])
         cli_args.extend(["--max", str(max_results)])
-        
+
         return await _run_with_fallback(
             direct_handler=handle_list_symbols,
             direct_args=args,

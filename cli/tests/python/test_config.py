@@ -2,6 +2,7 @@
 """
 Test configuration and common imports
 """
+
 import sys
 from pathlib import Path
 
@@ -13,4 +14,4 @@ SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
 # Export PROJECT_ROOT for other tests
-__all__ = ['PROJECT_ROOT']
+__all__ = ["PROJECT_ROOT"]

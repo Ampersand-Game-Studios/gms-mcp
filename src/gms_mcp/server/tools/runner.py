@@ -13,7 +13,9 @@ from ..project import _ensure_cli_on_sys_path, _resolve_project_directory, _reso
 def register(mcp: Any, ContextType: Any) -> None:
     globals()["Context"] = ContextType
 
-    def _run_direct_preserve_result(handler: Any, args: argparse.Namespace, project_root: str) -> tuple[bool, str, str, Any, str | None, int | None]:
+    def _run_direct_preserve_result(
+        handler: Any, args: argparse.Namespace, project_root: str
+    ) -> tuple[bool, str, str, Any, str | None, int | None]:
         """
         Run a handler in-process while capturing stdout/stderr, but preserve the handler's return value.
 
@@ -93,7 +95,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     ) -> Dict[str, Any]:
         """
         Run the project using Igor.
-        
+
         Args:
             platform: Target platform (default: host OS)
             runtime: Runtime type VM or YYC (default: VM)
@@ -110,7 +112,7 @@ def register(mcp: Any, ContextType: Any) -> None:
             enable_bridge: If True, start bridge server for log capture and commands.
                           If None (default), auto-detect based on whether bridge is installed.
                           If False, explicitly disable bridge even if installed.
-            
+
         Returns:
             If background=True: Dict with session info (ok, pid, run_id, message, bridge_enabled)
             If background=False: Dict with full execution result including stdout
@@ -128,17 +130,17 @@ def register(mcp: Any, ContextType: Any) -> None:
             output_location=output_location,
             project_root=project_root,
         )
-        
+
         # Auto-detect bridge if not explicitly set
         bridge_enabled = False
         bridge_server = None
         bridge_start_error: str | None = None
-        
+
         if enable_bridge is None or enable_bridge is True:
             try:
                 from gms_helpers.bridge_installer import is_bridge_installed
                 from gms_helpers.bridge_server import get_bridge_server
-                
+
                 if is_bridge_installed(str(repo_root)):
                     if enable_bridge is not False:
                         # Start bridge server
@@ -147,7 +149,7 @@ def register(mcp: Any, ContextType: Any) -> None:
                             bridge_enabled = True
             except Exception as e:
                 bridge_start_error = str(e)
-        
+
         # For background mode, we want to run directly and return quickly
         # The game will be launched and we'll return session info immediately
         if background:
@@ -163,7 +165,12 @@ def register(mcp: Any, ContextType: Any) -> None:
             if error_text:
                 if bridge_server:
                     bridge_server.stop()
-                return {"ok": False, "background": True, "error": error_text, "message": f"Failed to launch game: {error_text}"}
+                return {
+                    "ok": False,
+                    "background": True,
+                    "error": error_text,
+                    "message": f"Failed to launch game: {error_text}",
+                }
 
             if isinstance(result_value, dict):
                 result: Dict[str, Any] = dict(result_value)
@@ -189,7 +196,7 @@ def register(mcp: Any, ContextType: Any) -> None:
                 "bridge_error": bridge_start_error,
                 "message": "Game launched" if ok_bool else "Failed to launch game",
             }
-        
+
         # For foreground mode, use the standard fallback mechanism
         cli_args = [
             "run",
@@ -227,11 +234,11 @@ def register(mcp: Any, ContextType: Any) -> None:
     ) -> Dict[str, Any]:
         """
         Stop the running game (if any).
-        
+
         Uses persistent session tracking to find and stop the game,
         even if called from a different process or after MCP server restart.
         Also stops the bridge server if it was running.
-        
+
         Returns:
             Dict with result of stop operation (ok, message)
         """
@@ -240,26 +247,37 @@ def register(mcp: Any, ContextType: Any) -> None:
         from gms_helpers.commands.runner_commands import handle_runner_stop
 
         args = argparse.Namespace(project_root=project_root)
-        
+
         # Stop bridge server if running
         bridge_stopped = False
         try:
             from gms_helpers.bridge_server import stop_bridge_server
+
             stop_bridge_server(str(repo_root))
             bridge_stopped = True
         except Exception:
             pass
-        
+
         # Run directly for immediate response
         try:
             ok, _stdout, _stderr, result_value, error_text, _exit_code = _run_direct_preserve_result(
                 handle_runner_stop, args, project_root
             )
         except Exception as e:
-            return {"ok": False, "bridge_stopped": bridge_stopped, "error": str(e), "message": f"Error stopping game: {e}"}
+            return {
+                "ok": False,
+                "bridge_stopped": bridge_stopped,
+                "error": str(e),
+                "message": f"Error stopping game: {e}",
+            }
 
         if error_text:
-            return {"ok": False, "bridge_stopped": bridge_stopped, "error": error_text, "message": f"Error stopping game: {error_text}"}
+            return {
+                "ok": False,
+                "bridge_stopped": bridge_stopped,
+                "error": error_text,
+                "message": f"Error stopping game: {error_text}",
+            }
 
         if isinstance(result_value, dict):
             result: Dict[str, Any] = dict(result_value)
@@ -284,10 +302,10 @@ def register(mcp: Any, ContextType: Any) -> None:
     ) -> Dict[str, Any]:
         """
         Check whether the game is running.
-        
+
         Uses persistent session tracking to check status,
         even if called from a different process or after MCP server restart.
-        
+
         Returns:
             Dict with session info:
             - has_session: bool - whether a session file exists
@@ -302,7 +320,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         from gms_helpers.commands.runner_commands import handle_runner_status
 
         args = argparse.Namespace(project_root=project_root)
-        
+
         # Run directly for immediate response
         try:
             ok, _stdout, _stderr, result_value, error_text, _exit_code = _run_direct_preserve_result(

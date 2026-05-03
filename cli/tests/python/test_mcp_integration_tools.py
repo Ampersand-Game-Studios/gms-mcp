@@ -207,9 +207,12 @@ class TestMCPIntegrationTools(unittest.TestCase):
         self.assertIn("has_session", runner_status)
 
         fake_bridge_server = SimpleNamespace(get_status=lambda: {"running": True, "connected": False, "log_count": 0})
-        with patch("gms_helpers.bridge_installer.get_bridge_status", return_value={"installed": True}), patch(
-            "gms_helpers.bridge_server.get_bridge_server",
-            return_value=fake_bridge_server,
+        with (
+            patch("gms_helpers.bridge_installer.get_bridge_status", return_value={"installed": True}),
+            patch(
+                "gms_helpers.bridge_server.get_bridge_server",
+                return_value=fake_bridge_server,
+            ),
         ):
             bridge_status = self._call_tool(
                 "gm_bridge_status",

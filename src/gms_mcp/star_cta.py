@@ -9,10 +9,7 @@ from typing import Any, TextIO
 
 REPO_URL = "https://github.com/Ampersand-Game-Studios/gms-mcp"
 STAR_CTA_DISABLE_ENV = "GMS_MCP_DISABLE_STAR_ASK"
-HELP_EPILOG = (
-    f"Project: {REPO_URL} | "
-    "If gms-mcp is useful, you can star the repo on GitHub."
-)
+HELP_EPILOG = f"Project: {REPO_URL} | If gms-mcp is useful, you can star the repo on GitHub."
 _TRUE_VALUES = {"1", "true", "yes", "on"}
 
 

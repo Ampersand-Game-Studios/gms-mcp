@@ -70,9 +70,11 @@ class TestInstallWrapperCoverage(unittest.TestCase):
             local_bin = home / ".local" / "bin"
             local_bin.mkdir(parents=True)
 
-            with patch("gms_helpers.install.platform.system", return_value="Linux"), patch(
-                "gms_helpers.install.Path.home", return_value=home
-            ), patch.dict("os.environ", {"PATH": "/usr/bin"}, clear=False):
+            with (
+                patch("gms_helpers.install.platform.system", return_value="Linux"),
+                patch("gms_helpers.install.Path.home", return_value=home),
+                patch.dict("os.environ", {"PATH": "/usr/bin"}, clear=False),
+            ):
                 result, output = _capture_output(install_module.install_gms_command, auto=False)
 
             self.assertTrue(result)
@@ -84,9 +86,11 @@ class TestInstallWrapperCoverage(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             home = Path(temp_dir)
-            with patch("gms_helpers.install.platform.system", return_value="Linux"), patch(
-                "gms_helpers.install.Path.home", return_value=home
-            ), patch.dict("os.environ", {"PATH": "/usr/bin"}, clear=False):
+            with (
+                patch("gms_helpers.install.platform.system", return_value="Linux"),
+                patch("gms_helpers.install.Path.home", return_value=home),
+                patch.dict("os.environ", {"PATH": "/usr/bin"}, clear=False),
+            ):
                 result, output = _capture_output(install_module.install_gms_command, auto=False)
 
             self.assertTrue(result)
@@ -99,17 +103,24 @@ class TestInstallWrapperCoverage(unittest.TestCase):
             windows_apps.mkdir(parents=True)
             fake_winreg = _FakeWinReg()
 
-            with patch("gms_helpers.install.platform.system", return_value="Windows"), patch.dict(
-                "os.environ",
-                {"LOCALAPPDATA": str(localapp)},
-                clear=False,
-            ), patch.dict(sys.modules, {"winreg": fake_winreg}):
+            with (
+                patch("gms_helpers.install.platform.system", return_value="Windows"),
+                patch.dict(
+                    "os.environ",
+                    {"LOCALAPPDATA": str(localapp)},
+                    clear=False,
+                ),
+                patch.dict(sys.modules, {"winreg": fake_winreg}),
+            ):
                 result, output = _capture_output(install_module.install_gms_command, auto=True)
 
             self.assertTrue(result)
             shim = windows_apps / "gms.cmd"
             self.assertTrue(shim.exists())
-            self.assertIn(str(install_module.Path(__file__).parents[3] / "src" / "gms_helpers" / "gms.py").split("gms-mcp")[0], shim.read_text(encoding="utf-8"))
+            self.assertIn(
+                str(install_module.Path(__file__).parents[3] / "src" / "gms_helpers" / "gms.py").split("gms-mcp")[0],
+                shim.read_text(encoding="utf-8"),
+            )
             self.assertIn("Shim created", output)
             self.assertIn("Added to user PATH", output)
             self.assertTrue(fake_winreg.set_calls)
@@ -117,10 +128,13 @@ class TestInstallWrapperCoverage(unittest.TestCase):
     def test_windows_install_without_windows_apps_shows_warning_and_profile_tip(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             localapp = Path(temp_dir) / "MissingLocalAppData"
-            with patch("gms_helpers.install.platform.system", return_value="Windows"), patch.dict(
-                "os.environ",
-                {"LOCALAPPDATA": str(localapp)},
-                clear=False,
+            with (
+                patch("gms_helpers.install.platform.system", return_value="Windows"),
+                patch.dict(
+                    "os.environ",
+                    {"LOCALAPPDATA": str(localapp)},
+                    clear=False,
+                ),
             ):
                 result, output = _capture_output(install_module.install_gms_command, auto=False)
 

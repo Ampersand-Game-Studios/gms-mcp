@@ -92,3 +92,7 @@ exclude = [".venv", "build", "dist"]
 # Keep this lightweight: focus on undefined names/exports to catch real breakages early
 # without forcing a style cleanup across the repo.
 select = ["F821", "F822", "F823"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

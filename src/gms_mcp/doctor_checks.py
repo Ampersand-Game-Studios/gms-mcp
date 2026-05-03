@@ -139,9 +139,7 @@ def _build_project_detection_check(*, project_root: str | None, required: bool) 
                 scope="project",
                 status=status,
                 severity=_severity_for_status(status, fatal=required),
-                message="No GameMaker project detected."
-                if not required
-                else f"GameMaker project not found: {exc}",
+                message="No GameMaker project detected." if not required else f"GameMaker project not found: {exc}",
                 recommendation=(
                     [
                         "Run from a workspace with a .yyp file.",
@@ -245,9 +243,7 @@ def _build_runtime_selection_check(project_directory: Path) -> DoctorCheck:
             "pinned_version": pinned,
             "verification": verify,
         },
-        recommendation=["Verify the selected runtime in GameMaker and refresh runtimes."]
-        if status == "error"
-        else [],
+        recommendation=["Verify the selected runtime in GameMaker and refresh runtimes."] if status == "error" else [],
     )
 
 

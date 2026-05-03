@@ -94,8 +94,7 @@ class TestBridgeOneShotEnable(unittest.TestCase):
         self.assertIsInstance(ico, list)
         self.assertTrue(
             any(
-                (isinstance(e, str) and e == instance_id)
-                or (isinstance(e, dict) and e.get("name") == instance_id)
+                (isinstance(e, str) and e == instance_id) or (isinstance(e, dict) and e.get("name") == instance_id)
                 for e in ico
             ),
             msg=str(ico),
@@ -128,4 +127,3 @@ class TestBridgeOneShotEnable(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

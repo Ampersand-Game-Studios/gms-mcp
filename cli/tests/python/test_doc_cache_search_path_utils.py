@@ -26,6 +26,7 @@ from gms_helpers.gml_docs.cache import (
     clear_cache,
     get_cache_stats,
 )
+
 doc_search = importlib.import_module("gms_helpers.gml_docs.search")
 from gms_helpers.maintenance import path_utils
 
@@ -152,21 +153,27 @@ class TestDocSearch(unittest.TestCase):
         self.index = {
             "draw_sprite": FunctionIndexEntry("draw_sprite", "Drawing", "Sprites", "https://example/draw_sprite"),
             "draw_text": FunctionIndexEntry("draw_text", "Drawing", "Text", "https://example/draw_text"),
-            "sprite_get_width": FunctionIndexEntry("sprite_get_width", "Sprites", "Info", "https://example/sprite_get_width"),
-            "audio_play_sound": FunctionIndexEntry("audio_play_sound", "Audio", "Playback", "https://example/audio_play_sound"),
+            "sprite_get_width": FunctionIndexEntry(
+                "sprite_get_width", "Sprites", "Info", "https://example/sprite_get_width"
+            ),
+            "audio_play_sound": FunctionIndexEntry(
+                "audio_play_sound", "Audio", "Playback", "https://example/audio_play_sound"
+            ),
         }
 
     def test_lookup_success_and_suggestions(self):
         doc = _sample_doc()
-        with patch("gms_helpers.gml_docs.search.fetch_function_doc", return_value=doc), patch(
-            "gms_helpers.gml_docs.search.fetch_function_index", return_value=self.index
+        with (
+            patch("gms_helpers.gml_docs.search.fetch_function_doc", return_value=doc),
+            patch("gms_helpers.gml_docs.search.fetch_function_index", return_value=self.index),
         ):
             result = doc_search.lookup("draw_sprite", force_refresh=True)
         self.assertTrue(result["ok"])
         self.assertFalse(result["cached"])
 
-        with patch("gms_helpers.gml_docs.search.fetch_function_doc", return_value=None), patch(
-            "gms_helpers.gml_docs.search.fetch_function_index", return_value=self.index
+        with (
+            patch("gms_helpers.gml_docs.search.fetch_function_doc", return_value=None),
+            patch("gms_helpers.gml_docs.search.fetch_function_index", return_value=self.index),
         ):
             result = doc_search.lookup("dra_sprite")
         self.assertFalse(result["ok"])
@@ -217,15 +224,21 @@ class TestPathUtils(unittest.TestCase):
         with patch("gms_helpers.maintenance.path_utils.platform.system", return_value="Windows"):
             self.assertEqual(path_utils.normalize_path(r"Sprites\Hero.PNG"), "sprites/hero.png")
 
-        with patch("gms_helpers.maintenance.path_utils.platform.system", return_value="Darwin"), patch(
-            "gms_helpers.maintenance.path_utils._is_macos_case_sensitive",
-            return_value=False,
+        with (
+            patch("gms_helpers.maintenance.path_utils.platform.system", return_value="Darwin"),
+            patch(
+                "gms_helpers.maintenance.path_utils._is_macos_case_sensitive",
+                return_value=False,
+            ),
         ):
             self.assertEqual(path_utils.normalize_path("Sprites/Hero.PNG"), "sprites/hero.png")
 
-        with patch("gms_helpers.maintenance.path_utils.platform.system", return_value="Darwin"), patch(
-            "gms_helpers.maintenance.path_utils._is_macos_case_sensitive",
-            return_value=True,
+        with (
+            patch("gms_helpers.maintenance.path_utils.platform.system", return_value="Darwin"),
+            patch(
+                "gms_helpers.maintenance.path_utils._is_macos_case_sensitive",
+                return_value=True,
+            ),
         ):
             self.assertEqual(path_utils.normalize_path("Sprites/Hero.PNG"), "Sprites/Hero.PNG")
 

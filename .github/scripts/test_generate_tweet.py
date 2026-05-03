@@ -57,8 +57,7 @@ class TestTweetValidation(unittest.TestCase):
         """Should accept valid tweet."""
         history = {"posted": []}
         valid, reason = generate_tweet.validate_tweet(
-            "Check out gm_find_references - trace every usage of a symbol across your project. #gamedev",
-            history
+            "Check out gm_find_references - trace every usage of a symbol across your project. #gamedev", history
         )
         self.assertTrue(valid)
         self.assertEqual(reason, "valid")
@@ -152,7 +151,7 @@ class TestContextBuilding(unittest.TestCase):
             tweet_format="problem_solution",
             selected_angle="Test angle",
             recent_tweets=[],
-            changelog_entries=[]
+            changelog_entries=[],
         )
         self.assertIn("Code Intelligence", context)
 
@@ -163,7 +162,7 @@ class TestContextBuilding(unittest.TestCase):
             tweet_format="problem_solution",
             selected_angle="Test angle",
             recent_tweets=[],
-            changelog_entries=[]
+            changelog_entries=[],
         )
         self.assertIn("gm_build_index", context)
 
@@ -175,7 +174,7 @@ class TestContextBuilding(unittest.TestCase):
             tweet_format="problem_solution",
             selected_angle="Test angle",
             recent_tweets=recent,
-            changelog_entries=[]
+            changelog_entries=[],
         )
         self.assertIn("Previous tweet", context)
 
@@ -187,7 +186,7 @@ class TestContextBuilding(unittest.TestCase):
             selected_angle="Test angle",
             recent_tweets=[],
             changelog_entries=[],
-            suggested_opening="discovery"
+            suggested_opening="discovery",
         )
         self.assertIn("SUGGESTED OPENING STYLE: discovery", context)
         self.assertIn("TIL", context)  # Example text for discovery pattern
@@ -199,7 +198,7 @@ class TestContextBuilding(unittest.TestCase):
             tweet_format="problem_solution",
             selected_angle="Test angle",
             recent_tweets=[],
-            changelog_entries=[]
+            changelog_entries=[],
         )
         self.assertIn("HASHTAG STRATEGY (freeform)", context)
         self.assertNotIn("HASHTAG OPTIONS (pick 1-2)", context)
@@ -226,7 +225,7 @@ class TestHistoryManagement(unittest.TestCase):
         history = {
             "posted": [{"hash": "abc123", "status": "posted"}],
             "topic_coverage": {"test": "2026-01-01T00:00:00Z"},
-            "generation_stats": {"total_generated": 1}
+            "generation_stats": {"total_generated": 1},
         }
         generate_tweet.save_history(history)
 
@@ -259,16 +258,14 @@ class TestSemanticDuplicateDetection(unittest.TestCase):
     def test_word_overlap_identical(self):
         """Identical texts should have 100% overlap."""
         overlap = generate_tweet.compute_word_overlap(
-            "This is a test tweet about GameMaker",
-            "This is a test tweet about GameMaker"
+            "This is a test tweet about GameMaker", "This is a test tweet about GameMaker"
         )
         self.assertEqual(overlap, 1.0)
 
     def test_word_overlap_different(self):
         """Completely different texts should have low overlap."""
         overlap = generate_tweet.compute_word_overlap(
-            "GameMaker sprites objects rooms",
-            "Python functions classes modules"
+            "GameMaker sprites objects rooms", "Python functions classes modules"
         )
         self.assertLess(overlap, 0.3)
 
@@ -276,7 +273,7 @@ class TestSemanticDuplicateDetection(unittest.TestCase):
         """Partially similar texts should have medium overlap."""
         overlap = generate_tweet.compute_word_overlap(
             "gm_find_references traces function calls across your project",
-            "gm_find_definition locates function definitions across your codebase"
+            "gm_find_definition locates function definitions across your codebase",
         )
         self.assertGreater(overlap, 0.3)
         self.assertLess(overlap, 0.8)
@@ -284,8 +281,7 @@ class TestSemanticDuplicateDetection(unittest.TestCase):
     def test_word_overlap_ignores_hashtags(self):
         """Hashtags should not count toward overlap."""
         overlap = generate_tweet.compute_word_overlap(
-            "Great feature #gamedev #GameMaker",
-            "Great feature #indiedev #coding"
+            "Great feature #gamedev #GameMaker", "Great feature #indiedev #coding"
         )
         # Only "great" and "feature" should count
         self.assertGreater(overlap, 0.5)
@@ -293,29 +289,19 @@ class TestSemanticDuplicateDetection(unittest.TestCase):
     def test_semantic_duplicate_detected(self):
         """Should detect semantic duplicates with >60% overlap."""
         history = {
-            "posted": [
-                {"content": "gm_find_references traces every usage of a symbol across your GameMaker project"}
-            ]
+            "posted": [{"content": "gm_find_references traces every usage of a symbol across your GameMaker project"}]
         }
         is_dup, reason = generate_tweet.is_semantic_duplicate(
-            "gm_find_references traces symbol usage across your entire GameMaker project",
-            history,
-            threshold=0.6
+            "gm_find_references traces symbol usage across your entire GameMaker project", history, threshold=0.6
         )
         self.assertTrue(is_dup)
         self.assertIn("semantic_duplicate", reason)
 
     def test_semantic_duplicate_not_detected(self):
         """Should not flag genuinely different tweets."""
-        history = {
-            "posted": [
-                {"content": "gm_find_references traces function calls"}
-            ]
-        }
+        history = {"posted": [{"content": "gm_find_references traces function calls"}]}
         is_dup, reason = generate_tweet.is_semantic_duplicate(
-            "TCP bridge lets your AI see game logs in real-time",
-            history,
-            threshold=0.6
+            "TCP bridge lets your AI see game logs in real-time", history, threshold=0.6
         )
         self.assertFalse(is_dup)
 
@@ -362,7 +348,7 @@ class TestOpeningPatternSelection(unittest.TestCase):
                 selected_angle="Test angle",
                 recent_tweets=[],
                 changelog_entries=[],
-                suggested_opening=pattern
+                suggested_opening=pattern,
             )
             self.assertIn(f"SUGGESTED OPENING STYLE: {pattern}", context)
 

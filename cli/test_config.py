@@ -1,6 +1,6 @@
 """Test configuration - single source of truth for import paths.
 
-This file centralizes all test import configuration so that if we need to 
+This file centralizes all test import configuration so that if we need to
 reorganize the project structure in the future, we only need to change paths here.
 
 ## Purpose
@@ -9,7 +9,7 @@ When the package structure changes, update REAL_PACKAGE_PATH and run the bulk up
 
 ## Usage
 - **View current config**: Check REAL_PACKAGE_PATH below
-- **Change package location**: Update REAL_PACKAGE_PATH 
+- **Change package location**: Update REAL_PACKAGE_PATH
 - **Apply changes**: Run `python cli/update_test_imports.py`
 - **Verify**: All imports across 20+ test files update automatically
 
@@ -44,7 +44,6 @@ IMPORT_REPLACEMENTS = [
     # Patch decorators
     (r"@patch\('tooling\.gms_helpers\.([^']+)'\)", rf"@patch('{REAL_PACKAGE_PATH}.\1')"),
     (r"@patch\('gms_helpers\.([^']+)'\)", rf"@patch('{REAL_PACKAGE_PATH}.\1')"),
-    
     # Direct imports
     (r"from tooling\.gms_helpers\.([^\s]+) import", rf"from {REAL_PACKAGE_PATH}.\1 import"),
     (r"from tooling\.gms_helpers import", rf"from {REAL_PACKAGE_PATH} import"),
@@ -54,9 +53,11 @@ IMPORT_REPLACEMENTS = [
     (r"from gms_helpers import", rf"from {REAL_PACKAGE_PATH} import"),
     (r"import gms_helpers\.([^\s]+)", rf"import {REAL_PACKAGE_PATH}.\1"),
     (r"import gms_helpers", rf"import {REAL_PACKAGE_PATH}"),
-    
     # importlib calls
-    (r'importlib\.import_module\("tooling\.gms_helpers\.([^"]+)"\)', rf'importlib.import_module("{REAL_PACKAGE_PATH}.\1")'),
+    (
+        r'importlib\.import_module\("tooling\.gms_helpers\.([^"]+)"\)',
+        rf'importlib.import_module("{REAL_PACKAGE_PATH}.\1")',
+    ),
     (r'importlib\.import_module\("tooling\.gms_helpers"\)', rf'importlib.import_module("{REAL_PACKAGE_PATH}")'),
     (r'importlib\.import_module\("gms_helpers\.([^"]+)"\)', rf'importlib.import_module("{REAL_PACKAGE_PATH}.\1")'),
     (r'importlib\.import_module\("gms_helpers"\)', rf'importlib.import_module("{REAL_PACKAGE_PATH}")'),
@@ -66,14 +67,16 @@ IMPORT_REPLACEMENTS = [
 PROJECT_ROOT_RELATIVE_TO_TESTS = "../.."  # tests/python -> project root
 TEST_DIRECTORIES = ["tests/python"]
 
+
 def get_project_root_setup_code():
     """Generate the standard project root setup code for test files."""
     return f"""# Add project root to path
 PROJECT_ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(PROJECT_ROOT))"""
 
+
 def get_real_import_path(legacy_path):
     """Convert a legacy import path to the real package path."""
     if legacy_path.startswith("gms_helpers"):
         return legacy_path.replace("gms_helpers", REAL_PACKAGE_PATH, 1)
-    return legacy_path 
+    return legacy_path

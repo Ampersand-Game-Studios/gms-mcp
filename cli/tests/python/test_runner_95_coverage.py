@@ -200,7 +200,9 @@ class TestRunner95Coverage(unittest.TestCase):
                 with patch.object(self.runner, "_macos_debug_log_path", return_value=self.project_root / "debug.log"):
                     with patch.object(self.runner, "_find_macos_validation_helper_pids", return_value=(set(), set())):
                         with patch.object(self.runner, "_run_igor_command", return_value=process):
-                            with patch.object(self.runner, "_collect_igor_output_async", return_value=(["bad"], thread)):
+                            with patch.object(
+                                self.runner, "_collect_igor_output_async", return_value=(["bad"], thread)
+                            ):
                                 with patch.object(self.runner, "_wait_for_macos_main_loop", return_value=False):
                                     with patch.object(self.runner, "_stop_platform_process", return_value=False):
                                         with patch.object(self.runner, "_cleanup_macos_validation_helpers"):
@@ -233,7 +235,9 @@ class TestRunner95Coverage(unittest.TestCase):
                 with patch.object(self.runner, "_macos_debug_log_path", return_value=self.project_root / "debug.log"):
                     with patch.object(self.runner, "_find_macos_validation_helper_pids", return_value=(set(), set())):
                         with patch.object(self.runner, "_run_igor_command", return_value=process):
-                            with patch.object(self.runner, "_collect_igor_output_async", return_value=(["compile failed"], thread)):
+                            with patch.object(
+                                self.runner, "_collect_igor_output_async", return_value=(["compile failed"], thread)
+                            ):
                                 with patch.object(self.runner, "_wait_for_macos_main_loop", return_value=False):
                                     with patch.object(self.runner, "_cleanup_macos_validation_helpers"):
                                         self.assertFalse(self.runner.compile_project(platform_target="macOS"))
@@ -265,7 +269,9 @@ class TestRunner95Coverage(unittest.TestCase):
                         with patch.object(self.runner, "_stream_igor_output", return_value=[]):
                             with patch.object(self.runner, "_find_launch_target", return_value=launch_path):
                                 with patch.object(self.runner, "_start_game_process", return_value=game_process):
-                                    with patch.object(self.runner._session_manager, "create_session", return_value=session):
+                                    with patch.object(
+                                        self.runner._session_manager, "create_session", return_value=session
+                                    ):
                                         with patch("gms_helpers.runner.subprocess.run") as mock_unzip:
                                             result = self.runner._run_project_ide_temp_approach(
                                                 platform_target="macOS",
@@ -302,14 +308,22 @@ class TestRunner95Coverage(unittest.TestCase):
                         with patch.object(self.runner, "_stream_igor_output", return_value=[]):
                             with patch.object(self.runner, "_find_launch_target", return_value=launch_path):
                                 with patch.object(self.runner, "_start_game_process", return_value=fg_game):
-                                    with patch.object(self.runner._session_manager, "create_session", return_value=session):
+                                    with patch.object(
+                                        self.runner._session_manager, "create_session", return_value=session
+                                    ):
                                         with patch.object(self.runner._session_manager, "clear_session"):
-                                            self.assertFalse(self.runner._run_project_ide_temp_approach(platform_target="Windows", background=False))
+                                            self.assertFalse(
+                                                self.runner._run_project_ide_temp_approach(
+                                                    platform_target="Windows", background=False
+                                                )
+                                            )
 
         with patch.object(self.runner, "_run_igor_command", side_effect=RuntimeError("explode")):
             with patch.object(self.runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"):
                 with patch.object(self.runner, "_system_temp_root", return_value=temp_root):
-                    with patch.object(self.runner, "_build_platform_action_command", return_value=["igor", "PackageZip"]):
+                    with patch.object(
+                        self.runner, "_build_platform_action_command", return_value=["igor", "PackageZip"]
+                    ):
                         self.assertFalse(self.runner._run_project_ide_temp_approach(platform_target="Windows"))
 
     def test_classic_run_and_stop_game_remaining_paths(self):
@@ -324,10 +338,20 @@ class TestRunner95Coverage(unittest.TestCase):
             with patch.object(self.runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"):
                 with patch.object(self.runner, "_macos_debug_log_path", return_value=self.project_root / "debug.log"):
                     with patch.object(self.runner, "_run_igor_command", return_value=process):
-                        with patch.object(self.runner, "_find_macos_validation_helper_pids", return_value=(set(), set())):
-                            with patch.object(self.runner, "_collect_igor_output_async", return_value=([], SimpleNamespace(join=lambda timeout=0: None))):
-                                with patch.object(self.runner, "_wait_for_macos_runner_start", return_value=(None, set(), set())):
-                                    result = self.runner._run_project_classic_approach(platform_target="macOS", background=True)
+                        with patch.object(
+                            self.runner, "_find_macos_validation_helper_pids", return_value=(set(), set())
+                        ):
+                            with patch.object(
+                                self.runner,
+                                "_collect_igor_output_async",
+                                return_value=([], SimpleNamespace(join=lambda timeout=0: None)),
+                            ):
+                                with patch.object(
+                                    self.runner, "_wait_for_macos_runner_start", return_value=(None, set(), set())
+                                ):
+                                    result = self.runner._run_project_classic_approach(
+                                        platform_target="macOS", background=True
+                                    )
         self.assertFalse(result["ok"])
         self.assertIn("timed out", result["message"])
 
@@ -339,10 +363,20 @@ class TestRunner95Coverage(unittest.TestCase):
             with patch.object(self.runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"):
                 with patch.object(self.runner, "_macos_debug_log_path", return_value=self.project_root / "debug.log"):
                     with patch.object(self.runner, "_run_igor_command", return_value=process):
-                        with patch.object(self.runner, "_find_macos_validation_helper_pids", return_value=(set(), set())):
-                            with patch.object(self.runner, "_collect_igor_output_async", return_value=(["bad"], SimpleNamespace(join=lambda timeout=0: None))):
-                                with patch.object(self.runner, "_wait_for_macos_runner_start", return_value=(None, set(), set())):
-                                    result = self.runner._run_project_classic_approach(platform_target="macOS", background=True)
+                        with patch.object(
+                            self.runner, "_find_macos_validation_helper_pids", return_value=(set(), set())
+                        ):
+                            with patch.object(
+                                self.runner,
+                                "_collect_igor_output_async",
+                                return_value=(["bad"], SimpleNamespace(join=lambda timeout=0: None)),
+                            ):
+                                with patch.object(
+                                    self.runner, "_wait_for_macos_runner_start", return_value=(None, set(), set())
+                                ):
+                                    result = self.runner._run_project_classic_approach(
+                                        platform_target="macOS", background=True
+                                    )
         self.assertFalse(result["ok"])
         self.assertIn("Local run failed", result["message"])
 
@@ -354,9 +388,13 @@ class TestRunner95Coverage(unittest.TestCase):
         with patch.object(self.runner, "_build_platform_action_command", return_value=["igor", "Run"]):
             with patch.object(self.runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"):
                 with patch.object(self.runner, "_run_igor_command", return_value=fg_process):
-                    with patch.object(self.runner._session_manager, "create_session", return_value=SimpleNamespace(run_id="run-2")):
+                    with patch.object(
+                        self.runner._session_manager, "create_session", return_value=SimpleNamespace(run_id="run-2")
+                    ):
                         with patch.object(self.runner._session_manager, "clear_session"):
-                            self.assertFalse(self.runner._run_project_classic_approach(platform_target="Windows", background=False))
+                            self.assertFalse(
+                                self.runner._run_project_classic_approach(platform_target="Windows", background=False)
+                            )
 
         with patch.object(self.runner, "_run_igor_command", side_effect=RuntimeError("bad run")):
             with patch.object(self.runner, "_build_platform_action_command", return_value=["igor", "Run"]):

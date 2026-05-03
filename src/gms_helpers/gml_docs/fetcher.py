@@ -151,11 +151,13 @@ class GMLDocParser(HTMLParser):
                 name = self._current_row[0].strip()
                 # Skip header rows
                 if name.lower() not in ("argument", "name", "parameter"):
-                    self.parameters.append({
-                        "name": name,
-                        "type": self._current_row[1].strip(),
-                        "description": self._current_row[2].strip(),
-                    })
+                    self.parameters.append(
+                        {
+                            "name": name,
+                            "type": self._current_row[1].strip(),
+                            "description": self._current_row[2].strip(),
+                        }
+                    )
         elif tag == "td":
             self._in_td = False
             self._current_row.append("".join(self._buffer).strip())
@@ -208,14 +210,14 @@ class GMLDocParser(HTMLParser):
         # Try to extract syntax if not found
         if not self.syntax:
             # Look for function_name followed by parentheses
-            pattern = rf'{re.escape(function_name)}\s*\([^)]*\)\s*;?'
+            pattern = rf"{re.escape(function_name)}\s*\([^)]*\)\s*;?"
             match = re.search(pattern, full_text, re.IGNORECASE)
             if match:
                 self.syntax = match.group(0).strip()
 
         # Try to extract returns if not found
         if not self.returns or self.returns == "N/A":
-            returns_pattern = r'Returns?:?\s*([^\n]+)'
+            returns_pattern = r"Returns?:?\s*([^\n]+)"
             match = re.search(returns_pattern, full_text, re.IGNORECASE)
             if match:
                 ret = match.group(1).strip()
@@ -286,9 +288,7 @@ def _fetch_url(url: str, timeout: float = 30.0) -> str:
     """Fetch a URL with rate limiting and error handling."""
     _rate_limit()
 
-    headers = {
-        "User-Agent": "gms-mcp/1.0 (GameMaker Documentation Tool)"
-    }
+    headers = {"User-Agent": "gms-mcp/1.0 (GameMaker Documentation Tool)"}
     request = urllib.request.Request(url, headers=headers)
 
     try:

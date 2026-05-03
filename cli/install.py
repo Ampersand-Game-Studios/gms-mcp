@@ -19,12 +19,3 @@ from gms_mcp.install import main as _main  # noqa: E402
 
 if __name__ == "__main__":
     raise SystemExit(_main())
-
-
-
-
-
-
-
-
-

@@ -62,7 +62,7 @@ def compute_hash(content: str) -> str:
 
 def extract_tools_mentioned(content: str) -> list[str]:
     """Extract gm_* tool names from tweet content."""
-    return re.findall(r'\bgm_\w+\b', content)
+    return re.findall(r"\bgm_\w+\b", content)
 
 
 def extract_hashtags_mentioned(content: str) -> list[str]:
@@ -135,8 +135,7 @@ def history_entry_blocks_repost(entry: dict) -> bool:
 def is_duplicate_in_history(history: dict, tweet_hash: str) -> bool:
     """Check if a tweet hash already exists in history."""
     return any(
-        entry.get("hash") == tweet_hash and history_entry_blocks_repost(entry)
-        for entry in history.get("posted", [])
+        entry.get("hash") == tweet_hash and history_entry_blocks_repost(entry) for entry in history.get("posted", [])
     )
 
 
@@ -496,7 +495,9 @@ def post_text_to_x_endpoint(
                 logger(f"Retrying in {delay}s (attempt {attempt + 1}/{max_attempts})...")
                 sleep_func(delay)
                 continue
-            logger(f"X kept challenging the workflow runner on {endpoint_name}. The tweet will remain queued for a later rerun.")
+            logger(
+                f"X kept challenging the workflow runner on {endpoint_name}. The tweet will remain queued for a later rerun."
+            )
             return XPostResult(False, "x_edge_challenge")
 
         if status_code in (200, 201):
@@ -538,7 +539,9 @@ def post_text_to_x_endpoint(
                 logger(f"Retrying in {delay}s (attempt {attempt + 1}/{max_attempts})...")
                 sleep_func(delay)
                 continue
-            logger(f"X's servers are still having issues on {endpoint_name} after retries. The tweet will remain queued.")
+            logger(
+                f"X's servers are still having issues on {endpoint_name} after retries. The tweet will remain queued."
+            )
             return XPostResult(False, "x_server_error")
 
         if status_code == 401:
@@ -616,7 +619,13 @@ def post_text_to_x(
         logger=logger,
         endpoint_name="POST /2/tweets",
     )
-    if primary_result.ok or primary_result.reason in {"duplicate_on_x", "rate_limited", "bad_request", "unauthorized", "forbidden"}:
+    if primary_result.ok or primary_result.reason in {
+        "duplicate_on_x",
+        "rate_limited",
+        "bad_request",
+        "unauthorized",
+        "forbidden",
+    }:
         return primary_result
 
     if primary_result.reason not in {"network_timeout", "network_error", "x_edge_challenge", "x_server_error"}:
@@ -625,7 +634,13 @@ def post_text_to_x(
     logger("\n[XURL FALLBACK]")
     logger("Retrying via X's official xurl client after repeated direct v2 write failures.")
     xurl_result = post_text_to_x_with_xurl(tweet_content, log_func=logger)
-    if xurl_result.ok or xurl_result.reason in {"duplicate_on_x", "rate_limited", "bad_request", "unauthorized", "forbidden"}:
+    if xurl_result.ok or xurl_result.reason in {
+        "duplicate_on_x",
+        "rate_limited",
+        "bad_request",
+        "unauthorized",
+        "forbidden",
+    }:
         return xurl_result
     return primary_result
 

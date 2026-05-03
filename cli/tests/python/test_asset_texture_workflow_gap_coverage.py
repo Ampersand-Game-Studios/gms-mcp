@@ -154,7 +154,9 @@ class TestAssetsGapCoverage(unittest.TestCase):
         asset = FolderAsset()
         self.assertEqual(asset.create_yy_data("UI")["folderPath"], "folders/UI.yy")
         self.assertEqual(asset.create_yy_data("Buttons", "folders/UI.yy")["folderPath"], "folders/UI/Buttons.yy")
-        self.assertEqual(asset.create_yy_data("Buttons", "folders/UI/Buttons.yy")["folderPath"], "folders/UI/Buttons.yy")
+        self.assertEqual(
+            asset.create_yy_data("Buttons", "folders/UI/Buttons.yy")["folderPath"], "folders/UI/Buttons.yy"
+        )
         self.assertEqual(asset.create_yy_data("Buttons", "folders/UI/")["folderPath"], "folders/UI/Buttons.yy")
 
         yyp_path = self.project_root / "TestGame.yyp"
@@ -254,7 +256,12 @@ class TestTextureGroupGapCoverage(unittest.TestCase):
                     ],
                     "TextureGroups": [
                         {"name": "Default", "%Name": "Default", "ConfigValues": {"desktop": {"loadType": "default"}}},
-                        {"name": "game", "%Name": "game", "groupParent": "Default", "ConfigValues": {"desktop": {"groupParent": "Default"}}},
+                        {
+                            "name": "game",
+                            "%Name": "game",
+                            "groupParent": "Default",
+                            "ConfigValues": {"desktop": {"groupParent": "Default"}},
+                        },
                     ],
                 },
                 indent=2,
@@ -265,11 +272,7 @@ class TestTextureGroupGapCoverage(unittest.TestCase):
             json.dumps(
                 {
                     "textureGroupId": {"name": "game", "path": "texturegroups/game"},
-                    "ConfigValues": {
-                        "desktop": {
-                            "textureGroupId": "{ \"name\":\"game\", \"path\":\"texturegroups/game\", }"
-                        }
-                    },
+                    "ConfigValues": {"desktop": {"textureGroupId": '{ "name":"game", "path":"texturegroups/game", }'}},
                 }
             ),
             encoding="utf-8",
@@ -292,7 +295,10 @@ class TestTextureGroupGapCoverage(unittest.TestCase):
 
         parsed = parse_group_ref('{ "name":"game", "path":"texturegroups/game", }')
         self.assertEqual(parsed["name"], "game")
-        self.assertEqual(serialize_group_ref_for_config({"name": "ui", "path": "texturegroups/ui"}), '{ "name":"ui", "path":"texturegroups/ui" }')
+        self.assertEqual(
+            serialize_group_ref_for_config({"name": "ui", "path": "texturegroups/ui"}),
+            '{ "name":"ui", "path":"texturegroups/ui" }',
+        )
         self.assertIsNone(parse_group_ref({"bad": True}))
         self.assertFalse(_asset_supports_texture_groups({}))
         self.assertTrue(_asset_supports_texture_groups({"ConfigValues": {"desktop": {"textureGroupId": "x"}}}))
@@ -320,7 +326,7 @@ class TestTextureGroupGapCoverage(unittest.TestCase):
         self.assertTrue(changed)
         self.assertTrue(any("no top-level textureGroupId" in warning for warning in warnings))
 
-        asset_yy = {"textureGroupId": "{ \"name\":\"game\", \"path\":\"texturegroups/game\" }", "ConfigValues": {"desktop": {}}}
+        asset_yy = {"textureGroupId": '{ "name":"game", "path":"texturegroups/game" }', "ConfigValues": {"desktop": {}}}
         changed, warnings = set_asset_group(
             asset_yy,
             "ui",
@@ -333,7 +339,7 @@ class TestTextureGroupGapCoverage(unittest.TestCase):
         self.assertEqual(asset_yy["textureGroupId"]["name"], "ui")
 
         replace_target = {
-            "textureGroupId": "{ \"name\":\"ui\", \"path\":\"texturegroups/ui\" }",
+            "textureGroupId": '{ "name":"ui", "path":"texturegroups/ui" }',
             "ConfigValues": {"desktop": {"textureGroupId": '{ "name":"ui", "path":"texturegroups/ui" }'}},
         }
         changed, warnings = _replace_asset_group_references(
@@ -420,7 +426,9 @@ class TestWorkflowGapCoverage(unittest.TestCase, WorkflowProjectMixin):
                     duplicate_asset(project_root, "scripts/scr_old/scr_old.yy", "scr_copy")
 
             with patch("gms_helpers.reference_scanner.comprehensive_rename_asset", return_value=False):
-                with patch("gms_helpers.auto_maintenance.run_auto_maintenance", return_value=SimpleNamespace(has_errors=True)):
+                with patch(
+                    "gms_helpers.auto_maintenance.run_auto_maintenance", return_value=SimpleNamespace(has_errors=True)
+                ):
                     with patch.dict(os.environ, {}, clear=True):
                         result = rename_asset(project_root, "scripts/scr_old/scr_old.yy", "scr_new")
             self.assertTrue(result.success)
@@ -479,7 +487,7 @@ class TestWorkflowGapCoverage(unittest.TestCase, WorkflowProjectMixin):
                 ),
                 encoding="utf-8",
             )
-            (project_root / "scripts" / "extra" ).mkdir(parents=True, exist_ok=True)
+            (project_root / "scripts" / "extra").mkdir(parents=True, exist_ok=True)
             (project_root / "scripts" / "extra" / "extra.yy").write_text("{}", encoding="utf-8")
             lint = lint_project(project_root)
             self.assertFalse(lint.success)

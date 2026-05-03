@@ -38,4 +38,3 @@ class ToolRunResult:
             "log_file": self.log_file,
             "execution_mode": self.execution_mode,
         }
-

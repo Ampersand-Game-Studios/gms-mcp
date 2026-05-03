@@ -125,13 +125,15 @@ def search(
 
     # Take top results
     for score, entry in scored[:limit]:
-        results.append({
-            "name": entry.name,
-            "category": entry.category,
-            "subcategory": entry.subcategory,
-            "url": entry.url,
-            "score": score,
-        })
+        results.append(
+            {
+                "name": entry.name,
+                "category": entry.category,
+                "subcategory": entry.subcategory,
+                "url": entry.url,
+                "score": score,
+            }
+        )
 
     return {
         "ok": True,
@@ -184,11 +186,13 @@ def list_functions(
         if regex and not regex.search(name):
             continue
 
-        results.append({
-            "name": entry.name,
-            "category": entry.category,
-            "subcategory": entry.subcategory,
-        })
+        results.append(
+            {
+                "name": entry.name,
+                "category": entry.category,
+                "subcategory": entry.subcategory,
+            }
+        )
 
         if len(results) >= limit:
             break
@@ -239,8 +243,7 @@ def list_categories() -> Dict[str, Any]:
         }
         if data["_subcategories"]:
             item["subcategories"] = [
-                {"name": sub, "count": count}
-                for sub, count in sorted(data["_subcategories"].items())
+                {"name": sub, "count": count} for sub, count in sorted(data["_subcategories"].items())
             ]
         result_list.append(item)
 
@@ -258,6 +261,6 @@ def _find_similar_names(query: str, names: List[str], limit: int = 5) -> List[st
 
     # Also add prefix matches
     prefix_matches = [n for n in names if n.startswith(query[:3]) and n not in matches]
-    matches.extend(prefix_matches[:limit - len(matches)])
+    matches.extend(prefix_matches[: limit - len(matches)])
 
     return matches[:limit]

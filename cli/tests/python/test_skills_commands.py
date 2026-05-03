@@ -36,14 +36,7 @@ class TestSkillsCommands(unittest.TestCase):
         cmd = [self.python_exe, "-m", "gms_helpers.gms"] + args
         # Skills commands don't require a GameMaker project
         work_dir = cwd if cwd else self.temp_project
-        result = subprocess.run(
-            cmd,
-            cwd=str(work_dir),
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            env=self.env
-        )
+        result = subprocess.run(cmd, cwd=str(work_dir), capture_output=True, text=True, encoding="utf-8", env=self.env)
         return result.returncode, result.stdout, result.stderr
 
     def test_skills_help(self):
@@ -101,10 +94,7 @@ class TestSkillsCommands(unittest.TestCase):
 
     def test_skills_install_project(self):
         """Test skills install --project works."""
-        returncode, stdout, stderr = self.run_gms_command(
-            ["skills", "install", "--project"],
-            cwd=self.temp_project
-        )
+        returncode, stdout, stderr = self.run_gms_command(["skills", "install", "--project"], cwd=self.temp_project)
         self.assertEqual(returncode, 0)
         self.assertIn("[OK]", stdout)
         self.assertIn("Installed", stdout)
@@ -119,8 +109,7 @@ class TestSkillsCommands(unittest.TestCase):
     def test_skills_install_openclaw_project(self):
         """Test skills install --openclaw --project writes to ./skills."""
         returncode, stdout, stderr = self.run_gms_command(
-            ["skills", "install", "--openclaw", "--project"],
-            cwd=self.temp_project
+            ["skills", "install", "--openclaw", "--project"], cwd=self.temp_project
         )
         self.assertEqual(returncode, 0)
         self.assertIn("[OK]", stdout)
@@ -141,8 +130,7 @@ class TestSkillsCommands(unittest.TestCase):
         shutil.copy2(source_skill, legacy_dir / "SKILL.md")
 
         returncode, stdout, stderr = self.run_gms_command(
-            ["skills", "list", "--openclaw", "--installed"],
-            cwd=self.temp_project
+            ["skills", "list", "--openclaw", "--installed"], cwd=self.temp_project
         )
         self.assertEqual(returncode, 0)
         self.assertIn("legacy-project", stdout)
@@ -151,17 +139,11 @@ class TestSkillsCommands(unittest.TestCase):
     def test_skills_install_skip_existing(self):
         """Test that install skips existing files without --force."""
         # First install
-        returncode1, stdout1, stderr1 = self.run_gms_command(
-            ["skills", "install", "--project"],
-            cwd=self.temp_project
-        )
+        returncode1, stdout1, stderr1 = self.run_gms_command(["skills", "install", "--project"], cwd=self.temp_project)
         self.assertEqual(returncode1, 0)
 
         # Second install should skip
-        returncode2, stdout2, stderr2 = self.run_gms_command(
-            ["skills", "install", "--project"],
-            cwd=self.temp_project
-        )
+        returncode2, stdout2, stderr2 = self.run_gms_command(["skills", "install", "--project"], cwd=self.temp_project)
         self.assertEqual(returncode2, 0)
         self.assertIn("[SKIP]", stdout2)
         self.assertIn("already exist", stdout2)
@@ -169,16 +151,12 @@ class TestSkillsCommands(unittest.TestCase):
     def test_skills_install_force(self):
         """Test that install --force overwrites existing files."""
         # First install
-        returncode1, stdout1, stderr1 = self.run_gms_command(
-            ["skills", "install", "--project"],
-            cwd=self.temp_project
-        )
+        returncode1, stdout1, stderr1 = self.run_gms_command(["skills", "install", "--project"], cwd=self.temp_project)
         self.assertEqual(returncode1, 0)
 
         # Second install with --force should overwrite
         returncode2, stdout2, stderr2 = self.run_gms_command(
-            ["skills", "install", "--project", "--force"],
-            cwd=self.temp_project
+            ["skills", "install", "--project", "--force"], cwd=self.temp_project
         )
         self.assertEqual(returncode2, 0)
         self.assertIn("[OK]", stdout2)
@@ -188,20 +166,14 @@ class TestSkillsCommands(unittest.TestCase):
     def test_skills_uninstall_project(self):
         """Test skills uninstall --project works."""
         # First install
-        self.run_gms_command(
-            ["skills", "install", "--project"],
-            cwd=self.temp_project
-        )
+        self.run_gms_command(["skills", "install", "--project"], cwd=self.temp_project)
 
         # Verify installed
         skills_dir = self.temp_project / ".claude" / "skills" / "gms-mcp"
         self.assertTrue(skills_dir.exists())
 
         # Uninstall
-        returncode, stdout, stderr = self.run_gms_command(
-            ["skills", "uninstall", "--project"],
-            cwd=self.temp_project
-        )
+        returncode, stdout, stderr = self.run_gms_command(["skills", "uninstall", "--project"], cwd=self.temp_project)
         self.assertEqual(returncode, 0)
         self.assertIn("[OK]", stdout)
         self.assertIn("Removed", stdout)
@@ -211,17 +183,13 @@ class TestSkillsCommands(unittest.TestCase):
 
     def test_skills_uninstall_openclaw_project(self):
         """Test skills uninstall --openclaw --project works."""
-        self.run_gms_command(
-            ["skills", "install", "--openclaw", "--project"],
-            cwd=self.temp_project
-        )
+        self.run_gms_command(["skills", "install", "--openclaw", "--project"], cwd=self.temp_project)
 
         skills_dir = self.temp_project / "skills" / "gms-mcp"
         self.assertTrue(skills_dir.exists())
 
         returncode, stdout, stderr = self.run_gms_command(
-            ["skills", "uninstall", "--openclaw", "--project"],
-            cwd=self.temp_project
+            ["skills", "uninstall", "--openclaw", "--project"], cwd=self.temp_project
         )
         self.assertEqual(returncode, 0)
         self.assertIn("[OK]", stdout)
@@ -230,10 +198,7 @@ class TestSkillsCommands(unittest.TestCase):
 
     def test_skills_uninstall_openclaw_project_removes_legacy_dir(self):
         """Test uninstall removes both current and legacy OpenClaw project dirs."""
-        self.run_gms_command(
-            ["skills", "install", "--openclaw", "--project"],
-            cwd=self.temp_project
-        )
+        self.run_gms_command(["skills", "install", "--openclaw", "--project"], cwd=self.temp_project)
         current_dir = self.temp_project / "skills" / "gms-mcp"
         legacy_dir = self.temp_project / ".openclaw" / "skills" / "gms-mcp"
         legacy_dir.mkdir(parents=True)
@@ -243,8 +208,7 @@ class TestSkillsCommands(unittest.TestCase):
         self.assertTrue(legacy_dir.exists())
 
         returncode, stdout, stderr = self.run_gms_command(
-            ["skills", "uninstall", "--openclaw", "--project"],
-            cwd=self.temp_project
+            ["skills", "uninstall", "--openclaw", "--project"], cwd=self.temp_project
         )
         self.assertEqual(returncode, 0)
         self.assertIn("both current and legacy OpenClaw workspace skill paths", stdout)
@@ -253,10 +217,7 @@ class TestSkillsCommands(unittest.TestCase):
 
     def test_skills_uninstall_not_installed(self):
         """Test skills uninstall when nothing is installed."""
-        returncode, stdout, stderr = self.run_gms_command(
-            ["skills", "uninstall", "--project"],
-            cwd=self.temp_project
-        )
+        returncode, stdout, stderr = self.run_gms_command(["skills", "uninstall", "--project"], cwd=self.temp_project)
         self.assertEqual(returncode, 0)
         self.assertIn("[OK]", stdout)
         self.assertIn("No skills installed", stdout)
@@ -315,14 +276,11 @@ class TestSkillsSourceFiles(unittest.TestCase):
             "check-health.md",
             "check-quality.md",
             "cleanup-project.md",
-            "pre-commit.md"
+            "pre-commit.md",
         ]
         for workflow in expected_workflows:
             workflow_file = workflows_dir / workflow
-            self.assertTrue(
-                workflow_file.exists(),
-                f"Missing workflow file: {workflow}"
-            )
+            self.assertTrue(workflow_file.exists(), f"Missing workflow file: {workflow}")
 
     def test_expected_reference_files_exist(self):
         """Test that expected reference files exist."""
@@ -335,30 +293,21 @@ class TestSkillsSourceFiles(unittest.TestCase):
             "maintenance-commands.md",
             "runtime-options.md",
             "symbol-commands.md",
-            "doc-commands.md"
+            "doc-commands.md",
         ]
         for ref in expected_references:
             ref_file = reference_dir / ref
-            self.assertTrue(
-                ref_file.exists(),
-                f"Missing reference file: {ref}"
-            )
+            self.assertTrue(ref_file.exists(), f"Missing reference file: {ref}")
 
     def test_skill_files_have_frontmatter(self):
         """Test that skill files have valid YAML frontmatter."""
         for skill_file in self.skills_dir.rglob("*.md"):
-            content = skill_file.read_text(encoding='utf-8')
+            content = skill_file.read_text(encoding="utf-8")
             # Check for YAML frontmatter
-            self.assertTrue(
-                content.startswith("---"),
-                f"Missing frontmatter in {skill_file.name}"
-            )
+            self.assertTrue(content.startswith("---"), f"Missing frontmatter in {skill_file.name}")
             # Check that frontmatter is closed
             second_delimiter = content.find("---", 3)
-            self.assertGreater(
-                second_delimiter, 3,
-                f"Unclosed frontmatter in {skill_file.name}"
-            )
+            self.assertGreater(second_delimiter, 3, f"Unclosed frontmatter in {skill_file.name}")
             # Check for required fields
             frontmatter = content[3:second_delimiter]
             self.assertIn("name:", frontmatter, f"Missing 'name' in {skill_file.name}")

@@ -55,7 +55,9 @@ def main(argv: list[str] | None = None) -> int:
         help="Silent unless an update reminder is due; intended for client startup hooks.",
     )
     parser.add_argument("--project", action="store_true", help="Run project-aware environment checks.")
-    parser.add_argument("--full", action="store_true", help="Run the full diagnostics set, including bridge/runtime checks.")
+    parser.add_argument(
+        "--full", action="store_true", help="Run the full diagnostics set, including bridge/runtime checks."
+    )
     parser.add_argument(
         "--client",
         choices=("codex", "claude"),

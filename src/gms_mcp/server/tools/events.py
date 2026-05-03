@@ -31,7 +31,9 @@ def register(mcp: Any, ContextType: Any) -> None:
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.event_commands import handle_event_add
 
-        args = argparse.Namespace(object=object, event=event, template=template if template else None, project_root=project_root)
+        args = argparse.Namespace(
+            object=object, event=event, template=template if template else None, project_root=project_root
+        )
         cli_args = ["event", "add", object, event]
         if template:
             cli_args.extend(["--template", template])
@@ -99,7 +101,9 @@ def register(mcp: Any, ContextType: Any) -> None:
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.event_commands import handle_event_duplicate
 
-        args = argparse.Namespace(object=object, source_event=source_event, target_num=target_num, project_root=project_root)
+        args = argparse.Namespace(
+            object=object, source_event=source_event, target_num=target_num, project_root=project_root
+        )
         cli_args = ["event", "duplicate", object, source_event, str(target_num)]
 
         return await _run_with_fallback(

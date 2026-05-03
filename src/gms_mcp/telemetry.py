@@ -599,12 +599,16 @@ def reset_tool_execution_context() -> None:
     _TOOL_EXECUTION_CONTEXT.set(None)
 
 
-def note_tool_execution(*, tool_name: str, execution_mode: str | None, ok: bool, timed_out: bool = False, error: Any = None) -> None:
+def note_tool_execution(
+    *, tool_name: str, execution_mode: str | None, ok: bool, timed_out: bool = False, error: Any = None
+) -> None:
     _TOOL_EXECUTION_CONTEXT.set(
         {
             "tool_name": tool_name,
             "execution_mode": execution_mode,
-            "result": "ok" if ok else ("cancelled" if classify_error_family(error, timed_out=timed_out) == "cancelled" else "error"),
+            "result": "ok"
+            if ok
+            else ("cancelled" if classify_error_family(error, timed_out=timed_out) == "cancelled" else "error"),
             "error_family": classify_error_family(error, timed_out=timed_out),
         }
     )

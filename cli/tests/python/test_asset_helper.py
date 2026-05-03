@@ -23,9 +23,14 @@ sys.path.insert(0, str(SRC_ROOT))
 
 # Import our modules
 from gms_helpers.utils import (
-    strip_trailing_commas, load_json_loose, save_pretty_json,
-    find_yyp, insert_into_resources, insert_into_folders,
-    generate_uuid, create_dummy_png
+    strip_trailing_commas,
+    load_json_loose,
+    save_pretty_json,
+    find_yyp,
+    insert_into_resources,
+    insert_into_folders,
+    generate_uuid,
+    create_dummy_png,
 )
 from gms_helpers.assets import ScriptAsset, ObjectAsset, SpriteAsset, RoomAsset, FolderAsset
 
@@ -63,14 +68,11 @@ class TestUtils(unittest.TestCase):
         self.assertEqual(len(uuid2), 32)
 
         # Should contain only hex characters
-        self.assertTrue(all(c in '0123456789abcdef' for c in uuid1.lower()))
+        self.assertTrue(all(c in "0123456789abcdef" for c in uuid1.lower()))
 
     def test_insert_into_resources(self):
         """Test resource insertion and sorting."""
-        resources = [
-            {"id": {"name": "alpha", "path": "alpha.yy"}},
-            {"id": {"name": "charlie", "path": "charlie.yy"}}
-        ]
+        resources = [{"id": {"name": "alpha", "path": "alpha.yy"}}, {"id": {"name": "charlie", "path": "charlie.yy"}}]
 
         # Insert beta (should go between alpha and charlie)
         result = insert_into_resources(resources, "beta", "beta.yy")
@@ -90,7 +92,7 @@ class TestUtils(unittest.TestCase):
         """Test folder insertion and sorting."""
         folders = [
             {"name": "Alpha", "folderPath": "folders/Alpha.yy"},
-            {"name": "Charlie", "folderPath": "folders/Charlie.yy"}
+            {"name": "Charlie", "folderPath": "folders/Charlie.yy"},
         ]
 
         # Insert Beta
@@ -130,25 +132,19 @@ class TestAssetValidation(unittest.TestCase):
         from gms_helpers.utils import validate_name
 
         # Valid PascalCase constructor names
-        valid_constructor_names = [
-            "PlayerData",
-            "InventoryItem",
-            "StatusEffect",
-            "GameData",
-            "Vector2D"
-        ]
+        valid_constructor_names = ["PlayerData", "InventoryItem", "StatusEffect", "GameData", "Vector2D"]
 
         for name in valid_constructor_names:
             with self.subTest(name=name):
                 # Should not raise exception when allow_constructor=True
                 try:
-                    validate_name(name, 'script', allow_constructor=True)
+                    validate_name(name, "script", allow_constructor=True)
                 except ValueError:
                     self.fail(f"validate_name raised ValueError for valid constructor name: {name}")
 
                 # Should raise exception when allow_constructor=False (default)
                 with self.assertRaises(ValueError):
-                    validate_name(name, 'script', allow_constructor=False)
+                    validate_name(name, "script", allow_constructor=False)
 
         # Invalid names even for constructors
         invalid_names = [
@@ -162,7 +158,7 @@ class TestAssetValidation(unittest.TestCase):
         for name in invalid_names:
             with self.subTest(name=name):
                 with self.assertRaises(ValueError):
-                    validate_name(name, 'script', allow_constructor=True)
+                    validate_name(name, "script", allow_constructor=True)
 
     def test_constructor_pattern_detection(self):
         """Test constructor pattern detection in linting."""
@@ -183,11 +179,11 @@ class TestAssetValidation(unittest.TestCase):
 function TestConstructor() constructor {
     // Constructor implementation
 }"""
-            gml_file.write_text(gml_content, encoding='utf-8')
+            gml_file.write_text(gml_content, encoding="utf-8")
 
             # Create .yy file
             yy_file = script_dir / "TestConstructor.yy"
-            yy_file.write_text('{}', encoding='utf-8')
+            yy_file.write_text("{}", encoding="utf-8")
 
             # Test constructor detection
             linter = ProjectLinter(temp_dir)
@@ -198,7 +194,7 @@ function TestConstructor() constructor {
             regular_gml = """function test_function() {
     // Regular function
 }"""
-            gml_file.write_text(regular_gml, encoding='utf-8')
+            gml_file.write_text(regular_gml, encoding="utf-8")
 
             is_constructor = linter._is_constructor_script(str(yy_file))
             self.assertFalse(is_constructor, "Should not detect constructor pattern in regular script")
@@ -211,8 +207,8 @@ function TestConstructor() constructor {
         # Create mock args object with correct attribute name
         class MockArgs:
             def __init__(self):
-                self.asset_type = 'script'  # This should be asset_type, not type
-                self.name = 'test_script'
+                self.asset_type = "script"  # This should be asset_type, not type
+                self.name = "test_script"
                 self.dry_run = True
                 self.skip_maintenance = True
                 self.no_auto_fix = False
@@ -220,8 +216,8 @@ function TestConstructor() constructor {
         args = MockArgs()
 
         # Should be able to access args.asset_type without AttributeError
-        self.assertEqual(args.asset_type, 'script')
-        self.assertTrue(hasattr(args, 'asset_type'))
+        self.assertEqual(args.asset_type, "script")
+        self.assertTrue(hasattr(args, "asset_type"))
 
         # The delete_asset function should not fail due to missing asset_type attribute
         # Note: We're only testing the argument structure, not the full deletion
@@ -297,9 +293,9 @@ class TestAssetCreation(unittest.TestCase):
                     "folderPath": "folders/Scripts.yy",
                     "name": "Scripts",
                     "resourceType": "GMFolder",
-                    "resourceVersion": "2.0"
+                    "resourceVersion": "2.0",
                 }
-            ]
+            ],
         }
         yyp_path = self.project_root / "test.yyp"
         save_pretty_json(yyp_path, self.yyp_data)
@@ -315,11 +311,7 @@ class TestAssetCreation(unittest.TestCase):
         script = ScriptAsset()
 
         # Create script
-        rel_path = script.create_files(
-            self.project_root,
-            "test_function",
-            "folders/Scripts.yy"
-        )
+        rel_path = script.create_files(self.project_root, "test_function", "folders/Scripts.yy")
 
         # Check files were created
         script_dir = self.project_root / "scripts" / "test_function"
@@ -352,7 +344,7 @@ class TestAssetCreation(unittest.TestCase):
         rel_path = obj.create_files(
             self.project_root,
             "o_test_object",
-            "folders/Scripts.yy"  # Using existing folder for test
+            "folders/Scripts.yy",  # Using existing folder for test
         )
 
         # Check files were created
@@ -378,10 +370,7 @@ class TestAssetCreation(unittest.TestCase):
 
         # Test object creation with parent object
         child_rel_path = obj.create_files(
-            self.project_root,
-            "o_child_object",
-            "folders/Scripts.yy",
-            parent_object="o_test_object"
+            self.project_root, "o_child_object", "folders/Scripts.yy", parent_object="o_test_object"
         )
 
         # Check child object files
@@ -407,7 +396,7 @@ class TestAssetCreation(unittest.TestCase):
         rel_path = sprite.create_files(
             self.project_root,
             "spr_test_sprite",
-            "folders/Scripts.yy"  # Using existing folder for test
+            "folders/Scripts.yy",  # Using existing folder for test
         )
 
         # Check files were created
@@ -434,7 +423,7 @@ class TestAssetCreation(unittest.TestCase):
 
         # Check that files are valid PNG (at least have PNG header)
         main_data = main_image.read_bytes()
-        self.assertTrue(main_data.startswith(b'\x89PNG'))
+        self.assertTrue(main_data.startswith(b"\x89PNG"))
 
     def test_room_creation(self):
         """Test room asset creation."""
@@ -446,7 +435,7 @@ class TestAssetCreation(unittest.TestCase):
             "r_test_room",
             "folders/Scripts.yy",  # Using existing folder for test
             width=1920,
-            height=1080
+            height=1080,
         )
 
         # Check files were created
@@ -473,10 +462,7 @@ class TestAssetCreation(unittest.TestCase):
         folder = FolderAsset()
 
         # Test simple folder creation
-        rel_path = folder.create_files(
-            self.project_root,
-            "TestFolder"
-        )
+        rel_path = folder.create_files(self.project_root, "TestFolder")
 
         # Check return path (folders are logical, no physical files created)
         self.assertEqual(rel_path, "folders/TestFolder.yy")
@@ -487,11 +473,7 @@ class TestAssetCreation(unittest.TestCase):
         self.assertIn("folders/TestFolder.yy", folder_paths)
 
         # Test nested folder creation with parent_path
-        nested_rel_path = folder.create_files(
-            self.project_root,
-            "NestedFolder",
-            "folders/Parent/Child/NestedFolder.yy"
-        )
+        nested_rel_path = folder.create_files(self.project_root, "NestedFolder", "folders/Parent/Child/NestedFolder.yy")
 
         # Check nested return path
         self.assertEqual(nested_rel_path, "folders/Parent/Child/NestedFolder.yy")
@@ -526,9 +508,9 @@ class TestIntegration(unittest.TestCase):
                     "folderPath": "folders/Scripts.yy",
                     "name": "Scripts",
                     "resourceType": "GMFolder",
-                    "resourceVersion": "2.0"
+                    "resourceVersion": "2.0",
                 }
-            ]
+            ],
         }
         self.yyp_path = self.project_root / "test.yyp"
         save_pretty_json(self.yyp_path, self.yyp_data)
@@ -539,27 +521,27 @@ class TestIntegration(unittest.TestCase):
         """Clean up."""
         shutil.rmtree(self.temp_dir)
 
-    @patch('builtins.input', return_value='y')  # Auto-confirm for missing parent paths
+    @patch("builtins.input", return_value="y")  # Auto-confirm for missing parent paths
     def test_complete_workflow(self, mock_input):
         """Test creating multiple assets and updating .yyp file."""
         # Create multiple assets using asset classes directly
         script_asset = ScriptAsset()
-        script_rel_path = script_asset.create_files(self.project_root, 'test_function', 'folders/Scripts.yy')
+        script_rel_path = script_asset.create_files(self.project_root, "test_function", "folders/Scripts.yy")
 
         object_asset = ObjectAsset()
-        object_rel_path = object_asset.create_files(self.project_root, 'o_test_obj', 'folders/Scripts.yy')
+        object_rel_path = object_asset.create_files(self.project_root, "o_test_obj", "folders/Scripts.yy")
 
         sprite_asset = SpriteAsset()
-        sprite_rel_path = sprite_asset.create_files(self.project_root, 'spr_test_spr', 'folders/Scripts.yy')
+        sprite_rel_path = sprite_asset.create_files(self.project_root, "spr_test_spr", "folders/Scripts.yy")
 
         # Manually update .yyp file (simulating what the CLI tool does)
         yyp_data = load_json_loose(self.yyp_path)
 
         # Add resources to .yyp file
         resources = yyp_data.get("resources", [])
-        insert_into_resources(resources, 'test_function', script_rel_path)
-        insert_into_resources(resources, 'o_test_obj', object_rel_path)
-        insert_into_resources(resources, 'spr_test_spr', sprite_rel_path)
+        insert_into_resources(resources, "test_function", script_rel_path)
+        insert_into_resources(resources, "o_test_obj", object_rel_path)
+        insert_into_resources(resources, "spr_test_spr", sprite_rel_path)
 
         yyp_data["resources"] = resources
         save_pretty_json(self.yyp_path, yyp_data)
@@ -568,9 +550,9 @@ class TestIntegration(unittest.TestCase):
         yyp_data = load_json_loose(self.yyp_path)
         resource_names = [r["id"]["name"] for r in yyp_data["resources"]]
 
-        self.assertIn('test_function', resource_names)
-        self.assertIn('o_test_obj', resource_names)
-        self.assertIn('spr_test_spr', resource_names)
+        self.assertIn("test_function", resource_names)
+        self.assertIn("o_test_obj", resource_names)
+        self.assertIn("spr_test_spr", resource_names)
 
         # Check alphabetical order
         self.assertEqual(resource_names, sorted(resource_names))
@@ -615,13 +597,13 @@ if __name__ == "__main__":
         if result.failures:
             print("\nFailures:")
             for test, traceback in result.failures:
-                error_msg = traceback.split('AssertionError: ')[-1].split('\n')[0]
+                error_msg = traceback.split("AssertionError: ")[-1].split("\n")[0]
                 print(f"  - {test}: {error_msg}")
 
         if result.errors:
             print("\nErrors:")
             for test, traceback in result.errors:
-                error_msg = traceback.split('\n')[-2]
+                error_msg = traceback.split("\n")[-2]
                 print(f"  - {test}: {error_msg}")
 
     print(f"\nRan {result.testsRun} tests in total")

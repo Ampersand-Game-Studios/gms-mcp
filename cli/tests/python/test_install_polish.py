@@ -61,23 +61,23 @@ class TestInstallAutodetect(unittest.TestCase):
         os.environ["GMS_MCP_GMS_PATH"] = "C:\\path\\to\\gms.exe"
         os.environ["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"] = "60"
         os.environ["GMS_MCP_ENABLE_DIRECT"] = "1"
-        
+
         try:
             config = _make_server_config(
                 client="cursor",
                 server_name="gms-test",
                 command="gms-mcp",
                 args=[],
-                gm_project_root_rel_posix="gamemaker"
+                gm_project_root_rel_posix="gamemaker",
             )
-            
+
             env = config["mcpServers"]["gms-test"]["env"]
-            
+
             self.assertEqual(env["GMS_MCP_GMS_PATH"], "C:\\path\\to\\gms.exe")
             self.assertEqual(env["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"], "60")
             self.assertEqual(env["GMS_MCP_ENABLE_DIRECT"], "1")
             self.assertEqual(env["GM_PROJECT_ROOT"], "${workspaceFolder}/gamemaker")
-            
+
         finally:
             # Clean up env vars
             for var in ["GMS_MCP_GMS_PATH", "GMS_MCP_DEFAULT_TIMEOUT_SECONDS", "GMS_MCP_ENABLE_DIRECT"]:
@@ -89,17 +89,13 @@ class TestInstallAutodetect(unittest.TestCase):
         for var in ["GMS_MCP_GMS_PATH", "GMS_MCP_DEFAULT_TIMEOUT_SECONDS", "GMS_MCP_ENABLE_DIRECT"]:
             if var in os.environ:
                 del os.environ[var]
-                
+
         config = _make_server_config(
-            client="cursor",
-            server_name="gms-test",
-            command="gms-mcp",
-            args=[],
-            gm_project_root_rel_posix=None
+            client="cursor", server_name="gms-test", command="gms-mcp", args=[], gm_project_root_rel_posix=None
         )
-        
+
         env = config["mcpServers"]["gms-test"]["env"]
-        
+
         self.assertNotIn("GMS_MCP_GMS_PATH", env)
         self.assertNotIn("GMS_MCP_DEFAULT_TIMEOUT_SECONDS", env)
         self.assertNotIn("GMS_MCP_ENABLE_DIRECT", env)
@@ -143,14 +139,21 @@ class TestInstallAutodetect(unittest.TestCase):
             home_dir = Path(tmpdir) / "home"
             fake_stdin = type("FakeStdin", (), {"isatty": lambda self: True})()
 
-            with temporary_home(home_dir), patch.dict(
-                os.environ,
-                {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
-                clear=False,
-            ), patch.object(sys, "stdin", fake_stdin), patch(
-                "builtins.input",
-                return_value="n",
-            ) as input_mock, patch("gms_mcp.install.maybe_print_star_cta", return_value=False), redirect_stdout(io.StringIO()):
+            with (
+                temporary_home(home_dir),
+                patch.dict(
+                    os.environ,
+                    {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
+                    clear=False,
+                ),
+                patch.object(sys, "stdin", fake_stdin),
+                patch(
+                    "builtins.input",
+                    return_value="n",
+                ) as input_mock,
+                patch("gms_mcp.install.maybe_print_star_cta", return_value=False),
+                redirect_stdout(io.StringIO()),
+            ):
                 ret = main(["--workspace-root", str(workspace), "--cursor", "--skip-config"])
 
             self.assertEqual(ret, 0)
@@ -182,18 +185,25 @@ class TestInstallAutodetect(unittest.TestCase):
             home_dir = Path(tmpdir) / "home"
             fake_stdin = type("FakeStdin", (), {"isatty": lambda self: True})()
 
-            with temporary_home(home_dir), patch.dict(
-                os.environ,
-                {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
-                clear=False,
-            ), patch.object(sys, "stdin", fake_stdin), patch(
-                "builtins.input",
-                side_effect=AssertionError("telemetry prompt should not run"),
-            ), redirect_stdout(io.StringIO()):
+            with (
+                temporary_home(home_dir),
+                patch.dict(
+                    os.environ,
+                    {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
+                    clear=False,
+                ),
+                patch.object(sys, "stdin", fake_stdin),
+                patch(
+                    "builtins.input",
+                    side_effect=AssertionError("telemetry prompt should not run"),
+                ),
+                redirect_stdout(io.StringIO()),
+            ):
                 ret = main(["--workspace-root", str(workspace), "--server-name", "gms-check", "--codex-check"])
 
             self.assertEqual(ret, 0)
             self.assertFalse((home_dir / ".gms-mcp" / "telemetry.json").exists())
+
 
 class TestClaudeCodeSupport(unittest.TestCase):
     """Tests for Claude Code plugin generation."""
@@ -539,10 +549,10 @@ class TestClaudeCodeSupport(unittest.TestCase):
             [
                 "[mcp_servers.shared]",
                 'command = "gms-mcp"',
-                'args = []',
+                "args = []",
                 "",
                 "[mcp_servers.shared.env]",
-                "GM_PROJECT_ROOT = \"/workspace\"",
+                'GM_PROJECT_ROOT = "/workspace"',
             ]
         )
 
@@ -559,9 +569,9 @@ class TestClaudeCodeSupport(unittest.TestCase):
         first = merged.find("[mcp_servers.shared]")
         self.assertNotEqual(first, -1)
         after_shared = merged[first : merged.find("[mcp_servers", first + 1)]
-        self.assertNotIn("command = \"old\"", after_shared)
+        self.assertNotIn('command = "old"', after_shared)
         self.assertIn('command = "gms-mcp"', merged)
-        self.assertIn("GM_PROJECT_ROOT = \"/workspace\"", merged)
+        self.assertIn('GM_PROJECT_ROOT = "/workspace"', merged)
 
     def test_generate_codex_config_merge_existing_file(self):
         """Existing mcp.toml entries should be preserved when writing Codex config."""
@@ -651,7 +661,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
 
             on_disk = path.read_text(encoding="utf-8")
             self.assertNotIn("GM_PROJECT_ROOT", on_disk)
-            self.assertIn('[mcp_servers.gms]', on_disk)
+            self.assertIn("[mcp_servers.gms]", on_disk)
             self.assertIn('"gms-mcp"', on_disk)
 
     def test_parse_toml_or_raise_and_validate_sections(self):

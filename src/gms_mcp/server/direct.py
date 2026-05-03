@@ -84,7 +84,9 @@ def _capture_output(callable_to_run: Callable[[], Any]) -> Tuple[bool, str, str,
     return ok, stdout_text, stderr_text, result_value, error_text, system_exit_code
 
 
-def _run_direct(handler: Callable[[argparse.Namespace], Any], args: argparse.Namespace, project_root: str | None) -> ToolRunResult:
+def _run_direct(
+    handler: Callable[[argparse.Namespace], Any], args: argparse.Namespace, project_root: str | None
+) -> ToolRunResult:
     project_directory = _resolve_project_directory(project_root)
 
     def _invoke() -> Any:

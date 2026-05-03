@@ -18,7 +18,7 @@ from .orphan_cleanup import delete_orphan_files, find_delete_candidates
 __version__ = "1.0.0"
 __all__ = [
     "lint",
-    "tidy_json", 
+    "tidy_json",
     "orphans",
     "dup",
     "rename",
@@ -29,5 +29,5 @@ __all__ = [
     "clean_unused_folders",
     "clean_old_yy_files",
     "delete_orphan_files",
-    "find_delete_candidates"
-] 
+    "find_delete_candidates",
+]

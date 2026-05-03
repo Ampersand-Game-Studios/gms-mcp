@@ -38,6 +38,7 @@ def main() -> int:
     # endregion
     try:
         from .gamemaker_mcp_server import main as server_main
+
         state = resolve_state()
         if queue_event(
             state=state,

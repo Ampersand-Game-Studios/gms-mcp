@@ -57,7 +57,7 @@ def safe_print(text: str) -> None:
         print(text)
     except UnicodeEncodeError:
         # Fall back to ASCII with replacement for problematic chars
-        print(text.encode('ascii', errors='replace').decode('ascii'))
+        print(text.encode("ascii", errors="replace").decode("ascii"))
 
 
 def post_tweet(text: str, dry_run: bool = False) -> bool:
@@ -112,21 +112,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="Post to X/Twitter locally for testing",
         formatter_class=argparse.RawDescriptionHelpFormatter,
-        epilog=__doc__
+        epilog=__doc__,
     )
+    parser.add_argument("text", nargs="?", help="Tweet text to post")
+    parser.add_argument("--file", "-f", help="Read tweet text from file")
     parser.add_argument(
-        "text",
-        nargs="?",
-        help="Tweet text to post"
-    )
-    parser.add_argument(
-        "--file", "-f",
-        help="Read tweet text from file"
-    )
-    parser.add_argument(
-        "--dry-run", "-n",
-        action="store_true",
-        help="Show what would be posted without actually posting"
+        "--dry-run", "-n", action="store_true", help="Show what would be posted without actually posting"
     )
 
     args = parser.parse_args()

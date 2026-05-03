@@ -62,4 +62,3 @@ def _dbg(hypothesis_id: str, location: str, message: str, data: dict) -> None:
             f.write(json.dumps(payload, ensure_ascii=False) + "\n")
     except Exception:
         return
-

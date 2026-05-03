@@ -47,13 +47,12 @@ from gms_helpers.maintenance.audit.reference_collector import (
     comprehensive_analysis,
 )
 from gms_helpers.maintenance.path_utils import normalize_path
+
+
 class TestFetcherCoverage(unittest.TestCase):
     def test_simple_html_text_extractor_ignores_script_and_style(self):
         parser = SimpleHTMLTextExtractor()
-        parser.feed(
-            "<div>Hello<br>World<script>bad()</script>"
-            "<style>.x{color:red;}</style><p>Done</p></div>"
-        )
+        parser.feed("<div>Hello<br>World<script>bad()</script><style>.x{color:red;}</style><p>Done</p></div>")
 
         text = parser.get_text()
         self.assertIn("Hello\nWorld", text)
@@ -86,9 +85,7 @@ class TestFetcherCoverage(unittest.TestCase):
 
     def test_gml_doc_parser_post_process_fills_missing_syntax_and_returns(self):
         parser = GMLDocParser()
-        parser.feed(
-            "<body><p>move_towards_point(x, y); Returns: Real number</p></body>"
-        )
+        parser.feed("<body><p>move_towards_point(x, y); Returns: Real number</p></body>")
         parser.post_process("move_towards_point")
 
         self.assertEqual(parser.syntax, "move_towards_point(x, y);")
@@ -236,8 +233,7 @@ class TestFetcherCoverage(unittest.TestCase):
             with patch(
                 "gms_helpers.gml_docs.fetcher._fetch_url",
                 return_value=(
-                    "<body><p>Draws a sprite.</p><h3>Syntax</h3>"
-                    "<pre>draw_sprite(sprite, 0, x, y);</pre></body>"
+                    "<body><p>Draws a sprite.</p><h3>Syntax</h3><pre>draw_sprite(sprite, 0, x, y);</pre></body>"
                 ),
             ):
                 doc = fetch_function_doc("draw_sprite", cache=cache)
@@ -303,7 +299,9 @@ class TestReferenceCollectorCoverage(unittest.TestCase):
         add_resource("sounds/snd_beep/snd_beep.yy")
 
         (self.project_root / "rooms" / "r_intro").mkdir(parents=True)
-        (self.project_root / "rooms" / "r_intro" / "r_intro.yy").write_text(json.dumps({"$GMRoom": ""}), encoding="utf-8")
+        (self.project_root / "rooms" / "r_intro" / "r_intro.yy").write_text(
+            json.dumps({"$GMRoom": ""}), encoding="utf-8"
+        )
         add_resource("rooms/r_intro/r_intro.yy")
 
         (self.project_root / "fonts" / "fnt_main").mkdir(parents=True)
@@ -535,10 +533,14 @@ class TestEventHelperCoverage(unittest.TestCase):
     def test_handle_validate_and_fix(self):
         args = SimpleNamespace(object="o_test")
 
-        with patch("gms_helpers.event_helper.sync_object_events", return_value={"orphaned_found": 0, "missing_found": 0}):
+        with patch(
+            "gms_helpers.event_helper.sync_object_events", return_value={"orphaned_found": 0, "missing_found": 0}
+        ):
             self.assertTrue(handle_validate(args))
 
-        with patch("gms_helpers.event_helper.sync_object_events", return_value={"orphaned_found": 2, "missing_found": 1}):
+        with patch(
+            "gms_helpers.event_helper.sync_object_events", return_value={"orphaned_found": 2, "missing_found": 1}
+        ):
             self.assertTrue(handle_validate(args))
 
         with patch(

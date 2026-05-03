@@ -23,37 +23,33 @@ def register(mcp: Any, ContextType: Any) -> None:
     ) -> Dict[str, Any]:
         """
         List all assets in the project, optionally filtered by type, name, or folder.
-        
+
         Args:
             asset_type: Optional type filter (e.g., 'script', 'object').
             name_contains: Filter assets by name (case-insensitive).
             folder_prefix: Filter assets by their path/folder (case-insensitive).
             include_included_files: Whether to include datafiles (default True).
             project_root: Path to project root.
-        
+
         Supports all GameMaker asset types including extensions and datafiles.
         """
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
         from gms_helpers.introspection import list_assets_by_type
-        
+
         assets = list_assets_by_type(
-            project_directory, 
-            asset_type, 
+            project_directory,
+            asset_type,
             include_included_files,
             name_contains=name_contains,
-            folder_prefix=folder_prefix
+            folder_prefix=folder_prefix,
         )
         return {
             "project_directory": str(project_directory),
             "assets": assets,
             "count": sum(len(l) for l in assets.values()),
             "types_found": list(assets.keys()),
-            "filters": {
-                "asset_type": asset_type,
-                "name_contains": name_contains,
-                "folder_prefix": folder_prefix
-            }
+            "filters": {"asset_type": asset_type, "name_contains": name_contains, "folder_prefix": folder_prefix},
         }
 
     @mcp.tool()
@@ -69,11 +65,11 @@ def register(mcp: Any, ContextType: Any) -> None:
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
         from gms_helpers.introspection import read_asset_yy
-        
+
         asset_data = read_asset_yy(project_directory, asset_identifier)
         if not asset_data:
             return {"ok": False, "error": f"Asset '{asset_identifier}' not found"}
-            
+
         return {"ok": True, "asset_data": asset_data}
 
     @mcp.tool()
@@ -88,27 +84,22 @@ def register(mcp: Any, ContextType: Any) -> None:
     ) -> Dict[str, Any]:
         """
         Search for a pattern in project files.
-        
+
         Scopes: 'all', 'gml', 'yy', 'scripts', 'objects', 'extensions', 'datafiles'.
         """
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
         from gms_helpers.introspection import search_references
-        
+
         results = search_references(
             project_directory,
             pattern,
             scope=scope,
             is_regex=is_regex,
             case_sensitive=case_sensitive,
-            max_results=max_results
+            max_results=max_results,
         )
-        return {
-            "pattern": pattern,
-            "scope": scope,
-            "results": results,
-            "count": len(results)
-        }
+        return {"pattern": pattern, "scope": scope, "results": results, "count": len(results)}
 
     @mcp.tool()
     async def gm_get_asset_graph(
@@ -118,17 +109,17 @@ def register(mcp: Any, ContextType: Any) -> None:
     ) -> Dict[str, Any]:
         """
         Build a dependency graph of assets.
-        
+
         Args:
             deep: If True, parse all GML code for references (slower but complete).
                   If False, only parse .yy structural references (fast).
-        
+
         Returns nodes (assets) and edges (relationships like parent, sprite, code_reference).
         """
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
         from gms_helpers.introspection import build_asset_graph
-        
+
         graph = build_asset_graph(project_directory, deep=deep)
         return graph
 
@@ -144,5 +135,5 @@ def register(mcp: Any, ContextType: Any) -> None:
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
         from gms_helpers.introspection import get_project_stats
-        
+
         return get_project_stats(project_directory)

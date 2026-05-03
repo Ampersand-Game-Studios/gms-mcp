@@ -55,11 +55,12 @@ try:
         create_default_config_file,
         PROJECT_CONFIG_FILE,
     )
+
     _HAS_NAMING_CONFIG = True
 except ImportError:
     _HAS_NAMING_CONFIG = False
     PROJECT_CONFIG_FILE = ".gms-mcp.json"
-    
+
     def get_factory_defaults():
         """Fallback factory defaults if gms_helpers not available."""
         return {
@@ -71,22 +72,20 @@ except ImportError:
                     "sprite": {"prefix": "spr_", "pattern": "^spr_[a-z0-9_]*$"},
                     "script": {"prefix": "", "pattern": "^[a-z][a-z0-9_]*$", "allow_pascal_constructors": True},
                     "room": {"prefix": "r_", "pattern": "^r_[a-z0-9_]*$"},
-                }
+                },
             },
-            "linting": {
-                "block_on_critical_errors": True
-            }
+            "linting": {"block_on_critical_errors": True},
         }
-    
+
     def create_default_config_file(project_root: Path, overwrite: bool = False) -> Path:
         """Fallback config file creator."""
         config_path = project_root / PROJECT_CONFIG_FILE
         if config_path.exists() and not overwrite:
             raise FileExistsError(f"Config file already exists: {config_path}")
         defaults = get_factory_defaults()
-        with open(config_path, 'w', encoding='utf-8') as f:
+        with open(config_path, "w", encoding="utf-8") as f:
             json.dump(defaults, f, indent=2, ensure_ascii=False)
-            f.write('\n')
+            f.write("\n")
         return config_path
 
 
@@ -139,7 +138,10 @@ def _looks_secret_key(key: str) -> bool:
     if not tokens:
         return False
 
-    if any(token in {"authorization", "bearer", "cookie", "password", "passwd", "secret", "session", "token"} for token in tokens):
+    if any(
+        token in {"authorization", "bearer", "cookie", "password", "passwd", "secret", "session", "token"}
+        for token in tokens
+    ):
         return True
     if "api" in tokens and "key" in tokens:
         return True
@@ -420,25 +422,27 @@ class ConfigState:
     readiness: ReadinessResult
 
     def as_dict(self) -> dict:
-        redacted = _redact_config_value({
-            "ok": True,
-            "client": self.client,
-            "scope": self.scope,
-            "server_name": self.server_name,
-            "config": {
-                "path": self.path,
-                "exists": self.exists,
-                "entry": self.entry,
-            },
-            "active": {
+        redacted = _redact_config_value(
+            {
+                "ok": True,
+                "client": self.client,
                 "scope": self.scope,
-                "path": self.path,
-                "entry": self.entry,
-            },
-            "ready": self.readiness.ready,
-            "problems": self.readiness.problems,
-            "not_applicable": self.readiness.not_applicable,
-        })
+                "server_name": self.server_name,
+                "config": {
+                    "path": self.path,
+                    "exists": self.exists,
+                    "entry": self.entry,
+                },
+                "active": {
+                    "scope": self.scope,
+                    "path": self.path,
+                    "entry": self.entry,
+                },
+                "ready": self.readiness.ready,
+                "problems": self.readiness.problems,
+                "not_applicable": self.readiness.not_applicable,
+            }
+        )
         assert isinstance(redacted, dict)
         return redacted
 
@@ -471,7 +475,7 @@ def _validate_common_entry(
             if not isinstance(gm_project_root, str) or not gm_project_root.strip():
                 problems.append("`env.GM_PROJECT_ROOT` must be a non-empty string.")
         if env.get("PYTHONUNBUFFERED") != "1":
-            problems.append("`env.PYTHONUNBUFFERED` should be \"1\" for unbuffered logs.")
+            problems.append('`env.PYTHONUNBUFFERED` should be "1" for unbuffered logs.')
 
     return ReadinessResult(ready=len(problems) == 0, problems=problems)
 
@@ -726,6 +730,7 @@ def _get_package_version() -> str:
     """Get the current package version, with fallback."""
     try:
         from importlib.metadata import version
+
         return version("gms-mcp")
     except Exception:
         return "0.1.0"
@@ -737,13 +742,10 @@ def _make_claude_code_plugin_manifest() -> dict:
         "name": "gms-mcp",
         "description": "GameMaker Studio MCP tools for asset management, code intelligence, and project maintenance",
         "version": _get_package_version(),
-        "author": {
-            "name": "Ampersand Game Studios",
-            "url": "https://github.com/Ampersand-Game-Studios/gms-mcp"
-        },
+        "author": {"name": "Ampersand Game Studios", "url": "https://github.com/Ampersand-Game-Studios/gms-mcp"},
         "repository": "https://github.com/Ampersand-Game-Studios/gms-mcp",
         "license": "MIT",
-        "keywords": ["gamemaker", "game-development", "mcp", "assets", "code-intelligence"]
+        "keywords": ["gamemaker", "game-development", "mcp", "assets", "code-intelligence"],
     }
 
 
@@ -793,9 +795,7 @@ def _build_codex_env(
     }
 
     if include_project_root:
-        resolved_root = str(
-            gm_project_root if gm_project_root is not None else workspace_root
-        )
+        resolved_root = str(gm_project_root if gm_project_root is not None else workspace_root)
         env["GM_PROJECT_ROOT"] = resolved_root
 
     for env_var in _FORWARDED_ENV_VARS:
@@ -810,17 +810,13 @@ def _build_codex_env(
 def _build_codex_env_args(env: dict[str, str]) -> str:
     if not env:
         return ""
-    return " " + " ".join(
-        f"--env {shlex.quote(f'{key}={value}')}" for key, value in env.items()
-    )
+    return " " + " ".join(f"--env {shlex.quote(f'{key}={value}')}" for key, value in env.items())
 
 
 def _parse_toml_or_raise(*, text: str, source_label: str) -> dict:
     """Parse TOML text and return a dictionary; raise a descriptive error on failure."""
     if _toml_parser is None:
-        raise RuntimeError(
-            "TOML parser unavailable. Install Python 3.11+ or add dependency 'tomli' for Python 3.10."
-        )
+        raise RuntimeError("TOML parser unavailable. Install Python 3.11+ or add dependency 'tomli' for Python 3.10.")
     try:
         parsed = _toml_parser.loads(text)
     except Exception as exc:
@@ -851,9 +847,7 @@ def _validate_codex_sections(
 
     env = target_entry.get("env")
     if env is not None and not isinstance(env, dict):
-        raise ValueError(
-            f"Malformed TOML in {source_label}: [mcp_servers.{server_name}.env] must be a table."
-        )
+        raise ValueError(f"Malformed TOML in {source_label}: [mcp_servers.{server_name}.env] must be a table.")
 
 
 def _render_codex_merged_config(
@@ -1029,9 +1023,7 @@ def _validate_antigravity_sections(
 
     env = target_entry.get("env")
     if env is not None and not isinstance(env, dict):
-        raise ValueError(
-            f"Malformed JSON in {source_label}: `mcpServers.{server_name}.env` must be an object."
-        )
+        raise ValueError(f"Malformed JSON in {source_label}: `mcpServers.{server_name}.env` must be an object.")
 
 
 def _render_antigravity_merged_config(
@@ -1184,7 +1176,7 @@ def _antigravity_entry_readiness(entry: object) -> tuple[bool, list[str]]:
         if not isinstance(gm_project_root, str) or not gm_project_root.strip():
             problems.append("`env.GM_PROJECT_ROOT` must be a non-empty string.")
         if env.get("PYTHONUNBUFFERED") != "1":
-            problems.append("`env.PYTHONUNBUFFERED` should be \"1\" for unbuffered logs.")
+            problems.append('`env.PYTHONUNBUFFERED` should be "1" for unbuffered logs.')
 
     return len(problems) == 0, problems
 
@@ -1197,8 +1189,7 @@ def _print_antigravity_check(*, config_path: Path, server_name: str) -> int:
         return 2
 
     print(
-        f"[INFO] Antigravity config: {state['config']['path']} "
-        f"({'exists' if state['config']['exists'] else 'missing'})"
+        f"[INFO] Antigravity config: {state['config']['path']} ({'exists' if state['config']['exists'] else 'missing'})"
     )
     entry = state["config"]["entry"]
     if entry is None:
@@ -1527,30 +1518,30 @@ def _setup_project_config(
 ) -> Optional[Path]:
     """
     Set up the .gms-mcp.json configuration file for naming conventions.
-    
+
     Args:
         gm_project_root: Path to the GameMaker project directory
         non_interactive: If True, never prompt for input
         skip_config: If True, skip config setup entirely
         use_defaults: If True, create config with defaults (no prompts)
         dry_run: If True, don't write any files
-        
+
     Returns:
         Path to created config file, or None if skipped
     """
     if skip_config:
         return None
-    
+
     config_path = gm_project_root / PROJECT_CONFIG_FILE
-    
+
     # Check if config already exists
     if config_path.exists():
         print(f"[INFO] Project config already exists: {config_path}")
         return config_path
-    
+
     # Determine whether to create config
     should_create = use_defaults
-    
+
     if not should_create and not non_interactive and sys.stdin and sys.stdin.isatty():
         # Interactive mode - ask user
         print("\n" + "=" * 60)
@@ -1564,7 +1555,7 @@ def _setup_project_config(
         print("  - Scripts:  snake_case (constructors can be PascalCase)")
         print("\nYou can customize these in the config file after creation.")
         print("")
-        
+
         while True:
             choice = input("Create .gms-mcp.json config file? [Y/n]: ").strip().lower()
             if choice in ("", "y", "yes"):
@@ -1580,15 +1571,15 @@ def _setup_project_config(
         print("[INFO] Skipping config file creation (non-interactive mode).")
         print("       Use --use-defaults to create config with default settings.")
         return None
-    
+
     if not should_create:
         print("[INFO] Skipping config file creation.")
         return None
-    
+
     if dry_run:
         print(f"[DRY-RUN] Would create: {config_path}")
         return config_path
-    
+
     try:
         created_path = create_default_config_file(gm_project_root, overwrite=False)
         print(f"[OK] Created project config: {created_path}")
@@ -1754,7 +1745,9 @@ def _run_setup_for_client(
             dry_run=dry_run,
             safe_profile=safe_profile,
         )
-        print(f"[{'DRY-RUN' if dry_run else 'INFO'}] Cursor config {'would be written to' if dry_run else 'written to'}: {target}")
+        print(
+            f"[{'DRY-RUN' if dry_run else 'INFO'}] Cursor config {'would be written to' if dry_run else 'written to'}: {target}"
+        )
         if dry_run:
             print(json.dumps(payload, indent=2, sort_keys=True))
         return 0
@@ -1817,7 +1810,9 @@ def _run_setup_for_client(
             safe_profile=safe_profile,
         )
         _write_json(target, payload, dry_run=dry_run)
-        print(f"[{'DRY-RUN' if dry_run else 'INFO'}] Antigravity workspace config {'would be written to' if dry_run else 'written to'}: {target}")
+        print(
+            f"[{'DRY-RUN' if dry_run else 'INFO'}] Antigravity workspace config {'would be written to' if dry_run else 'written to'}: {target}"
+        )
         return 0
 
     if spec.key == "claude-code":
@@ -1842,7 +1837,9 @@ def _run_setup_for_client(
             include_bundle_assets=False,
             safe_profile=safe_profile,
         )
-        print(f"[{'DRY-RUN' if dry_run else 'INFO'}] Claude Code config {'would be written to' if dry_run else 'written to'}: {plugin_dir / '.mcp.json'}")
+        print(
+            f"[{'DRY-RUN' if dry_run else 'INFO'}] Claude Code config {'would be written to' if dry_run else 'written to'}: {plugin_dir / '.mcp.json'}"
+        )
         if dry_run:
             print(json.dumps(manifest_payload, indent=2, sort_keys=True))
             print(json.dumps(mcp_payload, indent=2, sort_keys=True))
@@ -1869,7 +1866,9 @@ def _run_setup_for_client(
             include_bundle_assets=True,
             safe_profile=safe_profile,
         )
-        print(f"[{'DRY-RUN' if dry_run else 'INFO'}] Claude Desktop plugin {'would be synced to' if dry_run else 'synced to'}: {target}")
+        print(
+            f"[{'DRY-RUN' if dry_run else 'INFO'}] Claude Desktop plugin {'would be synced to' if dry_run else 'synced to'}: {target}"
+        )
         if dry_run:
             print(json.dumps(manifest_payload, indent=2, sort_keys=True))
             print(json.dumps(mcp_payload, indent=2, sort_keys=True))
@@ -1886,7 +1885,9 @@ def _run_setup_for_client(
         safe_profile=safe_profile,
     )
     _write_json(target, payload, dry_run=dry_run)
-    print(f"[{'DRY-RUN' if dry_run else 'INFO'}] {spec.key} config {'would be written to' if dry_run else 'written to'}: {target}")
+    print(
+        f"[{'DRY-RUN' if dry_run else 'INFO'}] {spec.key} config {'would be written to' if dry_run else 'written to'}: {target}"
+    )
     if dry_run:
         print(json.dumps(payload, indent=2, sort_keys=True))
     return 0
@@ -2135,19 +2136,21 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     parser.add_argument("--cursor", action="store_true", help="Write Cursor workspace config to .cursor/mcp.json.")
-    parser.add_argument("--cursor-global", action="store_true", help="Write Cursor *global* config to ~/.cursor/mcp.json.")
+    parser.add_argument(
+        "--cursor-global", action="store_true", help="Write Cursor *global* config to ~/.cursor/mcp.json."
+    )
     parser.add_argument(
         "--claude-code",
         action="store_true",
         help="Write .mcp.json for Claude Code CLI (per-project). "
-             "NOTE: For Claude Code CLI, run this in each GameMaker project. "
-             "Claude Code CLI does not support global MCP configs.",
+        "NOTE: For Claude Code CLI, run this in each GameMaker project. "
+        "Claude Code CLI does not support global MCP configs.",
     )
     parser.add_argument(
         "--claude-code-global",
         action="store_true",
         help="Install plugin for Claude Desktop GUI (NOT Claude Code CLI) to ~/.claude/plugins/gms-mcp/. "
-             "This is for the desktop app only. For the CLI, use --claude-code per-project instead.",
+        "This is for the desktop app only. For the CLI, use --claude-code per-project instead.",
     )
     parser.add_argument(
         "--codex",
@@ -2179,9 +2182,17 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="One-shot Codex app setup: write workspace config, preview global merge, then run check + readiness summary.",
     )
-    parser.add_argument("--vscode", action="store_true", help="Write a VS Code example config to mcp-configs/vscode.mcp.json.")
-    parser.add_argument("--windsurf", action="store_true", help="Write a Windsurf example config to mcp-configs/windsurf.mcp.json.")
-    parser.add_argument("--antigravity", action="store_true", help="Write an Antigravity example config to mcp-configs/antigravity.mcp.json.")
+    parser.add_argument(
+        "--vscode", action="store_true", help="Write a VS Code example config to mcp-configs/vscode.mcp.json."
+    )
+    parser.add_argument(
+        "--windsurf", action="store_true", help="Write a Windsurf example config to mcp-configs/windsurf.mcp.json."
+    )
+    parser.add_argument(
+        "--antigravity",
+        action="store_true",
+        help="Write an Antigravity example config to mcp-configs/antigravity.mcp.json.",
+    )
     parser.add_argument(
         "--antigravity-setup",
         action="store_true",
@@ -2222,9 +2233,13 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="When --openclaw-install-skills is used, install OpenClaw skills at workspace scope.",
     )
-    parser.add_argument("--openclaw", action="store_true", help="Write an OpenClaw example config to mcp-configs/openclaw.mcp.json.")
-    parser.add_argument("--all", action="store_true", help="Generate Cursor config + all example configs (excludes Claude Code global).")
-    
+    parser.add_argument(
+        "--openclaw", action="store_true", help="Write an OpenClaw example config to mcp-configs/openclaw.mcp.json."
+    )
+    parser.add_argument(
+        "--all", action="store_true", help="Generate Cursor config + all example configs (excludes Claude Code global)."
+    )
+
     # Naming convention config options
     parser.add_argument(
         "--skip-config",
@@ -2308,13 +2323,25 @@ def main(argv: list[str] | None = None) -> int:
         )
 
     requested_any = (
-        args.cursor or args.cursor_global or
-        args.claude_code or args.claude_code_global or
-        args.codex or args.codex_global or
-        args.codex_dry_run_only or args.codex_check or args.codex_check_json or args.codex_app_setup or
-        args.vscode or args.windsurf or args.antigravity or args.antigravity_setup or args.antigravity_check or
-        args.antigravity_check_json or args.antigravity_app_setup or
-        args.openclaw or args.all
+        args.cursor
+        or args.cursor_global
+        or args.claude_code
+        or args.claude_code_global
+        or args.codex
+        or args.codex_global
+        or args.codex_dry_run_only
+        or args.codex_check
+        or args.codex_check_json
+        or args.codex_app_setup
+        or args.vscode
+        or args.windsurf
+        or args.antigravity
+        or args.antigravity_setup
+        or args.antigravity_check
+        or args.antigravity_check_json
+        or args.antigravity_app_setup
+        or args.openclaw
+        or args.all
     )
     if not requested_any:
         args.cursor = True
@@ -2380,16 +2407,23 @@ def main(argv: list[str] | None = None) -> int:
         return check_exit
 
     only_checks = (
-        (args.codex_check or args.codex_check_json or args.antigravity_check or args.antigravity_check_json)
-        and not (
-            args.cursor or args.cursor_global or
-            args.claude_code or args.claude_code_global or
-            args.codex or args.codex_global or
-            args.codex_dry_run_only or
-            args.codex_app_setup or
-            args.antigravity_app_setup or
-            args.vscode or args.windsurf or args.antigravity or args.antigravity_setup or args.openclaw or args.all
-        )
+        args.codex_check or args.codex_check_json or args.antigravity_check or args.antigravity_check_json
+    ) and not (
+        args.cursor
+        or args.cursor_global
+        or args.claude_code
+        or args.claude_code_global
+        or args.codex
+        or args.codex_global
+        or args.codex_dry_run_only
+        or args.codex_app_setup
+        or args.antigravity_app_setup
+        or args.vscode
+        or args.windsurf
+        or args.antigravity
+        or args.antigravity_setup
+        or args.openclaw
+        or args.all
     )
     if only_checks:
         codex_exit = _run_requested_codex_checks()
@@ -2577,15 +2611,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.antigravity_setup:
         try:
-            antigravity_path, antigravity_payload, antigravity_merged, antigravity_backup = _generate_antigravity_config(
-                workspace_root=workspace_root,
-                output_path=antigravity_config_path,
-                server_name=args.server_name,
-                command=command,
-                args_prefix=args_prefix,
-                gm_project_root=gm_project_root,
-                safe_profile=antigravity_safe_profile,
-                dry_run=dry_run,
+            antigravity_path, antigravity_payload, antigravity_merged, antigravity_backup = (
+                _generate_antigravity_config(
+                    workspace_root=workspace_root,
+                    output_path=antigravity_config_path,
+                    server_name=args.server_name,
+                    command=command,
+                    args_prefix=args_prefix,
+                    gm_project_root=gm_project_root,
+                    safe_profile=antigravity_safe_profile,
+                    dry_run=dry_run,
+                )
             )
         except ValueError as exc:
             print(f"[ERROR] Could not generate Antigravity config: {exc}")
@@ -2602,10 +2638,7 @@ def main(argv: list[str] | None = None) -> int:
             if antigravity_backup is not None:
                 print(f"[INFO] Antigravity backup created: {antigravity_backup}")
             if antigravity_safe_profile:
-                print(
-                    "[INFO] Applied conservative safety profile: "
-                    "GMS_MCP_ENABLE_DIRECT=0, GMS_MCP_REQUIRE_DRY_RUN=1."
-                )
+                print("[INFO] Applied conservative safety profile: GMS_MCP_ENABLE_DIRECT=0, GMS_MCP_REQUIRE_DRY_RUN=1.")
 
     example_clients: list[str] = []
     if args.vscode:
@@ -2651,11 +2684,7 @@ def main(argv: list[str] | None = None) -> int:
             )
             print(f"\n[DRY-RUN] {cursor_path}:\n{json.dumps(payload, indent=2)}\n")
         if args.claude_code or args.claude_code_global:
-            plugin_dir = (
-                Path.home() / ".claude" / "plugins" / "gms-mcp"
-                if args.claude_code_global
-                else workspace_root
-            )
+            plugin_dir = Path.home() / ".claude" / "plugins" / "gms-mcp" if args.claude_code_global else workspace_root
             print(f"\n[DRY-RUN] Claude Code plugin would be created at: {plugin_dir}")
             print(f"[DRY-RUN] {plugin_dir / '.claude-plugin' / 'plugin.json'}:")
             print(
@@ -2706,7 +2735,7 @@ def main(argv: list[str] | None = None) -> int:
     print(f"[INFO] Selected GameMaker project root: {gm_note}")
     print("[INFO] If this is wrong, edit GM_PROJECT_ROOT in the generated config.")
     print("[INFO] Manual local diagnostics: gms-mcp doctor")
-    
+
     # Set up project naming config if we have a project root
     if gm_project_root:
         config_path = _setup_project_config(

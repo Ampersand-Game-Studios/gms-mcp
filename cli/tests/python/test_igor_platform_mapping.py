@@ -38,6 +38,7 @@ class TestPrefabsAutoDetection(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     @patch("gms_helpers.runner.platform.system", return_value="Darwin")
@@ -68,6 +69,7 @@ class TestRunnerCommandSelection(unittest.TestCase):
 
     def tearDown(self):
         import shutil
+
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
     def _fake_find_runtime(self, runner: GameMakerRunner):

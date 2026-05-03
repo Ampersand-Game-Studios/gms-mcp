@@ -146,9 +146,7 @@ class TestEntrypoints(unittest.TestCase):
         mock_main.assert_called_once()
 
     def test_bootstrap_server_main_success_and_missing_dependency(self):
-        with patch("gms_mcp.bootstrap_server._dbg"), patch(
-            "gms_mcp.gamemaker_mcp_server.main", return_value=0
-        ):
+        with patch("gms_mcp.bootstrap_server._dbg"), patch("gms_mcp.gamemaker_mcp_server.main", return_value=0):
             result = bootstrap_server.main()
         self.assertEqual(result, 0)
 
@@ -160,7 +158,11 @@ class TestEntrypoints(unittest.TestCase):
             return original_import(name, globals, locals, fromlist, level)
 
         stderr = io.StringIO()
-        with patch("builtins.__import__", side_effect=fake_import), patch("gms_mcp.bootstrap_server._dbg"), redirect_stderr(stderr):
+        with (
+            patch("builtins.__import__", side_effect=fake_import),
+            patch("gms_mcp.bootstrap_server._dbg"),
+            redirect_stderr(stderr),
+        ):
             result = bootstrap_server.main()
         self.assertEqual(result, 1)
         self.assertIn("Missing dependency while starting the GameMaker MCP server", stderr.getvalue())
@@ -181,9 +183,11 @@ class TestEntrypoints(unittest.TestCase):
         fake_fastmcp_mod.Context = FakeContext
         fake_fastmcp_mod.FastMCP = FakeFastMCP
 
-        with patch.dict(sys.modules, {"mcp.server.fastmcp": fake_fastmcp_mod}), patch(
-            "gms_mcp.gamemaker_mcp_server.register_all"
-        ) as register_all, patch("gms_mcp.gamemaker_mcp_server._dbg"):
+        with (
+            patch.dict(sys.modules, {"mcp.server.fastmcp": fake_fastmcp_mod}),
+            patch("gms_mcp.gamemaker_mcp_server.register_all") as register_all,
+            patch("gms_mcp.gamemaker_mcp_server._dbg"),
+        ):
             server = gamemaker_mcp_server.build_server()
         self.assertEqual(server.name, "GameMaker MCP")
         register_all.assert_called_once_with(server, FakeContext)
@@ -201,17 +205,21 @@ class TestEntrypoints(unittest.TestCase):
         fake_mcp_lowlevel = types.ModuleType("mcp.server.lowlevel")
 
         run_server = Mock()
-        with patch(
-            "gms_mcp.gamemaker_mcp_server.build_server",
-            return_value=SimpleNamespace(run=run_server),
-        ), patch("gms_mcp.gamemaker_mcp_server._dbg"), patch.dict(
-            sys.modules,
-            {
-                "mcp": fake_mcp,
-                "mcp.server": fake_mcp_server,
-                "mcp.server.lowlevel": fake_mcp_lowlevel,
-                "mcp.server.lowlevel.server": fake_lowlevel_mod,
-            },
+        with (
+            patch(
+                "gms_mcp.gamemaker_mcp_server.build_server",
+                return_value=SimpleNamespace(run=run_server),
+            ),
+            patch("gms_mcp.gamemaker_mcp_server._dbg"),
+            patch.dict(
+                sys.modules,
+                {
+                    "mcp": fake_mcp,
+                    "mcp.server": fake_mcp_server,
+                    "mcp.server.lowlevel": fake_mcp_lowlevel,
+                    "mcp.server.lowlevel.server": fake_lowlevel_mod,
+                },
+            ),
         ):
             result = gamemaker_mcp_server.main()
         self.assertEqual(result, 0)
@@ -219,7 +227,10 @@ class TestEntrypoints(unittest.TestCase):
         self.assertTrue(FakeServerClass._gms_mcp_patched)
 
         stderr = io.StringIO()
-        with patch("gms_mcp.gamemaker_mcp_server.build_server", side_effect=ModuleNotFoundError("mcp")), redirect_stderr(stderr):
+        with (
+            patch("gms_mcp.gamemaker_mcp_server.build_server", side_effect=ModuleNotFoundError("mcp")),
+            redirect_stderr(stderr),
+        ):
             result = gamemaker_mcp_server.main()
         self.assertEqual(result, 1)
         self.assertIn("MCP dependency is missing", stderr.getvalue())
@@ -245,7 +256,10 @@ class TestCommandWrappers(unittest.TestCase):
         }
         for asset_type, target in mapping.items():
             args = SimpleNamespace(asset_type=asset_type)
-            with self.subTest(asset_type=asset_type), patch.object(asset_commands, target, return_value=True) as handler:
+            with (
+                self.subTest(asset_type=asset_type),
+                patch.object(asset_commands, target, return_value=True) as handler,
+            ):
                 self.assertTrue(asset_commands.handle_asset_create(args))
                 handler.assert_called_once_with(args)
 
@@ -260,15 +274,23 @@ class TestCommandWrappers(unittest.TestCase):
 
     def test_event_wrappers_forward_arguments(self):
         with patch.object(event_commands, "add_event", return_value=True) as add_event:
-            self.assertTrue(event_commands.handle_event_add(SimpleNamespace(object="o_player", event="create", template=None)))
+            self.assertTrue(
+                event_commands.handle_event_add(SimpleNamespace(object="o_player", event="create", template=None))
+            )
         add_event.assert_called_once_with("o_player", "create", "")
 
         with patch.object(event_commands, "remove_event", return_value=True) as remove_event:
-            self.assertTrue(event_commands.handle_event_remove(SimpleNamespace(object="o_player", event="destroy", keep_file=True)))
+            self.assertTrue(
+                event_commands.handle_event_remove(SimpleNamespace(object="o_player", event="destroy", keep_file=True))
+            )
         remove_event.assert_called_once_with("o_player", "destroy", True)
 
         with patch.object(event_commands, "duplicate_event", return_value=True) as duplicate_event:
-            self.assertTrue(event_commands.handle_event_duplicate(SimpleNamespace(object="o_player", source_event="create", target_num=1)))
+            self.assertTrue(
+                event_commands.handle_event_duplicate(
+                    SimpleNamespace(object="o_player", source_event="create", target_num=1)
+                )
+            )
         duplicate_event.assert_called_once_with("o_player", "create", 1)
 
         with patch.object(event_commands, "list_events", return_value=["create"]) as list_events:
@@ -317,8 +339,13 @@ class TestCommandWrappers(unittest.TestCase):
                 handler.assert_called_once()
 
         health_result = SimpleNamespace(details=["ok one", "ok two"], success=True)
-        with patch.object(maintenance_commands, "gm_mcp_health", return_value=health_result), patch("builtins.print") as print_mock:
-            self.assertTrue(maintenance_commands.handle_maintenance_health(SimpleNamespace(project_root="/tmp/project")))
+        with (
+            patch.object(maintenance_commands, "gm_mcp_health", return_value=health_result),
+            patch("builtins.print") as print_mock,
+        ):
+            self.assertTrue(
+                maintenance_commands.handle_maintenance_health(SimpleNamespace(project_root="/tmp/project"))
+            )
         self.assertEqual(print_mock.call_count, 2)
 
     def test_room_wrappers_normalize_and_forward(self):
@@ -331,7 +358,9 @@ class TestCommandWrappers(unittest.TestCase):
         add_layer.assert_called_once_with("r_main", "Actors", "instance", 42)
 
         with patch.object(room_commands, "remove_layer", return_value=True) as remove_layer:
-            self.assertTrue(room_commands.handle_room_layer_remove(SimpleNamespace(room_name="r_main", layer_name="Actors")))
+            self.assertTrue(
+                room_commands.handle_room_layer_remove(SimpleNamespace(room_name="r_main", layer_name="Actors"))
+            )
         remove_layer.assert_called_once_with("r_main", "Actors")
 
         with patch.object(room_commands, "list_layers", return_value=["Actors"]) as list_layers:
@@ -363,7 +392,9 @@ class TestCommandWrappers(unittest.TestCase):
         add_instance.assert_called_once_with("r_main", "o_player", 10, 20, "Instances")
 
         with patch.object(room_commands, "remove_instance", return_value=True) as remove_instance:
-            self.assertTrue(room_commands.handle_room_instance_remove(SimpleNamespace(room_name="r_main", instance_id="inst_1")))
+            self.assertTrue(
+                room_commands.handle_room_instance_remove(SimpleNamespace(room_name="r_main", instance_id="inst_1"))
+            )
         remove_instance.assert_called_once_with("r_main", "inst_1")
 
         with patch.object(room_commands, "list_instances", return_value=["inst_1"]) as list_instances:
@@ -401,25 +432,44 @@ class TestCommandWrappers(unittest.TestCase):
 
         scenarios = [
             ({"ok": False, "error": "blocked"}, False),
-            ({"ok": True, "blocked": True, "dependencies": [{"asset_type": "script", "asset_name": "scr_test", "relation": "ref"}]}, False),
+            (
+                {
+                    "ok": True,
+                    "blocked": True,
+                    "dependencies": [{"asset_type": "script", "asset_name": "scr_test", "relation": "ref"}],
+                },
+                False,
+            ),
             ({"ok": True, "dry_run": True}, True),
             ({"ok": True, "deleted": True}, True),
         ]
         for result_obj, expected in scenarios:
-            with self.subTest(result=result_obj), patch.object(
-                workflow_commands, "safe_delete_asset", return_value=result_obj
-            ), patch("builtins.print"):
+            with (
+                self.subTest(result=result_obj),
+                patch.object(workflow_commands, "safe_delete_asset", return_value=result_obj),
+                patch("builtins.print"),
+            ):
                 result = workflow_commands.handle_workflow_safe_delete(
-                    SimpleNamespace(project_root=".", asset_type="script", asset_name="scr_test", force=False, clean_refs=False, apply=False)
+                    SimpleNamespace(
+                        project_root=".",
+                        asset_type="script",
+                        asset_name="scr_test",
+                        force=False,
+                        clean_refs=False,
+                        apply=False,
+                    )
                 )
             self.assertEqual(result, expected)
 
     def test_runner_wrappers_cover_success_failure_and_exceptions(self):
-        compile_args = SimpleNamespace(project_root="/tmp/project", runtime_version="1.0.0", platform=None, runtime="YYC")
+        compile_args = SimpleNamespace(
+            project_root="/tmp/project", runtime_version="1.0.0", platform=None, runtime="YYC"
+        )
         runner_instance = Mock()
         runner_instance.compile_project.return_value = True
-        with patch.object(runner_commands, "GameMakerRunner", return_value=runner_instance) as runner_cls, patch.object(
-            runner_commands, "detect_default_target_platform", return_value="Linux"
+        with (
+            patch.object(runner_commands, "GameMakerRunner", return_value=runner_instance) as runner_cls,
+            patch.object(runner_commands, "detect_default_target_platform", return_value="Linux"),
         ):
             result, stdout, _ = _capture_output(runner_commands.handle_runner_compile, compile_args)
         self.assertTrue(result)
@@ -429,26 +479,39 @@ class TestCommandWrappers(unittest.TestCase):
 
         runner_instance = Mock(last_failure_message="bad build")
         runner_instance.compile_project.return_value = False
-        with patch.object(runner_commands, "GameMakerRunner", return_value=runner_instance), patch.object(
-            runner_commands, "detect_default_target_platform", return_value="Windows"
+        with (
+            patch.object(runner_commands, "GameMakerRunner", return_value=runner_instance),
+            patch.object(runner_commands, "detect_default_target_platform", return_value="Windows"),
         ):
-            result, stdout, _ = _capture_output(runner_commands.handle_runner_compile, SimpleNamespace(project_root=None, runtime="VM"))
+            result, stdout, _ = _capture_output(
+                runner_commands.handle_runner_compile, SimpleNamespace(project_root=None, runtime="VM")
+            )
         self.assertFalse(result)
         self.assertIn("bad build", stdout)
 
         with patch.object(runner_commands, "GameMakerRunner", side_effect=RuntimeError("compile boom")):
-            result, stdout, _ = _capture_output(runner_commands.handle_runner_compile, SimpleNamespace(project_root=".", runtime="VM"))
+            result, stdout, _ = _capture_output(
+                runner_commands.handle_runner_compile, SimpleNamespace(project_root=".", runtime="VM")
+            )
         self.assertFalse(result)
         self.assertIn("Error during compilation: compile boom", stdout)
 
         run_instance = Mock()
         run_instance.run_project_direct.return_value = {"ok": True, "pid": 1}
-        with patch.object(runner_commands, "GameMakerRunner", return_value=run_instance), patch.object(
-            runner_commands, "detect_default_target_platform", return_value="macOS"
+        with (
+            patch.object(runner_commands, "GameMakerRunner", return_value=run_instance),
+            patch.object(runner_commands, "detect_default_target_platform", return_value="macOS"),
         ):
             result, stdout, _ = _capture_output(
                 runner_commands.handle_runner_run,
-                SimpleNamespace(project_root="/tmp/project", runtime_version=None, platform=None, runtime="VM", background=True, output_location="project"),
+                SimpleNamespace(
+                    project_root="/tmp/project",
+                    runtime_version=None,
+                    platform=None,
+                    runtime="VM",
+                    background=True,
+                    output_location="project",
+                ),
             )
         self.assertEqual(result["pid"], 1)
         self.assertIn("Running GameMaker project", stdout)
@@ -471,13 +534,17 @@ class TestCommandWrappers(unittest.TestCase):
         stop_instance = Mock()
         stop_instance.stop_game.return_value = {"ok": True, "message": "stopped"}
         with patch.object(runner_commands, "GameMakerRunner", return_value=stop_instance):
-            result, stdout, _ = _capture_output(runner_commands.handle_runner_stop, SimpleNamespace(project_root="/tmp/project"))
+            result, stdout, _ = _capture_output(
+                runner_commands.handle_runner_stop, SimpleNamespace(project_root="/tmp/project")
+            )
         self.assertTrue(result["ok"])
         self.assertIn("[OK] stopped", stdout)
 
         stop_instance.stop_game.return_value = {"ok": False, "message": "not running"}
         with patch.object(runner_commands, "GameMakerRunner", return_value=stop_instance):
-            result, stdout, _ = _capture_output(runner_commands.handle_runner_stop, SimpleNamespace(project_root="/tmp/project"))
+            result, stdout, _ = _capture_output(
+                runner_commands.handle_runner_stop, SimpleNamespace(project_root="/tmp/project")
+            )
         self.assertFalse(result["ok"])
         self.assertIn("[WARN] not running", stdout)
 
@@ -495,7 +562,9 @@ class TestCommandWrappers(unittest.TestCase):
             "started_at": "2026-03-10T10:00:00",
         }
         with patch.object(runner_commands, "GameMakerRunner", return_value=status_instance):
-            result, stdout, _ = _capture_output(runner_commands.handle_runner_status, SimpleNamespace(project_root="/tmp/project"))
+            result, stdout, _ = _capture_output(
+                runner_commands.handle_runner_status, SimpleNamespace(project_root="/tmp/project")
+            )
         self.assertTrue(result["running"])
         self.assertIn("PID: 123", stdout)
 
@@ -566,7 +635,10 @@ class TestServerHelpers(unittest.TestCase):
                 self.assertEqual(server_project._resolve_project_directory_no_deps(None), root)
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            with patch.dict(os.environ, {}, clear=True), patch("gms_mcp.project_detection.Path.cwd", return_value=Path(temp_dir)):
+            with (
+                patch.dict(os.environ, {}, clear=True),
+                patch("gms_mcp.project_detection.Path.cwd", return_value=Path(temp_dir)),
+            ):
                 with self.assertRaises(FileNotFoundError):
                     server_project._resolve_project_directory_no_deps(None)
 
@@ -576,16 +648,22 @@ class TestServerHelpers(unittest.TestCase):
         mcp = FakeMCP()
         server_resources.register(mcp)
 
-        with patch("gms_mcp.server.resources._resolve_project_directory", return_value=Path("/tmp/project")), patch(
-            "gms_helpers.introspection.build_project_index",
-            return_value={"assets": ["a"]},
+        with (
+            patch("gms_mcp.server.resources._resolve_project_directory", return_value=Path("/tmp/project")),
+            patch(
+                "gms_helpers.introspection.build_project_index",
+                return_value={"assets": ["a"]},
+            ),
         ):
             result = asyncio.run(mcp.resources["gms://project/index"]())
         self.assertIn('"assets"', result)
 
-        with patch("gms_mcp.server.resources._resolve_project_directory", return_value=Path("/tmp/project")), patch(
-            "gms_helpers.introspection.build_asset_graph",
-            return_value={"nodes": [], "edges": []},
+        with (
+            patch("gms_mcp.server.resources._resolve_project_directory", return_value=Path("/tmp/project")),
+            patch(
+                "gms_helpers.introspection.build_asset_graph",
+                return_value={"nodes": [], "edges": []},
+            ),
         ):
             result = asyncio.run(mcp.resources["gms://project/asset-graph"]())
         self.assertIn('"nodes"', result)
@@ -599,7 +677,10 @@ class TestRuntimeTools(MCPToolTestCase):
     module = runtime_tools
 
     def test_runtime_wrappers(self):
-        installed = [SimpleNamespace(to_dict=lambda: {"version": "1"}), SimpleNamespace(to_dict=lambda: {"version": "2"})]
+        installed = [
+            SimpleNamespace(to_dict=lambda: {"version": "1"}),
+            SimpleNamespace(to_dict=lambda: {"version": "2"}),
+        ]
         manager = Mock()
         manager.list_installed.return_value = installed
         manager.get_pinned.return_value = "1"
@@ -608,8 +689,9 @@ class TestRuntimeTools(MCPToolTestCase):
         manager.unpin.return_value = False
         manager.verify.return_value = {"ok": True}
 
-        with patch("gms_mcp.server.tools.runtime._resolve_project_directory_no_deps", return_value=Path("/tmp/project")), patch(
-            "gms_helpers.runtime_manager.RuntimeManager", return_value=manager
+        with (
+            patch("gms_mcp.server.tools.runtime._resolve_project_directory_no_deps", return_value=Path("/tmp/project")),
+            patch("gms_helpers.runtime_manager.RuntimeManager", return_value=manager),
         ):
             listed = self.call_tool("gm_runtime_list", project_root="/tmp/project")
             pinned = self.call_tool("gm_runtime_pin", version="2", project_root="/tmp/project")
@@ -626,16 +708,13 @@ class TestDocsTools(MCPToolTestCase):
     module = docs_tools
 
     def test_docs_wrappers(self):
-        with patch("gms_helpers.gml_docs.lookup", return_value={"ok": True}), patch(
-            "gms_helpers.gml_docs.search", return_value={"ok": True, "results": []}
-        ), patch(
-            "gms_helpers.gml_docs.list_functions", return_value={"ok": True, "results": []}
-        ), patch(
-            "gms_helpers.gml_docs.list_categories", return_value={"ok": True}
-        ), patch(
-            "gms_helpers.gml_docs.get_cache_stats", return_value={"ok": True}
-        ), patch(
-            "gms_helpers.gml_docs.clear_cache", return_value={"ok": True}
+        with (
+            patch("gms_helpers.gml_docs.lookup", return_value={"ok": True}),
+            patch("gms_helpers.gml_docs.search", return_value={"ok": True, "results": []}),
+            patch("gms_helpers.gml_docs.list_functions", return_value={"ok": True, "results": []}),
+            patch("gms_helpers.gml_docs.list_categories", return_value={"ok": True}),
+            patch("gms_helpers.gml_docs.get_cache_stats", return_value={"ok": True}),
+            patch("gms_helpers.gml_docs.clear_cache", return_value={"ok": True}),
         ):
             self.assertTrue(self.call_tool("gm_doc_lookup", function_name="draw_sprite")["ok"])
             self.assertTrue(self.call_tool("gm_doc_search", query="draw")["ok"])
@@ -649,16 +728,13 @@ class TestIntrospectionTools(MCPToolTestCase):
     module = introspection_tools
 
     def test_introspection_wrappers(self):
-        with patch("gms_mcp.server.tools.introspection._resolve_project_directory", return_value=Path("/tmp/project")), patch(
-            "gms_helpers.introspection.list_assets_by_type", return_value={"script": [{"name": "scr_test"}]}
-        ), patch(
-            "gms_helpers.introspection.read_asset_yy", side_effect=[{"name": "scr_test"}, None]
-        ), patch(
-            "gms_helpers.introspection.search_references", return_value=[{"path": "scripts/scr.gml"}]
-        ), patch(
-            "gms_helpers.introspection.build_asset_graph", return_value={"nodes": []}
-        ), patch(
-            "gms_helpers.introspection.get_project_stats", return_value={"objects": 1}
+        with (
+            patch("gms_mcp.server.tools.introspection._resolve_project_directory", return_value=Path("/tmp/project")),
+            patch("gms_helpers.introspection.list_assets_by_type", return_value={"script": [{"name": "scr_test"}]}),
+            patch("gms_helpers.introspection.read_asset_yy", side_effect=[{"name": "scr_test"}, None]),
+            patch("gms_helpers.introspection.search_references", return_value=[{"path": "scripts/scr.gml"}]),
+            patch("gms_helpers.introspection.build_asset_graph", return_value={"nodes": []}),
+            patch("gms_helpers.introspection.get_project_stats", return_value={"objects": 1}),
         ):
             listed = self.call_tool("gm_list_assets", project_root="/tmp/project", asset_type="script")
             found = self.call_tool("gm_read_asset", project_root="/tmp/project", asset_identifier="scr_test")
@@ -679,19 +755,45 @@ class TestEventTools(MCPToolTestCase):
     module = event_tools
 
     def test_event_wrappers_build_expected_cli_args(self):
-        with patch(
-            "gms_mcp.server.tools.events._run_with_fallback",
-            new=AsyncMock(return_value={"ok": True}),
-        ) as fallback, patch("gms_mcp.server.tools.events._resolve_repo_root", return_value=Path("/tmp/project")), patch(
-            "gms_mcp.server.tools.events._ensure_cli_on_sys_path"
+        with (
+            patch(
+                "gms_mcp.server.tools.events._run_with_fallback",
+                new=AsyncMock(return_value={"ok": True}),
+            ) as fallback,
+            patch("gms_mcp.server.tools.events._resolve_repo_root", return_value=Path("/tmp/project")),
+            patch("gms_mcp.server.tools.events._ensure_cli_on_sys_path"),
         ):
             cases = [
-                ("gm_event_add", {"object": "o_player", "event": "create", "template": "basic", "project_root": "/tmp/project"}, ["event", "add", "o_player", "create", "--template", "basic"]),
-                ("gm_event_remove", {"object": "o_player", "event": "destroy", "keep_file": True, "project_root": "/tmp/project"}, ["event", "remove", "o_player", "destroy", "--keep-file"]),
-                ("gm_event_duplicate", {"object": "o_player", "source_event": "create", "target_num": 2, "project_root": "/tmp/project"}, ["event", "duplicate", "o_player", "create", "2"]),
-                ("gm_event_list", {"object": "o_player", "project_root": "/tmp/project"}, ["event", "list", "o_player"]),
-                ("gm_event_validate", {"object": "o_player", "project_root": "/tmp/project"}, ["event", "validate", "o_player"]),
-                ("gm_event_fix", {"object": "o_player", "safe_mode": False, "project_root": "/tmp/project"}, ["event", "fix", "o_player", "--no-safe-mode"]),
+                (
+                    "gm_event_add",
+                    {"object": "o_player", "event": "create", "template": "basic", "project_root": "/tmp/project"},
+                    ["event", "add", "o_player", "create", "--template", "basic"],
+                ),
+                (
+                    "gm_event_remove",
+                    {"object": "o_player", "event": "destroy", "keep_file": True, "project_root": "/tmp/project"},
+                    ["event", "remove", "o_player", "destroy", "--keep-file"],
+                ),
+                (
+                    "gm_event_duplicate",
+                    {"object": "o_player", "source_event": "create", "target_num": 2, "project_root": "/tmp/project"},
+                    ["event", "duplicate", "o_player", "create", "2"],
+                ),
+                (
+                    "gm_event_list",
+                    {"object": "o_player", "project_root": "/tmp/project"},
+                    ["event", "list", "o_player"],
+                ),
+                (
+                    "gm_event_validate",
+                    {"object": "o_player", "project_root": "/tmp/project"},
+                    ["event", "validate", "o_player"],
+                ),
+                (
+                    "gm_event_fix",
+                    {"object": "o_player", "safe_mode": False, "project_root": "/tmp/project"},
+                    ["event", "fix", "o_player", "--no-safe-mode"],
+                ),
             ]
             for tool_name, kwargs, cli_args in cases:
                 with self.subTest(tool_name=tool_name):
@@ -704,17 +806,38 @@ class TestCodeIntelTools(MCPToolTestCase):
     module = code_intel
 
     def test_code_intel_wrappers_build_expected_cli_args(self):
-        with patch(
-            "gms_mcp.server.tools.code_intel._run_with_fallback",
-            new=AsyncMock(return_value={"ok": True}),
-        ) as fallback, patch("gms_mcp.server.tools.code_intel._resolve_repo_root", return_value=Path("/tmp/project")), patch(
-            "gms_mcp.server.tools.code_intel._resolve_project_directory", return_value=Path("/tmp/project")
-        ), patch("gms_mcp.server.tools.code_intel._ensure_cli_on_sys_path"):
+        with (
+            patch(
+                "gms_mcp.server.tools.code_intel._run_with_fallback",
+                new=AsyncMock(return_value={"ok": True}),
+            ) as fallback,
+            patch("gms_mcp.server.tools.code_intel._resolve_repo_root", return_value=Path("/tmp/project")),
+            patch("gms_mcp.server.tools.code_intel._resolve_project_directory", return_value=Path("/tmp/project")),
+            patch("gms_mcp.server.tools.code_intel._ensure_cli_on_sys_path"),
+        ):
             cases = [
                 ("gm_build_index", {"project_root": "/tmp/project", "force": True}, ["symbol", "build", "--force"]),
-                ("gm_find_definition", {"project_root": "/tmp/project", "symbol_name": "player_move"}, ["symbol", "find-definition", "player_move"]),
-                ("gm_find_references", {"project_root": "/tmp/project", "symbol_name": "player_move", "max_results": 25}, ["symbol", "find-references", "player_move", "--max", "25"]),
-                ("gm_list_symbols", {"project_root": "/tmp/project", "kind": "function", "name_filter": "player", "file_filter": "scripts", "max_results": 10}, ["symbol", "list", "--kind", "function", "--name", "player", "--file", "scripts", "--max", "10"]),
+                (
+                    "gm_find_definition",
+                    {"project_root": "/tmp/project", "symbol_name": "player_move"},
+                    ["symbol", "find-definition", "player_move"],
+                ),
+                (
+                    "gm_find_references",
+                    {"project_root": "/tmp/project", "symbol_name": "player_move", "max_results": 25},
+                    ["symbol", "find-references", "player_move", "--max", "25"],
+                ),
+                (
+                    "gm_list_symbols",
+                    {
+                        "project_root": "/tmp/project",
+                        "kind": "function",
+                        "name_filter": "player",
+                        "file_filter": "scripts",
+                        "max_results": 10,
+                    },
+                    ["symbol", "list", "--kind", "function", "--name", "player", "--file", "scripts", "--max", "10"],
+                ),
             ]
             for tool_name, kwargs, cli_args in cases:
                 with self.subTest(tool_name=tool_name):
@@ -727,11 +850,16 @@ class TestProjectHealthTools(MCPToolTestCase):
     module = project_health
 
     def test_project_health_wrappers(self):
-        with patch("gms_mcp.server.tools.project_health._resolve_project_directory_no_deps", return_value=Path("/tmp/project")), patch(
-            "gms_mcp.server.tools.project_health._find_yyp_file", return_value="game.yyp"
-        ), patch(
-            "gms_mcp.server.tools.project_health.get_update_status",
-            return_value=SimpleNamespace(to_dict=lambda: {"status": "ok", "message": "Up to date"}),
+        with (
+            patch(
+                "gms_mcp.server.tools.project_health._resolve_project_directory_no_deps",
+                return_value=Path("/tmp/project"),
+            ),
+            patch("gms_mcp.server.tools.project_health._find_yyp_file", return_value="game.yyp"),
+            patch(
+                "gms_mcp.server.tools.project_health.get_update_status",
+                return_value=SimpleNamespace(to_dict=lambda: {"status": "ok", "message": "Up to date"}),
+            ),
         ):
             info = self.call_tool("gm_project_info", project_root="/tmp/project")
         self.assertEqual(info["yyp"], "game.yyp")
@@ -759,19 +887,25 @@ class TestProjectHealthTools(MCPToolTestCase):
             "gms_mcp.server.tools.project_health._run_cli_async",
             new=AsyncMock(return_value=async_result),
         ):
-            result = self.call_tool("gm_cli", args=["maintenance", "auto"], project_root="/tmp/project", prefer_cli=True)
+            result = self.call_tool(
+                "gm_cli", args=["maintenance", "auto"], project_root="/tmp/project", prefer_cli=True
+            )
         self.assertTrue(result["ok"])
 
         with patch(
             "gms_mcp.server.tools.project_health._run_gms_inprocess",
             return_value=SimpleNamespace(as_dict=lambda: {"ok": True, "stdout": "good", "stderr": ""}),
         ):
-            result = self.call_tool("gm_cli", args=["maintenance", "auto"], project_root="/tmp/project", prefer_cli=False)
+            result = self.call_tool(
+                "gm_cli", args=["maintenance", "auto"], project_root="/tmp/project", prefer_cli=False
+            )
         self.assertTrue(result["ok"])
 
         with patch(
             "gms_mcp.server.tools.project_health._run_gms_inprocess",
-            return_value=SimpleNamespace(as_dict=lambda: {"ok": False, "error": "direct failed", "stdout": "", "stderr": ""}),
+            return_value=SimpleNamespace(
+                as_dict=lambda: {"ok": False, "error": "direct failed", "stdout": "", "stderr": ""}
+            ),
         ):
             result = self.call_tool(
                 "gm_cli",
@@ -784,12 +918,17 @@ class TestProjectHealthTools(MCPToolTestCase):
         self.assertEqual(result["error"], "direct failed")
 
         async_result = SimpleNamespace(as_dict=lambda: {"ok": True, "stdout": "cli", "stderr": ""})
-        with patch(
-            "gms_mcp.server.tools.project_health._run_gms_inprocess",
-            return_value=SimpleNamespace(as_dict=lambda: {"ok": False, "error": "direct failed", "stdout": "", "stderr": ""}),
-        ), patch(
-            "gms_mcp.server.tools.project_health._run_cli_async",
-            new=AsyncMock(return_value=async_result),
+        with (
+            patch(
+                "gms_mcp.server.tools.project_health._run_gms_inprocess",
+                return_value=SimpleNamespace(
+                    as_dict=lambda: {"ok": False, "error": "direct failed", "stdout": "", "stderr": ""}
+                ),
+            ),
+            patch(
+                "gms_mcp.server.tools.project_health._run_cli_async",
+                new=AsyncMock(return_value=async_result),
+            ),
         ):
             result = self.call_tool(
                 "gm_cli",
@@ -799,11 +938,13 @@ class TestProjectHealthTools(MCPToolTestCase):
             )
         self.assertEqual(result["direct_error"], "direct failed")
 
-        with patch(
-            "gms_mcp.server.tools.project_health._run_with_fallback",
-            new=AsyncMock(return_value={"ok": True}),
-        ) as fallback, patch("gms_mcp.server.tools.project_health._resolve_repo_root", return_value=Path("/tmp/project")), patch(
-            "gms_mcp.server.tools.project_health._ensure_cli_on_sys_path"
+        with (
+            patch(
+                "gms_mcp.server.tools.project_health._run_with_fallback",
+                new=AsyncMock(return_value={"ok": True}),
+            ) as fallback,
+            patch("gms_mcp.server.tools.project_health._resolve_repo_root", return_value=Path("/tmp/project")),
+            patch("gms_mcp.server.tools.project_health._ensure_cli_on_sys_path"),
         ):
             diagnostics = self.call_tool("gm_diagnostics", depth="deep", include_info=True, project_root="/tmp/project")
         self.assertTrue(diagnostics["ok"])

@@ -11,4 +11,3 @@ def _default_target_platform() -> str:
     if system == "Linux":
         return "Linux"
     return "Windows"
-

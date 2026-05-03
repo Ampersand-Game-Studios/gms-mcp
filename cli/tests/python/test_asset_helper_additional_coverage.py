@@ -126,10 +126,13 @@ CREATE_CASES = [
 
 class TestAssetHelperAdditionalCoverage(unittest.TestCase):
     def test_validate_asset_directory_structure_rejects_cwd_outside_project(self):
-        with patch(
-            "gms_helpers.asset_helper.validate_gamemaker_context",
-            return_value=Path("/tmp/project"),
-        ), patch("gms_helpers.asset_helper.Path.cwd", return_value=Path("/tmp/outside")):
+        with (
+            patch(
+                "gms_helpers.asset_helper.validate_gamemaker_context",
+                return_value=Path("/tmp/project"),
+            ),
+            patch("gms_helpers.asset_helper.Path.cwd", return_value=Path("/tmp/outside")),
+        ):
             with self.assertRaises(ProjectNotFoundError) as error:
                 asset_helper.validate_asset_directory_structure()
 
@@ -171,9 +174,7 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                     return_value=_maintenance_result(False),
                 )
             )
-            stack.enter_context(
-                patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=False)
-            )
+            stack.enter_context(patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=False))
             handler = stack.enter_context(
                 patch("gms_helpers.asset_helper.handle_maintenance_failure", return_value="blocked")
             )
@@ -282,9 +283,7 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                     side_effect=[_maintenance_result(False), _maintenance_result(True)],
                 )
             )
-            stack.enter_context(
-                patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=True)
-            )
+            stack.enter_context(patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=True))
             handler = stack.enter_context(
                 patch("gms_helpers.asset_helper.handle_maintenance_failure", return_value="post-failed")
             )
@@ -302,19 +301,28 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
         self.assertIn("Unsupported asset type", output)
 
         missing = _create_args("missing", asset_type="script", skip_maintenance=True)
-        with patch("gms_helpers.utils.find_yyp_file", return_value="project.yyp"), patch(
-            "gms_helpers.utils.load_json",
-            return_value={"resources": []},
+        with (
+            patch("gms_helpers.utils.find_yyp_file", return_value="project.yyp"),
+            patch(
+                "gms_helpers.utils.load_json",
+                return_value={"resources": []},
+            ),
         ):
             result, output = _capture_output(asset_helper.delete_asset, missing)
         self.assertFalse(result)
         self.assertIn("not found in project", output)
 
         dry_run_args = _create_args("test_asset", asset_type="script", dry_run=True, skip_maintenance=True)
-        with patch("gms_helpers.utils.find_yyp_file", return_value="project.yyp"), patch(
-            "gms_helpers.utils.load_json",
-            return_value={"resources": [{"id": {"name": "test_asset", "path": "scripts/test_asset/test_asset.yy"}}]},
-        ), patch("gms_helpers.asset_helper.Path.exists", return_value=False):
+        with (
+            patch("gms_helpers.utils.find_yyp_file", return_value="project.yyp"),
+            patch(
+                "gms_helpers.utils.load_json",
+                return_value={
+                    "resources": [{"id": {"name": "test_asset", "path": "scripts/test_asset/test_asset.yy"}}]
+                },
+            ),
+            patch("gms_helpers.asset_helper.Path.exists", return_value=False),
+        ):
             result, output = _capture_output(asset_helper.delete_asset, dry_run_args)
         self.assertTrue(result)
         self.assertIn("No files found on disk", output)
@@ -350,15 +358,11 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                         side_effect=[_maintenance_result(False), _maintenance_result(True)],
                     )
                 )
-                stack.enter_context(
-                    patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=True)
-                )
+                stack.enter_context(patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=True))
                 handler = stack.enter_context(
                     patch("gms_helpers.asset_helper.handle_maintenance_failure", return_value="delete-post-failed")
                 )
-                stack.enter_context(
-                    patch("shutil.rmtree", side_effect=OSError("unlink failed"))
-                )
+                stack.enter_context(patch("shutil.rmtree", side_effect=OSError("unlink failed")))
                 cwd_before = Path.cwd()
                 os.chdir(project_root)
                 try:
@@ -378,9 +382,21 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                 "gms_helpers.maintenance.tidy_json.validate_project_json",
                 RuntimeError("json fail"),
             ),
-            ("maint_list_orphans_command", "gms_helpers.asset_helper.find_orphaned_assets", RuntimeError("orphans fail")),
-            ("maint_prune_missing_command", "gms_helpers.asset_helper.prune_missing_assets", RuntimeError("prune fail")),
-            ("maint_validate_paths_command", "gms_helpers.asset_helper.validate_folder_paths", RuntimeError("paths fail")),
+            (
+                "maint_list_orphans_command",
+                "gms_helpers.asset_helper.find_orphaned_assets",
+                RuntimeError("orphans fail"),
+            ),
+            (
+                "maint_prune_missing_command",
+                "gms_helpers.asset_helper.prune_missing_assets",
+                RuntimeError("prune fail"),
+            ),
+            (
+                "maint_validate_paths_command",
+                "gms_helpers.asset_helper.validate_folder_paths",
+                RuntimeError("paths fail"),
+            ),
             ("maint_fix_issues_command", "gms_helpers.asset_helper.run_auto_maintenance", RuntimeError("auto fail")),
         ]
         for func_name, patch_target, exc in command_cases:
@@ -395,12 +411,19 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
         self.assertFalse(result)
         self.assertIn("missing fail", output)
 
-        with patch("gms_helpers.utils.find_yyp_file", return_value="project.yyp"), patch(
-            "gms_helpers.utils.load_json",
-            return_value={"resources": [{"id": {"name": "dup", "path": "a"}}, {"id": {"name": "dup", "path": "b"}}]},
-        ), patch("gms_helpers.utils.dedupe_resources", return_value=({}, 1, ["dup"])), patch(
-            "gms_helpers.utils.save_json",
-            side_effect=RuntimeError("save fail"),
+        with (
+            patch("gms_helpers.utils.find_yyp_file", return_value="project.yyp"),
+            patch(
+                "gms_helpers.utils.load_json",
+                return_value={
+                    "resources": [{"id": {"name": "dup", "path": "a"}}, {"id": {"name": "dup", "path": "b"}}]
+                },
+            ),
+            patch("gms_helpers.utils.dedupe_resources", return_value=({}, 1, ["dup"])),
+            patch(
+                "gms_helpers.utils.save_json",
+                side_effect=RuntimeError("save fail"),
+            ),
         ):
             result, output = _capture_output(
                 asset_helper.maint_dedupe_resources_command,
@@ -501,9 +524,12 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
         self.assertTrue(result)
         self.assertIn("No orphaned assets found", output)
 
-        with patch("gms_helpers.asset_helper.find_orphaned_assets", return_value=[("objects/o_a/o_a.yy", "object")]), patch(
-            "gms_helpers.asset_helper.get_keep_patterns",
-            return_value=["o_a"],
+        with (
+            patch("gms_helpers.asset_helper.find_orphaned_assets", return_value=[("objects/o_a/o_a.yy", "object")]),
+            patch(
+                "gms_helpers.asset_helper.get_keep_patterns",
+                return_value=["o_a"],
+            ),
         ):
             result, output = _capture_output(
                 asset_helper.maint_purge_command,
@@ -512,12 +538,16 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
         self.assertTrue(result)
         self.assertIn("protected by keep patterns", output)
 
-        with patch("gms_helpers.asset_helper.find_orphaned_assets", return_value=[("objects/o_a/o_a.yy", "object")]), patch(
-            "gms_helpers.asset_helper.get_keep_patterns",
-            return_value=[],
-        ), patch(
-            "gms_helpers.asset_helper.move_to_trash",
-            return_value={"errors": ["trash fail"], "moved_count": 1, "trash_folder": ".trash"},
+        with (
+            patch("gms_helpers.asset_helper.find_orphaned_assets", return_value=[("objects/o_a/o_a.yy", "object")]),
+            patch(
+                "gms_helpers.asset_helper.get_keep_patterns",
+                return_value=[],
+            ),
+            patch(
+                "gms_helpers.asset_helper.move_to_trash",
+                return_value={"errors": ["trash fail"], "moved_count": 1, "trash_folder": ".trash"},
+            ),
         ):
             result, output = _capture_output(
                 asset_helper.maint_purge_command,
@@ -533,26 +563,28 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
         self.assertIn("audit fail", output)
 
     def test_main_error_paths(self):
-        with patch.object(sys, "argv", ["asset_helper"]), patch(
-            "gms_helpers.asset_helper.validate_working_directory"
-        ):
+        with patch.object(sys, "argv", ["asset_helper"]), patch("gms_helpers.asset_helper.validate_working_directory"):
             with self.assertRaises(SystemExit):
                 asset_helper.main()
 
-        with patch.object(sys, "argv", ["asset_helper", "test"]), patch(
-            "gms_helpers.asset_helper.validate_working_directory"
-        ), patch(
-            "argparse.ArgumentParser.parse_args",
-            return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(GMSError("boom"))),
+        with (
+            patch.object(sys, "argv", ["asset_helper", "test"]),
+            patch("gms_helpers.asset_helper.validate_working_directory"),
+            patch(
+                "argparse.ArgumentParser.parse_args",
+                return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(GMSError("boom"))),
+            ),
         ):
             with self.assertRaises(GMSError):
                 asset_helper.main()
 
-        with patch.object(sys, "argv", ["asset_helper", "test"]), patch(
-            "gms_helpers.asset_helper.validate_working_directory"
-        ), patch(
-            "argparse.ArgumentParser.parse_args",
-            return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(RuntimeError("unexpected"))),
+        with (
+            patch.object(sys, "argv", ["asset_helper", "test"]),
+            patch("gms_helpers.asset_helper.validate_working_directory"),
+            patch(
+                "argparse.ArgumentParser.parse_args",
+                return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(RuntimeError("unexpected"))),
+            ),
         ):
             result, output = _capture_output(asset_helper.main)
         self.assertFalse(result)

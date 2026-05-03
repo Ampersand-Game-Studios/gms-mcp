@@ -131,7 +131,9 @@ def test_post_text_to_x_exhausts_server_error_retries(monkeypatch):
     set_x_credentials(monkeypatch)
     session = FakeSession([FakeResponse(503, text="Service Unavailable")] * 4)
     sleeps: list[float] = []
-    monkeypatch.setattr(module, "post_text_to_x_with_xurl", lambda *args, **kwargs: module.XPostResult(False, "xurl_unavailable"))
+    monkeypatch.setattr(
+        module, "post_text_to_x_with_xurl", lambda *args, **kwargs: module.XPostResult(False, "xurl_unavailable")
+    )
 
     result = module.post_text_to_x(
         "hello world",
@@ -166,7 +168,11 @@ def test_post_text_to_x_defers_when_x_credits_are_depleted(monkeypatch):
         ]
     )
     logs: list[str] = []
-    monkeypatch.setattr(module, "post_text_to_x_with_xurl", lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("xurl fallback should not run")))
+    monkeypatch.setattr(
+        module,
+        "post_text_to_x_with_xurl",
+        lambda *args, **kwargs: (_ for _ in ()).throw(AssertionError("xurl fallback should not run")),
+    )
 
     result = module.post_text_to_x(
         "hello world",

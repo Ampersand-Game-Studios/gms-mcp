@@ -158,7 +158,9 @@ class TestDocCommandBehavior(unittest.TestCase):
             return_value={
                 "ok": True,
                 "count": 1,
-                "categories": [{"name": "Drawing", "function_count": 12, "subcategories": [{"name": "Sprites", "count": 5}]}],
+                "categories": [
+                    {"name": "Drawing", "function_count": 12, "subcategories": [{"name": "Sprites", "count": 5}]}
+                ],
             },
         ):
             categories_result, categories_output = _capture_output(handle_doc_categories, SimpleNamespace())
@@ -197,7 +199,9 @@ class TestDocCommandBehavior(unittest.TestCase):
 
 class TestSpriteCommandBehavior(unittest.TestCase):
     def test_sprite_frame_handlers_format_results(self):
-        add_args = SimpleNamespace(project_root=".", sprite_path="sprites/spr_test/spr_test.yy", position=2, source="frame.png")
+        add_args = SimpleNamespace(
+            project_root=".", sprite_path="sprites/spr_test/spr_test.yy", position=2, source="frame.png"
+        )
         with patch(
             "gms_helpers.sprite_frames.add_frame",
             return_value={"position": 2, "frame_uuid": "abc123", "new_frame_count": 3},
@@ -215,7 +219,9 @@ class TestSpriteCommandBehavior(unittest.TestCase):
         self.assertEqual(remove_result["removed_position"], 1)
         self.assertIn("Removed frame at position 1", remove_output)
 
-        duplicate_args = SimpleNamespace(project_root=".", sprite_path="sprites/spr_test/spr_test.yy", source_position=0, target=4)
+        duplicate_args = SimpleNamespace(
+            project_root=".", sprite_path="sprites/spr_test/spr_test.yy", source_position=0, target=4
+        )
         with patch(
             "gms_helpers.sprite_frames.duplicate_frame",
             return_value={"position": 4, "frame_uuid": "dup", "new_frame_count": 5},
@@ -265,20 +271,31 @@ class TestTextureGroupCommandBehavior(unittest.TestCase):
         )
 
     def test_texture_group_handlers_cover_success_and_failure_paths(self):
-        with patch("gms_helpers.commands.texture_group_commands.load_project_yyp", return_value=(Path("TestGame.yyp"), {})), patch(
-            "gms_helpers.commands.texture_group_commands.get_project_configs",
-            return_value=["desktop"],
-        ), patch(
-            "gms_helpers.commands.texture_group_commands.get_texture_groups_list",
-            return_value=[{"name": "Default", "loadType": "default"}],
+        with (
+            patch(
+                "gms_helpers.commands.texture_group_commands.load_project_yyp", return_value=(Path("TestGame.yyp"), {})
+            ),
+            patch(
+                "gms_helpers.commands.texture_group_commands.get_project_configs",
+                return_value=["desktop"],
+            ),
+            patch(
+                "gms_helpers.commands.texture_group_commands.get_texture_groups_list",
+                return_value=[{"name": "Default", "loadType": "default"}],
+            ),
         ):
             list_result, list_output = _capture_output(handle_texture_groups_list, SimpleNamespace(project_root="."))
         self.assertTrue(list_result.success)
         self.assertIn("Texture groups (1):", list_output)
 
-        with patch("gms_helpers.commands.texture_group_commands.load_project_yyp", return_value=(Path("TestGame.yyp"), {})), patch(
-            "gms_helpers.commands.texture_group_commands.find_texture_group",
-            return_value=None,
+        with (
+            patch(
+                "gms_helpers.commands.texture_group_commands.load_project_yyp", return_value=(Path("TestGame.yyp"), {})
+            ),
+            patch(
+                "gms_helpers.commands.texture_group_commands.find_texture_group",
+                return_value=None,
+            ),
         ):
             show_result, show_output = _capture_output(
                 handle_texture_groups_show,
@@ -289,7 +306,20 @@ class TestTextureGroupCommandBehavior(unittest.TestCase):
 
         with patch(
             "gms_helpers.commands.texture_group_commands.texture_group_members",
-            return_value={"ok": True, "warnings": ["watch this"], "count": 1, "members": [{"type": "sprite", "name": "spr_test", "path": "sprites/spr_test/spr_test.yy", "top_level_group": "Default", "config_groups": ["desktop"]}]},
+            return_value={
+                "ok": True,
+                "warnings": ["watch this"],
+                "count": 1,
+                "members": [
+                    {
+                        "type": "sprite",
+                        "name": "spr_test",
+                        "path": "sprites/spr_test/spr_test.yy",
+                        "top_level_group": "Default",
+                        "config_groups": ["desktop"],
+                    }
+                ],
+            },
         ):
             members_result, members_output = _capture_output(
                 handle_texture_groups_members,
@@ -301,7 +331,13 @@ class TestTextureGroupCommandBehavior(unittest.TestCase):
 
         with patch(
             "gms_helpers.commands.texture_group_commands.texture_group_scan",
-            return_value={"ok": True, "groups_defined": ["Default"], "groups_referenced": ["Default"], "missing_groups_referenced": {"missing": ["sprites/spr_test/spr_test.yy"]}, "mismatched_assets": ["spr_test"]},
+            return_value={
+                "ok": True,
+                "groups_defined": ["Default"],
+                "groups_referenced": ["Default"],
+                "missing_groups_referenced": {"missing": ["sprites/spr_test/spr_test.yy"]},
+                "mismatched_assets": ["spr_test"],
+            },
         ):
             scan_result, scan_output = _capture_output(
                 handle_texture_groups_scan,
@@ -310,11 +346,18 @@ class TestTextureGroupCommandBehavior(unittest.TestCase):
         self.assertTrue(scan_result.success)
         self.assertIn("Missing groups referenced: 1", scan_output)
 
-        success_payload = {"ok": True, "message": "Updated", "warnings": ["heads up"], "changed_files": ["TestGame.yyp"]}
+        success_payload = {
+            "ok": True,
+            "message": "Updated",
+            "warnings": ["heads up"],
+            "changed_files": ["TestGame.yyp"],
+        }
         with patch("gms_helpers.commands.texture_group_commands.texture_group_create", return_value=success_payload):
             create_result, create_output = _capture_output(
                 handle_texture_groups_create,
-                SimpleNamespace(project_root=".", name="game", template="Default", set=["autocrop=false"], dry_run=True),
+                SimpleNamespace(
+                    project_root=".", name="game", template="Default", set=["autocrop=false"], dry_run=True
+                ),
             )
         self.assertTrue(create_result.success)
         self.assertIn("[DRY] Would change", create_output)
@@ -322,7 +365,14 @@ class TestTextureGroupCommandBehavior(unittest.TestCase):
         with patch("gms_helpers.commands.texture_group_commands.texture_group_update", return_value=success_payload):
             update_result, update_output = _capture_output(
                 handle_texture_groups_update,
-                SimpleNamespace(project_root=".", name="game", set=["mips=2"], configs="desktop", update_existing_configs=True, dry_run=False),
+                SimpleNamespace(
+                    project_root=".",
+                    name="game",
+                    set=["mips=2"],
+                    configs="desktop",
+                    update_existing_configs=True,
+                    dry_run=False,
+                ),
             )
         self.assertTrue(update_result.success)
         self.assertIn("[OK] Updated", update_output)
@@ -330,7 +380,9 @@ class TestTextureGroupCommandBehavior(unittest.TestCase):
         with patch("gms_helpers.commands.texture_group_commands.texture_group_rename", return_value=success_payload):
             rename_result, rename_output = _capture_output(
                 handle_texture_groups_rename,
-                SimpleNamespace(project_root=".", old_name="old", new_name="new", update_references=True, dry_run=False),
+                SimpleNamespace(
+                    project_root=".", old_name="old", new_name="new", update_references=True, dry_run=False
+                ),
             )
         self.assertTrue(rename_result.success)
         self.assertIn("[WARN]", rename_output)
@@ -388,15 +440,19 @@ class TestPruneMaintenanceBehavior(unittest.TestCase):
                 123,
             ],
         }
-        with patch("gms_helpers.maintenance.prune.find_yyp_file", return_value="TestGame.yyp"), patch(
-            "gms_helpers.maintenance.prune.load_json",
-            return_value=yyp_data,
-        ), patch(
-            "gms_helpers.maintenance.prune.os.path.exists",
-            side_effect=lambda path: path == "scripts/existing/existing.yy",
-        ), patch("gms_helpers.maintenance.prune.shutil.copy2") as mock_copy, patch(
-            "gms_helpers.maintenance.prune.save_json"
-        ) as mock_save:
+        with (
+            patch("gms_helpers.maintenance.prune.find_yyp_file", return_value="TestGame.yyp"),
+            patch(
+                "gms_helpers.maintenance.prune.load_json",
+                return_value=yyp_data,
+            ),
+            patch(
+                "gms_helpers.maintenance.prune.os.path.exists",
+                side_effect=lambda path: path == "scripts/existing/existing.yy",
+            ),
+            patch("gms_helpers.maintenance.prune.shutil.copy2") as mock_copy,
+            patch("gms_helpers.maintenance.prune.save_json") as mock_save,
+        ):
             removed = prune_missing_assets(dry_run=True)
 
         self.assertEqual(
@@ -416,15 +472,21 @@ class TestPruneMaintenanceBehavior(unittest.TestCase):
             saved_payload["data"] = data
             saved_payload["path"] = path
 
-        with patch("gms_helpers.maintenance.prune.find_yyp_file", return_value="TestGame.yyp"), patch(
-            "gms_helpers.maintenance.prune.load_json",
-            return_value=yyp_data,
-        ), patch(
-            "gms_helpers.maintenance.prune.os.path.exists",
-            return_value=False,
-        ), patch("gms_helpers.maintenance.prune.shutil.copy2") as mock_copy, patch(
-            "gms_helpers.maintenance.prune.save_json",
-            side_effect=_save_json,
+        with (
+            patch("gms_helpers.maintenance.prune.find_yyp_file", return_value="TestGame.yyp"),
+            patch(
+                "gms_helpers.maintenance.prune.load_json",
+                return_value=yyp_data,
+            ),
+            patch(
+                "gms_helpers.maintenance.prune.os.path.exists",
+                return_value=False,
+            ),
+            patch("gms_helpers.maintenance.prune.shutil.copy2") as mock_copy,
+            patch(
+                "gms_helpers.maintenance.prune.save_json",
+                side_effect=_save_json,
+            ),
         ):
             removed = prune_missing_assets(dry_run=False)
 
@@ -479,9 +541,9 @@ class TestStaticSearchBehavior(unittest.TestCase):
             (root / "scripts").mkdir()
             (root / "docs").mkdir()
             (root / "scripts" / "logic.gml").write_text(
-                'sprite_index = spr_player;\n'
+                "sprite_index = spr_player;\n"
                 'audio_play_sound("snd_boom", 1, false);\n'
-                'room_goto(r_menu);\n'
+                "room_goto(r_menu);\n"
                 'font = "fnt_ui";\n',
                 encoding="utf-8",
             )

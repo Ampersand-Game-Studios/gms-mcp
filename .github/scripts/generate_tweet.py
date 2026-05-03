@@ -129,17 +129,56 @@ def is_duplicate(content: str, history: dict) -> bool:
 
 def compute_word_overlap(text1: str, text2: str) -> float:
     """Compute word overlap percentage between two texts."""
+
     # Normalize: lowercase, remove hashtags, split into words
     def normalize(text: str) -> set[str]:
-        text = re.sub(r'#\w+', '', text.lower())  # Remove hashtags
-        text = re.sub(r'[^\w\s]', ' ', text)  # Remove punctuation
+        text = re.sub(r"#\w+", "", text.lower())  # Remove hashtags
+        text = re.sub(r"[^\w\s]", " ", text)  # Remove punctuation
         words = set(text.split())
         # Remove common stop words
-        stop_words = {'a', 'an', 'the', 'is', 'are', 'was', 'were', 'be', 'been',
-                      'being', 'have', 'has', 'had', 'do', 'does', 'did', 'will',
-                      'would', 'could', 'should', 'may', 'might', 'must', 'to',
-                      'of', 'in', 'for', 'on', 'with', 'at', 'by', 'from', 'it',
-                      'this', 'that', 'and', 'or', 'but', 'if', 'your', 'you'}
+        stop_words = {
+            "a",
+            "an",
+            "the",
+            "is",
+            "are",
+            "was",
+            "were",
+            "be",
+            "been",
+            "being",
+            "have",
+            "has",
+            "had",
+            "do",
+            "does",
+            "did",
+            "will",
+            "would",
+            "could",
+            "should",
+            "may",
+            "might",
+            "must",
+            "to",
+            "of",
+            "in",
+            "for",
+            "on",
+            "with",
+            "at",
+            "by",
+            "from",
+            "it",
+            "this",
+            "that",
+            "and",
+            "or",
+            "but",
+            "if",
+            "your",
+            "you",
+        }
         return words - stop_words
 
     words1 = normalize(text1)
@@ -158,7 +197,7 @@ def is_semantic_duplicate(content: str, history: dict, threshold: float = 0.6) -
     recent_tweets = history.get("posted", [])[-10:]  # Check last 10 tweets
 
     for tweet in recent_tweets:
-        prev_content = tweet.get('content') or tweet.get('preview', '')
+        prev_content = tweet.get("content") or tweet.get("preview", "")
         if not prev_content:
             continue
 
@@ -273,7 +312,7 @@ def call_claude_api(prompt: str, system_prompt: str) -> str:
 
         except anthropic.RateLimitError:
             if attempt < MAX_RETRIES - 1:
-                wait_time = (2 ** attempt) * 10
+                wait_time = (2**attempt) * 10
                 print(f"Rate limited, waiting {wait_time}s...")
                 time.sleep(wait_time)
                 continue
@@ -312,9 +351,7 @@ Just the raw tweet content that will be posted directly."""
 
 def build_user_prompt(context: str, recent_tweets: list[dict]) -> str:
     """Build the user prompt for Claude."""
-    recent_text = "\n".join(
-        f"- {t.get('preview', '')}" for t in recent_tweets[-5:]
-    ) if recent_tweets else "None yet"
+    recent_text = "\n".join(f"- {t.get('preview', '')}" for t in recent_tweets[-5:]) if recent_tweets else "None yet"
 
     return f"""Generate ONE tweet for gms-mcp.
 
@@ -363,8 +400,7 @@ def generate_tweet(history: dict, dry_run: bool = False) -> tuple[str, str, str,
     recent_tweets = history.get("posted", [])[-15:]  # Expanded from 10 to 15
 
     context = build_context_for_claude(
-        topic, tweet_format, selected_angle, recent_tweets, changelog,
-        suggested_opening=opening_pattern
+        topic, tweet_format, selected_angle, recent_tweets, changelog, suggested_opening=opening_pattern
     )
     personality = get_personality_guide()
 

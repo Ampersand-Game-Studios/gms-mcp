@@ -2,7 +2,7 @@ import sys
 from pathlib import Path
 import os
 
-REPO_ROOT = Path(__file__).resolve().parents[3]     # repo root (contains gamemaker/)
+REPO_ROOT = Path(__file__).resolve().parents[3]  # repo root (contains gamemaker/)
 SRC_ROOT = REPO_ROOT / "src"
 
 # Ensure gms_helpers package is importable in tests.

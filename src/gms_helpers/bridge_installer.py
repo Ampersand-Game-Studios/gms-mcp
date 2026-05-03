@@ -34,21 +34,21 @@ def _find_yyp_in_dir(directory: Path) -> Optional[Path]:
 def _detect_asset_format(project_root: Path, asset_type: str) -> str:
     """
     Detect the format version string used for an asset type in this project.
-    
+
     Reads an existing asset of the given type and extracts its version string.
     Falls back to empty string if no existing assets found.
-    
+
     Args:
         project_root: Path to project root
         asset_type: Asset type folder name (e.g., "objects", "scripts")
-        
+
     Returns:
         Version string (e.g., "v1" or "")
     """
     asset_dir = project_root / asset_type
     if not asset_dir.exists():
         return ""
-    
+
     # Find first .yy file
     for subdir in asset_dir.iterdir():
         if subdir.is_dir():
@@ -78,44 +78,45 @@ ASSET_TYPE_FOLDER = "folders"
 
 class BridgeInstallError(Exception):
     """Error during bridge installation/removal."""
+
     pass
 
 
 class BridgeInstaller:
     """
     Handles installation and removal of MCP bridge assets.
-    
+
     The bridge consists of:
     - __mcp_bridge object (handles networking)
     - __mcp_log script (logging helper)
     - __mcp folder (organizational)
     """
-    
+
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root).resolve()
         self.yyp_path = _find_yyp_in_dir(self.project_root)
         if not self.yyp_path:
             raise BridgeInstallError(f"No .yyp file found in {self.project_root}")
-        
+
         self.backup_path: Optional[Path] = None
-        
+
         # Detect format versions from existing assets
         self._object_version = _detect_asset_format(self.project_root, "objects")
         self._script_version = _detect_asset_format(self.project_root, "scripts")
         self._folder_version = _detect_asset_format(self.project_root, "folders")
-    
+
     def is_installed(self) -> bool:
         """Check if bridge is already installed."""
         # Check for bridge object
         bridge_object_dir = self.project_root / ASSET_TYPE_OBJECT / BRIDGE_OBJECT_NAME
         if not bridge_object_dir.exists():
             return False
-        
+
         # Check for .yy file
         bridge_yy = bridge_object_dir / f"{BRIDGE_OBJECT_NAME}.yy"
         if not bridge_yy.exists():
             return False
-        
+
         # Check if registered in .yyp
         try:
             yyp_data = load_json(self.yyp_path)
@@ -126,9 +127,9 @@ class BridgeInstaller:
                     return True
         except Exception:
             pass
-        
+
         return False
-    
+
     def get_status(self) -> Dict[str, Any]:
         """Get detailed installation status."""
         status = {
@@ -139,21 +140,21 @@ class BridgeInstaller:
             "registered_in_yyp": False,
             "issues": [],
         }
-        
+
         # Check object
         bridge_object_dir = self.project_root / ASSET_TYPE_OBJECT / BRIDGE_OBJECT_NAME
         bridge_object_yy = bridge_object_dir / f"{BRIDGE_OBJECT_NAME}.yy"
         status["object_exists"] = bridge_object_yy.exists()
-        
+
         # Check script
         bridge_script_dir = self.project_root / ASSET_TYPE_SCRIPT / BRIDGE_SCRIPT_NAME
         bridge_script_yy = bridge_script_dir / f"{BRIDGE_SCRIPT_NAME}.yy"
         status["script_exists"] = bridge_script_yy.exists()
-        
+
         # Check folder
         bridge_folder_yy = self.project_root / ASSET_TYPE_FOLDER / f"{BRIDGE_FOLDER_NAME}.yy"
         status["folder_exists"] = bridge_folder_yy.exists()
-        
+
         # Check .yyp registration
         try:
             yyp_data = load_json(self.yyp_path)
@@ -166,22 +167,18 @@ class BridgeInstaller:
             status["registered_in_yyp"] = registered_count >= 2  # At least object and script
         except Exception as e:
             status["issues"].append(f"Failed to read .yyp: {e}")
-        
+
         # Determine overall status
-        status["installed"] = (
-            status["object_exists"] and 
-            status["script_exists"] and 
-            status["registered_in_yyp"]
-        )
-        
+        status["installed"] = status["object_exists"] and status["script_exists"] and status["registered_in_yyp"]
+
         # Check for inconsistencies
         if status["object_exists"] and not status["registered_in_yyp"]:
             status["issues"].append("Bridge files exist but not registered in .yyp")
         if status["registered_in_yyp"] and not status["object_exists"]:
             status["issues"].append("Bridge registered in .yyp but files missing")
-        
+
         return status
-    
+
     def _backup_yyp(self) -> Path:
         """Create a backup of the .yyp file."""
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -190,14 +187,14 @@ class BridgeInstaller:
         shutil.copy2(self.yyp_path, backup_path)
         self.backup_path = backup_path
         return backup_path
-    
+
     def _restore_yyp(self) -> None:
         """Restore .yyp from backup."""
         if self.backup_path and self.backup_path.exists():
             shutil.copy2(self.backup_path, self.yyp_path)
             self.backup_path.unlink()
             self.backup_path = None
-    
+
     def _cleanup_backup(self) -> None:
         """Remove backup file on success."""
         if self.backup_path and self.backup_path.exists():
@@ -326,15 +323,15 @@ class BridgeInstaller:
                 summary["warnings"].append(f"Failed to clean room '{room_file}': {exc}")
 
         return summary
-    
+
     def _generate_uuid(self) -> str:
         """Generate a GameMaker-style UUID."""
         return str(uuid.uuid4())
-    
+
     def _create_folder_asset(self) -> Tuple[Path, Dict[str, Any]]:
         """Create the __mcp folder asset."""
         folder_yy_path = self.project_root / ASSET_TYPE_FOLDER / f"{BRIDGE_FOLDER_NAME}.yy"
-        
+
         folder_data = {
             "$GMFolder": self._folder_version,
             "%Name": BRIDGE_FOLDER_NAME,
@@ -343,15 +340,15 @@ class BridgeInstaller:
             "resourceType": "GMFolder",
             "resourceVersion": "2.0",
         }
-        
+
         return folder_yy_path, folder_data
-    
+
     def _create_script_asset(self) -> Tuple[Path, Dict[str, Any], str]:
         """Create the __mcp_log script asset."""
         script_dir = self.project_root / ASSET_TYPE_SCRIPT / BRIDGE_SCRIPT_NAME
         script_yy_path = script_dir / f"{BRIDGE_SCRIPT_NAME}.yy"
         script_gml_path = script_dir / f"{BRIDGE_SCRIPT_NAME}.gml"
-        
+
         script_data = {
             "$GMScript": self._script_version,
             "%Name": BRIDGE_SCRIPT_NAME,
@@ -365,8 +362,8 @@ class BridgeInstaller:
             "resourceType": "GMScript",
             "resourceVersion": "2.0",
         }
-        
-        script_gml = '''/// @function __mcp_log(message)
+
+        script_gml = """/// @function __mcp_log(message)
 /// @description Log a message to both debug output and MCP bridge
 /// @param {string} message The message to log
 function __mcp_log(_message) {
@@ -399,26 +396,66 @@ function __mcp_send_response(_cmd_id, _result) {
         buffer_delete(_buffer);
     }
 }
-'''
-        
+"""
+
         return script_yy_path, script_data, script_gml
-    
+
     def _create_object_asset(self, port: int = 6502) -> Tuple[Path, Dict[str, Any], Dict[str, str]]:
         """Create the __mcp_bridge object asset."""
         object_dir = self.project_root / ASSET_TYPE_OBJECT / BRIDGE_OBJECT_NAME
         object_yy_path = object_dir / f"{BRIDGE_OBJECT_NAME}.yy"
-        
+
         # Events always use v1 format in modern GameMaker
         event_version = "v1"
-        
+
         object_data = {
             "$GMObject": self._object_version,
             "%Name": BRIDGE_OBJECT_NAME,
             "eventList": [
-                {"$GMEvent": event_version, "%Name": "Create_0", "collisionObjectId": None, "eventNum": 0, "eventType": 0, "isDnD": False, "name": "Create_0", "resourceType": "GMEvent", "resourceVersion": "2.0"},
-                {"$GMEvent": event_version, "%Name": "Step_0", "collisionObjectId": None, "eventNum": 0, "eventType": 3, "isDnD": False, "name": "Step_0", "resourceType": "GMEvent", "resourceVersion": "2.0"},
-                {"$GMEvent": event_version, "%Name": "Other_68", "collisionObjectId": None, "eventNum": 68, "eventType": 7, "isDnD": False, "name": "Other_68", "resourceType": "GMEvent", "resourceVersion": "2.0"},
-                {"$GMEvent": event_version, "%Name": "Destroy_0", "collisionObjectId": None, "eventNum": 0, "eventType": 1, "isDnD": False, "name": "Destroy_0", "resourceType": "GMEvent", "resourceVersion": "2.0"},
+                {
+                    "$GMEvent": event_version,
+                    "%Name": "Create_0",
+                    "collisionObjectId": None,
+                    "eventNum": 0,
+                    "eventType": 0,
+                    "isDnD": False,
+                    "name": "Create_0",
+                    "resourceType": "GMEvent",
+                    "resourceVersion": "2.0",
+                },
+                {
+                    "$GMEvent": event_version,
+                    "%Name": "Step_0",
+                    "collisionObjectId": None,
+                    "eventNum": 0,
+                    "eventType": 3,
+                    "isDnD": False,
+                    "name": "Step_0",
+                    "resourceType": "GMEvent",
+                    "resourceVersion": "2.0",
+                },
+                {
+                    "$GMEvent": event_version,
+                    "%Name": "Other_68",
+                    "collisionObjectId": None,
+                    "eventNum": 68,
+                    "eventType": 7,
+                    "isDnD": False,
+                    "name": "Other_68",
+                    "resourceType": "GMEvent",
+                    "resourceVersion": "2.0",
+                },
+                {
+                    "$GMEvent": event_version,
+                    "%Name": "Destroy_0",
+                    "collisionObjectId": None,
+                    "eventNum": 0,
+                    "eventType": 1,
+                    "isDnD": False,
+                    "name": "Destroy_0",
+                    "resourceType": "GMEvent",
+                    "resourceVersion": "2.0",
+                },
             ],
             "managed": True,
             "name": BRIDGE_OBJECT_NAME,
@@ -449,12 +486,12 @@ function __mcp_send_response(_cmd_id, _result) {
             "spriteMaskId": None,
             "visible": False,
         }
-        
+
         # Event GML files
         events = {}
-        
+
         # Create Event
-        events["Create_0.gml"] = f'''/// @description Initialize MCP Bridge connection
+        events["Create_0.gml"] = f"""/// @description Initialize MCP Bridge connection
 // This object connects to the MCP bridge server for debugging/control
 
 global.__mcp_socket = -1;
@@ -476,10 +513,10 @@ if (_result >= 0) {{
     global.__mcp_socket = -1;
     global.__mcp_enabled = false;
 }}
-'''
-        
+"""
+
         # Step Event
-        events["Step_0.gml"] = '''/// @description Process any pending MCP commands
+        events["Step_0.gml"] = """/// @description Process any pending MCP commands
 // This runs every frame to check for incoming commands
 
 // Nothing to do if not connected
@@ -490,10 +527,10 @@ if (global.__mcp_socket < 0) {
     global.__mcp_enabled = false;
     exit;
 }
-'''
-        
+"""
+
         # Async Networking Event (Other_68)
-        events["Other_68.gml"] = '''/// @description Handle network events from MCP bridge
+        events["Other_68.gml"] = """/// @description Handle network events from MCP bridge
 var _type = async_load[? "type"];
 var _sock = async_load[? "id"];
 
@@ -641,35 +678,35 @@ function __mcp_execute_command(_command) {
             return "ERROR:Unknown command: " + _action;
     }
 }
-'''
-        
+"""
+
         # Destroy Event
-        events["Destroy_0.gml"] = '''/// @description Clean up MCP bridge connection
+        events["Destroy_0.gml"] = """/// @description Clean up MCP bridge connection
 if (global.__mcp_socket >= 0) {
     network_destroy(global.__mcp_socket);
     global.__mcp_socket = -1;
 }
 global.__mcp_enabled = false;
-'''
-        
+"""
+
         return object_yy_path, object_data, events
-    
+
     def install(self, port: int = 6502) -> Dict[str, Any]:
         """
         Install the MCP bridge into the project.
-        
+
         Uses a transactional approach:
         1. Backup .yyp
         2. Create all files
         3. Verify files
         4. Update .yyp
         5. Verify .yyp
-        
+
         On failure, rolls back all changes.
-        
+
         Args:
             port: Port number for bridge server
-            
+
         Returns:
             Dict with installation result
         """
@@ -679,107 +716,115 @@ global.__mcp_enabled = false;
                 "message": "Bridge already installed",
                 "already_installed": True,
             }
-        
+
         created_paths: List[Path] = []
-        
+
         try:
             # Step 1: Backup .yyp
             print("[BRIDGE] Backing up .yyp...")
             self._backup_yyp()
-            
+
             # Step 2: Create folder asset
             print("[BRIDGE] Creating folder asset...")
             folder_yy_path, folder_data = self._create_folder_asset()
             folder_yy_path.parent.mkdir(parents=True, exist_ok=True)
             save_json(folder_data, folder_yy_path)
             created_paths.append(folder_yy_path)
-            
+
             # Step 3: Create script asset
             print("[BRIDGE] Creating script asset...")
             script_yy_path, script_data, script_gml = self._create_script_asset()
             script_yy_path.parent.mkdir(parents=True, exist_ok=True)
             save_json(script_data, script_yy_path)
             created_paths.append(script_yy_path)
-            
+
             script_gml_path = script_yy_path.parent / f"{BRIDGE_SCRIPT_NAME}.gml"
-            script_gml_path.write_text(script_gml, encoding='utf-8')
+            script_gml_path.write_text(script_gml, encoding="utf-8")
             created_paths.append(script_gml_path)
-            
+
             # Step 4: Create object asset
             print("[BRIDGE] Creating object asset...")
             object_yy_path, object_data, events = self._create_object_asset(port)
             object_yy_path.parent.mkdir(parents=True, exist_ok=True)
             save_json(object_data, object_yy_path)
             created_paths.append(object_yy_path)
-            
+
             for event_name, event_code in events.items():
                 event_path = object_yy_path.parent / event_name
-                event_path.write_text(event_code, encoding='utf-8')
+                event_path.write_text(event_code, encoding="utf-8")
                 created_paths.append(event_path)
-            
+
             # Step 5: Verify all files exist
             print("[BRIDGE] Verifying files...")
             for path in created_paths:
                 if not path.exists():
                     raise BridgeInstallError(f"Failed to create: {path}")
-            
+
             # Step 6: Update .yyp
             print("[BRIDGE] Updating .yyp...")
             yyp_data = load_json(self.yyp_path)
-            
+
             # Add folder - match format of existing folders in .yyp
             existing_folders = yyp_data.get("Folders", [])
             folder_format = ""
             if existing_folders:
                 folder_format = existing_folders[0].get("$GMFolder", "")
-            
-            yyp_data.setdefault("Folders", []).append({
-                "$GMFolder": folder_format,
-                "%Name": BRIDGE_FOLDER_NAME,
-                "folderPath": f"folders/{BRIDGE_FOLDER_NAME}.yy",
-                "name": BRIDGE_FOLDER_NAME,
-                "resourceType": "GMFolder",
-                "resourceVersion": "2.0",
-            })
-            
+
+            yyp_data.setdefault("Folders", []).append(
+                {
+                    "$GMFolder": folder_format,
+                    "%Name": BRIDGE_FOLDER_NAME,
+                    "folderPath": f"folders/{BRIDGE_FOLDER_NAME}.yy",
+                    "name": BRIDGE_FOLDER_NAME,
+                    "resourceType": "GMFolder",
+                    "resourceVersion": "2.0",
+                }
+            )
+
             # Add resources
             resources = yyp_data.setdefault("resources", [])
-            
+
             # Add folder resource
-            resources.append({
-                "id": {
-                    "name": BRIDGE_FOLDER_NAME,
-                    "path": f"folders/{BRIDGE_FOLDER_NAME}.yy",
-                },
-            })
-            
+            resources.append(
+                {
+                    "id": {
+                        "name": BRIDGE_FOLDER_NAME,
+                        "path": f"folders/{BRIDGE_FOLDER_NAME}.yy",
+                    },
+                }
+            )
+
             # Add script resource
-            resources.append({
-                "id": {
-                    "name": BRIDGE_SCRIPT_NAME,
-                    "path": f"scripts/{BRIDGE_SCRIPT_NAME}/{BRIDGE_SCRIPT_NAME}.yy",
-                },
-            })
-            
+            resources.append(
+                {
+                    "id": {
+                        "name": BRIDGE_SCRIPT_NAME,
+                        "path": f"scripts/{BRIDGE_SCRIPT_NAME}/{BRIDGE_SCRIPT_NAME}.yy",
+                    },
+                }
+            )
+
             # Add object resource
-            resources.append({
-                "id": {
-                    "name": BRIDGE_OBJECT_NAME,
-                    "path": f"objects/{BRIDGE_OBJECT_NAME}/{BRIDGE_OBJECT_NAME}.yy",
-                },
-            })
-            
+            resources.append(
+                {
+                    "id": {
+                        "name": BRIDGE_OBJECT_NAME,
+                        "path": f"objects/{BRIDGE_OBJECT_NAME}/{BRIDGE_OBJECT_NAME}.yy",
+                    },
+                }
+            )
+
             save_json(yyp_data, self.yyp_path)
-            
+
             # Step 7: Verify .yyp is valid
             print("[BRIDGE] Verifying .yyp...")
             verify_data = load_json(self.yyp_path)
             if not verify_data:
                 raise BridgeInstallError("Failed to verify .yyp after modification")
-            
+
             # Success - clean up backup
             self._cleanup_backup()
-            
+
             print("[BRIDGE] Installation complete!")
             return {
                 "ok": True,
@@ -787,14 +832,14 @@ global.__mcp_enabled = false;
                 "port": port,
                 "files_created": len(created_paths),
             }
-            
+
         except Exception as e:
             print(f"[BRIDGE] Installation failed: {e}")
             print("[BRIDGE] Rolling back...")
-            
+
             # Rollback: restore .yyp
             self._restore_yyp()
-            
+
             # Rollback: delete created files
             for path in reversed(created_paths):
                 try:
@@ -802,7 +847,7 @@ global.__mcp_enabled = false;
                         path.unlink()
                 except Exception:
                     pass
-            
+
             # Clean up empty directories
             for asset_type in [ASSET_TYPE_OBJECT, ASSET_TYPE_SCRIPT]:
                 asset_dir = self.project_root / asset_type / BRIDGE_OBJECT_NAME
@@ -811,17 +856,17 @@ global.__mcp_enabled = false;
                         asset_dir.rmdir()
                     except Exception:
                         pass
-            
+
             return {
                 "ok": False,
                 "error": str(e),
                 "message": f"Installation failed: {e}",
             }
-    
+
     def uninstall(self) -> Dict[str, Any]:
         """
         Remove the MCP bridge from the project.
-        
+
         Returns:
             Dict with uninstallation result
         """
@@ -831,59 +876,57 @@ global.__mcp_enabled = false;
                 "message": "Bridge not installed",
                 "already_uninstalled": True,
             }
-        
+
         try:
             # Step 1: Backup .yyp
             print("[BRIDGE] Backing up .yyp...")
             self._backup_yyp()
-            
+
             # Step 2: Load .yyp and clean room instances before deleting assets
             print("[BRIDGE] Updating .yyp...")
             yyp_data = load_json(self.yyp_path)
 
             room_cleanup = self._cleanup_bridge_room_instances(yyp_data)
-            
+
             # Remove from Folders
             if "Folders" in yyp_data:
                 yyp_data["Folders"] = [
-                    f for f in yyp_data["Folders"]
-                    if BRIDGE_FOLDER_NAME not in f.get("folderPath", "")
+                    f for f in yyp_data["Folders"] if BRIDGE_FOLDER_NAME not in f.get("folderPath", "")
                 ]
-            
+
             # Remove from resources
             if "resources" in yyp_data:
                 yyp_data["resources"] = [
-                    r for r in yyp_data["resources"]
-                    if "__mcp" not in r.get("id", {}).get("path", "")
+                    r for r in yyp_data["resources"] if "__mcp" not in r.get("id", {}).get("path", "")
                 ]
-            
+
             save_json(yyp_data, self.yyp_path)
-            
+
             # Step 3: Delete files
             print("[BRIDGE] Removing files...")
             deleted_count = 0
-            
+
             # Delete object directory
             object_dir = self.project_root / ASSET_TYPE_OBJECT / BRIDGE_OBJECT_NAME
             if object_dir.exists():
                 shutil.rmtree(object_dir)
                 deleted_count += 1
-            
+
             # Delete script directory
             script_dir = self.project_root / ASSET_TYPE_SCRIPT / BRIDGE_SCRIPT_NAME
             if script_dir.exists():
                 shutil.rmtree(script_dir)
                 deleted_count += 1
-            
+
             # Delete folder .yy
             folder_yy = self.project_root / ASSET_TYPE_FOLDER / f"{BRIDGE_FOLDER_NAME}.yy"
             if folder_yy.exists():
                 folder_yy.unlink()
                 deleted_count += 1
-            
+
             # Success - clean up backup
             self._cleanup_backup()
-            
+
             print("[BRIDGE] Uninstallation complete!")
             warnings = room_cleanup.get("warnings", [])
             return {
@@ -895,14 +938,14 @@ global.__mcp_enabled = false;
                 "creation_code_removed": room_cleanup.get("creation_code_deleted", 0),
                 "warnings": warnings,
             }
-            
+
         except Exception as e:
             print(f"[BRIDGE] Uninstallation failed: {e}")
             print("[BRIDGE] Rolling back...")
-            
+
             # Rollback: restore .yyp
             self._restore_yyp()
-            
+
             return {
                 "ok": False,
                 "error": str(e),
@@ -913,11 +956,11 @@ global.__mcp_enabled = false;
 def install_bridge(project_root: str, port: int = 6502) -> Dict[str, Any]:
     """
     Install bridge into a project.
-    
+
     Args:
         project_root: Path to project root
         port: Bridge server port
-        
+
     Returns:
         Installation result dict
     """
@@ -931,10 +974,10 @@ def install_bridge(project_root: str, port: int = 6502) -> Dict[str, Any]:
 def uninstall_bridge(project_root: str) -> Dict[str, Any]:
     """
     Remove bridge from a project.
-    
+
     Args:
         project_root: Path to project root
-        
+
     Returns:
         Uninstallation result dict
     """

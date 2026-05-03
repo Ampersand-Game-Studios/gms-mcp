@@ -1,4 +1,5 @@
 """Commands package for GMS Master CLI."""
+
 from pathlib import Path
 import sys
 

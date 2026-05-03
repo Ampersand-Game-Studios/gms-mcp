@@ -12,7 +12,7 @@ from .index import GMLIndex
 
 __all__ = [
     "Symbol",
-    "SymbolKind", 
+    "SymbolKind",
     "SymbolLocation",
     "SymbolReference",
     "GMLScanner",

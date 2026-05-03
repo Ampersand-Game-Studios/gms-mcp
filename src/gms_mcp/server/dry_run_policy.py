@@ -35,12 +35,8 @@ def _requires_dry_run_for_tool(tool_name: str) -> bool:
 def _dry_run_policy_blocked_result(tool_name: str, override_hint: str) -> Dict[str, Any]:
     return {
         "ok": False,
-        "error": (
-            f"{tool_name} blocked by safety policy "
-            "(GMS_MCP_REQUIRE_DRY_RUN=1)."
-        ),
+        "error": (f"{tool_name} blocked by safety policy (GMS_MCP_REQUIRE_DRY_RUN=1)."),
         "blocked_by_policy": True,
         "policy": "require_dry_run",
         "hint": override_hint,
     }
-

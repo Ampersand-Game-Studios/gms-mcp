@@ -131,7 +131,9 @@ def serialize_group_ref_for_config(ref: Dict[str, Any]) -> str:
     """
     name = ref.get("name", "")
     path = ref.get("path", "")
-    return "{ \"name\":" + json.dumps(name, ensure_ascii=False) + ", \"path\":" + json.dumps(path, ensure_ascii=False) + " }"
+    return (
+        '{ "name":' + json.dumps(name, ensure_ascii=False) + ', "path":' + json.dumps(path, ensure_ascii=False) + " }"
+    )
 
 
 # -----------------------------------------------------------------------------
@@ -534,7 +536,12 @@ def texture_group_create(
 
     template_hit = find_texture_group(yyp_data, template)
     if template_hit is None:
-        return {"ok": False, "dry_run": dry_run, "error": f"Template texture group '{template}' not found", "changed_files": []}
+        return {
+            "ok": False,
+            "dry_run": dry_run,
+            "error": f"Template texture group '{template}' not found",
+            "changed_files": [],
+        }
 
     _, template_group = template_hit
     new_group = copy.deepcopy(template_group)
@@ -609,7 +616,9 @@ def texture_group_update(
         tg.update(patch)
 
     # ConfigValues updates use string values (GameMaker's convention).
-    filtered_keys = [k for k in patch.keys() if k not in ("ConfigValues", "$GMTextureGroup", "resourceType", "resourceVersion")]
+    filtered_keys = [
+        k for k in patch.keys() if k not in ("ConfigValues", "$GMTextureGroup", "resourceType", "resourceVersion")
+    ]
     if filtered_keys:
         cv = tg.get("ConfigValues")
         if cv is None or not isinstance(cv, dict):
@@ -661,7 +670,12 @@ def texture_group_rename(
     if hit is None:
         return {"ok": False, "dry_run": dry_run, "error": f"Texture group '{old_name}' not found", "changed_files": []}
     if find_texture_group(yyp_data, new_name) is not None:
-        return {"ok": False, "dry_run": dry_run, "error": f"Texture group '{new_name}' already exists", "changed_files": []}
+        return {
+            "ok": False,
+            "dry_run": dry_run,
+            "error": f"Texture group '{new_name}' already exists",
+            "changed_files": [],
+        }
 
     _, tg = hit
     if "%Name" in tg:
@@ -767,7 +781,13 @@ def texture_group_delete(
         if isinstance(cv, dict):
             for cfg_name, cfg_dict in cv.items():
                 if isinstance(cfg_dict, dict) and cfg_dict.get("groupParent") == name:
-                    references.append({"kind": "texture_group", "name": tg.get("name"), "where": [f"ConfigValues.{cfg_name}.groupParent"]})
+                    references.append(
+                        {
+                            "kind": "texture_group",
+                            "name": tg.get("name"),
+                            "where": [f"ConfigValues.{cfg_name}.groupParent"],
+                        }
+                    )
 
     if references and not reassign_to:
         return {
@@ -837,7 +857,12 @@ def texture_group_delete(
             break
     if not removed:
         # Shouldn't happen if find_texture_group succeeded, but be defensive.
-        return {"ok": False, "dry_run": dry_run, "error": f"Texture group '{name}' could not be removed", "changed_files": []}
+        return {
+            "ok": False,
+            "dry_run": dry_run,
+            "error": f"Texture group '{name}' could not be removed",
+            "changed_files": [],
+        }
 
     changed_files.append(str(yyp_path.relative_to(project_root)))
     if not dry_run:
@@ -874,7 +899,12 @@ def texture_group_assign(
 ) -> Dict[str, Any]:
     _, yyp_data = load_project_yyp(project_root)
     if find_texture_group(yyp_data, group_name) is None:
-        return {"ok": False, "dry_run": dry_run, "error": f"Texture group '{group_name}' not found", "changed_files": []}
+        return {
+            "ok": False,
+            "dry_run": dry_run,
+            "error": f"Texture group '{group_name}' not found",
+            "changed_files": [],
+        }
 
     warnings: List[str] = []
     assets_changed = 0
