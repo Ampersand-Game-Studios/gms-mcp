@@ -22,7 +22,7 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
     - `gm_find_references`: Find all references to a symbol across the project
     - `gm_list_symbols`: List all symbols with optional filtering by kind, name, or file
   - **Introspection** (complete support for all asset types including extensions and datafiles):
-    - `gm_list_assets`: List all assets by type, name, or folder. Supports filtering by **`asset_type`**, **`name_contains`**, and **`folder_prefix`**. (Includes scripts, objects, sprites, rooms, sounds, fonts, shaders, paths, timelines, tilesets, animcurves, sequences, notes, folders, **extensions**, **includedfiles**)
+    - `gm_list_assets`: List all assets by type, name, or folder. Supports filtering by **`asset_type`**, **`name_contains`**, and **`folder_prefix`**. (Includes scripts, objects, sprites, rooms, sounds, fonts, shaders, paths, timelines, tilesets, animcurves, sequences, notes, folders, **particlesystems**, **extensions**, **includedfiles**)
     - `gm_read_asset`: Read complete .yy JSON metadata for any asset
     - `gm_search_references`: Search for patterns (string or regex) across the project with scoping options
     - `gm_get_asset_graph`: Build dependency graph with optional **deep mode** for GML code reference parsing
@@ -41,8 +41,8 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
     - `gm_check_updates`: Manually check for updates on PyPI and GitHub
     - `gm_project_info`: Includes a cached `updates` summary
   - **Maintenance**: auto + diagnostics/lint/validate-json/list-orphans/prune-missing/validate-paths/dedupe-resources/normalize-names/sync-events/clean-old-files/clean-orphans/fix-issues
-  - **Runtime Management**: list/pin/unpin/verify GameMaker runtimes
-  - **Runner**: compile/run (with runtime version pinning) + stop/status
+  - **Runtime Management**: list/pin/unpin/verify GameMaker runtimes, including LTS2026 channel detection
+  - **Runner**: compile/run (with runtime version pinning) + stop/status. Accepts `VM`/`YYC` plus LTS2026 UI aliases `GMS2 VM`/`GMS2 YYC`; GMRT labels are rejected until GameMaker documents Igor CLI support.
   - **TCP Bridge (optional)**: live game commands + log capture via `gm_bridge_install`, `gm_bridge_status`, `gm_run_command`, `gm_run_logs` (see `documentation/BRIDGE.md`). Bridge lifecycle/events stay off MCP stdout so `gm_run(..., enable_bridge=true)` remains stdio-safe.
   - **Escape hatch**: `gm_cli` (run arbitrary `gms` args)
   - **Project info**: `gm_project_info`

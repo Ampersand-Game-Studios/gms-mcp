@@ -58,6 +58,7 @@ Task-focused guides for common GameMaker development tasks.
 | [check-quality](workflows/check-quality.md) | Detect code anti-patterns |
 | [cleanup-project](workflows/cleanup-project.md) | Fix orphans and sync issues |
 | [pre-commit](workflows/pre-commit.md) | Validate before committing |
+| [release-promote](workflows/release-promote.md) | Promote dev through pre-release to main |
 
 ---
 

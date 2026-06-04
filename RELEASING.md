@@ -34,14 +34,13 @@ data before writing the final report.
 
 Before merging `pre-release` into `main`:
 
-1. Stage `.github/next_tweet.txt` with the release post text.
+1. Draft release post text using `.github/x-personality.md`.
 2. Merge `pre-release` into `main`.
 3. Confirm GitHub Actions `CI` passes on `main`.
+4. If posting is wanted, use Codex with Chrome logged into `@gms_mcp` to publish through the X web UI.
+5. Verify the post appears on the `@gms_mcp` profile and record the URL in the release closeout.
 
-On a successful or duplicate X post, the `Post to X` workflow commits an empty
-`.github/next_tweet.txt` back to `main` using a `[skip ci]` reset commit. If X
-fails with a transient retryable error, the staged tweet remains in git for the
-next run.
+GitHub Actions does not post to X and the X API is not part of the release flow.
 
 ## One-time: install tooling
 

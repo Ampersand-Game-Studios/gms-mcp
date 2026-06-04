@@ -1,1 +1,0 @@
-gm_run with the TCP bridge no longer nukes the MCP connection. Bridge logs stay off JSON-RPC stdio, background runner output stays quiet, and the MCP session survives launch so you can keep talking to a live game. #GameMaker #gamedev

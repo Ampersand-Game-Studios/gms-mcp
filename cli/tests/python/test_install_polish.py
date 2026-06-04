@@ -826,7 +826,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
                                     "env": {
                                         "GM_PROJECT_ROOT": "/tmp/workspace",
                                         "PYTHONUNBUFFERED": "1",
-                                        "X_APP_SECRET": "top-secret-value",
+                                        "EXAMPLE_API_SECRET": "top-secret-value",
                                     },
                                 }
                             }
@@ -852,7 +852,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
                 self.assertEqual(ret, 0)
                 self.assertIn("[INFO] Antigravity config:", output)
                 self.assertIn("[INFO] Ready for Antigravity: yes", output)
-                self.assertIn('"X_APP_SECRET": "***REDACTED***"', output)
+                self.assertIn('"EXAMPLE_API_SECRET": "***REDACTED***"', output)
                 self.assertNotIn("top-secret-value", output)
 
     def test_main_antigravity_check_json_only(self):
@@ -1028,7 +1028,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
                         "",
                         "[mcp_servers.gms-check.env]",
                         'PYTHONUNBUFFERED = "1"',
-                        'X_ACCESS_TOKEN = "codex-secret-token"',
+                        'EXAMPLE_ACCESS_TOKEN = "codex-secret-token"',
                     ]
                 )
                 + "\n",
@@ -1052,7 +1052,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
             self.assertIn("[INFO] Codex workspace config:", output)
             self.assertIn("[INFO] Active server entry 'gms-check' source:", output)
             self.assertIn('"command": "gms-mcp"', output)
-            self.assertIn('"X_ACCESS_TOKEN": "***REDACTED***"', output)
+            self.assertIn('"EXAMPLE_ACCESS_TOKEN": "***REDACTED***"', output)
             self.assertNotIn("codex-secret-token", output)
 
     def test_main_codex_check_json_reports_active_entry(self):
@@ -1072,7 +1072,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
                         "",
                         "[mcp_servers.gms-check-json.env]",
                         'PYTHONUNBUFFERED = "1"',
-                        'X_APP_KEY = "codex-secret-key"',
+                        'EXAMPLE_API_KEY = "codex-secret-key"',
                     ]
                 )
                 + "\n",
@@ -1096,7 +1096,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
             self.assertTrue(parsed["ok"])
             self.assertEqual(parsed["active"]["scope"], "workspace")
             self.assertEqual(parsed["active"]["entry"]["command"], "gms-mcp")
-            self.assertEqual(parsed["active"]["entry"]["env"]["X_APP_KEY"], "***REDACTED***")
+            self.assertEqual(parsed["active"]["entry"]["env"]["EXAMPLE_API_KEY"], "***REDACTED***")
             self.assertEqual(parsed["active"]["entry"]["env"]["PYTHONUNBUFFERED"], "1")
 
     def test_main_codex_app_setup_writes_workspace_and_prints_readiness(self):

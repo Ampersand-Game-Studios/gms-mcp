@@ -26,6 +26,25 @@ class RuntimeInfo:
         return asdict(self)
 
 
+def classify_runtime_channel(version: str) -> str:
+    """Classify a GameMaker runtime version into a release channel."""
+    normalized = (version or "").strip().lower()
+    if normalized.startswith("runtime-"):
+        normalized = normalized.removeprefix("runtime-")
+
+    if not normalized:
+        return "unknown"
+
+    if normalized.startswith(("2.", "2022.", "2026.")):
+        return "lts"
+
+    parts = normalized.split(".")
+    if len(parts) > 1 and parts[1].isdigit() and int(parts[1]) >= 1000:
+        return "beta"
+
+    return "stable"
+
+
 class RuntimeManager:
     """Manages GameMaker runtime discovery, selection, and pinning."""
 
@@ -92,14 +111,7 @@ class RuntimeManager:
                         igor_path = candidate
                         break
 
-                # Determine release channel
-                channel = "stable"
-                if ".400." in version or ".600." in version:
-                    channel = "beta"
-                elif version.startswith("2."):
-                    channel = "lts"
-                elif not version:
-                    channel = "unknown"
+                channel = classify_runtime_channel(version)
 
                 runtimes.append(
                     RuntimeInfo(

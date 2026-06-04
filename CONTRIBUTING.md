@@ -5,38 +5,31 @@
 - Maintainers promote changes `dev` -> `pre-release` -> `main`
 
 ### Commit & PR summaries
-When creating PRs to `main`, include a **Tweet** section in the PR description if a tweet will be posted:
+When creating PRs to `main`, include a **Release post** section in the PR description if a post will be published:
 
 ```markdown
 ## Summary
 - Brief description of changes
 
-## Tweet
+## Release post
 > Your project, your rules. gms-mcp now supports custom naming conventions...
 
 ## Test plan
 - [ ] Tests pass
 ```
 
-This helps reviewers see exactly what will be posted to X when the PR merges.
+This keeps the proposed X post visible during release review.
 
 ### X posting
-When changes are promoted to `main`, a GitHub Action may post to X.
+X posting is handled by Codex/browser automation during release promotion, not by GitHub Actions or the X API.
 
 - Personality / voice guide: `.github/x-personality.md`
-- Tweet staging file: `.github/next_tweet.txt`
 
-**Preparing a tweet:**
-1. Update `.github/next_tweet.txt` with the tweet content
-2. Include the tweet in the PR description (see above)
-3. The action posts automatically when the PR merges to `main`
-4. If X returns a transient error, rerun `Post to X` from GitHub Actions after the built-in retries are exhausted
+**Publishing a post:**
+1. Draft the post from the released changes, following `.github/x-personality.md`
+2. Verify Chrome is logged into `@gms_mcp`
+3. Use X's web UI to publish the post
+4. Verify the post appears on the `@gms_mcp` profile and record the URL in the release closeout
 
-**Skipping the tweet:**
-To merge without posting to X, ensure `.github/next_tweet.txt` is empty.
-
-The workflow safely handles:
-- Empty file → skips posting
-- Duplicate content → detects via hash and skips
-- Transient X API and edge protection errors → retries with bounded backoff, then leaves the tweet queued for the next run
-- Hung X API calls → request/job timeouts prevent the workflow queue from getting stuck
+**Skipping the post:**
+To release without posting to X, state that explicitly in the release closeout.

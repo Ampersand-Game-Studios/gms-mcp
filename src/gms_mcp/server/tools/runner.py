@@ -98,7 +98,8 @@ def register(mcp: Any, ContextType: Any) -> None:
 
         Args:
             platform: Target platform (default: host OS)
-            runtime: Runtime type VM or YYC (default: VM)
+            runtime: Runtime type VM or YYC (default: VM). GMS2 VM/YYC aliases are accepted;
+                     GMRT labels are rejected until GameMaker documents Igor CLI support.
             runtime_version: Specific runtime version to use
             background: If True, launch game and return immediately without waiting.
                         The game will run in the background and can be stopped with gm_run_stop.

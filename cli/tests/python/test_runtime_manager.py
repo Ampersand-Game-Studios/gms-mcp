@@ -5,7 +5,7 @@ import tempfile
 import json
 import os
 import platform
-from gms_helpers.runtime_manager import RuntimeManager, RuntimeInfo
+from gms_helpers.runtime_manager import RuntimeManager, RuntimeInfo, classify_runtime_channel
 
 
 class TestRuntimeManager(unittest.TestCase):
@@ -71,6 +71,15 @@ class TestRuntimeManager(unittest.TestCase):
                 selected = self.manager.select()
                 self.assertEqual(selected.version, "1.0.0.0")
 
+    def test_classify_runtime_channel_handles_lts2026_and_beta_series(self):
+        self.assertEqual(classify_runtime_channel("2026.0.0.23"), "lts")
+        self.assertEqual(classify_runtime_channel("runtime-2026.0.0.23"), "lts")
+        self.assertEqual(classify_runtime_channel("2022.0.3.80"), "lts")
+        self.assertEqual(classify_runtime_channel("2.3.7.606"), "lts")
+        self.assertEqual(classify_runtime_channel("2024.1400.5.12"), "beta")
+        self.assertEqual(classify_runtime_channel("2024.14.4.268"), "stable")
+        self.assertEqual(classify_runtime_channel(""), "unknown")
+
     def test_list_installed_discovers_apple_silicon_igor(self):
         runtime_root = (
             self.project_root / "Library/Application Support/GameMakerStudio2/Cache/runtimes/runtime-2026.1.1.0.1"
@@ -87,6 +96,9 @@ class TestRuntimeManager(unittest.TestCase):
             runtimes = manager.list_installed()
 
         self.assertTrue(any(runtime.version == "2026.1.1.0.1" and runtime.is_valid for runtime in runtimes))
+        self.assertTrue(
+            any(runtime.version == "2026.1.1.0.1" and runtime.release_channel == "lts" for runtime in runtimes)
+        )
 
 
 if __name__ == "__main__":

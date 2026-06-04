@@ -50,12 +50,14 @@ gms run compile [options]
 
 | Type | Description |
 |------|-------------|
-| `VM` | Virtual Machine (default) - faster compile, slower runtime |
-| `YYC` | YoYo Compiler - slower compile, faster runtime |
+| `VM` / `GMS2 VM` | GMS2 virtual machine (default) - faster compile, slower runtime |
+| `YYC` / `GMS2 YYC` | GMS2 YoYo Compiler - slower compile, faster runtime |
+| `GMRT` / `GMRT VM` | Recognized but not supported by the current Igor CLI path |
 
 **When to use:**
 - `VM` - Development and iteration (faster builds)
 - `YYC` - Performance testing and release (faster execution)
+- `GMRT` - Use the GameMaker IDE until YoYo publishes command-line syntax for GMRT targets
 
 ## Runtime Version
 
@@ -119,24 +121,11 @@ gms run compile --platform Windows --runtime VM
 gms run start --platform Windows --runtime VM --output-location temp
 ```
 
-## Bridge Commands
+## Bridge Tools
 
-For live debugging, see also:
+Bridge operations are exposed through MCP tools in the current package, not plain `gms` CLI subcommands:
 
-### Send Command
-```bash
-gms run command "<GML code>"
-```
-
-### View Logs
-```bash
-gms run logs [--follow]
-```
-
-## Bridge Management
-
-```bash
-gms bridge install      # Install bridge extension
-gms bridge status       # Check bridge status
-gms bridge uninstall    # Remove bridge extension
-```
+- `gm_bridge_install`
+- `gm_bridge_status`
+- `gm_run_command`
+- `gm_run_logs`

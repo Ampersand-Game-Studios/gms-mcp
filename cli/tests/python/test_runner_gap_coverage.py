@@ -27,7 +27,9 @@ from gms_helpers.runner import (
     _to_igor_platform,
     compile_project as compile_project_wrapper,
     detect_default_target_platform,
+    ensure_igor_supported_runtime_type,
     get_project_status,
+    normalize_runtime_type,
     normalize_platform_target,
     run_project as run_project_wrapper,
     stop_project,
@@ -65,6 +67,13 @@ class TestRunnerGapCoverage(unittest.TestCase):
         cmd = ["igor"]
         runner._append_runtime_type_arg(cmd, "YYC")
         self.assertIn("/runtime=YYC", cmd)
+        cmd = ["igor"]
+        runner._append_runtime_type_arg(cmd, "GMS2 YYC")
+        self.assertIn("/runtime=YYC", cmd)
+        self.assertEqual(normalize_runtime_type("GMS2 VM"), "VM")
+        self.assertEqual(normalize_runtime_type("gmrt-vm"), "GMRT VM")
+        with self.assertRaises(RuntimeNotFoundError):
+            ensure_igor_supported_runtime_type("GMRT")
         runner._clear_last_result("compile")
         runner._remember_failure("failed")
         self.assertEqual(runner.last_action_label, "compile")

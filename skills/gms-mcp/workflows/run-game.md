@@ -39,7 +39,11 @@ gms run start --platform iOS
 ```bash
 gms run start --runtime VM     # Virtual Machine (default, faster compile)
 gms run start --runtime YYC    # YoYo Compiler (slower compile, faster runtime)
+gms run start --runtime "GMS2 VM"   # LTS2026 UI label alias for VM
+gms run start --runtime "GMS2 YYC"  # LTS2026 UI label alias for YYC
 ```
+
+`GMRT` and `GMRT VM` are recognized but intentionally rejected by `gms` until GameMaker documents the Igor command-line syntax for GMRT targets. Use the GameMaker IDE for GMRT builds.
 
 ### Specific Runtime Version
 ```bash
@@ -127,6 +131,7 @@ gms run status
 
 - VM compiles faster but runs slower - use for development
 - YYC compiles slower but runs faster - use for testing/release
+- LTS2026 calls these `GMS2 VM` and `GMS2 YYC`; both names are accepted
 - Use `--output-location temp` (default) to avoid cluttering project folder
 - Check `gms run status` before starting if unsure whether game is running
 - The terminal shows game output (debug messages, errors) when not in background mode

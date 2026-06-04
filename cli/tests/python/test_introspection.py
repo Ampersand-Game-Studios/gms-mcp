@@ -57,8 +57,10 @@ class TestAssetTypeMap(unittest.TestCase):
         """Verify extensions and datafiles are properly mapped."""
         self.assertIn("extensions", ASSET_TYPE_MAP)
         self.assertIn("datafiles", ASSET_TYPE_MAP)
+        self.assertIn("particlesystems", ASSET_TYPE_MAP)
         self.assertEqual(ASSET_TYPE_MAP["extensions"], "extension")
         self.assertEqual(ASSET_TYPE_MAP["datafiles"], "includedfile")
+        self.assertEqual(ASSET_TYPE_MAP["particlesystems"], "particlesystem")
 
 
 class TestGMLPatterns(unittest.TestCase):
@@ -127,6 +129,7 @@ class TestIntrospectionBasics(unittest.TestCase):
                 {"id": {"name": "fnt_main", "path": "fonts/fnt_main/fnt_main.yy"}},
                 {"id": {"name": "sh_blur", "path": "shaders/sh_blur/sh_blur.yy"}},
                 {"id": {"name": "ext_steam", "path": "extensions/ext_steam/ext_steam.yy"}},
+                {"id": {"name": "ps_smoke", "path": "particlesystems/ps_smoke/ps_smoke.yy"}},
             ],
             "Folders": [
                 {"name": "Objects", "folderPath": "folders/Objects.yy"},
@@ -187,6 +190,20 @@ function scr_spawn_enemy() {
                 f,
             )
 
+        # LTS2026 particle system asset
+        os.makedirs(self.project_root / "particlesystems" / "ps_smoke")
+        with open(self.project_root / "particlesystems" / "ps_smoke" / "ps_smoke.yy", "w") as f:
+            json.dump(
+                {
+                    "$GMParticleSystem": "v1",
+                    "%Name": "ps_smoke",
+                    "name": "ps_smoke",
+                    "resourceType": "GMParticleSystem",
+                    "resourceVersion": "2.0",
+                },
+                f,
+            )
+
         # Datafiles
         os.makedirs(self.project_root / "datafiles")
         with open(self.project_root / "datafiles" / "config.json", "w") as f:
@@ -208,9 +225,11 @@ function scr_spawn_enemy() {
         self.assertIn("sprite", assets)
         self.assertIn("extension", assets)
         self.assertIn("includedfile", assets)
+        self.assertIn("particlesystem", assets)
 
         self.assertEqual(assets["object"][0]["name"], "o_player")
         self.assertEqual(len(assets["includedfile"]), 2)
+        self.assertEqual(assets["particlesystem"][0]["name"], "ps_smoke")
 
     def test_list_assets_filter_by_type(self):
         """Test filtering by specific asset type."""
@@ -372,6 +391,39 @@ function scr_spawn_enemy() {
         self.assertIn("asset_counts", index)
         self.assertIn("total_assets", index)
         self.assertGreater(index["total_assets"], 0)
+
+    def test_build_project_index_lts2026_serialized_shape(self):
+        """Test LTS2026-style project data with particle assets and lower-case key variants."""
+        with tempfile.TemporaryDirectory() as temp:
+            project_root = Path(temp)
+            yyp_data = {
+                "$GMProject": "v1",
+                "%Name": "LTS2026Game",
+                "resources": [
+                    {"id": {"name": "ps_smoke", "path": "particlesystems/ps_smoke/ps_smoke.yy"}},
+                    {"id": {"name": "r_main", "path": "rooms/r_main/r_main.yy"}},
+                ],
+                "folders": [{"name": "Particles", "folderPath": "folders/Particles.yy"}],
+                "roomOrderNodes": [{"roomId": {"name": "r_main", "path": "rooms/r_main/r_main.yy"}}],
+                "audioGroups": [{"name": "audiogroup_default", "targets": -1}],
+                "textureGroups": [{"name": "Default", "targets": -1}],
+                "MetaData": {"IDEVersion": "2026.0.0.16"},
+            }
+            (project_root / "particlesystems" / "ps_smoke").mkdir(parents=True)
+            (project_root / "rooms" / "r_main").mkdir(parents=True)
+            with open(project_root / "LTS2026Game.yyp", "w") as f:
+                json.dump(yyp_data, f)
+            with open(project_root / "particlesystems" / "ps_smoke" / "ps_smoke.yy", "w") as f:
+                json.dump({"name": "ps_smoke", "resourceType": "GMParticleSystem"}, f)
+
+            index = build_project_index(project_root)
+
+        self.assertEqual(index["ide_version"], "2026.0.0.16")
+        self.assertEqual(index["asset_counts"]["particlesystem"], 1)
+        self.assertEqual(index["folders"], [{"name": "Particles", "path": "folders/Particles.yy"}])
+        self.assertEqual(index["room_order"], ["r_main"])
+        self.assertEqual(index["audio_groups"], [{"name": "audiogroup_default", "targets": -1}])
+        self.assertEqual(index["texture_groups"], [{"name": "Default", "targets": -1}])
 
     # -------------------------------------------------------------------------
     # build_asset_graph tests

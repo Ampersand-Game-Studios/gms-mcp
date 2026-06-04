@@ -1053,7 +1053,11 @@ def setup_runner_commands(subparsers):
         choices=["Windows", "HTML5", "macOS", "Linux", "Android", "iOS"],
         help=f"Target platform (default: {default_platform})",
     )
-    compile_parser.add_argument("--runtime", default="VM", choices=["VM", "YYC"], help="Runtime type (default: VM)")
+    compile_parser.add_argument(
+        "--runtime",
+        default="VM",
+        help="Runtime type: VM, YYC, GMS2 VM, or GMS2 YYC (default: VM). GMRT labels are rejected until Igor CLI support is documented.",
+    )
     compile_parser.add_argument("--runtime-version", help="Specific runtime version to use (e.g. 2024.1100.0.625)")
     compile_parser.set_defaults(func=handle_runner_compile)
 
@@ -1065,7 +1069,11 @@ def setup_runner_commands(subparsers):
         choices=["Windows", "HTML5", "macOS", "Linux", "Android", "iOS"],
         help=f"Target platform (default: {default_platform})",
     )
-    run_parser.add_argument("--runtime", default="VM", choices=["VM", "YYC"], help="Runtime type (default: VM)")
+    run_parser.add_argument(
+        "--runtime",
+        default="VM",
+        help="Runtime type: VM, YYC, GMS2 VM, or GMS2 YYC (default: VM). GMRT labels are rejected until Igor CLI support is documented.",
+    )
     run_parser.add_argument("--runtime-version", help="Specific runtime version to use")
     run_parser.add_argument("--background", action="store_true", help="Run in background (don't capture output)")
     run_parser.add_argument(

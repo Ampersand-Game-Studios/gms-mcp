@@ -409,18 +409,33 @@ def build_project_index(project_root: Path) -> Dict[str, Any]:
 
     # Extract folders
     folders = []
-    for f in yyp_data.get("Folders", []):
+    raw_folders = yyp_data.get("Folders", None)
+    if raw_folders is None:
+        raw_folders = yyp_data.get("folders", [])
+    for f in raw_folders:
+        if not isinstance(f, dict):
+            continue
         folders.append({"name": f.get("name"), "path": f.get("folderPath")})
 
     # Extract room order
     room_order = []
-    for node in yyp_data.get("RoomOrderNodes", []):
+    raw_room_order = yyp_data.get("RoomOrderNodes", None)
+    if raw_room_order is None:
+        raw_room_order = yyp_data.get("roomOrderNodes", [])
+    for node in raw_room_order:
+        if not isinstance(node, dict):
+            continue
         room_id = node.get("roomId", {})
         if room_id.get("name"):
             room_order.append(room_id.get("name"))
 
     # Extract audio groups
-    audio_groups = [{"name": ag.get("name"), "targets": ag.get("targets")} for ag in yyp_data.get("AudioGroups", [])]
+    raw_audio_groups = yyp_data.get("AudioGroups", None)
+    if raw_audio_groups is None:
+        raw_audio_groups = yyp_data.get("audioGroups", [])
+    audio_groups = [
+        {"name": ag.get("name"), "targets": ag.get("targets")} for ag in raw_audio_groups if isinstance(ag, dict)
+    ]
 
     # Extract texture groups
     raw_texture_groups = yyp_data.get("TextureGroups", None)

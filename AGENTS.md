@@ -29,8 +29,9 @@ This file applies to the `gms-mcp` repository root.
 - Keep both human output (`--codex-check`) and machine output (`--codex-check-json`) deterministic.
 - Preserve dry-run safety: no file writes for `--dry-run` or `--codex-dry-run-only`.
 
-## Release Tweet Flow
+## Release Post Flow
 
-- For promotions to `main`, prepare `.github/next_tweet.txt` in advance.
-- Keep tweet text aligned with `.github/x-personality.md`.
-- The GitHub Action will post and then reset `.github/next_tweet.txt`.
+- For promotions to `main`, prepare release post text during the promotion workflow.
+- Keep release post text aligned with `.github/x-personality.md`.
+- Do not use the X API or GitHub Actions for X posting.
+- Codex may publish from the logged-in `@gms_mcp` Chrome session after confirming the account, post text, and final X post URL.

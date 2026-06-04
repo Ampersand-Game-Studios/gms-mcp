@@ -10,7 +10,7 @@
 - **Reliability-First Architecture**: Custom exception hierarchy, typed result objects, and an execution policy manager replace monolithic exit calls and raw dictionaries. This enables structured error handling, consistent tool integration, and optimized performance (Fast assets, Resilient runner).
 - **Health & Diagnostics**: `gm_mcp_health` provides a one-click diagnostic tool to verify the local GameMaker environment. `gm_diagnostics` provides structured, machine-readable project diagnostics (JSON, naming, orphans, references) compatible with IDE problem panels.
 - **Imported Template Cleanup**: `gms maintenance normalize-names` / `gm_maintenance_normalize_names` plans naming-convention renames, and applies them only when explicitly requested.
-- **Runtime Management**: `gm_runtime_list`, `gm_runtime_pin`, and `gm_runtime_verify` allow precise control over which GameMaker runtime version is used for builds and execution.
+- **Runtime Management**: `gm_runtime_list`, `gm_runtime_pin`, and `gm_runtime_verify` allow precise control over which GameMaker runtime version is used for builds and execution. Runtime discovery now identifies LTS2026 installs as LTS.
 - **Cross-Platform Runner Defaults**: `gm_run` / `gm_compile` now default to the host OS target platform (`macOS`, `Linux`, or `Windows`) when not explicitly provided.
 - **macOS Local Runner Behavior**: local `gm_run` / `gm_compile` use Igor's run-based path for IDE-equivalent validation without Developer ID packaging, and macOS background run sessions now track and stop the real `Mac_Runner` process cleanly. Packaged temp-output runs still resolve `.app` bundles via `Contents/MacOS/` when `PackageZip` is used.
 - **GML Symbol Indexing & Code Intelligence**: `gm_build_index`, `gm_find_definition`, `gm_find_references`, and `gm_list_symbols` provide deep, fast, and filtered code analysis (definitions and cross-file references).
@@ -226,34 +226,27 @@ PYTHONPATH=src python -m pytest cli/tests/python/test_final_verification.py
 python scripts/generate_quality_reports.py
 ```
 
-## X (Twitter) posting on `main`
+## X posting during release
 
-This repo can post to X automatically when `main` is updated.
+X posting is handled through Codex/browser automation during release promotion, not through GitHub Actions or the X API.
 
 - **Personality / voice**: `.github/x-personality.md`
-- **Tweet staging file**: `.github/next_tweet.txt`
 
 ### How it works
 
-- When a commit lands on `main`, GitHub Actions reads `.github/next_tweet.txt`.
-- If it contains the placeholder text (or is empty), it **skips posting**.
-- If it contains a real tweet, it posts to X, records the post in cached tweet history, and commits an empty `.github/next_tweet.txt` back to `main` using a `[skip ci]` reset commit.
-- The X workflows run on the dedicated self-hosted runner label `gms-mcp-x` because GitHub-hosted runner IPs are intermittently blocked or challenged by X.
-- That runner uses a pre-provisioned Python 3.13 virtualenv under `~/.local/share/actions-runner-gms-mcp-x/x-posting-venv`.
-- That same runner also provisions X's official `xurl` CLI at `~/.local/bin/xurl` so the posting script can retry `/2/tweets` through X's own client when direct OAuth1 requests misbehave.
-- Transient X API failures are retried automatically inside the posting script with bounded backoff so `503 Retry-After` hints cannot exceed the workflow budget, and edge challenge pages are retried without misreporting them as credential failures.
-- If X still fails with a known transient error after retries, the workflow leaves the staged tweet or evergreen queue item in git for a later retry instead of marking the whole job failed.
-- The X workflows also enforce job/request timeouts so a hung API call cannot block the queue indefinitely.
-- You can also retry the release-post workflow manually with the `Post to X` workflow dispatch in GitHub Actions.
+- Draft the release post from the released changes, following `.github/x-personality.md`.
+- Verify Chrome is logged into `@gms_mcp`.
+- Use the X web UI to publish the post.
+- Verify the post appears on the `@gms_mcp` profile and record the URL in the release closeout.
 
 ### Maintainer flow (dev -> pre-release -> main)
 
-Because this repo promotes changes `dev` -> `pre-release` -> `main`, prepare the tweet during the `pre-release` -> `main` PR:
+Because this repo promotes changes `dev` -> `pre-release` -> `main`, prepare the release post during the `pre-release` -> `main` promotion:
 
-- Update `.github/next_tweet.txt` with the tweet (following `.github/x-personality.md`)
 - Confirm the local validation commands above pass before promotion
 - Confirm GitHub Actions `CI` passes on `main` after the promotion lands
 - Merge to `main`
+- Publish through the X web UI with Codex if a release post is wanted
 
 ## Use with a GameMaker project (multi-project friendly)
 
@@ -451,7 +444,7 @@ List all project symbols with filtering by type, name substring, or file path.
 
 ### Asset Listing (`gm_list_assets`)
 List all assets in your project, optionally filtered by type:
-- **Supported types**: script, object, sprite, room, sound, font, shader, path, timeline, tileset, animcurve, sequence, note, folder, **extension**, **includedfile** (datafiles)
+- **Supported types**: script, object, sprite, room, sound, font, shader, path, timeline, tileset, animcurve, sequence, note, folder, **particlesystem**, **extension**, **includedfile** (datafiles)
 
 ### Asset Reading (`gm_read_asset`)
 Read the complete `.yy` JSON metadata for any asset by name or path.
@@ -509,6 +502,20 @@ Common doctor entry points:
 - `gms-mcp doctor --project-root /path/to/project`: targets an explicit GameMaker project directory.
 - `gms-mcp doctor --client codex --server-name gms-app`: validates a non-default MCP server entry name.
 - `gms-mcp doctor --json`: emits a stable JSON report with `overall_status`, `exit_code`, and `checks`.
+
+### Runtime Management
+Runtime list/pin/verify operations are exposed as MCP tools:
+- `gm_runtime_list`
+- `gm_runtime_pin`
+- `gm_runtime_unpin`
+- `gm_runtime_verify`
+
+The plain `gms` CLI has runner commands (`gms run compile`, `gms run start`, `gms run stop`, `gms run status`), but does not expose separate runtime-management subcommands.
+
+Runner runtime labels:
+- `VM` and `GMS2 VM` map to Igor VM builds.
+- `YYC` and `GMS2 YYC` map to Igor YYC builds.
+- `GMRT` and `GMRT VM` are recognized and rejected with a clear error until GameMaker documents the Igor command-line syntax for GMRT targets.
 
 ## CLI usage
 

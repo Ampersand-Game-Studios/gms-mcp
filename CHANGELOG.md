@@ -39,6 +39,8 @@ All notable changes to this project will be documented in this file.
   - Added a dedicated mockless macOS smoke test for real `.app` bundle launch path resolution.
   - Added macOS-specific launch/runtime permission diagnostics for sandbox blocks and unsigned binaries, including actionable remediation guidance.
 - **Coverage Audit Expansion**: Added focused coverage suites for CLI wrappers, helper-heavy modules, install/setup flows, bridge tools, and reporting regressions. Project-wide statement coverage now clears 90% with release artifacts generated from the same pipeline used in CI.
+- **LTS2026 Runtime Awareness**: Runtime discovery now classifies `2026.*` installs as LTS, and runner runtime labels accept the LTS2026 UI aliases `GMS2 VM` and `GMS2 YYC`.
+- **LTS2026 Asset Introspection Coverage**: Added regression coverage for particle-system assets and lower-case project-serializer key variants.
 
 ### Fixed
 - **Spurious `.gms_mcp` Folder Creation**: Fixed an issue where the MCP server would create a `.gms_mcp/logs/` folder in the current working directory even when no GameMaker project was present. Debug logging now only activates when a valid project is detected.
@@ -49,11 +51,15 @@ All notable changes to this project will be documented in this file.
 - **Run Session process termination on Windows**: Fixed `RunSessionManager.kill_process` to use fallback signal values when platform `signal` constants are unavailable, preventing Windows-only failures in process teardown and ensuring CI reliability across `test_run_session`.
 - **macOS Local Compile/Run Pipeline**: Fixed `gm_compile` and default local `gm_run` behavior on macOS so local validation uses Igor's run-based path instead of `PackageZip`, avoiding incorrect Developer ID signing/certificate failures during normal IDE-equivalent compile/run workflows. macOS background run sessions now track and stop the real `Mac_Runner` process cleanly.
 - **X Posting Workflow Retries**: Fixed the GitHub X posting workflows so transient `503 Service Unavailable` responses no longer honor unbounded server retry hints that exceed the job timeout. `5xx` retries now stay on the local bounded backoff, `429` retry hints remain capped to fit within the workflow budget, and Cloudflare challenge pages are classified/retried as edge failures instead of credential errors.
+- **GMRT Runner Requests**: `GMRT` and `GMRT VM` runtime labels are now recognized and rejected with an explicit unsupported message instead of being passed through as ambiguous Igor commands.
 
 ### Changed
 - **Diagnostic output**: Refined tool outputs to be cleaner and more consistent across the code intelligence suite.
 - **Standardized Versioning**: Locked default asset creation to GameMaker 2024.x+ standards.
 - **Quality Reporting Pipeline**: `scripts/generate_quality_reports.py` now collects subprocess coverage correctly, combines parallel `.coverage*` data before writing `coverage.xml`, and keeps the published markdown/XML/JSON quality artifacts aligned with real CLI execution paths.
+
+### Removed
+- **GitHub Actions X Posting**: Removed X API-based posting workflows, tweet staging, evergreen posting, posting history, and related tests. Release posts are now handled through Codex/browser automation using the X web UI.
 
 ## [0.1.1.dev41] - 2025-12-18 (Approximate)
 ### Added

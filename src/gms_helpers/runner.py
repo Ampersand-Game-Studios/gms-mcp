@@ -22,6 +22,13 @@ from .runtime_manager import RuntimeManager
 from .run_session import RunSessionManager, get_session_manager
 
 
+GMRT_CLI_UNSUPPORTED_MESSAGE = (
+    "GMRT command-line builds are not supported by gms-mcp yet. "
+    "The current GameMaker LTS command-line manual documents Igor /runtime=VM|YYC only; "
+    "use the GameMaker IDE for GMRT targets until YoYo publishes the Igor CLI syntax."
+)
+
+
 def detect_default_target_platform() -> str:
     """Map host OS to the matching GameMaker target platform name."""
     system = platform.system()
@@ -55,6 +62,38 @@ def _to_igor_platform(platform_target: str) -> str:
     if platform_target == "macOS":
         return "Mac"
     return platform_target
+
+
+def normalize_runtime_type(runtime_type: Optional[str]) -> str:
+    """Normalize GameMaker runtime labels from old and LTS2026 UI naming."""
+    raw = (runtime_type or "VM").strip()
+    key = " ".join(raw.replace("_", " ").replace("-", " ").upper().split())
+    compact = key.replace(" ", "")
+
+    aliases = {
+        "VM": "VM",
+        "GMS2VM": "VM",
+        "YYC": "YYC",
+        "GMS2YYC": "YYC",
+        "GMRT": "GMRT",
+        "NATIVEGMRT": "GMRT",
+        "GMRTNATIVE": "GMRT",
+        "GMRTVM": "GMRT VM",
+    }
+    normalized = aliases.get(compact)
+    if normalized:
+        return normalized
+
+    valid = "VM, YYC, GMS2 VM, GMS2 YYC, GMRT, or GMRT VM"
+    raise ValueError(f"Unsupported runtime type '{runtime_type}'. Expected one of: {valid}.")
+
+
+def ensure_igor_supported_runtime_type(runtime_type: Optional[str]) -> str:
+    """Return an Igor-supported runtime type or raise for known unsupported GMRT labels."""
+    normalized = normalize_runtime_type(runtime_type)
+    if normalized.startswith("GMRT"):
+        raise RuntimeNotFoundError(GMRT_CLI_UNSUPPORTED_MESSAGE)
+    return normalized
 
 
 class GameMakerRunner:
@@ -379,8 +418,9 @@ class GameMakerRunner:
         return Path(tempfile.gettempdir())
 
     def _append_runtime_type_arg(self, cmd: List[str], runtime_type: str) -> None:
-        """Append the YYC runtime switch when requested."""
-        if runtime_type.upper() == "YYC":
+        """Append the Igor runtime switch when requested."""
+        runtime_type = ensure_igor_supported_runtime_type(runtime_type)
+        if runtime_type == "YYC":
             cmd.append("/runtime=YYC")
 
     def _build_igor_base_command(self) -> List[str]:
@@ -759,6 +799,7 @@ class GameMakerRunner:
         platform_target = normalize_platform_target(platform_target)
 
         try:
+            runtime_type = ensure_igor_supported_runtime_type(runtime_type)
             print(f"[BUILD] Compiling project for {platform_target} ({runtime_type})...")
 
             if platform_target == "macOS":
@@ -872,11 +913,12 @@ class GameMakerRunner:
 
         Args:
             platform_target: Target platform (default: host OS)
-            runtime_type: Runtime type VM or YYC (default: VM)
+            runtime_type: Runtime type VM or YYC (default: VM); GMS2 VM/YYC aliases are accepted
             background: Run in background (default: False)
             output_location: Where to output files - 'temp' (IDE-style, AppData) or 'project' (classic output folder)
         """
         platform_target = normalize_platform_target(platform_target)
+        runtime_type = ensure_igor_supported_runtime_type(runtime_type)
 
         if platform_target == "macOS":
             print("[RUN] macOS local runs use Igor Run to match IDE behavior and avoid package signing.")
@@ -1270,7 +1312,7 @@ def run_project(
     Args:
         project_root: Path to project root
         platform: Target platform (default: host OS)
-        runtime: Runtime type VM or YYC (default: VM)
+        runtime: Runtime type VM or YYC (default: VM); GMS2 VM/YYC aliases are accepted
         background: If True, return immediately without waiting for game to exit
         output_location: 'temp' (IDE-style) or 'project' (classic output folder)
         runtime_version: Specific runtime version to use
