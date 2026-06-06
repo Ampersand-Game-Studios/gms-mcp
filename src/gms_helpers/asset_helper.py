@@ -1532,10 +1532,7 @@ def maint_validate_json_command(args):
     print("[VALIDATE] Validating JSON syntax in project files...")
 
     try:
-        try:
-            from .maintenance.tidy_json import validate_project_json, print_json_validation_report
-        except ImportError:
-            from maintenance.tidy_json import validate_project_json, print_json_validation_report
+        from .maintenance.tidy_json import validate_project_json, print_json_validation_report
 
         results = validate_project_json(".")
         print_json_validation_report(results)
@@ -1657,10 +1654,7 @@ def maint_sync_events_command(args):
         print("(DRY RUN - use --fix to actually make changes)")
 
     try:
-        try:
-            from .maintenance.event_sync import sync_object_events, sync_all_object_events
-        except ImportError:
-            from maintenance.event_sync import sync_object_events, sync_all_object_events
+        from .maintenance.event_sync import sync_object_events, sync_all_object_events
 
         if args.object:
             # Sync specific object
@@ -1707,10 +1701,7 @@ def maint_clean_old_files_command(args):
     print(f"[MAINT] {action} .old.yy backup files from project...")
 
     try:
-        try:
-            from .maintenance.clean_unused_assets import clean_old_yy_files
-        except ImportError:
-            from maintenance.clean_unused_assets import clean_old_yy_files
+        from .maintenance.clean_unused_assets import clean_old_yy_files
 
         found, deleted = clean_old_yy_files(".", do_delete=delete)
 

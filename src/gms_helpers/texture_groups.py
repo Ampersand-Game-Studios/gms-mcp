@@ -425,7 +425,7 @@ def texture_group_scan(
 ) -> Dict[str, Any]:
     _, yyp_data = load_project_yyp(project_root)
     groups_defined = sorted(
-        {tg.get("name") for tg in get_texture_groups_list(yyp_data) if isinstance(tg.get("name"), str)}
+        tg_name for tg in get_texture_groups_list(yyp_data) if isinstance((tg_name := tg.get("name")), str)
     )
 
     referenced: set[str] = set()

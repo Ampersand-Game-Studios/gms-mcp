@@ -130,6 +130,36 @@ class TestMCPIntegrationTools(unittest.TestCase):
         self.assertGreaterEqual(int(assets_result.get("count", 0)), 1)
         scripts = (assets_result.get("assets") or {}).get("script") or []
         self.assertTrue(any(a.get("name") == "scr_utils" for a in scripts), msg=str(scripts))
+        self.assertIn("transaction", result)
+        self.assertTrue(result["transaction"]["committed"])
+
+    def test_mcp_boundary_rejects_path_like_resource_names(self):
+        result = self._call_tool(
+            "gm_create_script",
+            {"name": "../scr_escape", "project_root": str(self.project_root)},
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "Invalid MCP tool arguments")
+        self.assertTrue(result["validation_errors"])
+        self.assertFalse((self.project_root / "scripts" / "scr_escape").exists())
+
+    def test_failed_mutation_rolls_back_created_files(self):
+        yyp_path = self.project_root / "TestProject.yyp"
+        yyp_data = json.loads(yyp_path.read_text(encoding="utf-8"))
+        yyp_data["resources"].append(
+            {"id": {"name": "scr_conflict", "path": "scripts/scr_conflict/scr_conflict.yy"}}
+        )
+        yyp_path.write_text(json.dumps(yyp_data, indent=2), encoding="utf-8")
+
+        result = self._call_tool(
+            "gm_create_script",
+            {"name": "scr_conflict", "project_root": str(self.project_root)},
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["transaction"]["rolled_back"])
+        self.assertFalse((self.project_root / "scripts" / "scr_conflict").exists())
 
     def test_tool_registration_parity_includes_critical_categories(self):
         tools = asyncio.run(self.mcp.list_tools())

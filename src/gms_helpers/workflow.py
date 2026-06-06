@@ -307,20 +307,9 @@ def rename_asset(project_root: Path, asset_path: str, new_name: str) -> AssetRes
             print(_c(f"[WARN] {warn_msg}", "yellow"))
             warnings.append(warn_msg)
     except ImportError:
-        try:
-            # Try absolute import for test environments
-            from reference_scanner import comprehensive_rename_asset
-
-            print(_c("[SCAN] Performing comprehensive reference scan and update...", "blue"))
-            ref_success = comprehensive_rename_asset(project_root, old_name, new_name, asset_type)
-            if not ref_success:
-                warn_msg = "Some references may not have been fully updated"
-                print(_c(f"[WARN] {warn_msg}", "yellow"))
-                warnings.append(warn_msg)
-        except ImportError:
-            warn_msg = "Reference scanner not available - manual reference checks may be needed"
-            print(_c(f"[WARN] {warn_msg}", "yellow"))
-            warnings.append(warn_msg)
+        warn_msg = "Reference scanner not available - manual reference checks may be needed"
+        print(_c(f"[WARN] {warn_msg}", "yellow"))
+        warnings.append(warn_msg)
 
     # Run post-operation maintenance (disabled in test environments)
     import os

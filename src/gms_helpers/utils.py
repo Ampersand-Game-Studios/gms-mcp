@@ -8,6 +8,7 @@ import sys
 import uuid
 import struct
 import zlib
+import tempfile
 from pathlib import Path
 from typing import Dict, Any, List
 import os
@@ -61,14 +62,14 @@ def load_json_loose(path: Path) -> Dict[str, Any] | None:
 
 def save_pretty_json(path: Path, data: Dict[str, Any]):
     """Pretty-print JSON (no trailing commas) - for compatibility."""
-    path.write_text(json.dumps(data, indent=2, ensure_ascii=False), encoding="utf-8")
+    atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False))
 
 
 def save_pretty_json_gm(path: Path, data: Dict[str, Any]):
     """Pretty-print JSON with GameMaker-style trailing commas."""
     json_str = json.dumps(data, indent=2, ensure_ascii=False)
     json_str = add_trailing_commas(json_str)
-    path.write_text(json_str, encoding="utf-8")
+    atomic_write_text(path, json_str)
 
 
 def save_json_loose(path: Path | str, data: Dict[str, Any]):
@@ -77,7 +78,7 @@ def save_json_loose(path: Path | str, data: Dict[str, Any]):
         path = Path(path)
     json_str = json.dumps(data, indent=2, ensure_ascii=False)
     json_str = add_trailing_commas(json_str)
-    path.write_text(json_str, encoding="utf-8")
+    atomic_write_text(path, json_str)
 
 
 def save_json(data, file_path):
@@ -87,8 +88,28 @@ def save_json(data, file_path):
         os.makedirs(dir_path, exist_ok=True)
     json_str = json.dumps(data, indent=2, ensure_ascii=False)
     json_str = add_trailing_commas(json_str)
-    with open(file_path, "w", encoding="utf-8") as f:
-        f.write(json_str)
+    atomic_write_text(Path(file_path), json_str)
+
+
+def atomic_write_text(path: Path | str, content: str, encoding: str = "utf-8") -> None:
+    """Atomically replace a text file after writing content to a temp file in the same directory."""
+    target = path if isinstance(path, Path) else Path(path)
+    target.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent))
+    os.close(fd)
+    tmp_path = target.parent / os.path.basename(tmp_name)
+    try:
+        tmp_path.write_text(content, encoding=encoding)
+        with tmp_path.open("a", encoding=encoding) as fh:
+            fh.flush()
+            os.fsync(fh.fileno())
+        tmp_path.replace(target)
+    except Exception:
+        try:
+            tmp_path.unlink()
+        except OSError:
+            pass
+        raise
 
 
 # ------------------------------------------------------------------
