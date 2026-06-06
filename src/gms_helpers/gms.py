@@ -1443,8 +1443,9 @@ def main():
                 telemetry_override=telemetry_override,
                 allow_prompt=ok and getattr(args, "category", None) != "telemetry",
             )
-            if hasattr(result, "success"):
-                return result.success
+            result_success = getattr(result, "success", None)
+            if isinstance(result_success, bool):
+                return result_success
             return result
         except GMSError as e:
             duration_ms = int((time.monotonic() - start) * 1000)

@@ -1,6 +1,6 @@
 {
   "include": ["src"],
-  "exclude": [".venv", "build", "dist", "src/gms_helpers"],
+  "exclude": [".venv", "build", "dist"],
   "pythonVersion": "3.10",
   "typeCheckingMode": "basic",
   "venvPath": ".",

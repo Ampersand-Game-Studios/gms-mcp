@@ -218,7 +218,7 @@ def list_categories() -> Dict[str, Any]:
     index = fetch_function_index(cache)
 
     # Collect unique categories
-    categories: Dict[str, Dict[str, int]] = {}
+    categories: Dict[str, Dict[str, Any]] = {}
 
     for entry in index.values():
         cat = entry.category

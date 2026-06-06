@@ -21,7 +21,7 @@ from .path_safety import validate_resource_name
 # ------------------------------------------------------------------
 
 
-def _find_rooms_directory() -> Path:
+def _find_rooms_directory() -> Optional[Path]:
     """Find the rooms directory in the project."""
     rooms_dir = Path("rooms")
     if not rooms_dir.exists():

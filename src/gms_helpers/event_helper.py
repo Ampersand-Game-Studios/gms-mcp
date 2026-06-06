@@ -20,7 +20,7 @@ from .path_safety import project_child_path, validate_resource_name
 # ------------------------------------------------------------------
 
 
-def _filename_to_event(filename: str) -> Tuple[int, int]:
+def _filename_to_event(filename: str) -> Tuple[Optional[int], Optional[int]]:
     """Convert GML event filename to event type and number."""
     if not filename.endswith(".gml"):
         return None, None

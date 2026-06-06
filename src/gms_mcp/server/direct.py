@@ -99,7 +99,7 @@ def _run_direct(
             setattr(args, "project_root", ".")
             return handler(args)
 
-    ok, stdout_text, stderr_text, _result_value, error_text, exit_code = _capture_output(_invoke)
+    ok, stdout_text, stderr_text, result_value, error_text, exit_code = _capture_output(_invoke)
     return ToolRunResult(
         ok=ok,
         stdout=stdout_text,
@@ -108,6 +108,7 @@ def _run_direct(
         exit_code=exit_code,
         error=error_text,
         execution_mode="direct",
+        result=result_value,
     )
 
 
@@ -141,7 +142,7 @@ def _run_gms_inprocess(cli_args: list[str], project_root: str | None) -> ToolRun
                 os.environ[SUPPRESS_CLI_TELEMETRY_ENV_VAR] = previous_suppression
             sys.argv = previous_argv
 
-    ok, stdout_text, stderr_text, _result_value, error_text, exit_code = _capture_output(_invoke)
+    ok, stdout_text, stderr_text, result_value, error_text, exit_code = _capture_output(_invoke)
     return ToolRunResult(
         ok=ok,
         stdout=stdout_text,
@@ -150,4 +151,5 @@ def _run_gms_inprocess(cli_args: list[str], project_root: str | None) -> ToolRun
         exit_code=exit_code if exit_code is not None else (0 if ok else 1),
         error=error_text,
         execution_mode="direct:module",
+        result=result_value,
     )

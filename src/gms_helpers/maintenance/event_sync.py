@@ -15,14 +15,14 @@ import json
 import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple, Set
+from typing import Dict, List, Tuple, Set, Optional
 
 from ..utils import load_json_loose, save_json_loose, find_yyp, resolve_project_directory
 from ..exceptions import ProjectNotFoundError, GMSError
 from ..path_safety import project_child_path, validate_resource_name
 
 
-def parse_gml_filename(filename: str) -> Tuple[str, int]:
+def parse_gml_filename(filename: str) -> Tuple[Optional[str], Optional[int]]:
     """
     Parse GML event filename to extract event type and number.
     Examples: 'Create_0.gml' -> ('Create', 0), 'Step_0.gml' -> ('Step', 0)
@@ -314,7 +314,7 @@ def sync_object_events(object_path: str, dry_run: bool = True) -> Dict[str, int]
     }
 
 
-def sync_all_object_events(project_root: str = None, dry_run: bool = True) -> Dict[str, int]:
+def sync_all_object_events(project_root: Optional[str] = None, dry_run: bool = True) -> Dict[str, int]:
     """
     Synchronize events for all objects in the project.
     Returns: total stats dictionary

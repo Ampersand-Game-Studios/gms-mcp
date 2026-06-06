@@ -337,6 +337,8 @@ class SpriteAsset(BaseAsset):
             except ImportError:
                 from .utils import load_json_loose
             yy_data = load_json_loose(yy_path)
+            if not yy_data:
+                return
 
             # Extract layer UUID (shared across all frames)
             layer_uuid = yy_data["layers"][0]["name"]
@@ -621,6 +623,8 @@ class FolderAsset(BaseAsset):
 
         yyp_file = yyp_files[0]
         project_data = load_json_loose(yyp_file)
+        if project_data is None:
+            raise ValueError(f"Could not load {yyp_file}")
 
         # Add folder to the Folders section
         folders = project_data.get("Folders", [])
