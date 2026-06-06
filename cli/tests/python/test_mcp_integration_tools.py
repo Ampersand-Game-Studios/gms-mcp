@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -160,6 +161,106 @@ class TestMCPIntegrationTools(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertTrue(result["transaction"]["rolled_back"])
         self.assertFalse((self.project_root / "scripts" / "scr_conflict").exists())
+
+    def test_smart_verification_compiles_high_risk_mutation_immediately(self):
+        fake_compile = {
+            "ok": True,
+            "mode": "compile",
+            "platform": "macOS",
+            "runtime": "VM",
+            "exit_code": 0,
+            "elapsed_seconds": 0.01,
+            "stdout_tail": "",
+            "stderr_tail": "",
+        }
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "GMS_MCP_POST_MUTATION_VERIFY": "smart",
+                    "GMS_MCP_VERIFY_COMPILE_AFTER_MUTATION": "0",
+                },
+                clear=False,
+            ),
+            patch("gms_helpers.transactions.compile_verify_project", return_value=fake_compile) as compile_mock,
+        ):
+            result = self._call_tool(
+                "gm_create_script",
+                {"name": "scr_verified", "project_root": str(self.project_root)},
+            )
+
+        self.assertTrue(result.get("ok"), msg=result)
+        compile_mock.assert_called_once()
+        transaction = result["transaction"]
+        self.assertEqual(transaction["verification_policy"]["mode"], "smart")
+        self.assertEqual(transaction["verification_policy"]["action"], "compile")
+        self.assertTrue(transaction["compile_verification"]["ok"])
+
+    def test_smart_verification_defers_sprite_frame_batch_until_flush(self):
+        created = self._call_tool(
+            "gm_create_sprite",
+            {"name": "spr_batch", "project_root": str(self.project_root)},
+        )
+        self.assertTrue(created.get("ok"), msg=created)
+
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "GMS_MCP_POST_MUTATION_VERIFY": "smart",
+                    "GMS_MCP_VERIFY_COMPILE_AFTER_MUTATION": "0",
+                },
+                clear=False,
+            ),
+            patch("gms_helpers.transactions.compile_verify_project") as compile_mock,
+        ):
+            added = self._call_tool(
+                "gm_sprite_add_frame",
+                {
+                    "sprite_path": "sprites/spr_batch/spr_batch.yy",
+                    "project_root": str(self.project_root),
+                },
+            )
+            status = self._call_tool("gm_verification_status", {"project_root": str(self.project_root)})
+
+        self.assertTrue(added.get("ok"), msg=added)
+        compile_mock.assert_not_called()
+        transaction = added["transaction"]
+        self.assertEqual(transaction["verification_policy"]["mode"], "smart")
+        self.assertEqual(transaction["verification_policy"]["action"], "defer")
+        self.assertEqual(transaction["pending_compile_verification"]["operation_count"], 1)
+        self.assertTrue(status["pending_compile_verification"]["required"])
+
+        fake_compile = {
+            "ok": True,
+            "mode": "compile",
+            "platform": "macOS",
+            "runtime": "VM",
+            "exit_code": 0,
+            "elapsed_seconds": 0.01,
+            "stdout_tail": "",
+            "stderr_tail": "",
+        }
+        with (
+            patch.dict(
+                os.environ,
+                {
+                    "GMS_MCP_POST_MUTATION_VERIFY": "smart",
+                    "GMS_MCP_VERIFY_COMPILE_AFTER_MUTATION": "0",
+                },
+                clear=False,
+            ),
+            patch("gms_mcp.server.verification_policy.compile_verify_project", return_value=fake_compile) as compile_mock,
+        ):
+            flushed = self._call_tool("gm_verification_flush", {"project_root": str(self.project_root)})
+            status_after = self._call_tool("gm_verification_status", {"project_root": str(self.project_root)})
+
+        self.assertTrue(flushed.get("ok"), msg=flushed)
+        self.assertTrue(flushed["compiled"])
+        compile_mock.assert_called_once()
+        self.assertIsNone(flushed["pending_compile_verification"])
+        self.assertIsNone(status_after["pending_compile_verification"])
 
     def test_tool_registration_parity_includes_critical_categories(self):
         tools = asyncio.run(self.mcp.list_tools())

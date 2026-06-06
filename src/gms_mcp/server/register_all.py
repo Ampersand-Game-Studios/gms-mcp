@@ -16,6 +16,7 @@ from .tools import (
     runner,
     runtime,
     texture_groups,
+    verification,
     workflow,
 )
 
@@ -26,6 +27,7 @@ def register_all(mcp: Any, Context: Any) -> None:
     maintenance.register(mcp, Context)
     runtime.register(mcp, Context)
     runner.register(mcp, Context)
+    verification.register(mcp, Context)
     bridge.register(mcp, Context)
     events.register(mcp, Context)
     workflow.register(mcp, Context)
