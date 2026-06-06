@@ -1,7 +1,19 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, is_dataclass
 from typing import Any, Dict, List, Optional
+
+
+def _jsonable_result(value: Any) -> Any:
+    if value is None:
+        return None
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        return value.to_dict()
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    if isinstance(value, (dict, list, str, int, float, bool)):
+        return value
+    return str(value)
 
 
 @dataclass
@@ -20,6 +32,9 @@ class ToolRunResult:
     cwd: Optional[str] = None
     log_file: Optional[str] = None
     execution_mode: Optional[str] = None
+    result: Any = None
+    transaction: Optional[Dict[str, Any]] = None
+    validation: Optional[Dict[str, Any]] = None
 
     def as_dict(self) -> Dict[str, Any]:
         return {
@@ -37,4 +52,7 @@ class ToolRunResult:
             "cwd": self.cwd,
             "log_file": self.log_file,
             "execution_mode": self.execution_mode,
+            "result": _jsonable_result(self.result),
+            "transaction": self.transaction,
+            "validation": self.validation,
         }

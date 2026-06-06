@@ -101,8 +101,8 @@ class MaintenanceResult:
         self.json_issues: List[Tuple[str, bool, str]] = []
         self.lint_issues: List[LintIssue] = []
         self.path_issues: List[PathValidationIssue] = []
-        self.orphaned_assets: List[str] = []
-        self.missing_assets: List[str] = []
+        self.orphaned_assets: List[Tuple[str, str]] = []
+        self.missing_assets: List[Tuple[str, str]] = []
         self.event_sync_stats: Dict[str, int] = {}
         self.old_files_stats: Dict[str, int] = {}
         self.orphan_cleanup_stats: Dict[str, Any] = {}
@@ -126,14 +126,16 @@ class MaintenanceResult:
         if any(issue.severity == "error" for issue in issues):
             self.has_errors = True
 
-    def set_orphan_data(self, orphaned: List[str], missing: List[str]):
+    def set_orphan_data(self, orphaned: List[Tuple[str, str]], missing: List[Tuple[str, str]]):
         self.orphaned_assets = orphaned
         self.missing_assets = missing
         if missing:
             self.has_errors = True
 
 
-def run_auto_maintenance(project_root: str, fix_issues: bool = None, verbose: bool = None) -> MaintenanceResult:
+def run_auto_maintenance(
+    project_root: str, fix_issues: Optional[bool] = None, verbose: Optional[bool] = None
+) -> MaintenanceResult:
     """
     Run a set of standard maintenance operations.
 

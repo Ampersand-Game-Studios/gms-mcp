@@ -25,7 +25,7 @@ def find_orphaned_assets(project_root: str = ".") -> List[Tuple[str, str]]:
             # Use proper project root detection if not specified or using current dir
             from ..utils import resolve_project_directory
 
-            project_root = resolve_project_directory()
+            project_root = str(resolve_project_directory())
 
         # Change to project directory temporarily to use find_yyp_file()
         original_cwd = os.getcwd()

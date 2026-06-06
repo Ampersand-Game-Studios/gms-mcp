@@ -14,6 +14,7 @@ from gms_mcp.server import dispatch as server
 from gms_mcp.server.direct import _capture_output
 from gms_mcp.server.dry_run_policy import _requires_dry_run_for_tool
 from gms_mcp.server.results import ToolRunResult
+from gms_helpers.results import OperationResult
 
 
 class TestCaptureOutputSystemExit(unittest.TestCase):
@@ -50,6 +51,18 @@ class TestCaptureOutputSystemExit(unittest.TestCase):
 
 
 class TestRunWithFallbackDefaults(unittest.TestCase):
+    def test_direct_result_preserves_structured_return_value(self):
+        result = ToolRunResult(
+            ok=True,
+            stdout="",
+            stderr="",
+            direct_used=True,
+            result=OperationResult(success=True, message="done", warnings=["note"]),
+        ).as_dict()
+
+        self.assertEqual(result["result"]["message"], "done")
+        self.assertEqual(result["result"]["warnings"], ["note"])
+
     def test_default_uses_cli_when_direct_disabled(self):
         direct_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=True)
         cli_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=False)

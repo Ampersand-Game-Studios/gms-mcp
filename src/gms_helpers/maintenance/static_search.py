@@ -10,16 +10,10 @@ import re
 from typing import Set, Dict, List, Optional
 from pathlib import Path
 
-# Import naming config for dynamic pattern building
-try:
-    from ..naming_config import get_config, NamingConfig
-except ImportError:
-    # Fallback for standalone usage
-    get_config = None
-    NamingConfig = None
+from ..naming_config import get_config, NamingConfig
 
 
-def _build_prefix_pattern(prefixes: List[str]) -> str:
+def _build_prefix_pattern(prefixes: List[str]) -> Optional[str]:
     """Build a regex pattern from a list of prefixes.
 
     Args:
@@ -143,7 +137,7 @@ def find_string_references_in_gml(root_dir: str, config: Optional["NamingConfig"
     }
 
     # Get config if not provided
-    if config is None and get_config is not None:
+    if config is None:
         try:
             config = get_config(root_dir)
         except Exception:
@@ -236,12 +230,9 @@ def cross_reference_strings_to_files(
     Cross-reference string references found in .gml files with actual filesystem files.
     Returns dict with categories of matches.
     """
-    try:
-        from .path_utils import find_file_case_insensitive
-    except ImportError:
-        from path_utils import find_file_case_insensitive
+    from .path_utils import find_file_case_insensitive
 
-    results = {
+    results: Dict[str, List[str]] = {
         "string_refs_found_exact": [],
         "string_refs_found_case_diff": [],
         "string_refs_missing": [],

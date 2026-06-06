@@ -17,13 +17,6 @@ from .orphan_cleanup import delete_orphan_files, find_delete_candidates
 
 __version__ = "1.0.0"
 __all__ = [
-    "lint",
-    "tidy_json",
-    "orphans",
-    "dup",
-    "rename",
-    "move",
-    "delete",
     "find_orphaned_assets",
     "validate_folder_paths",
     "clean_unused_folders",

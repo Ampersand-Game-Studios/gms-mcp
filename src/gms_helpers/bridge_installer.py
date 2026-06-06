@@ -94,9 +94,10 @@ class BridgeInstaller:
 
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root).resolve()
-        self.yyp_path = _find_yyp_in_dir(self.project_root)
-        if not self.yyp_path:
+        yyp_path = _find_yyp_in_dir(self.project_root)
+        if not yyp_path:
             raise BridgeInstallError(f"No .yyp file found in {self.project_root}")
+        self.yyp_path: Path = yyp_path
 
         self.backup_path: Optional[Path] = None
 

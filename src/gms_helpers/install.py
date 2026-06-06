@@ -9,6 +9,7 @@ import sys
 import platform
 import subprocess
 from pathlib import Path
+from typing import Any, cast
 from .exceptions import GMSError
 
 
@@ -54,7 +55,7 @@ def install_gms_command(auto: bool = False):
         # Optional: add helper directory to *user* PATH safely (avoid setx PATH hazards)
         if auto:
             try:
-                import winreg
+                winreg = cast(Any, __import__("winreg"))
 
                 def _normalize_path_list(path_value: str):
                     return [p.strip() for p in path_value.split(os.pathsep) if p.strip()]

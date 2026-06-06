@@ -230,7 +230,7 @@ class ProjectLinter:
                     LintIssue(
                         severity="error",
                         category="structure",
-                        file_path=self.yyp_path,
+                        file_path=str(self.yyp_path or "unknown"),
                         message=f"Duplicate resource name: {name}",
                     )
                 )

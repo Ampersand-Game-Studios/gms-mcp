@@ -19,9 +19,12 @@ import inspect
 import os
 import sys
 import time
+from pathlib import Path
+from typing import Any
 
 from .server.debug import _dbg
 from .server.register_all import register_all
+from .server.validation import invalid_arguments_result, validate_mcp_tool_arguments
 from .telemetry import (
     classify_error_family,
     get_tool_execution_context,
@@ -30,6 +33,48 @@ from .telemetry import (
     reset_tool_execution_context,
     resolve_state,
 )
+
+
+_TRANSACTIONAL_TOOL_PREFIXES = (
+    "gm_create_",
+    "gm_event_",
+    "gm_room_layer_",
+    "gm_room_instance_",
+    "gm_sprite_",
+    "gm_texture_group_",
+    "gm_workflow_",
+)
+_TRANSACTIONAL_TOOL_NAMES = {
+    "gm_asset_delete",
+    "gm_bridge_install",
+    "gm_bridge_uninstall",
+    "gm_bridge_enable_one_shot",
+    "gm_maintenance_auto",
+    "gm_maintenance_lint",
+    "gm_maintenance_prune_missing",
+    "gm_maintenance_dedupe_resources",
+    "gm_maintenance_sync_events",
+    "gm_maintenance_normalize_names",
+    "gm_maintenance_clean_old_files",
+    "gm_maintenance_clean_orphans",
+    "gm_maintenance_fix_issues",
+    "gm_room_ops_duplicate",
+    "gm_room_ops_rename",
+    "gm_room_ops_delete",
+    "gm_safe_delete",
+}
+_NON_TRANSACTIONAL_TOOL_NAMES = {
+    "gm_event_list",
+    "gm_event_validate",
+    "gm_room_layer_list",
+    "gm_room_instance_list",
+    "gm_room_ops_list",
+    "gm_texture_group_list",
+    "gm_texture_group_read",
+    "gm_texture_group_members",
+    "gm_texture_group_scan",
+    "gm_sprite_frame_count",
+}
 
 
 def _tool_family_for_function(func) -> str:
@@ -87,6 +132,111 @@ def _result_from_value(value) -> str:
     return "ok"
 
 
+def _bind_tool_arguments(func, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+    signature = inspect.signature(func)
+    bound = signature.bind_partial(*args, **kwargs)
+    bound.apply_defaults()
+    return dict(bound.arguments)
+
+
+def _tool_call_is_dry_run(arguments: dict[str, Any]) -> bool:
+    return bool(arguments.get("dry_run")) or (
+        arguments.get("fix") is False
+        and arguments.get("delete") is False
+        and any(name in arguments for name in ("fix", "delete"))
+    )
+
+
+def _tool_should_use_transaction(tool_name: str, arguments: dict[str, Any]) -> bool:
+    if tool_name in _NON_TRANSACTIONAL_TOOL_NAMES:
+        return False
+    if _tool_call_is_dry_run(arguments):
+        return False
+    if tool_name.startswith("gm_maintenance_"):
+        if tool_name == "gm_maintenance_fix_issues":
+            return True
+        if "dry_run" in arguments:
+            return not bool(arguments.get("dry_run"))
+        if "fix" in arguments:
+            return bool(arguments.get("fix"))
+        if "delete" in arguments:
+            return bool(arguments.get("delete"))
+        return False
+    if tool_name.startswith("gm_texture_group_") and tool_name not in _TRANSACTIONAL_TOOL_NAMES:
+        if tool_name in {
+            "gm_texture_group_list",
+            "gm_texture_group_read",
+            "gm_texture_group_members",
+            "gm_texture_group_scan",
+        }:
+            return False
+        return True
+    return tool_name in _TRANSACTIONAL_TOOL_NAMES or tool_name.startswith(_TRANSACTIONAL_TOOL_PREFIXES)
+
+
+def _resolve_transaction_project_root(arguments: dict[str, Any]) -> Path:
+    from gms_mcp.server.project import _resolve_project_directory_no_deps
+
+    return _resolve_project_directory_no_deps(str(arguments.get("project_root") or "."))
+
+
+def _annotate_transaction_result(result: Any, transaction: dict[str, Any]) -> Any:
+    if isinstance(result, dict):
+        if not result.get("transaction"):
+            result["transaction"] = transaction
+        return result
+    return {"ok": _result_from_value(result) == "ok", "result": result, "transaction": transaction}
+
+
+def _transaction_error_result(tool_name: str, exc: Exception) -> dict[str, Any]:
+    details = getattr(exc, "details", {}) or {}
+    return {
+        "ok": False,
+        "tool": tool_name,
+        "error": str(exc),
+        "error_type": type(exc).__name__,
+        **details,
+    }
+
+
+def _run_transactional_sync(tool_name: str, arguments: dict[str, Any], call):
+    from gms_helpers.transactions import GameMakerProjectTransaction, should_compile_verify_after_mutation
+
+    tx = GameMakerProjectTransaction(_resolve_transaction_project_root(arguments), tool_name)
+    tx.begin()
+    try:
+        result = call()
+        if _result_from_value(result) == "error":
+            tx.rollback()
+            return _annotate_transaction_result(result, tx.to_dict())
+        transaction = tx.commit(verify_compile=should_compile_verify_after_mutation())
+        return _annotate_transaction_result(result, transaction)
+    except Exception:
+        tx.rollback()
+        raise
+    finally:
+        tx.cleanup()
+
+
+async def _run_transactional_async(tool_name: str, arguments: dict[str, Any], call):
+    from gms_helpers.transactions import GameMakerProjectTransaction, should_compile_verify_after_mutation
+
+    tx = GameMakerProjectTransaction(_resolve_transaction_project_root(arguments), tool_name)
+    tx.begin()
+    try:
+        result = await call()
+        if _result_from_value(result) == "error":
+            tx.rollback()
+            return _annotate_transaction_result(result, tx.to_dict())
+        transaction = tx.commit(verify_compile=should_compile_verify_after_mutation())
+        return _annotate_transaction_result(result, transaction)
+    except Exception:
+        tx.rollback()
+        raise
+    finally:
+        tx.cleanup()
+
+
 def _wrap_tool_registration(mcp) -> None:
     if not hasattr(mcp, "tool"):
         return
@@ -100,7 +250,18 @@ def _wrap_tool_registration(mcp) -> None:
                 reset_tool_execution_context()
                 start = time.monotonic()
                 try:
-                    result = await func(*args, **kwargs)
+                    arguments = _bind_tool_arguments(func, args, kwargs)
+                    validation_errors = validate_mcp_tool_arguments(tool_name, arguments)
+                    if validation_errors:
+                        result = invalid_arguments_result(tool_name, validation_errors)
+                    elif _tool_should_use_transaction(tool_name, arguments):
+                        result = await _run_transactional_async(
+                            tool_name,
+                            arguments,
+                            lambda: func(*args, **kwargs),
+                        )
+                    else:
+                        result = await func(*args, **kwargs)
                     duration_ms = int((time.monotonic() - start) * 1000)
                     execution = get_tool_execution_context() or {}
                     _record_mcp_event(
@@ -115,6 +276,20 @@ def _wrap_tool_registration(mcp) -> None:
                     )
                     return result
                 except Exception as exc:
+                    if type(exc).__name__ == "TransactionValidationError":
+                        result = _transaction_error_result(tool_name, exc)
+                        duration_ms = int((time.monotonic() - start) * 1000)
+                        _record_mcp_event(
+                            event_type="mcp.tool",
+                            action=tool_name,
+                            tool_name=tool_name,
+                            tool_family=tool_family,
+                            result="error",
+                            error_family=classify_error_family(exc),
+                            duration_ms=duration_ms,
+                            execution_mode="inline",
+                        )
+                        return result
                     duration_ms = int((time.monotonic() - start) * 1000)
                     _record_mcp_event(
                         event_type="mcp.tool",
@@ -137,7 +312,18 @@ def _wrap_tool_registration(mcp) -> None:
             reset_tool_execution_context()
             start = time.monotonic()
             try:
-                result = func(*args, **kwargs)
+                arguments = _bind_tool_arguments(func, args, kwargs)
+                validation_errors = validate_mcp_tool_arguments(tool_name, arguments)
+                if validation_errors:
+                    result = invalid_arguments_result(tool_name, validation_errors)
+                elif _tool_should_use_transaction(tool_name, arguments):
+                    result = _run_transactional_sync(
+                        tool_name,
+                        arguments,
+                        lambda: func(*args, **kwargs),
+                    )
+                else:
+                    result = func(*args, **kwargs)
                 duration_ms = int((time.monotonic() - start) * 1000)
                 execution = get_tool_execution_context() or {}
                 _record_mcp_event(
@@ -152,6 +338,20 @@ def _wrap_tool_registration(mcp) -> None:
                 )
                 return result
             except Exception as exc:
+                if type(exc).__name__ == "TransactionValidationError":
+                    result = _transaction_error_result(tool_name, exc)
+                    duration_ms = int((time.monotonic() - start) * 1000)
+                    _record_mcp_event(
+                        event_type="mcp.tool",
+                        action=tool_name,
+                        tool_name=tool_name,
+                        tool_family=tool_family,
+                        result="error",
+                        error_family=classify_error_family(exc),
+                        duration_ms=duration_ms,
+                        execution_mode="inline",
+                    )
+                    return result
                 duration_ms = int((time.monotonic() - start) * 1000)
                 _record_mcp_event(
                     event_type="mcp.tool",
