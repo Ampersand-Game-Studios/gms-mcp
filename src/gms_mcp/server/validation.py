@@ -191,6 +191,7 @@ def validate_mcp_tool_arguments(tool_name: str, arguments: Mapping[str, Any]) ->
     for field in ("width", "height", "frame_count", "tile_width", "tile_height", "max_results"):
         _validate_positive_int(arguments, field, errors)
     _validate_non_negative_int(arguments, "tail_lines", errors)
+    _validate_non_negative_int(arguments, "timeout_seconds", errors)
     if tool_name != "gm_diagnostics":
         _validate_non_negative_int(arguments, "depth", errors)
 

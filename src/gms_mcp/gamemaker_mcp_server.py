@@ -25,6 +25,12 @@ from typing import Any
 from .server.debug import _dbg
 from .server.register_all import register_all
 from .server.validation import invalid_arguments_result, validate_mcp_tool_arguments
+from .server.verification_policy import (
+    MutationVerificationDecision,
+    clear_pending_compile_verification,
+    decide_mutation_verification,
+    mark_compile_verification_pending,
+)
 from .telemetry import (
     classify_error_family,
     get_tool_execution_context,
@@ -199,17 +205,49 @@ def _transaction_error_result(tool_name: str, exc: Exception) -> dict[str, Any]:
     }
 
 
-def _run_transactional_sync(tool_name: str, arguments: dict[str, Any], call):
-    from gms_helpers.transactions import GameMakerProjectTransaction, should_compile_verify_after_mutation
+def _apply_verification_decision(
+    *,
+    project_root: Path,
+    tool_name: str,
+    decision: MutationVerificationDecision,
+    transaction: dict[str, Any],
+) -> dict[str, Any]:
+    transaction["verification_policy"] = decision.to_dict()
+    if decision.action == "defer":
+        transaction["pending_compile_verification"] = mark_compile_verification_pending(
+            project_root,
+            tool_name=tool_name,
+            decision=decision,
+            transaction=transaction,
+        )
+    elif decision.action == "compile":
+        compile_verification = transaction.get("compile_verification")
+        if isinstance(compile_verification, dict) and compile_verification.get("ok"):
+            cleared = clear_pending_compile_verification(project_root)
+            if cleared:
+                transaction["cleared_pending_compile_verification"] = cleared
+    return transaction
 
-    tx = GameMakerProjectTransaction(_resolve_transaction_project_root(arguments), tool_name)
+
+def _run_transactional_sync(tool_name: str, arguments: dict[str, Any], call):
+    from gms_helpers.transactions import GameMakerProjectTransaction
+
+    project_root = _resolve_transaction_project_root(arguments)
+    decision = decide_mutation_verification(tool_name)
+    tx = GameMakerProjectTransaction(project_root, tool_name)
     tx.begin()
     try:
         result = call()
         if _result_from_value(result) == "error":
             tx.rollback()
             return _annotate_transaction_result(result, tx.to_dict())
-        transaction = tx.commit(verify_compile=should_compile_verify_after_mutation())
+        transaction = tx.commit(verify_compile=decision.action == "compile")
+        transaction = _apply_verification_decision(
+            project_root=project_root,
+            tool_name=tool_name,
+            decision=decision,
+            transaction=transaction,
+        )
         return _annotate_transaction_result(result, transaction)
     except Exception:
         tx.rollback()
@@ -219,16 +257,24 @@ def _run_transactional_sync(tool_name: str, arguments: dict[str, Any], call):
 
 
 async def _run_transactional_async(tool_name: str, arguments: dict[str, Any], call):
-    from gms_helpers.transactions import GameMakerProjectTransaction, should_compile_verify_after_mutation
+    from gms_helpers.transactions import GameMakerProjectTransaction
 
-    tx = GameMakerProjectTransaction(_resolve_transaction_project_root(arguments), tool_name)
+    project_root = _resolve_transaction_project_root(arguments)
+    decision = decide_mutation_verification(tool_name)
+    tx = GameMakerProjectTransaction(project_root, tool_name)
     tx.begin()
     try:
         result = await call()
         if _result_from_value(result) == "error":
             tx.rollback()
             return _annotate_transaction_result(result, tx.to_dict())
-        transaction = tx.commit(verify_compile=should_compile_verify_after_mutation())
+        transaction = tx.commit(verify_compile=decision.action == "compile")
+        transaction = _apply_verification_decision(
+            project_root=project_root,
+            tool_name=tool_name,
+            decision=decision,
+            transaction=transaction,
+        )
         return _annotate_transaction_result(result, transaction)
     except Exception:
         tx.rollback()

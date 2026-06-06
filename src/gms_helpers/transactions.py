@@ -195,19 +195,27 @@ def should_compile_verify_after_mutation() -> bool:
     )
 
 
-def _compile_verification(project_root: Path) -> Dict[str, Any]:
-    timeout_raw = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY_TIMEOUT_SECONDS", "1800").strip()
-    try:
-        timeout_seconds = max(1, int(timeout_raw))
-    except ValueError:
-        timeout_seconds = 1800
+def compile_verify_project(
+    project_root: str | Path,
+    *,
+    platform: str | None = None,
+    runtime: str | None = None,
+    timeout_seconds: int | None = None,
+) -> Dict[str, Any]:
+    if timeout_seconds is None:
+        timeout_raw = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY_TIMEOUT_SECONDS", "1800").strip()
+        try:
+            timeout_seconds = max(1, int(timeout_raw))
+        except ValueError:
+            timeout_seconds = 1800
 
-    runtime = os.environ.get("GMS_MCP_POST_MUTATION_RUNTIME", "VM").strip() or "VM"
-    platform = os.environ.get("GMS_MCP_POST_MUTATION_PLATFORM", "").strip()
-    if not platform:
+    selected_runtime = (runtime or os.environ.get("GMS_MCP_POST_MUTATION_RUNTIME", "VM")).strip() or "VM"
+    selected_platform = (platform or os.environ.get("GMS_MCP_POST_MUTATION_PLATFORM", "")).strip()
+    root = Path(project_root).resolve()
+    if not selected_platform:
         from .runner import detect_default_target_platform
 
-        platform = detect_default_target_platform()
+        selected_platform = detect_default_target_platform()
 
     cmd = [
         sys.executable,
@@ -215,18 +223,18 @@ def _compile_verification(project_root: Path) -> Dict[str, Any]:
         "-m",
         "gms_helpers.gms",
         "--project-root",
-        str(project_root),
+        str(root),
         "run",
         "compile",
         "--platform",
-        platform,
+        selected_platform,
         "--runtime",
-        runtime,
+        selected_runtime,
     ]
     started = time.monotonic()
     completed = subprocess.run(
         cmd,
-        cwd=str(project_root),
+        cwd=str(root),
         text=True,
         capture_output=True,
         timeout=timeout_seconds,
@@ -236,13 +244,17 @@ def _compile_verification(project_root: Path) -> Dict[str, Any]:
     return {
         "ok": ok,
         "mode": "compile",
-        "platform": platform,
-        "runtime": runtime,
+        "platform": selected_platform,
+        "runtime": selected_runtime,
         "exit_code": completed.returncode,
         "elapsed_seconds": elapsed,
         "stdout_tail": "\n".join((completed.stdout or "").splitlines()[-80:]),
         "stderr_tail": "\n".join((completed.stderr or "").splitlines()[-80:]),
     }
+
+
+def _compile_verification(project_root: Path) -> Dict[str, Any]:
+    return compile_verify_project(project_root)
 
 
 class GameMakerProjectTransaction:
@@ -296,7 +308,7 @@ class GameMakerProjectTransaction:
             )
 
         if verify_compile:
-            self.compile_verification = _compile_verification(self.project_root)
+            self.compile_verification = compile_verify_project(self.project_root)
             if not self.compile_verification.get("ok"):
                 self.rollback()
                 raise TransactionValidationError(
@@ -328,4 +340,3 @@ class GameMakerProjectTransaction:
             "validation": self.validation.to_dict() if self.validation else None,
             "compile_verification": self.compile_verification,
         }
-

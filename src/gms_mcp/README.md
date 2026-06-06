@@ -131,6 +131,8 @@ After changing `.cursor/mcp.json`, **Reload Window** in Cursor to pick up MCP co
   - To bypass subprocess overhead and use faster **in-process execution**, set `GMS_MCP_ENABLE_DIRECT=1`. This is faster but less resilient to hangs in library code.
   - To require dry-run mode for destructive operations, set `GMS_MCP_REQUIRE_DRY_RUN=1` (enabled by default for `--antigravity-setup`).
   - To allow specific destructive tools while this policy is enabled, set `GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST` to a comma-separated list (for example: `gm_asset_delete,gm_workflow_delete,gm_safe_delete`).
+  - Post-mutation compile verification is opt-in. Set `GMS_MCP_POST_MUTATION_VERIFY=compile` to compile after every transactional mutation, or `GMS_MCP_POST_MUTATION_VERIFY=smart` to compile immediately for high-risk structural mutations and defer batchable edits like sprite-frame changes.
+  - In smart mode, deferred edits create a pending marker in `.gms_mcp/verification_state.json`. Use `gm_verification_status` to inspect it and `gm_verification_flush` to run one compile when the batch is complete.
 
 - **Picking the `gms` executable (Windows shims)**:
   - The server prefers a "real" `gms` when multiple are present on Windows (avoids the WindowsApps shim when possible).
