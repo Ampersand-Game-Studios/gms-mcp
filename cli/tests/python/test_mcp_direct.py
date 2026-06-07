@@ -3,6 +3,7 @@ import argparse
 import asyncio
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -11,7 +12,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from gms_mcp.server import dispatch as server
-from gms_mcp.server.direct import _capture_output
+from gms_mcp.server.direct import _capture_output, _run_direct
 from gms_mcp.server.dry_run_policy import _requires_dry_run_for_tool
 from gms_mcp.server.results import ToolRunResult
 from gms_helpers.results import OperationResult
@@ -48,6 +49,37 @@ class TestCaptureOutputSystemExit(unittest.TestCase):
         self.assertEqual(err, "")
         self.assertIsNone(error_text)
         self.assertEqual(exit_code, 0)
+
+
+class TestDirectResultNormalization(unittest.TestCase):
+    def _project_root(self):
+        temp_dir = tempfile.TemporaryDirectory()
+        root = Path(temp_dir.name)
+        (root / "TestGame.yyp").write_text("{}", encoding="utf-8")
+        self.addCleanup(temp_dir.cleanup)
+        return root
+
+    def test_run_direct_normalizes_legacy_bool_failure(self):
+        def _handler(_args):
+            return False
+
+        result = _run_direct(_handler, argparse.Namespace(), str(self._project_root())).as_dict()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "_handler failed.")
+        self.assertFalse(result["result"]["ok"])
+        self.assertEqual(result["result"]["error"]["type"], "legacy_boolean_result")
+
+    def test_run_direct_normalizes_legacy_error_dict(self):
+        def _handler(_args):
+            return {"error": "bad input", "items": []}
+
+        result = _run_direct(_handler, argparse.Namespace(), str(self._project_root())).as_dict()
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "bad input")
+        self.assertFalse(result["result"]["ok"])
+        self.assertEqual(result["result"]["error"]["code"], "legacy_dict_error")
 
 
 class TestRunWithFallbackDefaults(unittest.TestCase):

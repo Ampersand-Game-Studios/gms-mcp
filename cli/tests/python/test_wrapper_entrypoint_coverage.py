@@ -469,9 +469,11 @@ class TestCommandWrappers(unittest.TestCase):
                         force=False,
                         clean_refs=False,
                         apply=False,
-                    )
                 )
-            self.assertEqual(result, expected)
+            )
+            self.assertEqual(bool(result), expected)
+            self.assertEqual(result.success, expected)
+            self.assertEqual(result.to_dict()["ok"], expected)
 
     def test_runner_wrappers_cover_success_failure_and_exceptions(self):
         compile_args = SimpleNamespace(

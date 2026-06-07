@@ -21,6 +21,20 @@ from ..texture_groups import (
 )
 
 
+def _texture_ok(message: str, data: Dict[str, Any] | None = None) -> OperationResult:
+    return OperationResult.ok(message, data=data or {})
+
+
+def _texture_fail(message: str, data: Dict[str, Any] | None = None, *, code: str = "texture_group_failed"):
+    return OperationResult.fail(
+        message,
+        code=code,
+        error_type="texture_group_error",
+        details=data or {},
+        data=data or {},
+    )
+
+
 def _parse_csv(value: Optional[str]) -> Optional[List[str]]:
     if not value:
         return None
@@ -88,7 +102,7 @@ def handle_texture_groups_list(args) -> OperationResult:
             extra.append(f"border={border}")
         suffix = f" ({', '.join(extra)})" if extra else ""
         print(f"- {name}{suffix}")
-    return OperationResult(success=True, message="Listed texture groups")
+    return _texture_ok("Listed texture groups", {"configs": configs, "groups": groups})
 
 
 def handle_texture_groups_show(args) -> OperationResult:
@@ -98,12 +112,16 @@ def handle_texture_groups_show(args) -> OperationResult:
     hit = find_texture_group(yyp_data, name)
     if hit is None:
         print(f"[ERROR] Texture group '{name}' not found in {yyp_path.name}")
-        return OperationResult(success=False, message="Not found")
+        return _texture_fail(
+            f"Texture group '{name}' not found",
+            {"name": name, "project_file": yyp_path.name},
+            code="texture_group_not_found",
+        )
     _, tg = hit
     print(f"[OK] Texture group: {name}")
     for k in sorted(tg.keys()):
         print(f"{k}: {tg.get(k)}")
-    return OperationResult(success=True, message="Shown texture group")
+    return _texture_ok("Shown texture group", {"name": name, "texture_group": tg})
 
 
 def handle_texture_groups_members(args) -> OperationResult:
@@ -113,8 +131,9 @@ def handle_texture_groups_members(args) -> OperationResult:
     configs = _parse_csv(getattr(args, "configs", None))
     result = texture_group_members(project_root, group, asset_types=types, configs=configs)
     if not result.get("ok"):
-        print(f"[ERROR] {result.get('error', 'Failed')}")
-        return OperationResult(success=False, message="Failed")
+        message = str(result.get("error", "Failed"))
+        print(f"[ERROR] {message}")
+        return _texture_fail(message, result, code="texture_group_members_failed")
     for w in result.get("warnings", []) or []:
         print(f"[WARN]  {w}")
     print(f"[OK] Members of '{group}': {result.get('count', 0)}")
@@ -122,7 +141,7 @@ def handle_texture_groups_members(args) -> OperationResult:
         print(
             f"- {m.get('type')} {m.get('name')} ({m.get('path')}) top={m.get('top_level_group')} cfg={m.get('config_groups')}"
         )
-    return OperationResult(success=True, message="Listed texture group members")
+    return _texture_ok("Listed texture group members", result)
 
 
 def handle_texture_groups_scan(args) -> OperationResult:
@@ -132,8 +151,9 @@ def handle_texture_groups_scan(args) -> OperationResult:
     include_assets = bool(getattr(args, "include_assets", False))
     result = texture_group_scan(project_root, asset_types=types, configs=configs, include_assets=include_assets)
     if not result.get("ok"):
-        print(f"[ERROR] {result.get('error', 'Failed')}")
-        return OperationResult(success=False, message="Failed")
+        message = str(result.get("error", "Failed"))
+        print(f"[ERROR] {message}")
+        return _texture_fail(message, result, code="texture_group_scan_failed")
     print(f"Groups defined: {len(result.get('groups_defined') or [])}")
     print(f"Groups referenced: {len(result.get('groups_referenced') or [])}")
     missing = result.get("missing_groups_referenced") or {}
@@ -142,7 +162,7 @@ def handle_texture_groups_scan(args) -> OperationResult:
     for g, refs in missing.items():
         print(f"- {g}: {len(refs)}")
     print(f"Mismatched assets: {len(mismatched)}")
-    return OperationResult(success=True, message="Scanned texture groups")
+    return _texture_ok("Scanned texture groups", result)
 
 
 def handle_texture_groups_create(args) -> OperationResult:
@@ -153,14 +173,15 @@ def handle_texture_groups_create(args) -> OperationResult:
     dry_run = bool(getattr(args, "dry_run", False))
     result = texture_group_create(project_root, name, template=template, patch=patch or None, dry_run=dry_run)
     if not result.get("ok"):
-        print(f"[ERROR] {result.get('error', 'Failed')}")
-        return OperationResult(success=False, message="Failed")
+        message = str(result.get("error", "Failed"))
+        print(f"[ERROR] {message}")
+        return _texture_fail(message, result, code="texture_group_create_failed")
     for w in result.get("warnings", []) or []:
         print(f"[WARN]  {w}")
     print(f"[OK] {result.get('message')}")
     if dry_run:
         print(f"[DRY] Would change: {result.get('changed_files')}")
-    return OperationResult(success=True, message=result.get("message", "Created"))
+    return _texture_ok(result.get("message", "Created"), result)
 
 
 def handle_texture_groups_update(args) -> OperationResult:
@@ -179,14 +200,15 @@ def handle_texture_groups_update(args) -> OperationResult:
         dry_run=dry_run,
     )
     if not result.get("ok"):
-        print(f"[ERROR] {result.get('error', 'Failed')}")
-        return OperationResult(success=False, message="Failed")
+        message = str(result.get("error", "Failed"))
+        print(f"[ERROR] {message}")
+        return _texture_fail(message, result, code="texture_group_update_failed")
     for w in result.get("warnings", []) or []:
         print(f"[WARN]  {w}")
     print(f"[OK] {result.get('message')}")
     if dry_run:
         print(f"[DRY] Would change: {result.get('changed_files')}")
-    return OperationResult(success=True, message=result.get("message", "Updated"))
+    return _texture_ok(result.get("message", "Updated"), result)
 
 
 def handle_texture_groups_rename(args) -> OperationResult:
@@ -203,14 +225,15 @@ def handle_texture_groups_rename(args) -> OperationResult:
         dry_run=dry_run,
     )
     if not result.get("ok"):
-        print(f"[ERROR] {result.get('error', 'Failed')}")
-        return OperationResult(success=False, message="Failed")
+        message = str(result.get("error", "Failed"))
+        print(f"[ERROR] {message}")
+        return _texture_fail(message, result, code="texture_group_rename_failed")
     for w in result.get("warnings", []) or []:
         print(f"[WARN]  {w}")
     print(f"[OK] {result.get('message')}")
     if dry_run:
         print(f"[DRY] Would change: {result.get('changed_files')}")
-    return OperationResult(success=True, message=result.get("message", "Renamed"))
+    return _texture_ok(result.get("message", "Renamed"), result)
 
 
 def handle_texture_groups_delete(args) -> OperationResult:
@@ -220,18 +243,19 @@ def handle_texture_groups_delete(args) -> OperationResult:
     dry_run = bool(getattr(args, "dry_run", False))
     result = texture_group_delete(project_root, name, reassign_to=reassign_to, dry_run=dry_run)
     if not result.get("ok"):
-        print(f"[ERROR] {result.get('error', 'Failed')}")
+        message = str(result.get("error", "Failed"))
+        print(f"[ERROR] {message}")
         details = result.get("details") or {}
         refs = details.get("references_found")
         if refs:
             print(f"References found: {len(refs)}")
-        return OperationResult(success=False, message="Failed")
+        return _texture_fail(message, result, code="texture_group_delete_failed")
     for w in result.get("warnings", []) or []:
         print(f"[WARN]  {w}")
     print(f"[OK] {result.get('message')}")
     if dry_run:
         print(f"[DRY] Would change: {result.get('changed_files')}")
-    return OperationResult(success=True, message=result.get("message", "Deleted"))
+    return _texture_ok(result.get("message", "Deleted"), result)
 
 
 def handle_texture_groups_assign(args) -> OperationResult:
@@ -261,11 +285,12 @@ def handle_texture_groups_assign(args) -> OperationResult:
         dry_run=dry_run,
     )
     if not result.get("ok"):
-        print(f"[ERROR] {result.get('error', 'Failed')}")
-        return OperationResult(success=False, message="Failed")
+        message = str(result.get("error", "Failed"))
+        print(f"[ERROR] {message}")
+        return _texture_fail(message, result, code="texture_group_assign_failed")
     for w in result.get("warnings", []) or []:
         print(f"[WARN]  {w}")
     print(f"[OK] {result.get('message')}")
     if dry_run:
         print(f"[DRY] Would change: {result.get('changed_files')}")
-    return OperationResult(success=True, message=result.get("message", "Assigned"))
+    return _texture_ok(result.get("message", "Assigned"), result)
