@@ -211,6 +211,7 @@ This command:
 - rewrites `build/reports/coverage.xml`
 - regenerates the markdown and JSON quality summaries
 - runs `cli/tests/python/test_final_verification.py`
+- enforces coverage gates: 85% overall statement coverage and 50% per-module statement coverage by default
 
 Use `--skip-test-run` to regenerate from existing CI artifacts:
 
@@ -218,12 +219,28 @@ Use `--skip-test-run` to regenerate from existing CI artifacts:
 python scripts/generate_quality_reports.py --skip-test-run --junit-xml build/reports/pytest_results.xml --coverage-xml build/reports/coverage.xml
 ```
 
-For release-bound promotions, maintainers should run all three locally from the repo root:
+Coverage gates can be raised or temporarily narrowed with `--min-overall-coverage`,
+`--min-module-coverage`, and `--coverage-gate-exclude`. The matching environment
+variables are `GMS_MCP_MIN_OVERALL_COVERAGE`, `GMS_MCP_MIN_MODULE_COVERAGE`, and
+`GMS_MCP_COVERAGE_GATE_EXCLUDE`.
+
+For real GameMaker verification on a machine with GameMaker installed, run:
+
+```bash
+GMS_MCP_REAL_SMOKE_PROJECT=/path/to/project python scripts/run_real_gamemaker_smoke.py --required
+```
+
+The smoke copies the project to a temporary directory, uses smart post-mutation
+verification, compiles after a high-risk mutation, defers a batchable sprite-frame
+mutation, then flushes the pending compile once.
+
+For release-bound promotions, maintainers should run these locally from the repo root:
 
 ```bash
 PYTHONPATH=src python cli/tests/python/run_all_tests.py
 PYTHONPATH=src python -m pytest cli/tests/python/test_final_verification.py
 python scripts/generate_quality_reports.py
+GMS_MCP_REAL_SMOKE_PROJECT=/path/to/project python scripts/run_real_gamemaker_smoke.py --required
 ```
 
 ## X posting during release

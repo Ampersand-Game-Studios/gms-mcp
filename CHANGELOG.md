@@ -41,6 +41,7 @@ All notable changes to this project will be documented in this file.
 - **Coverage Audit Expansion**: Added focused coverage suites for CLI wrappers, helper-heavy modules, install/setup flows, bridge tools, and reporting regressions. Project-wide statement coverage now clears 90% with release artifacts generated from the same pipeline used in CI.
 - **LTS2026 Runtime Awareness**: Runtime discovery now classifies `2026.*` installs as LTS, and runner runtime labels accept the LTS2026 UI aliases `GMS2 VM` and `GMS2 YYC`.
 - **LTS2026 Asset Introspection Coverage**: Added regression coverage for particle-system assets and lower-case project-serializer key variants.
+- **Real GameMaker Verification Smoke**: Added `scripts/run_real_gamemaker_smoke.py` to copy a real project, exercise smart post-mutation verification, compile a high-risk mutation, defer a batchable sprite-frame mutation, and flush the pending compile once. CI now publishes the smoke report when a real project is configured.
 
 ### Fixed
 - **Spurious `.gms_mcp` Folder Creation**: Fixed an issue where the MCP server would create a `.gms_mcp/logs/` folder in the current working directory even when no GameMaker project was present. Debug logging now only activates when a valid project is detected.
@@ -57,6 +58,9 @@ All notable changes to this project will be documented in this file.
 - **Diagnostic output**: Refined tool outputs to be cleaner and more consistent across the code intelligence suite.
 - **Standardized Versioning**: Locked default asset creation to GameMaker 2024.x+ standards.
 - **Quality Reporting Pipeline**: `scripts/generate_quality_reports.py` now collects subprocess coverage correctly, combines parallel `.coverage*` data before writing `coverage.xml`, and keeps the published markdown/XML/JSON quality artifacts aligned with real CLI execution paths.
+- **Smart Mutation Verification Default**: Post-mutation verification now defaults to smart mode, compiling high-risk structural mutations immediately while deferring batchable edits until `gm_verification_flush`.
+- **Coverage Gates**: Quality reports now fail below 85% overall statement coverage or 50% per-module statement coverage by default, with gate details recorded in `quality_summary.json`.
+- **Post-Mutation Compile Semantics**: Compile verification now treats a completed Igor compiler stage as a valid post-mutation compiler check even when a later local runner/package step exits non-zero for environment reasons.
 
 ### Removed
 - **GitHub Actions X Posting**: Removed X API-based posting workflows, tweet staging, evergreen posting, posting history, and related tests. Release posts are now handled through Codex/browser automation using the X web UI.

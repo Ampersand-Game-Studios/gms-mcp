@@ -65,12 +65,18 @@ class TestMCPIntegrationTools(unittest.TestCase):
         self._temp_dir = tempfile.TemporaryDirectory()
         self.project_root = Path(self._temp_dir.name)
         _create_basic_gamemaker_project(self.project_root)
+        self._previous_verify_mode = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY")
+        os.environ["GMS_MCP_POST_MUTATION_VERIFY"] = "off"
 
         from gms_mcp.gamemaker_mcp_server import build_server
 
         self.mcp = build_server()
 
     def tearDown(self):
+        if self._previous_verify_mode is None:
+            os.environ.pop("GMS_MCP_POST_MUTATION_VERIFY", None)
+        else:
+            os.environ["GMS_MCP_POST_MUTATION_VERIFY"] = self._previous_verify_mode
         try:
             self._temp_dir.cleanup()
         except Exception:

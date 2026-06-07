@@ -188,11 +188,27 @@ def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _env_bool(name: str, *, default: bool) -> bool:
+    raw = os.environ.get(name)
+    if raw is None:
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return default
+
+
 def should_compile_verify_after_mutation() -> bool:
     mode = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY", "").strip().lower()
     return mode in {"1", "true", "yes", "on", "compile", "ide"} or _env_truthy(
         "GMS_MCP_VERIFY_COMPILE_AFTER_MUTATION"
     )
+
+
+def _compile_stage_succeeded(stdout: str) -> bool:
+    return "Final Compile finished" in stdout and "Saving IFF file" in stdout and "Igor complete." in stdout
 
 
 def compile_verify_project(
@@ -240,13 +256,21 @@ def compile_verify_project(
         timeout=timeout_seconds,
     )
     elapsed = time.monotonic() - started
-    ok = completed.returncode == 0
+    compile_stage_ok = _compile_stage_succeeded(completed.stdout or "")
+    accepted_compile_stage_success = (
+        completed.returncode != 0
+        and compile_stage_ok
+        and _env_bool("GMS_MCP_POST_MUTATION_ACCEPT_COMPILE_STAGE_SUCCESS", default=True)
+    )
+    ok = completed.returncode == 0 or accepted_compile_stage_success
     return {
         "ok": ok,
         "mode": "compile",
         "platform": selected_platform,
         "runtime": selected_runtime,
         "exit_code": completed.returncode,
+        "compile_stage_ok": compile_stage_ok,
+        "accepted_compile_stage_success": accepted_compile_stage_success,
         "elapsed_seconds": elapsed,
         "stdout_tail": "\n".join((completed.stdout or "").splitlines()[-80:]),
         "stderr_tail": "\n".join((completed.stderr or "").splitlines()[-80:]),
