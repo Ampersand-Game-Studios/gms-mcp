@@ -16,6 +16,7 @@ Use this when taking completed `dev` branch work through `pre-release` and `main
    PYTHONPATH=src python cli/tests/python/run_all_tests.py
    PYTHONPATH=src python -m pytest cli/tests/python/test_final_verification.py
    python scripts/generate_quality_reports.py
+   GMS_MCP_REAL_SMOKE_PROJECT=/path/to/project python scripts/run_real_gamemaker_smoke.py --required
    ```
 4. Merge `dev` into `pre-release` and push.
 5. Confirm GitHub Actions `CI` passes on `pre-release`.

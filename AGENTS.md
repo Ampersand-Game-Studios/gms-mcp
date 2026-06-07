@@ -19,6 +19,10 @@ This file applies to the `gms-mcp` repository root.
   - `PYTHONPATH=src python cli/tests/python/run_all_tests.py`
 - Run final verification tests:
   - `PYTHONPATH=src python -m pytest cli/tests/python/test_final_verification.py`
+- Run quality reports and coverage gates:
+  - `python scripts/generate_quality_reports.py`
+- On a machine with GameMaker installed, run real compile smoke:
+  - `GMS_MCP_REAL_SMOKE_PROJECT=/path/to/project python scripts/run_real_gamemaker_smoke.py --required`
 - For release-bound updates, confirm GitHub Actions `CI` passes on `main`.
 
 ## Codex App Changes

@@ -120,6 +120,22 @@ jobs:
             cli/tests/python/test_install_polish.py \
             cli/tests/python/test_install_parity.py
 
+      - name: Run optional real GameMaker smoke
+        if: matrix.python-version == '3.12'
+        env:
+          GMS_MCP_REAL_SMOKE_PROJECT: ${{ vars.GMS_MCP_REAL_SMOKE_PROJECT }}
+          GMS_MCP_REQUIRE_REAL_GAMEMAKER_SMOKE: ${{ vars.GMS_MCP_REQUIRE_REAL_GAMEMAKER_SMOKE }}
+        run: |
+          python scripts/run_real_gamemaker_smoke.py --output build/reports/real_gamemaker_smoke.json
+
+      - name: Upload real GameMaker smoke report
+        if: always() && matrix.python-version == '3.12'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: real-gamemaker-smoke-macos-py${{ matrix.python-version }}
+          path: build/reports/real_gamemaker_smoke.json
+          if-no-files-found: warn
+
   # Summary job - this is the ONE check you require in branch protection
   ci:
     name: ci

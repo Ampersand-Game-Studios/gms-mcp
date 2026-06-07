@@ -26,11 +26,17 @@ Run these from the repo root:
 PYTHONPATH=src python cli/tests/python/run_all_tests.py
 PYTHONPATH=src python -m pytest cli/tests/python/test_final_verification.py
 python scripts/generate_quality_reports.py
+GMS_MCP_REAL_SMOKE_PROJECT=/path/to/project python scripts/run_real_gamemaker_smoke.py --required
 ```
 
 The quality report script regenerates `build/reports/coverage.xml`, `TEST_COVERAGE_REPORT.md`,
 `MCP_TOOL_VALIDATION_REPORT.md`, and `quality_summary.json`, and it merges subprocess coverage
-data before writing the final report.
+data before writing the final report. It fails below the default coverage gates: 85% overall
+statement coverage and 50% per-module statement coverage.
+
+The real GameMaker smoke copies `GMS_MCP_REAL_SMOKE_PROJECT`, then verifies that smart
+post-mutation verification compiles high-risk mutations immediately and flushes deferred
+batchable edits with one real compile.
 
 Before merging `pre-release` into `main`:
 

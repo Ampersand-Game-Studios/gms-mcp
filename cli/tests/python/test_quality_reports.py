@@ -96,6 +96,10 @@ class TestQualityReportParsing(unittest.TestCase):
                     str(junit_path),
                     "--coverage-xml",
                     str(coverage_path),
+                    "--min-overall-coverage",
+                    "0",
+                    "--min-module-coverage",
+                    "0",
                 ]
                 exit_code = quality_reports.main()
             finally:
@@ -106,6 +110,47 @@ class TestQualityReportParsing(unittest.TestCase):
 
         self.assertEqual(summary["tests"]["tests"], 7)
         self.assertEqual(summary["tests"]["passed"], 6)
+        self.assertTrue(summary["coverage_gate"]["ok"])
+
+    def test_evaluate_coverage_gates_reports_overall_and_module_failures(self):
+        coverage = {
+            "overall": 84.9,
+            "modules": [
+                {"module": "strong.py", "coverage": 90.0},
+                {"module": "weak.py", "coverage": 49.9},
+                {"module": "excluded.py", "coverage": 0.0},
+            ],
+        }
+
+        gate = quality_reports.evaluate_coverage_gates(
+            coverage,
+            min_overall=85.0,
+            min_module=50.0,
+            exclude_modules=["excluded.py"],
+        )
+
+        self.assertFalse(gate["ok"])
+        self.assertEqual(len(gate["failures"]), 2)
+        self.assertEqual(gate["excluded_modules"], ["excluded.py"])
+
+    def test_evaluate_coverage_gates_passes_when_thresholds_are_met(self):
+        coverage = {
+            "overall": 88.0,
+            "modules": [
+                {"module": "module_a.py", "coverage": 50.0},
+                {"module": "module_b.py", "coverage": 75.0},
+            ],
+        }
+
+        gate = quality_reports.evaluate_coverage_gates(
+            coverage,
+            min_overall=85.0,
+            min_module=50.0,
+            exclude_modules=[],
+        )
+
+        self.assertTrue(gate["ok"])
+        self.assertEqual(gate["failures"], [])
 
     def test_cleanup_coverage_data_removes_root_and_gamemaker_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -12,6 +12,7 @@ from __future__ import annotations
 import argparse
 import ast
 import datetime
+import fnmatch
 import json
 import os
 import re
@@ -20,6 +21,10 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Mapping
 from xml.etree import ElementTree as ET
+
+
+DEFAULT_MIN_OVERALL_COVERAGE = 85.0
+DEFAULT_MIN_MODULE_COVERAGE = 50.0
 
 
 def _parse_int_attr(node: ET.Element, name: str) -> int:
@@ -36,6 +41,22 @@ def _parse_float_attr(node: ET.Element, name: str) -> float:
         return float(value)
     except (TypeError, ValueError):
         return 0.0
+
+
+def _float_setting(name: str, default: float) -> float:
+    raw = os.environ.get(name, "").strip()
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        return default
+
+
+def _split_csv(value: str | None) -> List[str]:
+    if not value:
+        return []
+    return [item.strip() for item in value.split(",") if item.strip()]
 
 
 def parse_args() -> argparse.Namespace:
@@ -79,6 +100,24 @@ def parse_args() -> argparse.Namespace:
         "--no-final-verification",
         action="store_true",
         help="Do not run test_final_verification.py",
+    )
+    parser.add_argument(
+        "--min-overall-coverage",
+        type=float,
+        default=_float_setting("GMS_MCP_MIN_OVERALL_COVERAGE", DEFAULT_MIN_OVERALL_COVERAGE),
+        help="Minimum overall statement coverage percentage.",
+    )
+    parser.add_argument(
+        "--min-module-coverage",
+        type=float,
+        default=_float_setting("GMS_MCP_MIN_MODULE_COVERAGE", DEFAULT_MIN_MODULE_COVERAGE),
+        help="Minimum per-module statement coverage percentage.",
+    )
+    parser.add_argument(
+        "--coverage-gate-exclude",
+        action="append",
+        default=_split_csv(os.environ.get("GMS_MCP_COVERAGE_GATE_EXCLUDE")),
+        help="Module path or fnmatch pattern to exclude from per-module coverage gates. Repeatable.",
     )
     return parser.parse_args()
 
@@ -301,6 +340,60 @@ def parse_coverage(path: Path) -> Dict[str, object]:
     return {"overall": round(overall, 2), "modules": modules}
 
 
+def _is_module_excluded(module_name: str, patterns: List[str]) -> bool:
+    return any(module_name == pattern or fnmatch.fnmatch(module_name, pattern) for pattern in patterns)
+
+
+def evaluate_coverage_gates(
+    coverage: Dict[str, object],
+    *,
+    min_overall: float,
+    min_module: float,
+    exclude_modules: List[str],
+) -> Dict[str, object]:
+    modules = coverage.get("modules", [])
+    failures: List[Dict[str, object]] = []
+    excluded: List[str] = []
+
+    overall = float(coverage.get("overall", 0.0))
+    if overall < min_overall:
+        failures.append(
+            {
+                "scope": "overall",
+                "coverage": round(overall, 2),
+                "minimum": round(min_overall, 2),
+            }
+        )
+
+    for entry in modules if isinstance(modules, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        module_name = str(entry.get("module", ""))
+        if not module_name:
+            continue
+        if _is_module_excluded(module_name, exclude_modules):
+            excluded.append(module_name)
+            continue
+        module_coverage = float(entry.get("coverage", 0.0))
+        if module_coverage < min_module:
+            failures.append(
+                {
+                    "scope": "module",
+                    "module": module_name,
+                    "coverage": round(module_coverage, 2),
+                    "minimum": round(min_module, 2),
+                }
+            )
+
+    return {
+        "ok": not failures,
+        "min_overall": round(min_overall, 2),
+        "min_module": round(min_module, 2),
+        "excluded_modules": sorted(excluded),
+        "failures": failures,
+    }
+
+
 def discover_mcp_tools(server_sources_dir: Path) -> List[str]:
     tools: set[str] = set()
 
@@ -394,11 +487,19 @@ def scan_tool_references(tests_dir: Path, tools: List[str]) -> List[str]:
     return referenced
 
 
-def write_coverage_report(coverage: Dict[str, object], junit: Dict[str, object], out_path: Path) -> None:
+def write_coverage_report(
+    coverage: Dict[str, object],
+    junit: Dict[str, object],
+    gate: Dict[str, object],
+    out_path: Path,
+) -> None:
     failures = int(junit["failures"]) + int(junit["errors"])
     pass_rate = 0.0
     if junit["tests"]:
         pass_rate = (int(junit["passed"]) / int(junit["tests"])) * 100
+    gate_ok = bool(gate.get("ok"))
+    min_overall = float(gate.get("min_overall", 0.0))
+    min_module = float(gate.get("min_module", 0.0))
 
     lines = [
         "# Test Coverage Report",
@@ -411,6 +512,9 @@ def write_coverage_report(coverage: Dict[str, object], junit: Dict[str, object],
         f"| **Total Tests** | {junit['tests']} |",
         f"| **Pass Rate** | {pass_rate:.1f}% |",
         f"| **Overall Statement Coverage** | {coverage['overall']:.1f}% |",
+        f"| **Minimum Overall Coverage** | {min_overall:.1f}% |",
+        f"| **Minimum Module Coverage** | {min_module:.1f}% |",
+        f"| **Coverage Gate** | {'PASS' if gate_ok else 'FAIL'} |",
         f"| **Test Failures** | {failures} |",
         f"| **Test Duration** | {float(junit['time']):.2f}s |",
         "",
@@ -433,6 +537,26 @@ def write_coverage_report(coverage: Dict[str, object], junit: Dict[str, object],
             lines.append(f"- `{entry['module']}` ({entry['coverage']:.1f}%)")
     else:
         lines.append("No modules currently below 50% coverage.")
+
+    gate_failures = gate.get("failures", [])
+    lines.append("")
+    lines.append("## Coverage Gate")
+    if isinstance(gate_failures, list) and gate_failures:
+        lines.append("Gate failures:")
+        for failure in gate_failures:
+            if not isinstance(failure, dict):
+                continue
+            coverage_value = float(failure.get("coverage", 0.0))
+            minimum_value = float(failure.get("minimum", 0.0))
+            if failure.get("scope") == "overall":
+                lines.append(f"- Overall coverage {coverage_value:.1f}% is below {minimum_value:.1f}%.")
+            else:
+                module_name = str(failure.get("module", "unknown"))
+                lines.append(
+                    f"- `{module_name}` coverage {coverage_value:.1f}% is below {minimum_value:.1f}%."
+                )
+    else:
+        lines.append("Coverage gates passed.")
 
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -506,17 +630,24 @@ def main() -> int:
 
     junit = parse_junit(paths["junit_xml"])
     coverage = parse_coverage(paths["coverage_xml"])
+    gate = evaluate_coverage_gates(
+        coverage,
+        min_overall=args.min_overall_coverage,
+        min_module=args.min_module_coverage,
+        exclude_modules=args.coverage_gate_exclude,
+    )
     tools = discover_mcp_tools(paths["server_sources_dir"])
     referenced = scan_tool_references(paths["root"] / "cli/tests/python", tools)
 
     paths["output_dir"].mkdir(parents=True, exist_ok=True)
-    write_coverage_report(coverage, junit, paths["coverage_report_md"])
+    write_coverage_report(coverage, junit, gate, paths["coverage_report_md"])
     write_tool_report(tools, referenced, junit, paths["tool_report_md"])
 
     summary = {
         "generated_at": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
         "project": "gms-mcp",
         "coverage": coverage,
+        "coverage_gate": gate,
         "tests": junit,
         "mcp_tools": {
             "total": len(tools),
@@ -525,6 +656,20 @@ def main() -> int:
         },
     }
     paths["summary_json"].write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    if not bool(gate.get("ok")):
+        print("[ERROR] Coverage gate failed.")
+        gate_failures = gate.get("failures", [])
+        for failure in gate_failures if isinstance(gate_failures, list) else []:
+            if not isinstance(failure, dict):
+                continue
+            coverage_value = float(failure.get("coverage", 0.0))
+            minimum_value = float(failure.get("minimum", 0.0))
+            if failure.get("scope") == "overall":
+                print(f"[ERROR] Overall coverage {coverage_value:.1f}% is below {minimum_value:.1f}%.")
+            else:
+                module_name = str(failure.get("module", "unknown"))
+                print(f"[ERROR] {module_name} coverage {coverage_value:.1f}% is below {minimum_value:.1f}%.")
+        return 1
     return 0
 
 
