@@ -52,6 +52,7 @@ if to_add:
     os.environ["PYTHONPATH"] = (
         os.pathsep.join([*to_add, current_pythonpath]) if current_pythonpath else os.pathsep.join(to_add)
     )
+os.environ.setdefault("GMS_MCP_POST_MUTATION_VERIFY", "off")
 
 MCP_REQUIRED_MODULES = ("mcp", "fastmcp")
 MCP_DEPENDENT_TESTS = {

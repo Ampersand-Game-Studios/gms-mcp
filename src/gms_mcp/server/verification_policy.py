@@ -84,7 +84,10 @@ def current_verification_mode() -> str:
     """Return off, always, smart, or unknown for the active post-mutation policy."""
     if _env_truthy("GMS_MCP_VERIFY_COMPILE_AFTER_MUTATION"):
         return "always"
-    raw = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY", "").strip().lower()
+    raw_value = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY")
+    if raw_value is None:
+        return "smart"
+    raw = raw_value.strip().lower()
     if raw in _ALWAYS_VERIFY_VALUES:
         return "always"
     if raw in _SMART_VERIFY_VALUES:

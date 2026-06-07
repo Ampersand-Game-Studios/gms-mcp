@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 import asyncio
 import json
+import os
 import tempfile
 import unittest
 from pathlib import Path
@@ -18,6 +19,8 @@ class TestBridgeOneShotEnable(unittest.TestCase):
     def setUp(self):
         self._td = tempfile.TemporaryDirectory()
         self.project_root = Path(self._td.name)
+        self._previous_verify_mode = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY")
+        os.environ["GMS_MCP_POST_MUTATION_VERIFY"] = "off"
         for d in ("objects", "sprites", "scripts", "rooms", "folders"):
             (self.project_root / d).mkdir(parents=True, exist_ok=True)
 
@@ -47,6 +50,10 @@ class TestBridgeOneShotEnable(unittest.TestCase):
         self.mcp = build_server()
 
     def tearDown(self):
+        if self._previous_verify_mode is None:
+            os.environ.pop("GMS_MCP_POST_MUTATION_VERIFY", None)
+        else:
+            os.environ["GMS_MCP_POST_MUTATION_VERIFY"] = self._previous_verify_mode
         try:
             self._td.cleanup()
         except Exception:

@@ -10,11 +10,13 @@ import asyncio
 from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from gms_helpers import gms as gms_module
+from gms_helpers.commands import telemetry_commands
 from gms_mcp.server.direct import _run_gms_inprocess
 from gms_mcp.server.subprocess_runner import _run_cli_async
+from gms_mcp import telemetry_runtime
 from gms_mcp.telemetry import (
     SUPPRESS_CLI_TELEMETRY_ENV_VAR,
     clear_spool,
@@ -376,3 +378,69 @@ class TestTelemetry(unittest.TestCase):
 
         self.assertTrue(result.ok, msg=result.error or result.stderr or result.stdout)
         self.assertEqual(queued_events, 0)
+
+    def test_telemetry_command_handlers_cover_status_flush_clear_and_disable(self):
+        flush_result = SimpleNamespace(ok=True, sent_events=3, sent_batches=1, remaining_events=0, message="ok")
+        state = SimpleNamespace(
+            enabled=True,
+            decision_made=True,
+            source="config",
+            endpoint="https://example.invalid/v1/events",
+            include_install_hash=False,
+        )
+
+        with (
+            patch.object(telemetry_commands, "resolve_state", return_value=state),
+            patch.object(telemetry_commands, "count_spool_events", return_value=2),
+            patch.object(telemetry_commands, "flush_spool", return_value=flush_result),
+            patch.object(telemetry_commands, "clear_spool", return_value=4),
+            patch.object(telemetry_commands, "disable_telemetry") as disable_mock,
+            patch.object(telemetry_commands, "emit_consent_changed") as consent_mock,
+            redirect_stdout(io.StringIO()) as stdout,
+        ):
+            self.assertTrue(telemetry_commands.handle_telemetry_status(SimpleNamespace(telemetry="inherit")))
+            self.assertTrue(telemetry_commands.handle_telemetry_flush(SimpleNamespace()))
+            self.assertTrue(telemetry_commands.handle_telemetry_clear(SimpleNamespace()))
+            self.assertTrue(telemetry_commands.handle_telemetry_disable(SimpleNamespace(telemetry="inherit")))
+
+        output = stdout.getvalue()
+        self.assertIn("Consent: enabled", output)
+        self.assertIn("Flushed 3 event", output)
+        self.assertIn("Cleared 4 queued", output)
+        disable_mock.assert_called_once()
+        consent_mock.assert_called_once_with("disable")
+
+    def test_telemetry_command_flush_reports_warning_on_failure(self):
+        flush_result = SimpleNamespace(ok=False, sent_events=0, sent_batches=0, remaining_events=5, message="offline")
+
+        with (
+            patch.object(telemetry_commands, "flush_spool", return_value=flush_result),
+            redirect_stdout(io.StringIO()) as stdout,
+        ):
+            result = telemetry_commands.handle_telemetry_flush(SimpleNamespace())
+
+        self.assertFalse(result)
+        self.assertIn("offline", stdout.getvalue())
+
+    def test_telemetry_enable_handler_records_consent(self):
+        with (
+            patch.object(telemetry_commands, "enable_telemetry") as enable_mock,
+            patch.object(telemetry_commands, "emit_consent_changed") as consent_mock,
+            redirect_stdout(io.StringIO()) as stdout,
+        ):
+            self.assertTrue(telemetry_commands.handle_telemetry_enable(SimpleNamespace(with_install_id=True)))
+
+        enable_mock.assert_called_once_with(include_install_hash=True)
+        consent_mock.assert_called_once_with("enable")
+        self.assertIn("Stable install hash: enabled", stdout.getvalue())
+
+    def test_telemetry_runtime_main_returns_flush_status(self):
+        ok_result = SimpleNamespace(ok=True)
+        failed_result = SimpleNamespace(ok=False)
+
+        with patch.object(telemetry_runtime, "flush_spool", Mock(return_value=ok_result)) as flush_mock:
+            self.assertEqual(telemetry_runtime.main(["flush-spool"]), 0)
+            flush_mock.assert_called_once_with(force=False)
+
+        with patch.object(telemetry_runtime, "flush_spool", Mock(return_value=failed_result)):
+            self.assertEqual(telemetry_runtime.main(["flush-spool"]), 1)

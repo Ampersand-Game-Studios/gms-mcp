@@ -18,3 +18,4 @@ if not GAMEMAKER_DIR.exists():
             f.write('{"resources":[]}')
 
 os.environ.setdefault("PROJECT_ROOT", str(GAMEMAKER_DIR))
+os.environ.setdefault("GMS_MCP_POST_MUTATION_VERIFY", "off")
