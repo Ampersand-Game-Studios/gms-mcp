@@ -9,7 +9,14 @@ from unittest.mock import MagicMock, patch
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
-from gms_helpers.results import OperationResult, AssetResult, MaintenanceResult, RunnerResult
+from gms_helpers.results import (
+    AssetResult,
+    ErrorInfo,
+    MaintenanceResult,
+    OperationResult,
+    RunnerResult,
+    legacy_bool_result,
+)
 from gms_helpers.workflow import duplicate_asset, rename_asset, delete_asset, lint_project
 from gms_mcp.server.direct import _capture_output
 
@@ -20,8 +27,41 @@ class TestGMSResults(unittest.TestCase):
         res = OperationResult(success=True, message="Success", warnings=["Warn 1"])
         d = res.to_dict()
         self.assertEqual(d["success"], True)
+        self.assertEqual(d["ok"], True)
         self.assertEqual(d["message"], "Success")
         self.assertEqual(d["warnings"], ["Warn 1"])
+
+    def test_operation_result_failure_to_dict_has_structured_error(self):
+        """Failed operation results expose a stable error object."""
+        res = OperationResult.fail(
+            "Nope",
+            code="nope_failed",
+            error_type="validation_error",
+            details={"field": "name"},
+        )
+        d = res.to_dict()
+
+        self.assertFalse(res)
+        self.assertFalse(d["success"])
+        self.assertFalse(d["ok"])
+        self.assertEqual(d["error"]["code"], "nope_failed")
+        self.assertEqual(d["error"]["type"], "validation_error")
+        self.assertEqual(d["error"]["details"], {"field": "name"})
+
+    def test_error_info_to_dict(self):
+        error = ErrorInfo(code="bad", message="Bad input", type="validation_error", details={"x": 1})
+        self.assertEqual(
+            error.to_dict(),
+            {"code": "bad", "message": "Bad input", "type": "validation_error", "details": {"x": 1}},
+        )
+
+    def test_legacy_bool_result_wraps_old_helpers(self):
+        ok = legacy_bool_result(True, operation="legacy op").to_dict()
+        fail = legacy_bool_result(False, operation="legacy op").to_dict()
+
+        self.assertTrue(ok["ok"])
+        self.assertFalse(fail["ok"])
+        self.assertEqual(fail["error"]["type"], "legacy_boolean_result")
 
     def test_asset_result_inheritance(self):
         """Test AssetResult inherits from OperationResult and has extra fields."""
@@ -57,6 +97,16 @@ class TestCaptureWithTypedResults(unittest.TestCase):
         ok, out, err, result, error_text, exit_code = _capture_output(_fn)
         self.assertFalse(ok)
         self.assertEqual(result.message, "Failed")
+
+    def test_capture_legacy_error_dict_without_ok_is_failure(self):
+        """Test _capture_output treats legacy {"error": ...} dicts as failures."""
+
+        def _fn():
+            return {"error": "bad", "items": []}
+
+        ok, out, err, result, error_text, exit_code = _capture_output(_fn)
+        self.assertFalse(ok)
+        self.assertEqual(result["error"], "bad")
 
 
 class TestWorkflowResults(unittest.TestCase):

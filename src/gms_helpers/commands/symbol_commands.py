@@ -5,10 +5,31 @@ when called via MCP tools.
 """
 
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
+
+from ..results import OperationResult, structured_error
 
 
-def handle_build_index(args) -> bool:
+def _ok_payload(payload: dict[str, Any]) -> dict[str, Any]:
+    payload.setdefault("ok", True)
+    payload.setdefault("success", True)
+    return payload
+
+
+def _error_payload(message: str, *, code: str, operation: str, **payload: Any) -> dict[str, Any]:
+    payload.setdefault("message", message)
+    payload["ok"] = False
+    payload["success"] = False
+    payload["error"] = structured_error(
+        code,
+        message,
+        error_type="symbol_index_error",
+        details={"operation": operation},
+    ).to_dict()
+    return payload
+
+
+def handle_build_index(args) -> OperationResult:
     """Build or rebuild the GML symbol index."""
     from ..gml_index import GMLIndex
 
@@ -31,11 +52,16 @@ def handle_build_index(args) -> bool:
         print(f"  Symbols found: {stats.get('symbols', 0)}")
         print(f"  References found: {stats.get('references', 0)}")
 
-        return True
+        return OperationResult.ok("Symbol index built", data=stats)
 
     except Exception as e:
         print(f"[ERROR] Failed to build index: {e}")
-        return False
+        return OperationResult.fail(
+            f"Failed to build index: {e}",
+            code="build_index_failed",
+            error_type=type(e).__name__,
+            details={"operation": "build_index"},
+        )
 
 
 def handle_find_definition(args) -> dict:
@@ -48,7 +74,12 @@ def handle_find_definition(args) -> dict:
 
         if not symbol_name:
             print("[ERROR] Symbol name required")
-            return {"error": "Symbol name required", "definitions": []}
+            return _error_payload(
+                "Symbol name required",
+                code="symbol_name_required",
+                operation="find_definition",
+                definitions=[],
+            )
 
         print(f"[SEARCH] Finding definition of '{symbol_name}'...")
 
@@ -59,7 +90,7 @@ def handle_find_definition(args) -> dict:
 
         if not definitions:
             print(f"[INFO] No definition found for '{symbol_name}'")
-            return {"symbol": symbol_name, "definitions": [], "found": False}
+            return _ok_payload({"symbol": symbol_name, "definitions": [], "found": False})
 
         print(f"[OK] Found {len(definitions)} definition(s):")
 
@@ -77,16 +108,23 @@ def handle_find_definition(args) -> dict:
 
             result_defs.append(defn.to_dict())
 
-        return {
-            "symbol": symbol_name,
-            "definitions": result_defs,
-            "found": True,
-            "count": len(definitions),
-        }
+        return _ok_payload(
+            {
+                "symbol": symbol_name,
+                "definitions": result_defs,
+                "found": True,
+                "count": len(definitions),
+            }
+        )
 
     except Exception as e:
         print(f"[ERROR] Error finding definition: {e}")
-        return {"error": str(e), "definitions": []}
+        return _error_payload(
+            str(e),
+            code="find_definition_failed",
+            operation="find_definition",
+            definitions=[],
+        )
 
 
 def handle_find_references(args) -> dict:
@@ -100,7 +138,12 @@ def handle_find_references(args) -> dict:
 
         if not symbol_name:
             print("[ERROR] Symbol name required")
-            return {"error": "Symbol name required", "references": []}
+            return _error_payload(
+                "Symbol name required",
+                code="symbol_name_required",
+                operation="find_references",
+                references=[],
+            )
 
         print(f"[SEARCH] Finding references to '{symbol_name}'...")
 
@@ -111,7 +154,7 @@ def handle_find_references(args) -> dict:
 
         if not references:
             print(f"[INFO] No references found for '{symbol_name}'")
-            return {"symbol": symbol_name, "references": [], "found": False}
+            return _ok_payload({"symbol": symbol_name, "references": [], "found": False})
 
         total_count = len(references)
         truncated = total_count > max_results
@@ -129,17 +172,24 @@ def handle_find_references(args) -> dict:
             print(f"  {rel_path}:{loc.line} - {context_preview}")
             result_refs.append(ref.to_dict())
 
-        return {
-            "symbol": symbol_name,
-            "references": result_refs,
-            "found": True,
-            "count": total_count,
-            "truncated": truncated,
-        }
+        return _ok_payload(
+            {
+                "symbol": symbol_name,
+                "references": result_refs,
+                "found": True,
+                "count": total_count,
+                "truncated": truncated,
+            }
+        )
 
     except Exception as e:
         print(f"[ERROR] Error finding references: {e}")
-        return {"error": str(e), "references": []}
+        return _error_payload(
+            str(e),
+            code="find_references_failed",
+            operation="find_references",
+            references=[],
+        )
 
 
 def handle_list_symbols(args) -> dict:
@@ -174,7 +224,7 @@ def handle_list_symbols(args) -> dict:
 
         if not symbols:
             print("[INFO] No symbols found matching criteria")
-            return {"symbols": [], "count": 0}
+            return _ok_payload({"symbols": [], "count": 0})
 
         total_count = len(symbols)
         truncated = total_count > max_results
@@ -203,15 +253,17 @@ def handle_list_symbols(args) -> dict:
             print(f"  [{symbol.kind.value}] {symbol.name} - {rel_path}:{loc.line}")
             result_symbols.append(symbol.to_dict())
 
-        return {
-            "symbols": result_symbols,
-            "count": total_count,
-            "truncated": truncated,
-        }
+        return _ok_payload(
+            {
+                "symbols": result_symbols,
+                "count": total_count,
+                "truncated": truncated,
+            }
+        )
 
     except Exception as e:
         print(f"[ERROR] Error listing symbols: {e}")
-        return {"error": str(e), "symbols": []}
+        return _error_payload(str(e), code="list_symbols_failed", operation="list_symbols", symbols=[])
 
 
 def _get_project_root(args) -> Path:

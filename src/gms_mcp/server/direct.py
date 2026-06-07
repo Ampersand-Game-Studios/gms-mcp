@@ -14,6 +14,59 @@ from .project import _resolve_project_directory
 from .results import ToolRunResult
 
 
+def _dict_result_is_ok(result: dict[str, Any]) -> bool:
+    if result.get("ok") is False or result.get("success") is False:
+        return False
+    if "error" in result and "ok" not in result and "success" not in result:
+        return False
+    return True
+
+
+def _normalize_direct_result(result_value: Any, *, operation: str) -> Any:
+    from gms_helpers.results import legacy_bool_result, structured_error
+
+    if isinstance(result_value, bool):
+        return legacy_bool_result(result_value, operation=operation).to_dict()
+
+    if isinstance(result_value, dict):
+        normalized = dict(result_value)
+        ok = _dict_result_is_ok(normalized)
+        normalized.setdefault("ok", ok)
+        normalized.setdefault("success", ok)
+        if not ok and "error" in normalized and not isinstance(normalized["error"], dict):
+            message = str(normalized["error"])
+            normalized["error"] = structured_error(
+                "legacy_dict_error",
+                message,
+                error_type="legacy_dict_result",
+                details={"operation": operation},
+            ).to_dict()
+            normalized.setdefault("message", message)
+        return normalized
+
+    return result_value
+
+
+def _result_failure_message(result_value: Any) -> str | None:
+    payload: Any = result_value
+    if hasattr(payload, "to_dict") and callable(payload.to_dict):
+        payload = payload.to_dict()
+
+    if isinstance(payload, dict):
+        error = payload.get("error")
+        if isinstance(error, dict):
+            return str(error.get("message") or payload.get("message") or "Operation failed")
+        if error:
+            return str(error)
+        if payload.get("message"):
+            return str(payload["message"])
+        return None
+
+    if hasattr(result_value, "message"):
+        return str(result_value.message)
+    return None
+
+
 @contextlib.contextmanager
 def _pushd(target_directory: Path):
     """Temporarily change working directory."""
@@ -44,6 +97,8 @@ def _capture_output(callable_to_run: Callable[[], Any]) -> Tuple[bool, str, str,
                 ok = result_value.success
             elif isinstance(result_value, bool):
                 ok = result_value
+            elif isinstance(result_value, dict):
+                ok = _dict_result_is_ok(result_value)
             else:
                 ok = True
         except GMSError as e:
@@ -100,6 +155,9 @@ def _run_direct(
             return handler(args)
 
     ok, stdout_text, stderr_text, result_value, error_text, exit_code = _capture_output(_invoke)
+    result_value = _normalize_direct_result(result_value, operation=getattr(handler, "__name__", "direct_helper"))
+    if not ok and not error_text:
+        error_text = _result_failure_message(result_value)
     return ToolRunResult(
         ok=ok,
         stdout=stdout_text,
@@ -143,6 +201,9 @@ def _run_gms_inprocess(cli_args: list[str], project_root: str | None) -> ToolRun
             sys.argv = previous_argv
 
     ok, stdout_text, stderr_text, result_value, error_text, exit_code = _capture_output(_invoke)
+    result_value = _normalize_direct_result(result_value, operation="gms_module")
+    if not ok and not error_text:
+        error_text = _result_failure_message(result_value)
     return ToolRunResult(
         ok=ok,
         stdout=stdout_text,

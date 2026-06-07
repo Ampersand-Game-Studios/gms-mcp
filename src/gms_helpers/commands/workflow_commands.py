@@ -2,6 +2,7 @@
 
 from pathlib import Path
 
+from ..results import OperationResult
 from ..workflow import duplicate_asset, rename_asset, delete_asset, safe_delete_asset, swap_sprite_png
 
 
@@ -47,8 +48,15 @@ def handle_workflow_safe_delete(args):
     )
 
     if result.get("ok") is False:
-        print(f"[ERROR] {result.get('error', 'Safe delete failed')}")
-        return False
+        message = str(result.get("error", "Safe delete failed"))
+        print(f"[ERROR] {message}")
+        return OperationResult.fail(
+            message,
+            code="safe_delete_failed",
+            error_type="workflow_error",
+            details=result,
+            data=result,
+        )
     if result.get("blocked"):
         print("[WARN] Safe delete blocked by dependencies:")
         for dep in result.get("dependencies", []):
@@ -56,8 +64,22 @@ def handle_workflow_safe_delete(args):
                 f"  - {dep.get('asset_type', 'unknown')} {dep.get('asset_name', 'unknown')} "
                 f"({dep.get('relation', 'unknown')})"
             )
-        return False
+        return OperationResult.fail(
+            "Safe delete blocked by dependencies",
+            code="safe_delete_blocked",
+            error_type="dependency_error",
+            details=result,
+            data=result,
+        )
     if result.get("dry_run"):
         print("[OK] Safe delete dry-run completed.")
-        return True
-    return bool(result.get("deleted", False))
+        return OperationResult.ok("Safe delete dry-run completed", data=result)
+    if result.get("deleted", False):
+        return OperationResult.ok("Safe delete completed", data=result)
+    return OperationResult.fail(
+        "Safe delete did not delete the asset",
+        code="safe_delete_noop",
+        error_type="workflow_error",
+        details=result,
+        data=result,
+    )
