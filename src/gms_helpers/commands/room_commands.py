@@ -4,6 +4,21 @@
 from ..room_layer_helper import add_layer, remove_layer, list_layers
 from ..room_helper import duplicate_room, rename_room, delete_room, list_rooms
 from ..room_instance_helper import add_instance, remove_instance, list_instances
+from ..results import OperationResult
+
+
+def _room_result(result, operation: str, **data):
+    if not isinstance(result, bool):
+        return result
+    if result:
+        return OperationResult.ok(f"{operation} completed", data=data)
+    return OperationResult.fail(
+        f"{operation} failed",
+        code="room_operation_failed",
+        error_type="room_error",
+        details={"operation": operation, **data},
+        data=data,
+    )
 
 
 # Layer commands
@@ -19,17 +34,29 @@ def handle_room_layer_add(args):
     # Debug print to catch why depth might be 0
     # print(f"[DEBUG] handle_room_layer_add: room_name={args.room_name}, layer_name={args.layer_name}, layer_type={layer_type}, depth={depth}")
 
-    return add_layer(
-        args.room_name,
-        args.layer_name,
-        layer_type,
-        depth,
+    return _room_result(
+        add_layer(
+            args.room_name,
+            args.layer_name,
+            layer_type,
+            depth,
+        ),
+        "Room layer add",
+        room_name=args.room_name,
+        layer_name=args.layer_name,
+        layer_type=layer_type,
+        depth=depth,
     )
 
 
 def handle_room_layer_remove(args):
     """Handle room layer removal."""
-    return remove_layer(args.room_name, args.layer_name)
+    return _room_result(
+        remove_layer(args.room_name, args.layer_name),
+        "Room layer remove",
+        room_name=args.room_name,
+        layer_name=args.layer_name,
+    )
 
 
 def handle_room_layer_list(args):
@@ -40,17 +67,32 @@ def handle_room_layer_list(args):
 # Standard room operation commands (replacing template commands)
 def handle_room_duplicate(args):
     """Handle room duplication."""
-    return duplicate_room(args.source_room, args.new_name)
+    return _room_result(
+        duplicate_room(args.source_room, args.new_name),
+        "Room duplicate",
+        source_room=args.source_room,
+        new_name=args.new_name,
+    )
 
 
 def handle_room_rename(args):
     """Handle room renaming."""
-    return rename_room(args.room_name, args.new_name)
+    return _room_result(
+        rename_room(args.room_name, args.new_name),
+        "Room rename",
+        room_name=args.room_name,
+        new_name=args.new_name,
+    )
 
 
 def handle_room_delete(args):
     """Handle room deletion."""
-    return delete_room(args.room_name, getattr(args, "dry_run", False))
+    return _room_result(
+        delete_room(args.room_name, getattr(args, "dry_run", False)),
+        "Room delete",
+        room_name=args.room_name,
+        dry_run=getattr(args, "dry_run", False),
+    )
 
 
 def handle_room_list(args):
@@ -61,18 +103,32 @@ def handle_room_list(args):
 # Instance commands
 def handle_room_instance_add(args):
     """Handle room instance addition."""
-    return add_instance(
-        args.room_name,
-        args.object_name,
-        args.x,
-        args.y,
-        getattr(args, "layer", "Instances") or "Instances",
+    layer = getattr(args, "layer", "Instances") or "Instances"
+    return _room_result(
+        add_instance(
+            args.room_name,
+            args.object_name,
+            args.x,
+            args.y,
+            layer,
+        ),
+        "Room instance add",
+        room_name=args.room_name,
+        object_name=args.object_name,
+        x=args.x,
+        y=args.y,
+        layer=layer,
     )
 
 
 def handle_room_instance_remove(args):
     """Handle room instance removal."""
-    return remove_instance(args.room_name, args.instance_id)
+    return _room_result(
+        remove_instance(args.room_name, args.instance_id),
+        "Room instance remove",
+        room_name=args.room_name,
+        instance_id=args.instance_id,
+    )
 
 
 def handle_room_instance_list(args):

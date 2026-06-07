@@ -3,10 +3,36 @@
 from pathlib import Path
 from typing import Dict, Any, Union
 
+from ..results import RunnerResult, structured_error
 from ..runner import GameMakerRunner, detect_default_target_platform
 
 
-def handle_runner_compile(args) -> bool:
+def _dict_result_is_ok(result: Dict[str, Any]) -> bool:
+    if result.get("ok") is False or result.get("success") is False:
+        return False
+    if "error" in result and "ok" not in result and "success" not in result:
+        return False
+    return True
+
+
+def _normalize_runner_dict(result: Dict[str, Any], *, operation: str) -> Dict[str, Any]:
+    normalized = dict(result)
+    ok = _dict_result_is_ok(normalized)
+    normalized.setdefault("ok", ok)
+    normalized.setdefault("success", ok)
+    if not ok and "error" in normalized and not isinstance(normalized["error"], dict):
+        message = str(normalized["error"])
+        normalized["error"] = structured_error(
+            f"{operation}_failed",
+            message,
+            error_type="runner_error",
+            details={"operation": operation},
+        ).to_dict()
+        normalized.setdefault("message", message)
+    return normalized
+
+
+def handle_runner_compile(args) -> RunnerResult:
     """Handle project compilation."""
     try:
         # Use current working directory if no project root specified
@@ -27,18 +53,34 @@ def handle_runner_compile(args) -> bool:
 
         if success:
             print("[SUCCESS] Compilation completed successfully!")
+            return RunnerResult(success=True, message="Compilation completed successfully", exit_code=0)
         else:
             failure_message = runner.last_failure_message or "Build validation failed!"
             print(f"[ERROR] {failure_message}")
-
-        return success
+            return RunnerResult(
+                success=False,
+                message=failure_message,
+                error=structured_error(
+                    "compile_failed",
+                    failure_message,
+                    error_type="runner_error",
+                    details={"platform": platform, "runtime": runtime},
+                ),
+                exit_code=1,
+            )
 
     except Exception as e:
-        print(f"[ERROR] Error during compilation: {e}")
-        return False
+        message = f"Error during compilation: {e}"
+        print(f"[ERROR] {message}")
+        return RunnerResult(
+            success=False,
+            message=message,
+            error=structured_error("compile_exception", str(e), error_type=type(e).__name__),
+            exit_code=1,
+        )
 
 
-def handle_runner_run(args) -> Union[bool, Dict[str, Any]]:
+def handle_runner_run(args) -> Union[RunnerResult, Dict[str, Any]]:
     """
     Handle project execution.
 
@@ -65,13 +107,38 @@ def handle_runner_run(args) -> Union[bool, Dict[str, Any]]:
 
         result = runner.run_project_direct(platform, runtime, background, output_location)
 
+        if isinstance(result, bool):
+            if result:
+                return RunnerResult(success=True, message="Game run completed successfully", exit_code=0)
+            return RunnerResult(
+                success=False,
+                message=runner.last_failure_message or "Game run failed",
+                error=structured_error(
+                    "run_failed",
+                    runner.last_failure_message or "Game run failed",
+                    error_type="runner_error",
+                    details={"platform": platform, "runtime": runtime, "background": background},
+                ),
+                exit_code=1,
+            )
+        if isinstance(result, dict):
+            return _normalize_runner_dict(result, operation="run")
         return result
 
     except Exception as e:
-        print(f"[ERROR] Error during execution: {e}")
+        message = f"Error during execution: {e}"
+        print(f"[ERROR] {message}")
         if getattr(args, "background", False):
-            return {"ok": False, "error": str(e), "message": f"Failed to start game: {e}"}
-        return False
+            return _normalize_runner_dict(
+                {"ok": False, "error": str(e), "message": f"Failed to start game: {e}"},
+                operation="run",
+            )
+        return RunnerResult(
+            success=False,
+            message=message,
+            error=structured_error("run_exception", str(e), error_type=type(e).__name__),
+            exit_code=1,
+        )
 
 
 def handle_runner_stop(args) -> Dict[str, Any]:
@@ -102,11 +169,12 @@ def handle_runner_stop(args) -> Dict[str, Any]:
         else:
             print(f"[WARN] {result.get('message', 'Failed to stop game')}")
 
-        return result
+        return _normalize_runner_dict(result, operation="stop")
 
     except Exception as e:
-        print(f"[ERROR] Error stopping game: {e}")
-        return {"ok": False, "error": str(e), "message": f"Error stopping game: {e}"}
+        message = f"Error stopping game: {e}"
+        print(f"[ERROR] {message}")
+        return _normalize_runner_dict({"ok": False, "error": str(e), "message": message}, operation="stop")
 
 
 def handle_runner_status(args) -> Dict[str, Any]:
@@ -137,8 +205,9 @@ def handle_runner_status(args) -> Dict[str, Any]:
             print(f"   Run ID: {status.get('run_id')}")
             print(f"   Started: {status.get('started_at')}")
 
-        return status
+        return _normalize_runner_dict(status, operation="status")
 
     except Exception as e:
-        print(f"[ERROR] Error checking status: {e}")
-        return {"ok": False, "error": str(e), "message": f"Error checking status: {e}"}
+        message = f"Error checking status: {e}"
+        print(f"[ERROR] {message}")
+        return _normalize_runner_dict({"ok": False, "error": str(e), "message": message}, operation="status")

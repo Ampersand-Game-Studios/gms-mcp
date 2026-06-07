@@ -7,8 +7,25 @@ from __future__ import annotations
 import json
 from typing import Any, Dict
 
+from ..results import OperationResult
 
-def handle_doc_lookup(args) -> bool:
+
+def _doc_success(message: str, data: Dict[str, Any]) -> OperationResult:
+    return OperationResult.ok(message, data=data)
+
+
+def _doc_failure(code: str, result: Dict[str, Any]) -> OperationResult:
+    message = str(result.get("error", "Unknown error"))
+    return OperationResult.fail(
+        message,
+        code=code,
+        error_type="documentation_error",
+        details=result,
+        data=result,
+    )
+
+
+def handle_doc_lookup(args) -> OperationResult:
     """Handle the doc lookup command."""
     from gms_helpers.gml_docs import lookup
 
@@ -54,17 +71,17 @@ def handle_doc_lookup(args) -> bool:
                     print(f"\nExample {i}:")
                 print(example)
 
-        return True
+        return _doc_success(f"Found documentation for {result['name']}", result)
     else:
         print(f"[ERROR] {result.get('error', 'Unknown error')}")
         if result.get("suggestions"):
             print("\nDid you mean:")
             for suggestion in result["suggestions"]:
                 print(f"  - {suggestion}")
-        return False
+        return _doc_failure("doc_lookup_failed", result)
 
 
-def handle_doc_search(args) -> bool:
+def handle_doc_search(args) -> OperationResult:
     """Handle the doc search command."""
     from gms_helpers.gml_docs import search
 
@@ -92,13 +109,13 @@ def handle_doc_search(args) -> bool:
         else:
             print("No matching functions found.")
 
-        return True
+        return _doc_success(f"Searched documentation for {result['query']}", result)
     else:
         print(f"[ERROR] {result.get('error', 'Unknown error')}")
-        return False
+        return _doc_failure("doc_search_failed", result)
 
 
-def handle_doc_list(args) -> bool:
+def handle_doc_list(args) -> OperationResult:
     """Handle the doc list command."""
     from gms_helpers.gml_docs import list_functions
 
@@ -141,13 +158,13 @@ def handle_doc_list(args) -> bool:
         else:
             print("No matching functions found.")
 
-        return True
+        return _doc_success("Listed documentation functions", result)
     else:
         print(f"[ERROR] {result.get('error', 'Unknown error')}")
-        return False
+        return _doc_failure("doc_list_failed", result)
 
 
-def handle_doc_categories(args) -> bool:
+def handle_doc_categories(args) -> OperationResult:
     """Handle the doc categories command."""
     from gms_helpers.gml_docs import list_categories
 
@@ -162,13 +179,13 @@ def handle_doc_categories(args) -> bool:
                 for sub in cat["subcategories"]:
                     print(f"    └─ {sub['name']} ({sub['count']})")
 
-        return True
+        return _doc_success("Listed documentation categories", result)
     else:
         print(f"[ERROR] {result.get('error', 'Unknown error')}")
-        return False
+        return _doc_failure("doc_categories_failed", result)
 
 
-def handle_doc_cache_stats(args) -> bool:
+def handle_doc_cache_stats(args) -> OperationResult:
     """Handle the doc cache stats command."""
     from gms_helpers.gml_docs import get_cache_stats
 
@@ -191,10 +208,10 @@ def handle_doc_cache_stats(args) -> bool:
     print(f"Cached function docs: {stats['cached_function_count']}")
     print(f"Cache size: {stats['cache_size_kb']:.1f} KB")
 
-    return True
+    return _doc_success("Read documentation cache stats", stats)
 
 
-def handle_doc_cache_clear(args) -> bool:
+def handle_doc_cache_clear(args) -> OperationResult:
     """Handle the doc cache clear command."""
     from gms_helpers.gml_docs import clear_cache
 
@@ -206,4 +223,4 @@ def handle_doc_cache_clear(args) -> bool:
     if not functions_only:
         print(f"  Index removed: {result['index_removed']}")
 
-    return True
+    return _doc_success("Cleared documentation cache", result)
