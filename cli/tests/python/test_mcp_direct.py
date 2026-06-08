@@ -228,6 +228,133 @@ class TestRunWithFallbackDefaults(unittest.TestCase):
         self.assertTrue(mock_direct.called)
         self.assertTrue(mock_cli.called)
 
+    def test_real_destructive_default_uses_direct_not_cli(self):
+        direct_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=True)
+        cli_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=False)
+
+        async def _fake_cli(*_args, **_kwargs):
+            return cli_result
+
+        with patch.dict(os.environ, {}, clear=True):
+            from gms_mcp.execution_policy import PolicyManager
+
+            with patch("gms_mcp.server.dispatch.policy_manager", PolicyManager()):
+                with patch("gms_mcp.server.dispatch._run_direct", return_value=direct_result) as mock_direct:
+                    with patch("gms_mcp.server.dispatch._run_cli_async", side_effect=_fake_cli) as mock_cli:
+                        result = asyncio.run(
+                            server._run_with_fallback(
+                                direct_handler=lambda _args: True,
+                                direct_args=argparse.Namespace(dry_run=False),
+                                cli_args=["asset", "delete", "script", "scr_dead"],
+                                project_root=".",
+                                prefer_cli=False,
+                                output_mode="full",
+                                quiet=True,
+                            )
+                        )
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["direct_used"])
+        self.assertTrue(mock_direct.called)
+        self.assertFalse(mock_cli.called)
+
+    def test_prefer_cli_blocked_for_real_destructive_workflow(self):
+        direct_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=True)
+        cli_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=False)
+
+        async def _fake_cli(*_args, **_kwargs):
+            return cli_result
+
+        with patch("gms_mcp.server.dispatch._run_direct", return_value=direct_result) as mock_direct:
+            with patch("gms_mcp.server.dispatch._run_cli_async", side_effect=_fake_cli) as mock_cli:
+                result = asyncio.run(
+                    server._run_with_fallback(
+                        direct_handler=lambda _args: True,
+                        direct_args=argparse.Namespace(dry_run=False),
+                        cli_args=["asset", "delete", "script", "scr_dead"],
+                        project_root=".",
+                        prefer_cli=True,
+                        output_mode="full",
+                        quiet=True,
+                    )
+                )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["policy"], "destructive_cli_disabled")
+        self.assertTrue(result["fallback_skipped"])
+        self.assertEqual(result["fallback_skipped_reason"], "destructive_cli_disabled")
+        self.assertFalse(mock_direct.called)
+        self.assertFalse(mock_cli.called)
+
+    def test_real_destructive_infrastructure_failure_does_not_fallback_to_cli(self):
+        direct_result = ToolRunResult(
+            ok=False,
+            stdout="",
+            stderr="",
+            direct_used=True,
+            error="Traceback (most recent call last):\nImportError: helper unavailable",
+        )
+        cli_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=False)
+
+        async def _fake_cli(*_args, **_kwargs):
+            return cli_result
+
+        with patch.dict(os.environ, {"GMS_MCP_ENABLE_DIRECT": "1"}, clear=True):
+            from gms_mcp.execution_policy import PolicyManager
+
+            with patch("gms_mcp.server.dispatch.policy_manager", PolicyManager()):
+                with patch("gms_mcp.server.dispatch._run_direct", return_value=direct_result) as mock_direct:
+                    with patch("gms_mcp.server.dispatch._run_cli_async", side_effect=_fake_cli) as mock_cli:
+                        result = asyncio.run(
+                            server._run_with_fallback(
+                                direct_handler=lambda _args: True,
+                                direct_args=argparse.Namespace(dry_run=False),
+                                cli_args=["asset", "delete", "script", "scr_dead"],
+                                project_root=".",
+                                prefer_cli=False,
+                                output_mode="full",
+                                quiet=True,
+                            )
+                        )
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["direct_used"])
+        self.assertTrue(result["fallback_skipped"])
+        self.assertEqual(result["fallback_skipped_reason"], "destructive_cli_disabled")
+        self.assertTrue(result["fallback_blocked_by_policy"])
+        self.assertTrue(mock_direct.called)
+        self.assertFalse(mock_cli.called)
+
+    def test_destructive_dry_run_can_use_cli_default(self):
+        direct_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=True)
+        cli_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=False)
+
+        async def _fake_cli(*_args, **_kwargs):
+            return cli_result
+
+        with patch.dict(os.environ, {}, clear=True):
+            from gms_mcp.execution_policy import PolicyManager
+
+            with patch("gms_mcp.server.dispatch.policy_manager", PolicyManager()):
+                with patch("gms_mcp.server.dispatch._run_direct", return_value=direct_result) as mock_direct:
+                    with patch("gms_mcp.server.dispatch._run_cli_async", side_effect=_fake_cli) as mock_cli:
+                        result = asyncio.run(
+                            server._run_with_fallback(
+                                direct_handler=lambda _args: True,
+                                direct_args=argparse.Namespace(dry_run=True),
+                                cli_args=["asset", "delete", "script", "scr_dead", "--dry-run"],
+                                project_root=".",
+                                prefer_cli=False,
+                                output_mode="full",
+                                quiet=True,
+                            )
+                        )
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["direct_used"])
+        self.assertFalse(mock_direct.called)
+        self.assertTrue(mock_cli.called)
+
 
 class TestDryRunPolicyAllowlist(unittest.TestCase):
     def test_require_dry_run_enforced_without_allowlist(self):
