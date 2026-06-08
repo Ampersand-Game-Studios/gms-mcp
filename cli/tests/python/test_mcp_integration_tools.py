@@ -151,6 +151,54 @@ class TestMCPIntegrationTools(unittest.TestCase):
         self.assertTrue(result["validation_errors"])
         self.assertFalse((self.project_root / "scripts" / "scr_escape").exists())
 
+    def test_mcp_boundary_rejects_domain_invalid_asset_name_before_write(self):
+        result = self._call_tool(
+            "gm_create_object",
+            {"name": "player", "project_root": str(self.project_root)},
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "Invalid MCP tool arguments")
+        self.assertTrue(any(error["field"] == "name" for error in result["validation_errors"]))
+        self.assertNotIn("transaction", result)
+        self.assertFalse((self.project_root / "objects" / "player").exists())
+
+    def test_mcp_boundary_rejects_invalid_workflow_asset_path_before_transaction(self):
+        result = self._call_tool(
+            "gm_workflow_delete",
+            {
+                "asset_path": "../scripts/scr_escape/scr_escape.yy",
+                "dry_run": False,
+                "project_root": str(self.project_root),
+            },
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["error"], "Invalid MCP tool arguments")
+        self.assertTrue(any(error["field"] == "asset_path" for error in result["validation_errors"]))
+        self.assertNotIn("transaction", result)
+
+    def test_write_operation_models_cover_core_write_tools(self):
+        from gms_mcp.server.validation import write_operation_model_names
+
+        names = set(write_operation_model_names())
+        expected = {
+            "gm_create_script",
+            "gm_create_object",
+            "gm_asset_delete",
+            "gm_event_add",
+            "gm_event_remove",
+            "gm_room_layer_add",
+            "gm_room_instance_add",
+            "gm_safe_delete",
+            "gm_workflow_rename",
+            "gm_workflow_delete",
+            "gm_sprite_add_frame",
+            "gm_texture_group_update",
+            "gm_texture_group_assign",
+        }
+        self.assertTrue(expected.issubset(names), msg=f"Missing write models: {sorted(expected - names)}")
+
     def test_failed_mutation_rolls_back_created_files(self):
         yyp_path = self.project_root / "TestProject.yyp"
         yyp_data = json.loads(yyp_path.read_text(encoding="utf-8"))

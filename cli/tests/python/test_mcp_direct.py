@@ -31,6 +31,7 @@ class TestCaptureOutputSystemExit(unittest.TestCase):
         self.assertIn("oops", err)
         self.assertIsNone(result)
         self.assertIsNotNone(error_text)
+        assert error_text is not None
         self.assertIn("SystemExit: 2", error_text)
         self.assertEqual(exit_code, 2)
         self.assertIn("stdout:", error_text)
@@ -150,6 +151,82 @@ class TestRunWithFallbackDefaults(unittest.TestCase):
         self.assertTrue(result["direct_used"])
         self.assertTrue(mock_direct.called)
         self.assertFalse(mock_cli.called)
+
+    def test_direct_domain_failure_does_not_fallback_to_cli(self):
+        direct_result = ToolRunResult(
+            ok=False,
+            stdout="",
+            stderr="",
+            direct_used=True,
+            exit_code=9,
+            error="ValidationError: invalid asset name",
+        )
+        cli_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=False)
+
+        async def _fake_cli(*_args, **_kwargs):
+            return cli_result
+
+        with patch.dict(os.environ, {"GMS_MCP_ENABLE_DIRECT": "1"}, clear=True):
+            from gms_mcp.execution_policy import PolicyManager
+
+            with patch("gms_mcp.server.dispatch.policy_manager", PolicyManager()):
+                with patch("gms_mcp.server.dispatch._run_direct", return_value=direct_result) as mock_direct:
+                    with patch("gms_mcp.server.dispatch._run_cli_async", side_effect=_fake_cli) as mock_cli:
+                        result = asyncio.run(
+                            server._run_with_fallback(
+                                direct_handler=lambda _args: True,
+                                direct_args=argparse.Namespace(),
+                                cli_args=["asset", "create", "object", "player"],
+                                project_root=".",
+                                prefer_cli=False,
+                                output_mode="full",
+                                quiet=True,
+                            )
+                        )
+
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["direct_used"])
+        self.assertTrue(result["fallback_skipped"])
+        self.assertEqual(result["fallback_skipped_reason"], "direct_domain_failure")
+        self.assertTrue(mock_direct.called)
+        self.assertFalse(mock_cli.called)
+
+    def test_direct_infrastructure_failure_still_falls_back_to_cli(self):
+        direct_result = ToolRunResult(
+            ok=False,
+            stdout="",
+            stderr="",
+            direct_used=True,
+            error="Traceback (most recent call last):\nImportError: helper unavailable",
+        )
+        cli_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=False)
+
+        async def _fake_cli(*_args, **_kwargs):
+            return cli_result
+
+        with patch.dict(os.environ, {"GMS_MCP_ENABLE_DIRECT": "1"}, clear=True):
+            from gms_mcp.execution_policy import PolicyManager
+
+            with patch("gms_mcp.server.dispatch.policy_manager", PolicyManager()):
+                with patch("gms_mcp.server.dispatch._run_direct", return_value=direct_result) as mock_direct:
+                    with patch("gms_mcp.server.dispatch._run_cli_async", side_effect=_fake_cli) as mock_cli:
+                        result = asyncio.run(
+                            server._run_with_fallback(
+                                direct_handler=lambda _args: True,
+                                direct_args=argparse.Namespace(),
+                                cli_args=["asset", "create", "object", "o_player"],
+                                project_root=".",
+                                prefer_cli=False,
+                                output_mode="full",
+                                quiet=True,
+                            )
+                        )
+
+        self.assertTrue(result["ok"])
+        self.assertFalse(result["direct_used"])
+        self.assertEqual(result["direct_error"], direct_result.error)
+        self.assertTrue(mock_direct.called)
+        self.assertTrue(mock_cli.called)
 
 
 class TestDryRunPolicyAllowlist(unittest.TestCase):
