@@ -191,6 +191,70 @@ class ToolRunRecord:
     error: Optional[str] = None
 
 
+def create_minimal_base_project(project_root: Path) -> None:
+    """Create a small GameMaker-like project fixture for CI-safe MCP smoke runs."""
+    project_root = Path(project_root).resolve()
+    project_root.mkdir(parents=True, exist_ok=True)
+    for directory in (
+        "animcurves",
+        "fonts",
+        "folders",
+        "notes",
+        "objects",
+        "paths",
+        "rooms",
+        "scripts",
+        "sequences",
+        "shaders",
+        "sounds",
+        "sprites",
+        "tilesets",
+        "timelines",
+    ):
+        (project_root / directory).mkdir(parents=True, exist_ok=True)
+
+    yyp_path = project_root / "mcp_smoke.yyp"
+    if yyp_path.exists():
+        return
+    yyp_path.write_text(
+        json.dumps(
+            {
+                "$GMProject": "",
+                "%Name": "mcp_smoke",
+                "name": "mcp_smoke",
+                "resources": [],
+                "Folders": [],
+                "IncludedFiles": [],
+                "RoomOrderNodes": [],
+                "TextureGroups": [
+                    {
+                        "$GMTextureGroup": "",
+                        "%Name": "Default",
+                        "autocrop": True,
+                        "border": 2,
+                        "groupParent": None,
+                        "isScaled": True,
+                        "mipsToGenerate": 0,
+                        "name": "Default",
+                        "resourceType": "GMTextureGroup",
+                        "resourceVersion": "2.0",
+                        "targets": -1,
+                    }
+                ],
+                "configs": {
+                    "children": [],
+                    "name": "Default",
+                },
+                "resourceType": "GMProject",
+                "resourceVersion": "2.0",
+            },
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 class MCPToolSmokeRunner:
     def __init__(
         self,
@@ -202,6 +266,7 @@ class MCPToolSmokeRunner:
         exclude_tools: Optional[List[str]] = None,
         keep_workdirs: bool = False,
         fail_fast: bool = False,
+        init_minimal_base: bool = False,
     ) -> None:
         self.base_project = Path(base_project).resolve()
         self.work_root = Path(work_root).resolve()
@@ -210,6 +275,7 @@ class MCPToolSmokeRunner:
         self.exclude_tools = set(exclude_tools or [])
         self.keep_workdirs = keep_workdirs
         self.fail_fast = fail_fast
+        self.init_minimal_base = init_minimal_base
 
         self.mcp = None
         self.tools: List[str] = []
@@ -283,6 +349,8 @@ class MCPToolSmokeRunner:
         }
 
     async def run(self) -> int:
+        if self.init_minimal_base:
+            create_minimal_base_project(self.base_project)
         if not self.base_project.exists():
             raise FileNotFoundError(f"Base project not found: {self.base_project}")
 
@@ -1081,6 +1149,11 @@ def parse_args() -> argparse.Namespace:
         help="Tool names to skip",
     )
     parser.add_argument(
+        "--init-minimal-base",
+        action="store_true",
+        help="Create a minimal base project at --base-project before running smoke checks",
+    )
+    parser.add_argument(
         "--keep-workdirs",
         action="store_true",
         help="Keep per-tool workspace directories after run",
@@ -1103,6 +1176,7 @@ async def _async_main() -> int:
         exclude_tools=args.exclude_tools,
         keep_workdirs=args.keep_workdirs,
         fail_fast=args.fail_fast,
+        init_minimal_base=args.init_minimal_base,
     )
     return await runner.run()
 

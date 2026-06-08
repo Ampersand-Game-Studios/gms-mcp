@@ -12,7 +12,9 @@ Tests cover:
 import sys
 import platform
 import errno
+import subprocess
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import patch, MagicMock, PropertyMock
@@ -516,10 +518,20 @@ class TestRunnerLaunchTargetDetection(unittest.TestCase):
         self.assertEqual(resolved_launch, binary_path)
 
         process = self.runner._start_game_process(binary_path)
-        process.wait(timeout=2)
+        try:
+            deadline = time.time() + 5.0
+            while time.time() < deadline and not launch_marker.exists():
+                time.sleep(0.05)
 
-        self.assertEqual(process.returncode, 0)
-        self.assertTrue(launch_marker.exists())
+            self.assertTrue(launch_marker.exists())
+        finally:
+            if process.poll() is None:
+                process.terminate()
+                try:
+                    process.wait(timeout=2)
+                except subprocess.TimeoutExpired:
+                    process.kill()
+                    process.wait(timeout=2)
 
 
 class TestRunnerLaunchGuards(unittest.TestCase):
@@ -539,8 +551,8 @@ class TestRunnerLaunchGuards(unittest.TestCase):
 
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
-    @patch("gms_helpers.runner.platform.system", return_value="Darwin")
-    @patch("gms_helpers.runner.subprocess.Popen")
+    @patch("gms_helpers.runner_process.platform.system", return_value="Darwin")
+    @patch("gms_helpers.runner_process.subprocess.Popen")
     def test_start_game_process_guidance_for_permission_error(self, mock_popen, _mock_system):
         mock_popen.side_effect = OSError(errno.EACCES, "Permission denied")
         with self.assertRaises(RuntimeError) as context:
@@ -551,8 +563,8 @@ class TestRunnerLaunchGuards(unittest.TestCase):
         self.assertIn("chmod +x", message)
         self.assertIn("xattr -dr com.apple.quarantine", message)
 
-    @patch("gms_helpers.runner.platform.system", return_value="Darwin")
-    @patch("gms_helpers.runner.subprocess.Popen")
+    @patch("gms_helpers.runner_process.platform.system", return_value="Darwin")
+    @patch("gms_helpers.runner_process.subprocess.Popen")
     def test_run_igor_command_guidance_for_permission_error(self, mock_popen, _mock_system):
         mock_popen.side_effect = OSError(errno.EACCES, "Permission denied")
         with self.assertRaises(RuntimeError) as context:

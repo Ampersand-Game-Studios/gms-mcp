@@ -59,9 +59,9 @@ class TestRunnerGapCoverage(unittest.TestCase):
         self.assertEqual(_to_igor_platform("macOS"), "Mac")
 
         runner = self._make_runner()
-        with patch("gms_helpers.runner.platform.system", return_value="Windows"):
+        with patch("gms_helpers.runner_process.platform.system", return_value="Windows"):
             self.assertEqual(runner._normalize_path_for_popen(), {})
-        with patch("gms_helpers.runner.platform.system", return_value="Linux"):
+        with patch("gms_helpers.runner_process.platform.system", return_value="Linux"):
             self.assertEqual(runner._normalize_path_for_popen(), {"start_new_session": True})
 
         cmd = ["igor"]
@@ -213,15 +213,21 @@ class TestRunnerGapCoverage(unittest.TestCase):
         linux_bin.chmod(linux_bin.stat().st_mode | stat.S_IXUSR)
         self.assertEqual(runner._find_launch_target(build_dir, "TestGame", "Linux"), linux_bin)
 
-        with patch("gms_helpers.runner.platform.system", return_value="Darwin"):
-            with patch("gms_helpers.runner.subprocess.Popen", side_effect=OSError(errno.EACCES, "Permission denied")):
+        with patch("gms_helpers.runner_process.platform.system", return_value="Darwin"):
+            with patch(
+                "gms_helpers.runner_process.subprocess.Popen",
+                side_effect=OSError(errno.EACCES, "Permission denied"),
+            ):
                 with self.assertRaises(RuntimeError):
                     runner._start_game_process(Path("/fake/game"))
-            with patch("gms_helpers.runner.subprocess.Popen", side_effect=OSError(errno.EACCES, "Permission denied")):
+            with patch(
+                "gms_helpers.runner_process.subprocess.Popen",
+                side_effect=OSError(errno.EACCES, "Permission denied"),
+            ):
                 with self.assertRaises(RuntimeError):
                     runner._run_igor_command(["/fake/Igor"])
 
-        with patch("gms_helpers.runner.subprocess.Popen", return_value=SimpleNamespace(pid=1)) as mock_popen:
+        with patch("gms_helpers.runner_process.subprocess.Popen", return_value=SimpleNamespace(pid=1)) as mock_popen:
             runner._start_game_process(Path("/fake/game"))
         _, kwargs = mock_popen.call_args
         self.assertIs(kwargs["stdin"], subprocess.DEVNULL)

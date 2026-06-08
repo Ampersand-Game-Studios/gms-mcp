@@ -184,6 +184,7 @@ See `RELEASING.md` for the one-time PyPI setup and the first manual upload helpe
 
 - Core CI runs on Ubuntu and Windows across Python `3.11`-`3.13`.
 - Runner/session regression tests also run on macOS across Python `3.11`-`3.13`, including a mockless smoke test that builds a real `.app` bundle structure and validates executable path resolution.
+- Core CI also runs a deterministic MCP tool smoke subset against a generated minimal GameMaker project fixture.
 
 ### Quality Reports
 
@@ -195,6 +196,7 @@ dropping out of `coverage.xml`.
 
 - `TEST_COVERAGE_REPORT.md`
 - `MCP_TOOL_VALIDATION_REPORT.md`
+- `mcp_tool_smoke_report.json`
 - `coverage.xml`
 - `pytest_results.xml`
 - `quality_summary.json`
@@ -233,6 +235,12 @@ GMS_MCP_REAL_SMOKE_PROJECT=/path/to/project python scripts/run_real_gamemaker_sm
 The smoke copies the project to a temporary directory, uses smart post-mutation
 verification, compiles after a high-risk mutation, defers a batchable sprite-frame
 mutation, then flushes the pending compile once.
+
+For CI-safe MCP tool smoke coverage without a real GameMaker install, run:
+
+```bash
+GMS_MCP_POST_MUTATION_VERIFY=off python scripts/run_mcp_tool_smoke.py --init-minimal-base --base-project build/mcp-smoke/base-project --work-root build/mcp-smoke/work --output build/reports/mcp_tool_smoke_report.json --tools gm_asset_delete gm_create_object gm_event_add gm_maintenance_validate_json gm_room_instance_add gm_room_layer_add gm_verification_status gm_list_assets gm_project_info gm_search_references gm_workflow_duplicate gm_sprite_frame_count
+```
 
 For release-bound promotions, maintainers should run these locally from the repo root:
 
