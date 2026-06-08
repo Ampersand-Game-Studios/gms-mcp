@@ -229,12 +229,20 @@ variables are `GMS_MCP_MIN_OVERALL_COVERAGE`, `GMS_MCP_MIN_MODULE_COVERAGE`, and
 For real GameMaker verification on a machine with GameMaker installed, run:
 
 ```bash
-GMS_MCP_REAL_SMOKE_PROJECT=/path/to/project python scripts/run_real_gamemaker_smoke.py --required
+GMS_MCP_REAL_SMOKE_PROJECT=/path/to/project \
+GMS_MCP_REAL_SMOKE_EXPECTED_RUNTIME='2026.*' \
+python scripts/run_real_gamemaker_smoke.py --fixture-name gm-2026-lts --required
 ```
 
 The smoke copies the project to a temporary directory, uses smart post-mutation
 verification, compiles after a high-risk mutation, defers a batchable sprite-frame
 mutation, then flushes the pending compile once.
+
+CI runs this as a macOS fixture matrix. Configure repository variables
+`GMS_MCP_REAL_SMOKE_PROJECT_2024` / `GMS_MCP_REAL_SMOKE_RUNTIME_2024` and
+`GMS_MCP_REAL_SMOKE_PROJECT_2026` / `GMS_MCP_REAL_SMOKE_RUNTIME_2026` to exercise
+real projects against their expected GameMaker runtime versions. Set
+`GMS_MCP_REQUIRE_REAL_GAMEMAKER_SMOKE=1` to fail when a fixture path is absent.
 
 For CI-safe MCP tool smoke coverage without a real GameMaker install, run:
 
@@ -248,7 +256,7 @@ For release-bound promotions, maintainers should run these locally from the repo
 PYTHONPATH=src python cli/tests/python/run_all_tests.py
 PYTHONPATH=src python -m pytest cli/tests/python/test_final_verification.py
 python scripts/generate_quality_reports.py
-GMS_MCP_REAL_SMOKE_PROJECT=/path/to/project python scripts/run_real_gamemaker_smoke.py --required
+GMS_MCP_REAL_SMOKE_PROJECT=/path/to/project GMS_MCP_REAL_SMOKE_EXPECTED_RUNTIME='2026.*' python scripts/run_real_gamemaker_smoke.py --fixture-name gm-2026-lts --required
 ```
 
 ## X posting during release

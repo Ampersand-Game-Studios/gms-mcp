@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import fnmatch
 import json
 import os
 import shutil
@@ -47,16 +48,36 @@ def _unwrap_call_tool(value: Any) -> Any:
     return value
 
 
-def _skip(message: str, *, required: bool, output_path: Path) -> int:
+def _write_report(output_path: Path, payload: Dict[str, Any]) -> None:
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _skip(message: str, *, required: bool, output_path: Path, fixture: Dict[str, Any] | None = None) -> int:
     payload = {
         "ok": not required,
         "status": "failed" if required else "skipped",
         "message": message,
     }
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    if fixture is not None:
+        payload["fixture"] = fixture
+    _write_report(output_path, payload)
     print(f"[{'ERROR' if required else 'SKIP'}] {message}")
     return 1 if required else 0
+
+
+def _fail(message: str, *, output_path: Path, fixture: Dict[str, Any], runtime: Dict[str, Any] | None = None) -> int:
+    payload: Dict[str, Any] = {
+        "ok": False,
+        "status": "failed",
+        "message": message,
+        "fixture": fixture,
+    }
+    if runtime is not None:
+        payload["runtime"] = runtime
+    _write_report(output_path, payload)
+    print(f"[ERROR] {message}")
+    return 1
 
 
 def _find_default_project() -> Path | None:
@@ -108,6 +129,12 @@ def _runtime_report(project_root: Path) -> Dict[str, Any]:
         "igor_path": runtime.igor_path,
         "message": "GameMaker runtime discovered." if runtime.is_valid else "GameMaker runtime exists but Igor is missing.",
     }
+
+
+def _runtime_version_matches(version: str, expected: str) -> bool:
+    if not expected:
+        return True
+    return version == expected or version.startswith(expected) or fnmatch.fnmatch(version, expected)
 
 
 async def _run_smoke(project_root: Path) -> Dict[str, Any]:
@@ -199,6 +226,16 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--keep-workdir", action="store_true", help="Keep the copied project after the smoke.")
     parser.add_argument("--required", action="store_true", help="Fail instead of skipping when prerequisites are absent.")
+    parser.add_argument(
+        "--fixture-name",
+        default=os.environ.get("GMS_MCP_REAL_SMOKE_FIXTURE_NAME", "default"),
+        help="Human-readable fixture name to include in the JSON report.",
+    )
+    parser.add_argument(
+        "--expected-runtime-version",
+        default=os.environ.get("GMS_MCP_REAL_SMOKE_EXPECTED_RUNTIME", ""),
+        help="Required GameMaker runtime version or fnmatch pattern for this fixture.",
+    )
     parser.add_argument("--platform", default="", help="Optional GameMaker platform override for compile verification.")
     parser.add_argument("--runtime", default="", help="Optional GameMaker runtime override for compile verification.")
     parser.add_argument("--timeout-seconds", type=int, default=0, help="Optional compile timeout override.")
@@ -209,6 +246,11 @@ def main() -> int:
     args = parse_args()
     output_path = (REPO_ROOT / args.output).resolve() if not args.output.is_absolute() else args.output
     required = bool(args.required or _truthy(os.environ.get("GMS_MCP_REQUIRE_REAL_GAMEMAKER_SMOKE")))
+    expected_runtime_version = str(args.expected_runtime_version or "").strip()
+    fixture: Dict[str, Any] = {
+        "name": str(args.fixture_name or "default"),
+        "expected_runtime_version": expected_runtime_version,
+    }
 
     source_project = args.project_root or _find_default_project()
     if source_project is None:
@@ -216,16 +258,26 @@ def main() -> int:
             "No real GameMaker smoke project configured. Set GMS_MCP_REAL_SMOKE_PROJECT or pass --project-root.",
             required=required,
             output_path=output_path,
+            fixture=fixture,
         )
 
     source_project = source_project.resolve()
+    fixture["source_project"] = str(source_project)
     validation_error = _validate_source_project(source_project)
     if validation_error:
-        return _skip(validation_error, required=required, output_path=output_path)
+        return _skip(validation_error, required=required, output_path=output_path, fixture=fixture)
 
     runtime_report = _runtime_report(source_project)
     if not runtime_report["ok"]:
-        return _skip(str(runtime_report["message"]), required=required, output_path=output_path)
+        return _skip(str(runtime_report["message"]), required=required, output_path=output_path, fixture=fixture)
+    runtime_version = str(runtime_report.get("version") or "")
+    if expected_runtime_version and not _runtime_version_matches(runtime_version, expected_runtime_version):
+        return _fail(
+            f"GameMaker runtime version {runtime_version!r} does not match fixture expectation {expected_runtime_version!r}.",
+            output_path=output_path,
+            fixture=fixture,
+            runtime=runtime_report,
+        )
 
     if args.work_root is not None:
         temp_context = None
@@ -268,11 +320,11 @@ def main() -> int:
 
     result.setdefault("runtime", runtime_report)
     result.setdefault("source_project", str(source_project))
+    result.setdefault("fixture", fixture)
     if args.keep_workdir or args.work_root is not None:
         result["work_project"] = str(project_copy)
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    output_path.write_text(json.dumps(result, indent=2) + "\n", encoding="utf-8")
+    _write_report(output_path, result)
 
     if result.get("ok"):
         print("[OK] Real GameMaker smart verification smoke passed.")
