@@ -10,6 +10,41 @@ from .output import _apply_output_mode
 from .subprocess_runner import _run_cli_async
 
 
+_DIRECT_DOMAIN_FAILURE_EXIT_CODES = {2, 3, 4, 5, 6, 9}
+_DIRECT_DOMAIN_FAILURE_PREFIXES = (
+    "AssetExistsError:",
+    "AssetNotFoundError:",
+    "InvalidAssetTypeError:",
+    "JSONParseError:",
+    "ProjectNotFoundError:",
+    "ValidationError:",
+)
+
+
+def _is_structured_domain_failure(value: Any) -> bool:
+    if hasattr(value, "to_dict") and callable(value.to_dict):
+        value = value.to_dict()
+    if not isinstance(value, dict):
+        return False
+    if value.get("ok") is not False and value.get("success") is not False:
+        return False
+    error = value.get("error")
+    if isinstance(error, dict):
+        error_type = str(error.get("type") or "")
+        code = str(error.get("code") or "")
+        return bool(error_type or code)
+    return bool(error)
+
+
+def _should_skip_cli_fallback_for_direct_failure(direct_result: Any) -> bool:
+    if direct_result.exit_code in _DIRECT_DOMAIN_FAILURE_EXIT_CODES:
+        return True
+    error = str(direct_result.error or "")
+    if error.startswith(_DIRECT_DOMAIN_FAILURE_PREFIXES):
+        return True
+    return _is_structured_domain_failure(direct_result.result)
+
+
 async def _run_with_fallback(
     *,
     direct_handler: Callable[[argparse.Namespace], Any],
@@ -96,7 +131,26 @@ async def _run_with_fallback(
         )
         return result
 
-    # If the direct call threw (or otherwise failed), fall back to subprocess for resilience.
+    if _should_skip_cli_fallback_for_direct_failure(direct_result):
+        result = _apply_output_mode(
+            direct_result.as_dict(),
+            output_mode=output_mode,
+            tail_lines=tail_lines,
+            max_chars=max_chars,
+            quiet=quiet,
+        )
+        result["fallback_skipped"] = True
+        result["fallback_skipped_reason"] = "direct_domain_failure"
+        note_tool_execution(
+            tool_name=derived_tool_name,
+            execution_mode=result.get("execution_mode") or "direct",
+            ok=bool(result.get("ok")),
+            timed_out=bool(result.get("timed_out")),
+            error=result.get("error"),
+        )
+        return result
+
+    # If the direct call failed for an infrastructure reason, fall back to subprocess for resilience.
     cli_result = await _run_cli_async(
         cli_args,
         project_root,
