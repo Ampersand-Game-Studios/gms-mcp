@@ -5,6 +5,7 @@ from typing import Any, Callable, Dict, List
 
 from ..telemetry import note_tool_execution
 from ..execution_policy import ExecutionMode, policy_manager
+from .destructive_policy import destructive_cli_blocked_result, is_real_destructive_cli_workflow
 from .direct import _run_direct
 from .output import _apply_output_mode
 from .subprocess_runner import _run_cli_async
@@ -80,10 +81,34 @@ async def _run_with_fallback(
     policy = policy_manager.get_policy(derived_tool_name)
     effective_mode = policy.mode
     effective_timeout = timeout_seconds if timeout_seconds is not None else policy.timeout_seconds
+    destructive_cli_disabled = is_real_destructive_cli_workflow(derived_tool_name, direct_args)
 
     # Respect manual override via prefer_cli
     if prefer_cli:
         effective_mode = ExecutionMode.SUBPROCESS
+
+    if destructive_cli_disabled and prefer_cli:
+        result = destructive_cli_blocked_result(
+            derived_tool_name,
+            "This MCP tool call would perform a real destructive write; use the typed direct handler instead.",
+        )
+        result = _apply_output_mode(
+            result,
+            output_mode=output_mode,
+            tail_lines=tail_lines,
+            max_chars=max_chars,
+            quiet=quiet,
+        )
+        note_tool_execution(
+            tool_name=derived_tool_name,
+            execution_mode=result.get("execution_mode") or "policy",
+            ok=bool(result.get("ok")),
+            timed_out=bool(result.get("timed_out")),
+            error=result.get("error"),
+        )
+        return result
+    if destructive_cli_disabled:
+        effective_mode = ExecutionMode.DIRECT
 
     if effective_mode == ExecutionMode.SUBPROCESS:
         result = _apply_output_mode(
@@ -141,6 +166,26 @@ async def _run_with_fallback(
         )
         result["fallback_skipped"] = True
         result["fallback_skipped_reason"] = "direct_domain_failure"
+        note_tool_execution(
+            tool_name=derived_tool_name,
+            execution_mode=result.get("execution_mode") or "direct",
+            ok=bool(result.get("ok")),
+            timed_out=bool(result.get("timed_out")),
+            error=result.get("error"),
+        )
+        return result
+
+    if destructive_cli_disabled:
+        result = _apply_output_mode(
+            direct_result.as_dict(),
+            output_mode=output_mode,
+            tail_lines=tail_lines,
+            max_chars=max_chars,
+            quiet=quiet,
+        )
+        result["fallback_skipped"] = True
+        result["fallback_skipped_reason"] = "destructive_cli_disabled"
+        result["fallback_blocked_by_policy"] = True
         note_tool_execution(
             tool_name=derived_tool_name,
             execution_mode=result.get("execution_mode") or "direct",

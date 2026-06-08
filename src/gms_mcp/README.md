@@ -130,6 +130,7 @@ After changing `.cursor/mcp.json`, **Reload Window** in Cursor to pick up MCP co
   - Tools apply **category-aware default max runtimes** (overrideable) to prevent indefinite blocking. Override globally with `GMS_MCP_DEFAULT_TIMEOUT_SECONDS`.
   - To bypass subprocess overhead and use faster **in-process execution**, set `GMS_MCP_ENABLE_DIRECT=1`. This is faster but less resilient to hangs in library code.
   - Mutation tools validate typed operation models at the MCP boundary before transactions, direct helper calls, or subprocess fallback. Invalid write arguments return `Invalid MCP tool arguments` and do not retry through another execution path.
+  - Real destructive MCP writes run through typed direct handlers only. `prefer_cli=true` is rejected for those calls, and direct infrastructure failures do not fall back to generic CLI execution.
   - To require dry-run mode for destructive operations, set `GMS_MCP_REQUIRE_DRY_RUN=1` (enabled by default for `--antigravity-setup`).
   - To allow specific destructive tools while this policy is enabled, set `GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST` to a comma-separated list (for example: `gm_asset_delete,gm_workflow_delete,gm_safe_delete`).
   - Post-mutation compile verification defaults to smart mode. Set `GMS_MCP_POST_MUTATION_VERIFY=compile` to compile after every transactional mutation, `smart` to keep the default explicitly, or `off` to disable post-mutation compile verification.

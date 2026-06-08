@@ -41,7 +41,7 @@ All notable changes to this project will be documented in this file.
 - **Coverage Audit Expansion**: Added focused coverage suites for CLI wrappers, helper-heavy modules, install/setup flows, bridge tools, and reporting regressions. Project-wide statement coverage now clears 90% with release artifacts generated from the same pipeline used in CI.
 - **LTS2026 Runtime Awareness**: Runtime discovery now classifies `2026.*` installs as LTS, and runner runtime labels accept the LTS2026 UI aliases `GMS2 VM` and `GMS2 YYC`.
 - **LTS2026 Asset Introspection Coverage**: Added regression coverage for particle-system assets and lower-case project-serializer key variants.
-- **Real GameMaker Verification Smoke**: Added `scripts/run_real_gamemaker_smoke.py` to copy a real project, exercise smart post-mutation verification, compile a high-risk mutation, defer a batchable sprite-frame mutation, and flush the pending compile once. CI now publishes the smoke report when a real project is configured.
+- **Real GameMaker Verification Smoke**: Added `scripts/run_real_gamemaker_smoke.py` to copy a real project, exercise smart post-mutation verification, compile a high-risk mutation, defer a batchable sprite-frame mutation, and flush the pending compile once. CI now runs a macOS fixture matrix for 2024 and 2026/LTS real-project fixtures when configured.
 - **CI MCP Tool Smoke Coverage**: CI now runs a deterministic MCP tool smoke subset against a generated minimal GameMaker project fixture and publishes `mcp_tool_smoke_report.json` with quality artifacts.
 
 ### Fixed
@@ -59,7 +59,7 @@ All notable changes to this project will be documented in this file.
 ### Changed
 - **Diagnostic output**: Refined tool outputs to be cleaner and more consistent across the code intelligence suite.
 - **Legacy Helper Results**: Command/MCP paths that still call print-heavy legacy helpers now normalize raw booleans and ad-hoc error dictionaries into structured `success`/`ok`/`message`/`error` result payloads.
-- **MCP Write Validation**: MCP mutation tools now validate typed operation models before transactions, direct helper calls, or CLI subprocess fallback. Domain validation failures stop at the MCP boundary instead of retrying through a generic fallback path.
+- **MCP Write Validation**: MCP mutation tools now validate typed operation models before transactions, direct helper calls, or CLI subprocess fallback. Domain validation failures stop at the MCP boundary instead of retrying through a generic fallback path, and real destructive MCP writes no longer accept `prefer_cli` or infrastructure fallback to the broad CLI path.
 - **Standardized Versioning**: Locked default asset creation to GameMaker 2024.x+ standards.
 - **Quality Reporting Pipeline**: `scripts/generate_quality_reports.py` now collects subprocess coverage correctly, combines parallel `.coverage*` data before writing `coverage.xml`, and keeps the published markdown/XML/JSON quality artifacts aligned with real CLI execution paths.
 - **Smart Mutation Verification Default**: Post-mutation verification now defaults to smart mode, compiling high-risk structural mutations immediately while deferring batchable edits until `gm_verification_flush`.
