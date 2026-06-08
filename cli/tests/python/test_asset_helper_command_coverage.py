@@ -134,16 +134,18 @@ class TestCreateCommands(unittest.TestCase):
             )
             run_maintenance = stack.enter_context(
                 patch(
-                    "gms_helpers.asset_helper.run_auto_maintenance",
+                    "gms_helpers.asset_creation_flow.run_auto_maintenance",
                     side_effect=[_maintenance_result(), _maintenance_result()],
                 )
             )
             safe_check = stack.enter_context(
-                patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=True)
+                patch("gms_helpers.asset_creation_flow.validate_asset_creation_safe", return_value=True)
             )
-            validate_name = stack.enter_context(patch("gms_helpers.asset_helper.validate_name"))
-            validate_parent = stack.enter_context(patch("gms_helpers.asset_helper.validate_parent_path"))
-            update_yyp = stack.enter_context(patch("gms_helpers.asset_helper.update_yyp_file", return_value=True))
+            validate_name = stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_name"))
+            validate_parent = stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path"))
+            update_yyp = stack.enter_context(
+                patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=True)
+            )
             script_cls = stack.enter_context(patch("gms_helpers.asset_helper.ScriptAsset"))
             script_instance = script_cls.return_value
             script_instance.create_files.return_value = "scripts/PlayerData/PlayerData.yy"
@@ -336,17 +338,17 @@ class TestCreateCommands(unittest.TestCase):
                 with ExitStack() as stack:
                     run_maintenance = stack.enter_context(
                         patch(
-                            "gms_helpers.asset_helper.run_auto_maintenance",
+                            "gms_helpers.asset_creation_flow.run_auto_maintenance",
                             side_effect=[_maintenance_result(), _maintenance_result()],
                         )
                     )
                     safe_check = stack.enter_context(
-                        patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=True)
+                        patch("gms_helpers.asset_creation_flow.validate_asset_creation_safe", return_value=True)
                     )
-                    validate_name = stack.enter_context(patch("gms_helpers.asset_helper.validate_name"))
-                    validate_parent = stack.enter_context(patch("gms_helpers.asset_helper.validate_parent_path"))
+                    validate_name = stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_name"))
+                    validate_parent = stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path"))
                     update_yyp = stack.enter_context(
-                        patch("gms_helpers.asset_helper.update_yyp_file", return_value=True)
+                        patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=True)
                     )
                     asset_cls = stack.enter_context(patch(f"gms_helpers.asset_helper.{case['class_name']}"))
                     asset_instance = asset_cls.return_value
@@ -370,12 +372,12 @@ class TestCreateCommands(unittest.TestCase):
         with ExitStack() as stack:
             run_maintenance = stack.enter_context(
                 patch(
-                    "gms_helpers.asset_helper.run_auto_maintenance",
+                    "gms_helpers.asset_creation_flow.run_auto_maintenance",
                     side_effect=[_maintenance_result(), _maintenance_result()],
                 )
             )
             safe_check = stack.enter_context(
-                patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=True)
+                patch("gms_helpers.asset_creation_flow.validate_asset_creation_safe", return_value=True)
             )
             folder_cls = stack.enter_context(patch("gms_helpers.asset_helper.FolderAsset"))
             folder_instance = folder_cls.return_value
@@ -393,13 +395,13 @@ class TestCreateCommands(unittest.TestCase):
         args = _create_args("spr_fail")
         with (
             patch(
-                "gms_helpers.asset_helper.run_auto_maintenance",
+                "gms_helpers.asset_creation_flow.run_auto_maintenance",
                 side_effect=[_maintenance_result(), _maintenance_result()],
             ),
-            patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=True),
-            patch("gms_helpers.asset_helper.validate_name"),
-            patch("gms_helpers.asset_helper.validate_parent_path"),
-            patch("gms_helpers.asset_helper.update_yyp_file", return_value=False),
+            patch("gms_helpers.asset_creation_flow.validate_asset_creation_safe", return_value=True),
+            patch("gms_helpers.asset_creation_flow.validate_name"),
+            patch("gms_helpers.asset_creation_flow.validate_parent_path"),
+            patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=False),
             patch("gms_helpers.asset_helper.SpriteAsset") as sprite_cls,
         ):
             sprite_cls.return_value.create_files.return_value = "sprites/spr_fail/spr_fail.yy"
@@ -412,9 +414,9 @@ class TestCreateCommands(unittest.TestCase):
     def test_create_wrapper_returns_maintenance_failure_when_precheck_fails(self):
         args = _create_args("o_guard")
         with (
-            patch("gms_helpers.asset_helper.run_auto_maintenance", return_value=_maintenance_result()),
-            patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=False),
-            patch("gms_helpers.asset_helper.handle_maintenance_failure", return_value=False) as failure_handler,
+            patch("gms_helpers.asset_creation_flow.run_auto_maintenance", return_value=_maintenance_result()),
+            patch("gms_helpers.asset_creation_flow.validate_asset_creation_safe", return_value=False),
+            patch("gms_helpers.asset_creation_flow.handle_maintenance_failure", return_value=False) as failure_handler,
         ):
             result = asset_helper.create_object(args)
 

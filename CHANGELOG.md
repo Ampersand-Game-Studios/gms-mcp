@@ -42,6 +42,7 @@ All notable changes to this project will be documented in this file.
 - **LTS2026 Runtime Awareness**: Runtime discovery now classifies `2026.*` installs as LTS, and runner runtime labels accept the LTS2026 UI aliases `GMS2 VM` and `GMS2 YYC`.
 - **LTS2026 Asset Introspection Coverage**: Added regression coverage for particle-system assets and lower-case project-serializer key variants.
 - **Real GameMaker Verification Smoke**: Added `scripts/run_real_gamemaker_smoke.py` to copy a real project, exercise smart post-mutation verification, compile a high-risk mutation, defer a batchable sprite-frame mutation, and flush the pending compile once. CI now publishes the smoke report when a real project is configured.
+- **CI MCP Tool Smoke Coverage**: CI now runs a deterministic MCP tool smoke subset against a generated minimal GameMaker project fixture and publishes `mcp_tool_smoke_report.json` with quality artifacts.
 
 ### Fixed
 - **Spurious `.gms_mcp` Folder Creation**: Fixed an issue where the MCP server would create a `.gms_mcp/logs/` folder in the current working directory even when no GameMaker project was present. Debug logging now only activates when a valid project is detected.
@@ -53,6 +54,7 @@ All notable changes to this project will be documented in this file.
 - **macOS Local Compile/Run Pipeline**: Fixed `gm_compile` and default local `gm_run` behavior on macOS so local validation uses Igor's run-based path instead of `PackageZip`, avoiding incorrect Developer ID signing/certificate failures during normal IDE-equivalent compile/run workflows. macOS background run sessions now track and stop the real `Mac_Runner` process cleanly.
 - **X Posting Workflow Retries**: Fixed the GitHub X posting workflows so transient `503 Service Unavailable` responses no longer honor unbounded server retry hints that exceed the job timeout. `5xx` retries now stay on the local bounded backoff, `429` retry hints remain capped to fit within the workflow budget, and Cloudflare challenge pages are classified/retried as edge failures instead of credential errors.
 - **GMRT Runner Requests**: `GMRT` and `GMRT VM` runtime labels are now recognized and rejected with an explicit unsupported message instead of being passed through as ambiguous Igor commands.
+- **macOS Runner Smoke Reliability**: The mockless `.app` launch smoke now verifies that the executable actually runs and cleans up the child process instead of assuming a detached game process exits immediately.
 
 ### Changed
 - **Diagnostic output**: Refined tool outputs to be cleaner and more consistent across the code intelligence suite.
