@@ -11,14 +11,12 @@ from pathlib import Path
 
 # Direct imports - no complex fallbacks needed
 from .utils import (
-    validate_name,
-    validate_parent_path,
-    update_yyp_file,
     find_yyp_file,
     validate_working_directory,
     remove_folder_from_yyp,
     list_folders_in_yyp,
 )
+from .asset_creation_flow import create_project_asset, run_post_creation_maintenance, run_pre_creation_maintenance
 from .assets import (
     ScriptAsset,
     ObjectAsset,
@@ -135,60 +133,16 @@ def validate_asset_directory_structure():
 def create_script(args):
     """Create a new script asset."""
     try:
-        # DIRECTORY VALIDATION: Ensure we're in proper GameMaker context
         gamemaker_root = validate_asset_directory_structure()
         print(f"[OK] GameMaker project validated: {gamemaker_root.name}")
-
-        # Run pre-creation maintenance check
-        # Skip maintenance if explicitly requested
-        if not getattr(args, "skip_maintenance", False):
-            print("[VALIDATE] Running pre-creation validation...")
-            pre_result = run_auto_maintenance(".", fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
-
-            if not validate_asset_creation_safe(pre_result):
-                return handle_maintenance_failure(f"Script '{args.name}' creation", pre_result)
-
-        validate_name(args.name, "script", allow_constructor=getattr(args, "constructor", False))
-        validate_parent_path(args.parent_path)
-
-        asset = ScriptAsset()
-        from pathlib import Path
-
-        project_root = Path(".")
-
-        # Create the asset files
-        relative_path = asset.create_files(
-            project_root, args.name, args.parent_path, is_constructor=getattr(args, "constructor", False)
+        return create_project_asset(
+            args,
+            asset=ScriptAsset(),
+            asset_type="script",
+            label="Script",
+            kwargs={"is_constructor": getattr(args, "constructor", False)},
+            allow_constructor=getattr(args, "constructor", False),
         )
-
-        # Create resource entry for .yyp file
-        resource_entry = {"id": {"name": args.name, "path": relative_path}}
-
-        # Update .yyp file
-        success = update_yyp_file(resource_entry)
-
-        if success:
-            print(f"[OK] Script '{args.name}' created successfully")
-
-            # Run post-creation maintenance
-            if not getattr(args, "skip_maintenance", False):
-                print("[MAINT] Running post-creation maintenance...")
-                post_result = run_auto_maintenance(
-                    ".",
-                    fix_issues=not getattr(args, "no_auto_fix", False),
-                    verbose=getattr(args, "maintenance_verbose", True),
-                )
-
-                if post_result.has_errors:
-                    return handle_maintenance_failure(f"Script '{args.name}' post-creation", post_result)
-
-                print("[OK] Asset created and validated successfully!")
-
-            return True
-        else:
-            print(f"[ERROR] Failed to update .yyp file for script '{args.name}'")
-            return False
-
     except Exception as e:
         print(f"Error creating script: {e}")
         return False
@@ -197,59 +151,12 @@ def create_script(args):
 def create_object(args):
     """Create a new object asset."""
     try:
-        # Run pre-creation maintenance check
-        # Skip maintenance if explicitly requested
-        if not getattr(args, "skip_maintenance", False):
-            print("[VALIDATE] Running pre-creation validation...")
-            pre_result = run_auto_maintenance(".", fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
-
-            if not validate_asset_creation_safe(pre_result):
-                return handle_maintenance_failure(f"Object '{args.name}' creation", pre_result)
-
-        validate_name(args.name, "object")
-        validate_parent_path(args.parent_path)
-
-        asset = ObjectAsset()
-        from pathlib import Path
-
-        project_root = Path(".")
-
-        # Create the asset files
         kwargs = {}
         if args.sprite_id:
             kwargs["sprite_id"] = args.sprite_id
         if args.parent_object:
             kwargs["parent_object"] = args.parent_object
-
-        relative_path = asset.create_files(project_root, args.name, args.parent_path, **kwargs)
-
-        # Create resource entry for .yyp file
-        resource_entry = {"id": {"name": args.name, "path": relative_path}}
-
-        # Update .yyp file
-        success = update_yyp_file(resource_entry)
-
-        if success:
-            print(f"[OK] Object '{args.name}' created successfully")
-
-            # Run post-creation maintenance
-            if not getattr(args, "skip_maintenance", False):
-                print("[MAINT] Running post-creation maintenance...")
-                post_result = run_auto_maintenance(
-                    ".",
-                    fix_issues=not getattr(args, "no_auto_fix", False),
-                    verbose=getattr(args, "maintenance_verbose", True),
-                )
-
-                if post_result.has_errors:
-                    return handle_maintenance_failure(f"Object '{args.name}' post-creation", post_result)
-
-                print("[OK] Asset created and validated successfully!")
-
-            return True
-        else:
-            print(f"[ERROR] Failed to update .yyp file for object '{args.name}'")
-            return False
+        return create_project_asset(args, asset=ObjectAsset(), asset_type="object", label="Object", kwargs=kwargs)
 
     except Exception as e:
         print(f"Error creating object: {e}")
@@ -259,57 +166,17 @@ def create_object(args):
 def create_sprite(args):
     """Create a new sprite asset."""
     try:
-        # Run pre-creation maintenance check
-        # Skip maintenance if explicitly requested
-        if not getattr(args, "skip_maintenance", False):
-            print("[VALIDATE] Running pre-creation validation...")
-            pre_result = run_auto_maintenance(".", fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
-
-            if not validate_asset_creation_safe(pre_result):
-                return handle_maintenance_failure(f"Sprite '{args.name}' creation", pre_result)
-
-        validate_name(args.name, "sprite")
-        validate_parent_path(args.parent_path)
-
-        asset = SpriteAsset()
-        from pathlib import Path
-
-        project_root = Path(".")
-
-        # Multi-frame support: pass frame_count to create_files
         frame_count = getattr(args, "frame_count", 1)
-
-        # Create the asset files
-        relative_path = asset.create_files(project_root, args.name, args.parent_path, frame_count=frame_count)
-
-        # Create resource entry for .yyp file
-        resource_entry = {"id": {"name": args.name, "path": relative_path}}
-
-        # Update .yyp file
-        success = update_yyp_file(resource_entry)
-
-        if success:
-            frame_msg = f" with {frame_count} frames" if frame_count > 1 else ""
-            print(f"[OK] Sprite '{args.name}' created successfully{frame_msg}")
-
-            # Run post-creation maintenance
-            if not getattr(args, "skip_maintenance", False):
-                print("[MAINT] Running post-creation maintenance...")
-                post_result = run_auto_maintenance(
-                    ".",
-                    fix_issues=not getattr(args, "no_auto_fix", False),
-                    verbose=getattr(args, "maintenance_verbose", True),
-                )
-
-                if post_result.has_errors:
-                    return handle_maintenance_failure(f"Sprite '{args.name}' post-creation", post_result)
-
-                print("[OK] Asset created and validated successfully!")
-
-            return True
-        else:
-            print(f"[ERROR] Failed to update .yyp file for sprite '{args.name}'")
-            return False
+        return create_project_asset(
+            args,
+            asset=SpriteAsset(),
+            asset_type="sprite",
+            label="Sprite",
+            kwargs={"frame_count": frame_count},
+            success_message=(
+                f"[OK] Sprite '{args.name}' created successfully with {frame_count} frames" if frame_count > 1 else None
+            ),
+        )
 
     except Exception as e:
         print(f"Error creating sprite: {e}")
@@ -319,55 +186,13 @@ def create_sprite(args):
 def create_room(args):
     """Create a new room asset."""
     try:
-        # Run pre-creation maintenance check
-        # Skip maintenance if explicitly requested
-        if not getattr(args, "skip_maintenance", False):
-            print("[VALIDATE] Running pre-creation validation...")
-            pre_result = run_auto_maintenance(".", fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
-
-            if not validate_asset_creation_safe(pre_result):
-                return handle_maintenance_failure(f"Room '{args.name}' creation", pre_result)
-
-        validate_name(args.name, "room")
-        validate_parent_path(args.parent_path)
-
-        asset = RoomAsset()
-        from pathlib import Path
-
-        project_root = Path(".")
-
-        # Create the asset files
-        kwargs = {"width": args.width, "height": args.height}
-
-        relative_path = asset.create_files(project_root, args.name, args.parent_path, **kwargs)
-
-        # Create resource entry for .yyp file
-        resource_entry = {"id": {"name": args.name, "path": relative_path}}
-
-        # Update .yyp file
-        success = update_yyp_file(resource_entry)
-
-        if success:
-            print(f"[OK] Room '{args.name}' created successfully")
-
-            # Run post-creation maintenance
-            if not getattr(args, "skip_maintenance", False):
-                print("[MAINT] Running post-creation maintenance...")
-                post_result = run_auto_maintenance(
-                    ".",
-                    fix_issues=not getattr(args, "no_auto_fix", False),
-                    verbose=getattr(args, "maintenance_verbose", True),
-                )
-
-                if post_result.has_errors:
-                    return handle_maintenance_failure(f"Room '{args.name}' post-creation", post_result)
-
-                print("[OK] Asset created and validated successfully!")
-
-            return True
-        else:
-            print(f"[ERROR] Failed to update .yyp file for room '{args.name}'")
-            return False
+        return create_project_asset(
+            args,
+            asset=RoomAsset(),
+            asset_type="room",
+            label="Room",
+            kwargs={"width": args.width, "height": args.height},
+        )
 
     except Exception as e:
         print(f"Error creating room: {e}")
@@ -377,40 +202,16 @@ def create_room(args):
 def create_folder(args):
     """Create a new folder asset."""
     try:
-        # Run pre-creation maintenance check
-        if not getattr(args, "skip_maintenance", False):
-            print("[VALIDATE] Running pre-creation validation...")
-            pre_result = run_auto_maintenance(".", fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
-
-            if not validate_asset_creation_safe(pre_result):
-                return handle_maintenance_failure(f"Folder '{args.name}' creation", pre_result)
+        precheck = run_pre_creation_maintenance(args, f"Folder '{args.name}' creation")
+        if precheck is not True:
+            return precheck
 
         asset = FolderAsset()
-        from pathlib import Path
-
-        project_root = Path(".")
-
-        # Create the folder entry in .yyp file
-        folder_path = asset.create_files(project_root, args.name, args.path)
+        folder_path = asset.create_files(Path("."), args.name, args.path)
 
         print(f"[OK] Folder '{args.name}' created at logical path: {folder_path}")
         print(f'   [INFO] Use --parent-path "{folder_path}" when creating assets inside this folder.')
-
-        # Run post-creation maintenance
-        if not getattr(args, "skip_maintenance", False):
-            print("[MAINT] Running post-creation maintenance...")
-            post_result = run_auto_maintenance(
-                ".",
-                fix_issues=not getattr(args, "no_auto_fix", False),
-                verbose=getattr(args, "maintenance_verbose", True),
-            )
-
-            if post_result.has_errors:
-                return handle_maintenance_failure(f"Folder '{args.name}' post-creation", post_result)
-
-            print("[OK] Asset created and validated successfully!")
-
-        return True
+        return run_post_creation_maintenance(args, f"Folder '{args.name}' post-creation")
 
     except Exception as e:
         print(f"Error creating folder: {e}")
@@ -420,23 +221,6 @@ def create_folder(args):
 def create_font(args):
     """Create a new font asset."""
     try:
-        # Run pre-creation maintenance check
-        if not getattr(args, "skip_maintenance", False):
-            print("[VALIDATE] Running pre-creation validation...")
-            pre_result = run_auto_maintenance(".", fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
-
-            if not validate_asset_creation_safe(pre_result):
-                return handle_maintenance_failure(f"Font '{args.name}' creation", pre_result)
-
-        validate_name(args.name, "font")
-        validate_parent_path(args.parent_path)
-
-        asset = FontAsset()
-        from pathlib import Path
-
-        project_root = Path(".")
-
-        # Create the asset files
         kwargs = {
             "font_name": args.font_name,
             "size": args.size,
@@ -445,39 +229,18 @@ def create_font(args):
             "aa_level": args.aa_level,
             "uses_sdf": args.uses_sdf,
         }
-
-        relative_path = asset.create_files(project_root, args.name, args.parent_path, **kwargs)
-
-        # Create resource entry for .yyp file
-        resource_entry = {"id": {"name": args.name, "path": relative_path}}
-
-        # Update .yyp file
-        success = update_yyp_file(resource_entry)
-
-        if success:
-            print(f"[OK] Font '{args.name}' created successfully")
-            print(f"  Font family: {args.font_name}")
-            print(f"  Size: {args.size}")
-            print(f"  Bold: {args.bold}, Italic: {args.italic}")
-
-            # Run post-creation maintenance
-            if not getattr(args, "skip_maintenance", False):
-                print("[MAINT] Running post-creation maintenance...")
-                post_result = run_auto_maintenance(
-                    ".",
-                    fix_issues=not getattr(args, "no_auto_fix", False),
-                    verbose=getattr(args, "maintenance_verbose", True),
-                )
-
-                if post_result.has_errors:
-                    return handle_maintenance_failure(f"Font '{args.name}' post-creation", post_result)
-
-                print("[OK] Asset created and validated successfully!")
-
-            return True
-        else:
-            print(f"[ERROR] Failed to update .yyp file for font '{args.name}'")
-            return False
+        return create_project_asset(
+            args,
+            asset=FontAsset(),
+            asset_type="font",
+            label="Font",
+            kwargs=kwargs,
+            success_lines=(
+                f"  Font family: {args.font_name}",
+                f"  Size: {args.size}",
+                f"  Bold: {args.bold}, Italic: {args.italic}",
+            ),
+        )
 
     except Exception as e:
         print(f"Error creating font: {e}")
@@ -487,57 +250,18 @@ def create_font(args):
 def create_shader(args):
     """Create a new shader asset."""
     try:
-        # Run pre-creation maintenance check
-        if not getattr(args, "skip_maintenance", False):
-            print("[VALIDATE] Running pre-creation validation...")
-            pre_result = run_auto_maintenance(".", fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
-
-            if not validate_asset_creation_safe(pre_result):
-                return handle_maintenance_failure(f"Shader '{args.name}' creation", pre_result)
-
-        validate_name(args.name, "shader")
-        validate_parent_path(args.parent_path)
-
-        asset = ShaderAsset()
-        from pathlib import Path
-
-        project_root = Path(".")
-
-        # Create the asset files
-        kwargs = {"shader_type": args.shader_type}
-
-        relative_path = asset.create_files(project_root, args.name, args.parent_path, **kwargs)
-
-        # Create resource entry for .yyp file
-        resource_entry = {"id": {"name": args.name, "path": relative_path}}
-
-        # Update .yyp file
-        success = update_yyp_file(resource_entry)
-
-        if success:
-            print(f"[OK] Shader '{args.name}' created successfully")
-            print(f"  Type: {['GLSL ES', 'GLSL', 'HLSL 9', 'HLSL 11'][args.shader_type - 1]}")
-            print(f"  Created: {args.name}.vsh (vertex shader)")
-            print(f"  Created: {args.name}.fsh (fragment shader)")
-
-            # Run post-creation maintenance
-            if not getattr(args, "skip_maintenance", False):
-                print("[MAINT] Running post-creation maintenance...")
-                post_result = run_auto_maintenance(
-                    ".",
-                    fix_issues=not getattr(args, "no_auto_fix", False),
-                    verbose=getattr(args, "maintenance_verbose", True),
-                )
-
-                if post_result.has_errors:
-                    return handle_maintenance_failure(f"Shader '{args.name}' post-creation", post_result)
-
-                print("[OK] Asset created and validated successfully!")
-
-            return True
-        else:
-            print(f"[ERROR] Failed to update .yyp file for shader '{args.name}'")
-            return False
+        return create_project_asset(
+            args,
+            asset=ShaderAsset(),
+            asset_type="shader",
+            label="Shader",
+            kwargs={"shader_type": args.shader_type},
+            success_lines=(
+                f"  Type: {['GLSL ES', 'GLSL', 'HLSL 9', 'HLSL 11'][args.shader_type - 1]}",
+                f"  Created: {args.name}.vsh (vertex shader)",
+                f"  Created: {args.name}.fsh (fragment shader)",
+            ),
+        )
 
     except Exception as e:
         print(f"Error creating shader: {e}")
@@ -547,56 +271,14 @@ def create_shader(args):
 def create_animcurve(args):
     """Create a new animation curve asset."""
     try:
-        # Run pre-creation maintenance check
-        if not getattr(args, "skip_maintenance", False):
-            print("[VALIDATE] Running pre-creation validation...")
-            pre_result = run_auto_maintenance(".", fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
-
-            if not validate_asset_creation_safe(pre_result):
-                return handle_maintenance_failure(f"Animation curve '{args.name}' creation", pre_result)
-
-        validate_name(args.name, "animcurve")
-        validate_parent_path(args.parent_path)
-
-        asset = AnimCurveAsset()
-        from pathlib import Path
-
-        project_root = Path(".")
-
-        # Create the asset files
-        kwargs = {"curve_type": args.curve_type, "channel_name": args.channel_name}
-
-        relative_path = asset.create_files(project_root, args.name, args.parent_path, **kwargs)
-
-        # Create resource entry for .yyp file
-        resource_entry = {"id": {"name": args.name, "path": relative_path}}
-
-        # Update .yyp file
-        success = update_yyp_file(resource_entry)
-
-        if success:
-            print(f"[OK] Animation curve '{args.name}' created successfully")
-            print(f"  Type: {args.curve_type}")
-            print(f"  Channel: {args.channel_name}")
-
-            # Run post-creation maintenance
-            if not getattr(args, "skip_maintenance", False):
-                print("[MAINT] Running post-creation maintenance...")
-                post_result = run_auto_maintenance(
-                    ".",
-                    fix_issues=not getattr(args, "no_auto_fix", False),
-                    verbose=getattr(args, "maintenance_verbose", True),
-                )
-
-                if post_result.has_errors:
-                    return handle_maintenance_failure(f"Animation curve '{args.name}' post-creation", post_result)
-
-                print("[OK] Asset created and validated successfully!")
-
-            return True
-        else:
-            print(f"[ERROR] Failed to update .yyp file for animation curve '{args.name}'")
-            return False
+        return create_project_asset(
+            args,
+            asset=AnimCurveAsset(),
+            asset_type="animcurve",
+            label="Animation curve",
+            kwargs={"curve_type": args.curve_type, "channel_name": args.channel_name},
+            success_lines=(f"  Type: {args.curve_type}", f"  Channel: {args.channel_name}"),
+        )
 
     except Exception as e:
         print(f"Error creating animation curve: {e}")
@@ -606,23 +288,6 @@ def create_animcurve(args):
 def create_sound(args):
     """Create a new sound asset."""
     try:
-        # Run pre-creation maintenance check
-        if not getattr(args, "skip_maintenance", False):
-            print("[VALIDATE] Running pre-creation validation...")
-            pre_result = run_auto_maintenance(".", fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
-
-            if not validate_asset_creation_safe(pre_result):
-                return handle_maintenance_failure(f"Sound '{args.name}' creation", pre_result)
-
-        validate_name(args.name, "sound")
-        validate_parent_path(args.parent_path)
-
-        asset = SoundAsset()
-        from pathlib import Path
-
-        project_root = Path(".")
-
-        # Create the asset files
         kwargs = {
             "volume": args.volume,
             "pitch": args.pitch,
@@ -631,40 +296,19 @@ def create_sound(args):
             "sample_rate": args.sample_rate,
             "format": args.format,
         }
-
-        relative_path = asset.create_files(project_root, args.name, args.parent_path, **kwargs)
-
-        # Create resource entry for .yyp file
-        resource_entry = {"id": {"name": args.name, "path": relative_path}}
-
-        # Update .yyp file
-        success = update_yyp_file(resource_entry)
-
-        if success:
-            print(f"[OK] Sound '{args.name}' created successfully")
-            print(f"  Type: {['Normal', 'Background', '3D'][args.sound_type]}")
-            print(f"  Volume: {args.volume}, Pitch: {args.pitch}")
-            print(f"  Bitrate: {args.bitrate}, Sample Rate: {args.sample_rate}")
-            print(f"  [WARN] Replace placeholder audio file with actual audio!")
-
-            # Run post-creation maintenance
-            if not getattr(args, "skip_maintenance", False):
-                print("[MAINT] Running post-creation maintenance...")
-                post_result = run_auto_maintenance(
-                    ".",
-                    fix_issues=not getattr(args, "no_auto_fix", False),
-                    verbose=getattr(args, "maintenance_verbose", True),
-                )
-
-                if post_result.has_errors:
-                    return handle_maintenance_failure(f"Sound '{args.name}' post-creation", post_result)
-
-                print("[OK] Asset created and validated successfully!")
-
-            return True
-        else:
-            print(f"[ERROR] Failed to update .yyp file for sound '{args.name}'")
-            return False
+        return create_project_asset(
+            args,
+            asset=SoundAsset(),
+            asset_type="sound",
+            label="Sound",
+            kwargs=kwargs,
+            success_lines=(
+                f"  Type: {['Normal', 'Background', '3D'][args.sound_type]}",
+                f"  Volume: {args.volume}, Pitch: {args.pitch}",
+                f"  Bitrate: {args.bitrate}, Sample Rate: {args.sample_rate}",
+                "  [WARN] Replace placeholder audio file with actual audio!",
+            ),
+        )
 
     except Exception as e:
         print(f"Error creating sound: {e}")
@@ -674,56 +318,14 @@ def create_sound(args):
 def create_path(args):
     """Create a new path asset."""
     try:
-        # Run pre-creation maintenance check
-        if not getattr(args, "skip_maintenance", False):
-            print("[VALIDATE] Running pre-creation validation...")
-            pre_result = run_auto_maintenance(".", fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
-
-            if not validate_asset_creation_safe(pre_result):
-                return handle_maintenance_failure(f"Path '{args.name}' creation", pre_result)
-
-        validate_name(args.name, "path")
-        validate_parent_path(args.parent_path)
-
-        asset = PathAsset()
-        from pathlib import Path
-
-        project_root = Path(".")
-
-        # Create the asset files
-        kwargs = {"closed": args.closed, "precision": args.precision, "path_type": args.path_type}
-
-        relative_path = asset.create_files(project_root, args.name, args.parent_path, **kwargs)
-
-        # Create resource entry for .yyp file
-        resource_entry = {"id": {"name": args.name, "path": relative_path}}
-
-        # Update .yyp file
-        success = update_yyp_file(resource_entry)
-
-        if success:
-            print(f"[OK] Path '{args.name}' created successfully")
-            print(f"  Type: {args.path_type}")
-            print(f"  Closed: {args.closed}, Precision: {args.precision}")
-
-            # Run post-creation maintenance
-            if not getattr(args, "skip_maintenance", False):
-                print("[MAINT] Running post-creation maintenance...")
-                post_result = run_auto_maintenance(
-                    ".",
-                    fix_issues=not getattr(args, "no_auto_fix", False),
-                    verbose=getattr(args, "maintenance_verbose", True),
-                )
-
-                if post_result.has_errors:
-                    return handle_maintenance_failure(f"Path '{args.name}' post-creation", post_result)
-
-                print("[OK] Asset created and validated successfully!")
-
-            return True
-        else:
-            print(f"[ERROR] Failed to update .yyp file for path '{args.name}'")
-            return False
+        return create_project_asset(
+            args,
+            asset=PathAsset(),
+            asset_type="path",
+            label="Path",
+            kwargs={"closed": args.closed, "precision": args.precision, "path_type": args.path_type},
+            success_lines=(f"  Type: {args.path_type}", f"  Closed: {args.closed}, Precision: {args.precision}"),
+        )
 
     except Exception as e:
         print(f"Error creating path: {e}")
@@ -733,23 +335,6 @@ def create_path(args):
 def create_tileset(args):
     """Create a new tileset asset."""
     try:
-        # Run pre-creation maintenance check
-        if not getattr(args, "skip_maintenance", False):
-            print("[VALIDATE] Running pre-creation validation...")
-            pre_result = run_auto_maintenance(".", fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
-
-            if not validate_asset_creation_safe(pre_result):
-                return handle_maintenance_failure(f"Tileset '{args.name}' creation", pre_result)
-
-        validate_name(args.name, "tileset")
-        validate_parent_path(args.parent_path)
-
-        asset = TileSetAsset()
-        from pathlib import Path
-
-        project_root = Path(".")
-
-        # Create the asset files
         kwargs = {
             "tile_width": args.tile_width,
             "tile_height": args.tile_height,
@@ -759,41 +344,21 @@ def create_tileset(args):
             "tile_yoff": args.tile_yoff,
             "sprite_id": args.sprite_id,
         }
-
-        relative_path = asset.create_files(project_root, args.name, args.parent_path, **kwargs)
-
-        # Create resource entry for .yyp file
-        resource_entry = {"id": {"name": args.name, "path": relative_path}}
-
-        # Update .yyp file
-        success = update_yyp_file(resource_entry)
-
-        if success:
-            print(f"[OK] Tileset '{args.name}' created successfully")
-            print(f"  Tile size: {args.tile_width}x{args.tile_height}")
-            print(f"  Separation: {args.tile_xsep}x{args.tile_ysep}")
-            print(f"  Offset: {args.tile_xoff}x{args.tile_yoff}")
-            if args.sprite_id:
-                print(f"  Sprite: {args.sprite_id}")
-
-            # Run post-creation maintenance
-            if not getattr(args, "skip_maintenance", False):
-                print("[MAINT] Running post-creation maintenance...")
-                post_result = run_auto_maintenance(
-                    ".",
-                    fix_issues=not getattr(args, "no_auto_fix", False),
-                    verbose=getattr(args, "maintenance_verbose", True),
-                )
-
-                if post_result.has_errors:
-                    return handle_maintenance_failure(f"Tileset '{args.name}' post-creation", post_result)
-
-                print("[OK] Asset created and validated successfully!")
-
-            return True
-        else:
-            print(f"[ERROR] Failed to update .yyp file for tileset '{args.name}'")
-            return False
+        lines = [
+            f"  Tile size: {args.tile_width}x{args.tile_height}",
+            f"  Separation: {args.tile_xsep}x{args.tile_ysep}",
+            f"  Offset: {args.tile_xoff}x{args.tile_yoff}",
+        ]
+        if args.sprite_id:
+            lines.append(f"  Sprite: {args.sprite_id}")
+        return create_project_asset(
+            args,
+            asset=TileSetAsset(),
+            asset_type="tileset",
+            label="Tileset",
+            kwargs=kwargs,
+            success_lines=lines,
+        )
 
     except Exception as e:
         print(f"Error creating tileset: {e}")
@@ -803,55 +368,13 @@ def create_tileset(args):
 def create_timeline(args):
     """Create a new timeline asset."""
     try:
-        # Run pre-creation maintenance check
-        if not getattr(args, "skip_maintenance", False):
-            print("[VALIDATE] Running pre-creation validation...")
-            pre_result = run_auto_maintenance(".", fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
-
-            if not validate_asset_creation_safe(pre_result):
-                return handle_maintenance_failure(f"Timeline '{args.name}' creation", pre_result)
-
-        validate_name(args.name, "timeline")
-        validate_parent_path(args.parent_path)
-
-        asset = TimelineAsset()
-        from pathlib import Path
-
-        project_root = Path(".")
-
-        # Create the asset files
-        kwargs = {}
-
-        relative_path = asset.create_files(project_root, args.name, args.parent_path, **kwargs)
-
-        # Create resource entry for .yyp file
-        resource_entry = {"id": {"name": args.name, "path": relative_path}}
-
-        # Update .yyp file
-        success = update_yyp_file(resource_entry)
-
-        if success:
-            print(f"[OK] Timeline '{args.name}' created successfully")
-            print(f"  Created: moment_0.gml")
-
-            # Run post-creation maintenance
-            if not getattr(args, "skip_maintenance", False):
-                print("[MAINT] Running post-creation maintenance...")
-                post_result = run_auto_maintenance(
-                    ".",
-                    fix_issues=not getattr(args, "no_auto_fix", False),
-                    verbose=getattr(args, "maintenance_verbose", True),
-                )
-
-                if post_result.has_errors:
-                    return handle_maintenance_failure(f"Timeline '{args.name}' post-creation", post_result)
-
-                print("[OK] Asset created and validated successfully!")
-
-            return True
-        else:
-            print(f"[ERROR] Failed to update .yyp file for timeline '{args.name}'")
-            return False
+        return create_project_asset(
+            args,
+            asset=TimelineAsset(),
+            asset_type="timeline",
+            label="Timeline",
+            success_lines=("  Created: moment_0.gml",),
+        )
 
     except Exception as e:
         print(f"Error creating timeline: {e}")
@@ -861,56 +384,14 @@ def create_timeline(args):
 def create_sequence(args):
     """Create a new sequence asset."""
     try:
-        # Run pre-creation maintenance check
-        if not getattr(args, "skip_maintenance", False):
-            print("[VALIDATE] Running pre-creation validation...")
-            pre_result = run_auto_maintenance(".", fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
-
-            if not validate_asset_creation_safe(pre_result):
-                return handle_maintenance_failure(f"Sequence '{args.name}' creation", pre_result)
-
-        validate_name(args.name, "sequence")
-        validate_parent_path(args.parent_path)
-
-        asset = SequenceAsset()
-        from pathlib import Path
-
-        project_root = Path(".")
-
-        # Create the asset files
-        kwargs = {"length": args.length, "playback_speed": args.playback_speed}
-
-        relative_path = asset.create_files(project_root, args.name, args.parent_path, **kwargs)
-
-        # Create resource entry for .yyp file
-        resource_entry = {"id": {"name": args.name, "path": relative_path}}
-
-        # Update .yyp file
-        success = update_yyp_file(resource_entry)
-
-        if success:
-            print(f"[OK] Sequence '{args.name}' created successfully")
-            print(f"  Length: {args.length} frames")
-            print(f"  Playback speed: {args.playback_speed} FPS")
-
-            # Run post-creation maintenance
-            if not getattr(args, "skip_maintenance", False):
-                print("[MAINT] Running post-creation maintenance...")
-                post_result = run_auto_maintenance(
-                    ".",
-                    fix_issues=not getattr(args, "no_auto_fix", False),
-                    verbose=getattr(args, "maintenance_verbose", True),
-                )
-
-                if post_result.has_errors:
-                    return handle_maintenance_failure(f"Sequence '{args.name}' post-creation", post_result)
-
-                print("[OK] Asset created and validated successfully!")
-
-            return True
-        else:
-            print(f"[ERROR] Failed to update .yyp file for sequence '{args.name}'")
-            return False
+        return create_project_asset(
+            args,
+            asset=SequenceAsset(),
+            asset_type="sequence",
+            label="Sequence",
+            kwargs={"length": args.length, "playback_speed": args.playback_speed},
+            success_lines=(f"  Length: {args.length} frames", f"  Playback speed: {args.playback_speed} FPS"),
+        )
 
     except Exception as e:
         print(f"Error creating sequence: {e}")
@@ -920,55 +401,14 @@ def create_sequence(args):
 def create_note(args):
     """Create a new note asset."""
     try:
-        # Run pre-creation maintenance check
-        if not getattr(args, "skip_maintenance", False):
-            print("[VALIDATE] Running pre-creation validation...")
-            pre_result = run_auto_maintenance(".", fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
-
-            if not validate_asset_creation_safe(pre_result):
-                return handle_maintenance_failure(f"Note '{args.name}' creation", pre_result)
-
-        validate_name(args.name, "note")
-        validate_parent_path(args.parent_path)
-
-        asset = NoteAsset()
-        from pathlib import Path
-
-        project_root = Path(".")
-
-        # Create the asset files
-        kwargs = {"content": args.content}
-
-        relative_path = asset.create_files(project_root, args.name, args.parent_path, **kwargs)
-
-        # Create resource entry for .yyp file
-        resource_entry = {"id": {"name": args.name, "path": relative_path}}
-
-        # Update .yyp file
-        success = update_yyp_file(resource_entry)
-
-        if success:
-            print(f"[OK] Note '{args.name}' created successfully")
-            print(f"  Created: {args.name}.txt")
-
-            # Run post-creation maintenance
-            if not getattr(args, "skip_maintenance", False):
-                print("[MAINT] Running post-creation maintenance...")
-                post_result = run_auto_maintenance(
-                    ".",
-                    fix_issues=not getattr(args, "no_auto_fix", False),
-                    verbose=getattr(args, "maintenance_verbose", True),
-                )
-
-                if post_result.has_errors:
-                    return handle_maintenance_failure(f"Note '{args.name}' post-creation", post_result)
-
-                print("[OK] Asset created and validated successfully!")
-
-            return True
-        else:
-            print(f"[ERROR] Failed to update .yyp file for note '{args.name}'")
-            return False
+        return create_project_asset(
+            args,
+            asset=NoteAsset(),
+            asset_type="note",
+            label="Note",
+            kwargs={"content": args.content},
+            success_lines=(f"  Created: {args.name}.txt",),
+        )
 
     except Exception as e:
         print(f"Error creating note: {e}")

@@ -151,15 +151,15 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                         )
                     stack.enter_context(
                         patch(
-                            "gms_helpers.asset_helper.run_auto_maintenance",
+                            "gms_helpers.asset_creation_flow.run_auto_maintenance",
                             return_value=_maintenance_result(False),
                         )
                     )
                     stack.enter_context(
-                        patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=False)
+                        patch("gms_helpers.asset_creation_flow.validate_asset_creation_safe", return_value=False)
                     )
                     handler = stack.enter_context(
-                        patch("gms_helpers.asset_helper.handle_maintenance_failure", return_value="blocked")
+                        patch("gms_helpers.asset_creation_flow.handle_maintenance_failure", return_value="blocked")
                     )
 
                     result, _ = _capture_output(getattr(asset_helper, func_name), args)
@@ -170,13 +170,15 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
         with ExitStack() as stack:
             stack.enter_context(
                 patch(
-                    "gms_helpers.asset_helper.run_auto_maintenance",
+                    "gms_helpers.asset_creation_flow.run_auto_maintenance",
                     return_value=_maintenance_result(False),
                 )
             )
-            stack.enter_context(patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=False))
+            stack.enter_context(
+                patch("gms_helpers.asset_creation_flow.validate_asset_creation_safe", return_value=False)
+            )
             handler = stack.enter_context(
-                patch("gms_helpers.asset_helper.handle_maintenance_failure", return_value="blocked")
+                patch("gms_helpers.asset_creation_flow.handle_maintenance_failure", return_value="blocked")
             )
             result, _ = _capture_output(asset_helper.create_folder, _create_args("Folder", path="folders/Folder.yy"))
 
@@ -194,9 +196,9 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                                 return_value=Path("/tmp/project"),
                             )
                         )
-                    stack.enter_context(patch("gms_helpers.asset_helper.validate_name"))
-                    stack.enter_context(patch("gms_helpers.asset_helper.validate_parent_path"))
-                    stack.enter_context(patch("gms_helpers.asset_helper.update_yyp_file", return_value=False))
+                    stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_name"))
+                    stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path"))
+                    stack.enter_context(patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=False))
                     asset_cls = stack.enter_context(patch(f"gms_helpers.asset_helper.{class_name}"))
                     asset_cls.return_value.create_files.return_value = relative_path
 
@@ -219,8 +221,8 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                                 return_value=Path("/tmp/project"),
                             )
                         )
-                    stack.enter_context(patch("gms_helpers.asset_helper.validate_name"))
-                    stack.enter_context(patch("gms_helpers.asset_helper.validate_parent_path"))
+                    stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_name"))
+                    stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path"))
                     asset_cls = stack.enter_context(patch(f"gms_helpers.asset_helper.{class_name}"))
                     asset_cls.return_value.create_files.side_effect = RuntimeError("boom")
 
@@ -255,18 +257,18 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                         )
                     stack.enter_context(
                         patch(
-                            "gms_helpers.asset_helper.run_auto_maintenance",
+                            "gms_helpers.asset_creation_flow.run_auto_maintenance",
                             side_effect=[_maintenance_result(False), _maintenance_result(True)],
                         )
                     )
                     stack.enter_context(
-                        patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=True)
+                        patch("gms_helpers.asset_creation_flow.validate_asset_creation_safe", return_value=True)
                     )
-                    stack.enter_context(patch("gms_helpers.asset_helper.validate_name"))
-                    stack.enter_context(patch("gms_helpers.asset_helper.validate_parent_path"))
-                    stack.enter_context(patch("gms_helpers.asset_helper.update_yyp_file", return_value=True))
+                    stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_name"))
+                    stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path"))
+                    stack.enter_context(patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=True))
                     handler = stack.enter_context(
-                        patch("gms_helpers.asset_helper.handle_maintenance_failure", return_value="post-failed")
+                        patch("gms_helpers.asset_creation_flow.handle_maintenance_failure", return_value="post-failed")
                     )
                     asset_cls = stack.enter_context(patch(f"gms_helpers.asset_helper.{class_name}"))
                     asset_cls.return_value.create_files.return_value = relative_path
@@ -279,13 +281,15 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
         with ExitStack() as stack:
             stack.enter_context(
                 patch(
-                    "gms_helpers.asset_helper.run_auto_maintenance",
+                    "gms_helpers.asset_creation_flow.run_auto_maintenance",
                     side_effect=[_maintenance_result(False), _maintenance_result(True)],
                 )
             )
-            stack.enter_context(patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=True))
+            stack.enter_context(
+                patch("gms_helpers.asset_creation_flow.validate_asset_creation_safe", return_value=True)
+            )
             handler = stack.enter_context(
-                patch("gms_helpers.asset_helper.handle_maintenance_failure", return_value="post-failed")
+                patch("gms_helpers.asset_creation_flow.handle_maintenance_failure", return_value="post-failed")
             )
             folder_cls = stack.enter_context(patch("gms_helpers.asset_helper.FolderAsset"))
             folder_cls.return_value.create_files.return_value = "folders/Folder.yy"
