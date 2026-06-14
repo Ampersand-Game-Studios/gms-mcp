@@ -27,7 +27,7 @@ Refactor the large GMS MCP helper surfaces into smaller, testable modules while 
 
 - [x] Split `texture_groups.py`.
 - [x] Split `assets.py`.
-- [ ] Split `asset_helper.py`.
+- [x] Split `asset_helper.py`.
 - [ ] Split `runner.py`.
 - [ ] Split `gms_mcp/install.py`.
 - [ ] Run focused validation after each split.
@@ -103,6 +103,21 @@ Result: `35 passed, 23 subtests passed`.
 ```
 
 Result: `173 passed, 103 subtests passed`.
+- Split `src/gms_helpers/asset_helper.py` into a thin public facade plus:
+  - `src/gms_helpers/asset_cli/context.py`
+  - `src/gms_helpers/asset_cli/create.py`
+  - `src/gms_helpers/asset_cli/delete.py`
+  - `src/gms_helpers/asset_cli/maintenance.py`
+  - `src/gms_helpers/asset_cli/parser.py`
+- Updated internal command modules to import the split asset CLI implementations directly.
+- Updated asset-helper tests to patch the owning implementation modules instead of the facade.
+- Validation passed:
+
+```bash
+./.venv/bin/python -m pytest cli/tests/python/test_asset_helper.py cli/tests/python/test_asset_helper_additional_coverage.py cli/tests/python/test_asset_helper_command_coverage.py cli/tests/python/test_maintenance_purge.py cli/tests/python/test_command_modules_comprehensive.py -q
+```
+
+Result: `60 passed, 80 subtests passed`.
 
 ## Current Known Issues
 
