@@ -29,7 +29,7 @@ Refactor the large GMS MCP helper surfaces into smaller, testable modules while 
 - [x] Split `assets.py`.
 - [x] Split `asset_helper.py`.
 - [x] Split `runner.py`.
-- [ ] Split `gms_mcp/install.py`.
+- [x] Split `gms_mcp/install.py`.
 - [ ] Run focused validation after each split.
 - [ ] Run final validation suite.
 - [ ] Commit coherent checkpoints.
@@ -134,6 +134,21 @@ Result: `60 passed, 80 subtests passed`.
 ```
 
 Result: `57 passed`.
+- Split `src/gms_mcp/install.py` into a public CLI entrypoint plus:
+  - `src/gms_mcp/install_support/common.py`
+  - `src/gms_mcp/install_support/client_configs.py`
+  - `src/gms_mcp/install_support/flow.py`
+  - `src/gms_mcp/install_support/project.py`
+  - `src/gms_mcp/install_support/naming.py`
+- Kept `gms_mcp.install.main` and existing importable helper names available from the entry module where tests/public imports rely on them.
+- Updated install tests to patch the owning support modules for split helper behavior.
+- Validation passed:
+
+```bash
+./.venv/bin/python -m pytest cli/tests/python/test_install_parity.py cli/tests/python/test_install_polish.py cli/tests/python/test_install_wrapper_coverage.py cli/tests/python/test_bridge_install_coverage.py -q
+```
+
+Result: `73 passed, 33 subtests passed`.
 
 ## Current Known Issues
 
