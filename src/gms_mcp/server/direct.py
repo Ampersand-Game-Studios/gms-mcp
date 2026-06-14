@@ -15,34 +15,16 @@ from .results import ToolRunResult
 
 
 def _dict_result_is_ok(result: dict[str, Any]) -> bool:
-    if result.get("ok") is False or result.get("success") is False:
-        return False
-    if "error" in result and "ok" not in result and "success" not in result:
-        return False
-    return True
+    from gms_helpers.results import result_dict_is_ok
+
+    return result_dict_is_ok(result)
 
 
 def _normalize_direct_result(result_value: Any, *, operation: str) -> Any:
-    from gms_helpers.results import legacy_bool_result, structured_error
+    from gms_helpers.results import normalize_result
 
-    if isinstance(result_value, bool):
-        return legacy_bool_result(result_value, operation=operation).to_dict()
-
-    if isinstance(result_value, dict):
-        normalized = dict(result_value)
-        ok = _dict_result_is_ok(normalized)
-        normalized.setdefault("ok", ok)
-        normalized.setdefault("success", ok)
-        if not ok and "error" in normalized and not isinstance(normalized["error"], dict):
-            message = str(normalized["error"])
-            normalized["error"] = structured_error(
-                "legacy_dict_error",
-                message,
-                error_type="legacy_dict_result",
-                details={"operation": operation},
-            ).to_dict()
-            normalized.setdefault("message", message)
-        return normalized
+    if isinstance(result_value, (bool, dict, list)):
+        return normalize_result(result_value, operation=operation).to_dict()
 
     return result_value
 

@@ -4,20 +4,20 @@
 from ..room_layer_helper import add_layer, remove_layer, list_layers
 from ..room_helper import duplicate_room, rename_room, delete_room, list_rooms
 from ..room_instance_helper import add_instance, remove_instance, list_instances
-from ..results import OperationResult
+from ..results import OperationResult, normalize_result
 
 
 def _room_result(result, operation: str, **data):
-    if not isinstance(result, bool):
+    if isinstance(result, OperationResult):
         return result
-    if result:
-        return OperationResult.ok(f"{operation} completed", data=data)
-    return OperationResult.fail(
-        f"{operation} failed",
+    return normalize_result(
+        result,
+        operation=operation,
+        data=data,
+        success_message=f"{operation} completed",
+        failure_message=f"{operation} failed",
         code="room_operation_failed",
         error_type="room_error",
-        details={"operation": operation, **data},
-        data=data,
     )
 
 
@@ -61,7 +61,13 @@ def handle_room_layer_remove(args):
 
 def handle_room_layer_list(args):
     """Handle room layer listing."""
-    return list_layers(args.room_name)
+    layers = list_layers(args.room_name)
+    return normalize_result(
+        layers,
+        operation="Room layer list",
+        data_key="layers",
+        data={"room_name": args.room_name},
+    )
 
 
 # Standard room operation commands (replacing template commands)
@@ -97,7 +103,8 @@ def handle_room_delete(args):
 
 def handle_room_list(args):
     """Handle room listing."""
-    return list_rooms(getattr(args, "verbose", False))
+    rooms = list_rooms(getattr(args, "verbose", False))
+    return normalize_result(rooms, operation="Room list", data_key="rooms")
 
 
 # Instance commands
@@ -133,4 +140,10 @@ def handle_room_instance_remove(args):
 
 def handle_room_instance_list(args):
     """Handle room instance listing."""
-    return list_instances(args.room_name, getattr(args, "layer", None))
+    instances = list_instances(args.room_name, getattr(args, "layer", None))
+    return normalize_result(
+        instances,
+        operation="Room instance list",
+        data_key="instances",
+        data={"room_name": args.room_name, "layer": getattr(args, "layer", None)},
+    )
