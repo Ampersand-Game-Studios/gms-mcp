@@ -312,7 +312,7 @@ class TestTextureGroupGapCoverage(unittest.TestCase):
         self.assertEqual(assignments["top"], "game")
         self.assertEqual(assignments["configs"]["desktop"], "Default")
 
-        with patch("gms_helpers.texture_groups.list_assets_by_type", return_value="bad"):
+        with patch("gms_helpers.texture_group.scan.list_assets_by_type", return_value="bad"):
             self.assertEqual(_iter_resource_assets(self.project_root), [])
 
     def test_set_and_replace_asset_group_edge_cases(self):

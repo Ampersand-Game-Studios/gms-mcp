@@ -6,17 +6,17 @@ from ..auto_maintenance import run_auto_maintenance
 from ..health import gm_mcp_health
 from ..maintenance.normalize_names import normalize_asset_names
 from ..results import MaintenanceResult, OperationResult, normalize_result
-from ..asset_helper import (
-    maint_lint_command,
-    maint_validate_json_command,
-    maint_list_orphans_command,
-    maint_prune_missing_command,
-    maint_validate_paths_command,
-    maint_dedupe_resources_command,
-    maint_sync_events_command,
+from ..asset_cli.maintenance import (
     maint_clean_old_files_command,
     maint_clean_orphans_command,
+    maint_dedupe_resources_command,
     maint_fix_issues_command,
+    maint_lint_command,
+    maint_list_orphans_command,
+    maint_prune_missing_command,
+    maint_sync_events_command,
+    maint_validate_json_command,
+    maint_validate_paths_command,
 )
 
 

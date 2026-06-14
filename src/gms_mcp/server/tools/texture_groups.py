@@ -22,7 +22,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         """List texture groups and available configs."""
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
-        from gms_helpers.texture_groups import get_project_configs, get_texture_groups_list, load_project_yyp
+        from gms_helpers.texture_group.project import get_project_configs, get_texture_groups_list, load_project_yyp
 
         yyp_path, yyp_data = load_project_yyp(project_directory)
         configs = get_project_configs(yyp_data)
@@ -45,7 +45,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         """Read a texture group entry from the .yyp."""
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
-        from gms_helpers.texture_groups import find_texture_group, load_project_yyp
+        from gms_helpers.texture_group.project import find_texture_group, load_project_yyp
 
         yyp_path, yyp_data = load_project_yyp(project_directory)
         hit = find_texture_group(yyp_data, name)
@@ -75,7 +75,8 @@ def register(mcp: Any, ContextType: Any) -> None:
         """List members of a texture group (top-level and ConfigValues overrides)."""
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
-        from gms_helpers.texture_groups import load_project_yyp, texture_group_members
+        from gms_helpers.texture_group.project import load_project_yyp
+        from gms_helpers.texture_group.scan import texture_group_members
 
         yyp_path, _ = load_project_yyp(project_directory)
         result = texture_group_members(project_directory, group_name, asset_types=asset_types, configs=configs)
@@ -94,7 +95,8 @@ def register(mcp: Any, ContextType: Any) -> None:
         """Scan a project for texture group health issues (missing groups, mismatches)."""
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
-        from gms_helpers.texture_groups import load_project_yyp, texture_group_scan
+        from gms_helpers.texture_group.project import load_project_yyp
+        from gms_helpers.texture_group.scan import texture_group_scan
 
         yyp_path, _ = load_project_yyp(project_directory)
         result = texture_group_scan(
@@ -128,7 +130,8 @@ def register(mcp: Any, ContextType: Any) -> None:
                 "Use dry_run=true, add gm_texture_group_create to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
             )
         project_directory = _resolve_project_directory(project_root)
-        from gms_helpers.texture_groups import load_project_yyp, texture_group_create
+        from gms_helpers.texture_group.mutations import texture_group_create
+        from gms_helpers.texture_group.project import load_project_yyp
 
         yyp_path, _ = load_project_yyp(project_directory)
         result = texture_group_create(project_directory, name, template=template, patch=patch, dry_run=dry_run)
@@ -154,7 +157,8 @@ def register(mcp: Any, ContextType: Any) -> None:
                 "Use dry_run=true, add gm_texture_group_update to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
             )
         project_directory = _resolve_project_directory(project_root)
-        from gms_helpers.texture_groups import load_project_yyp, texture_group_update
+        from gms_helpers.texture_group.mutations import texture_group_update
+        from gms_helpers.texture_group.project import load_project_yyp
 
         yyp_path, _ = load_project_yyp(project_directory)
         result = texture_group_update(
@@ -186,7 +190,8 @@ def register(mcp: Any, ContextType: Any) -> None:
                 "Use dry_run=true, add gm_texture_group_rename to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
             )
         project_directory = _resolve_project_directory(project_root)
-        from gms_helpers.texture_groups import load_project_yyp, texture_group_rename
+        from gms_helpers.texture_group.mutations import texture_group_rename
+        from gms_helpers.texture_group.project import load_project_yyp
 
         yyp_path, _ = load_project_yyp(project_directory)
         result = texture_group_rename(
@@ -216,7 +221,8 @@ def register(mcp: Any, ContextType: Any) -> None:
                 "Use dry_run=true, add gm_texture_group_delete to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
             )
         project_directory = _resolve_project_directory(project_root)
-        from gms_helpers.texture_groups import load_project_yyp, texture_group_delete
+        from gms_helpers.texture_group.mutations import texture_group_delete
+        from gms_helpers.texture_group.project import load_project_yyp
 
         yyp_path, _ = load_project_yyp(project_directory)
         result = texture_group_delete(project_directory, name, reassign_to=reassign_to, dry_run=dry_run)
@@ -247,7 +253,8 @@ def register(mcp: Any, ContextType: Any) -> None:
                 "Use dry_run=true, add gm_texture_group_assign to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
             )
         project_directory = _resolve_project_directory(project_root)
-        from gms_helpers.texture_groups import load_project_yyp, texture_group_assign
+        from gms_helpers.texture_group.mutations import texture_group_assign
+        from gms_helpers.texture_group.project import load_project_yyp
 
         yyp_path, _ = load_project_yyp(project_directory)
         result = texture_group_assign(

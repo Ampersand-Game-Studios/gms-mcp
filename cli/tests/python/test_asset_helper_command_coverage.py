@@ -91,7 +91,7 @@ class TestGameMakerContext(unittest.TestCase):
             subdir = root / "scripts" / "nested"
             subdir.mkdir(parents=True)
 
-            with patch("gms_helpers.asset_helper.Path.cwd", return_value=subdir):
+            with patch("gms_helpers.asset_cli.context.Path.cwd", return_value=subdir):
                 result, output = _capture_output(asset_helper.validate_gamemaker_context)
 
         self.assertEqual(result, root)
@@ -101,7 +101,7 @@ class TestGameMakerContext(unittest.TestCase):
     def test_validate_gamemaker_context_rejects_non_project_directory(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             outside = Path(temp_dir)
-            with patch("gms_helpers.asset_helper.Path.cwd", return_value=outside):
+            with patch("gms_helpers.asset_cli.context.Path.cwd", return_value=outside):
                 with self.assertRaises(asset_helper.GameMakerContextError):
                     asset_helper.validate_gamemaker_context()
 
@@ -110,13 +110,13 @@ class TestGameMakerContext(unittest.TestCase):
             root = Path(temp_dir)
             (root / "demo.yyp").write_text("{}", encoding="utf-8")
 
-            with patch("gms_helpers.asset_helper.Path.cwd", return_value=root):
+            with patch("gms_helpers.asset_cli.context.Path.cwd", return_value=root):
                 with self.assertRaises(asset_helper.GameMakerContextError):
                     asset_helper.validate_gamemaker_context()
 
     def test_validate_asset_directory_structure_wraps_context_error(self):
         with patch(
-            "gms_helpers.asset_helper.validate_gamemaker_context",
+            "gms_helpers.asset_cli.context.validate_gamemaker_context",
             side_effect=asset_helper.GameMakerContextError("bad context"),
         ):
             with self.assertRaises(ProjectNotFoundError) as error:
@@ -130,7 +130,7 @@ class TestCreateCommands(unittest.TestCase):
         args = _create_args("PlayerData", constructor=True)
         with ExitStack() as stack:
             validate_dir = stack.enter_context(
-                patch("gms_helpers.asset_helper.validate_asset_directory_structure", return_value=Path("/tmp/project"))
+                patch("gms_helpers.asset_cli.create.validate_asset_directory_structure", return_value=Path("/tmp/project"))
             )
             run_maintenance = stack.enter_context(
                 patch(
@@ -146,7 +146,7 @@ class TestCreateCommands(unittest.TestCase):
             update_yyp = stack.enter_context(
                 patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=True)
             )
-            script_cls = stack.enter_context(patch("gms_helpers.asset_helper.ScriptAsset"))
+            script_cls = stack.enter_context(patch("gms_helpers.asset_cli.create.ScriptAsset"))
             script_instance = script_cls.return_value
             script_instance.create_files.return_value = "scripts/PlayerData/PlayerData.yy"
 
@@ -350,7 +350,7 @@ class TestCreateCommands(unittest.TestCase):
                     update_yyp = stack.enter_context(
                         patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=True)
                     )
-                    asset_cls = stack.enter_context(patch(f"gms_helpers.asset_helper.{case['class_name']}"))
+                    asset_cls = stack.enter_context(patch(f"gms_helpers.asset_cli.create.{case['class_name']}"))
                     asset_instance = asset_cls.return_value
                     asset_instance.create_files.return_value = case["path"]
 
@@ -379,7 +379,7 @@ class TestCreateCommands(unittest.TestCase):
             safe_check = stack.enter_context(
                 patch("gms_helpers.asset_creation_flow.validate_asset_creation_safe", return_value=True)
             )
-            folder_cls = stack.enter_context(patch("gms_helpers.asset_helper.FolderAsset"))
+            folder_cls = stack.enter_context(patch("gms_helpers.asset_cli.create.FolderAsset"))
             folder_instance = folder_cls.return_value
             folder_instance.create_files.return_value = "folders/Utility.yy"
 
@@ -402,7 +402,7 @@ class TestCreateCommands(unittest.TestCase):
             patch("gms_helpers.asset_creation_flow.validate_name"),
             patch("gms_helpers.asset_creation_flow.validate_parent_path"),
             patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=False),
-            patch("gms_helpers.asset_helper.SpriteAsset") as sprite_cls,
+            patch("gms_helpers.asset_cli.create.SpriteAsset") as sprite_cls,
         ):
             sprite_cls.return_value.create_files.return_value = "sprites/spr_fail/spr_fail.yy"
 
@@ -479,10 +479,10 @@ class TestDeleteAndMain(unittest.TestCase):
             try:
                 with (
                     patch(
-                        "gms_helpers.asset_helper.run_auto_maintenance",
+                        "gms_helpers.asset_cli.delete.run_auto_maintenance",
                         side_effect=[_maintenance_result(), _maintenance_result()],
                     ) as run_maintenance,
-                    patch("gms_helpers.asset_helper.validate_asset_creation_safe", return_value=True),
+                    patch("gms_helpers.asset_cli.delete.validate_asset_creation_safe", return_value=True),
                     patch("gms_helpers.utils.find_yyp_file", return_value=root / "demo.yyp"),
                     patch("gms_helpers.utils.load_json", return_value=json.loads(json.dumps(project_data))),
                     patch("gms_helpers.utils.save_json") as save_json,
@@ -540,8 +540,8 @@ class TestDeleteAndMain(unittest.TestCase):
     def test_main_builds_parser_and_routes_command(self):
         with (
             patch.object(sys, "argv", ["asset_helper", "maint", "lint"]),
-            patch("gms_helpers.asset_helper.validate_working_directory"),
-            patch("gms_helpers.asset_helper.maint_lint_command", return_value=True) as maint_lint,
+            patch("gms_helpers.asset_cli.parser.validate_working_directory"),
+            patch("gms_helpers.asset_cli.parser.maint_lint_command", return_value=True) as maint_lint,
         ):
             result = asset_helper.main()
 
@@ -552,16 +552,16 @@ class TestDeleteAndMain(unittest.TestCase):
         error = GMSError("broken")
         with (
             patch.object(sys, "argv", ["asset_helper", "maint", "lint"]),
-            patch("gms_helpers.asset_helper.validate_working_directory"),
-            patch("gms_helpers.asset_helper.maint_lint_command", side_effect=error),
+            patch("gms_helpers.asset_cli.parser.validate_working_directory"),
+            patch("gms_helpers.asset_cli.parser.maint_lint_command", side_effect=error),
         ):
             with self.assertRaises(GMSError):
                 asset_helper.main()
 
         with (
             patch.object(sys, "argv", ["asset_helper", "maint", "lint"]),
-            patch("gms_helpers.asset_helper.validate_working_directory"),
-            patch("gms_helpers.asset_helper.maint_lint_command", side_effect=KeyboardInterrupt),
+            patch("gms_helpers.asset_cli.parser.validate_working_directory"),
+            patch("gms_helpers.asset_cli.parser.maint_lint_command", side_effect=KeyboardInterrupt),
         ):
             result, output = _capture_output(asset_helper.main)
             self.assertFalse(result)
@@ -569,8 +569,8 @@ class TestDeleteAndMain(unittest.TestCase):
 
         with (
             patch.object(sys, "argv", ["asset_helper", "maint", "lint"]),
-            patch("gms_helpers.asset_helper.validate_working_directory"),
-            patch("gms_helpers.asset_helper.maint_lint_command", side_effect=RuntimeError("boom")),
+            patch("gms_helpers.asset_cli.parser.validate_working_directory"),
+            patch("gms_helpers.asset_cli.parser.maint_lint_command", side_effect=RuntimeError("boom")),
         ):
             result, output = _capture_output(asset_helper.main)
             self.assertFalse(result)
@@ -580,8 +580,8 @@ class TestDeleteAndMain(unittest.TestCase):
 class TestMaintenanceCommands(unittest.TestCase):
     def test_basic_maintenance_commands(self):
         with (
-            patch("gms_helpers.asset_helper.lint_project", return_value=[SimpleNamespace(severity="warning")]),
-            patch("gms_helpers.asset_helper.print_lint_report"),
+            patch("gms_helpers.asset_cli.maintenance.lint_project", return_value=[SimpleNamespace(severity="warning")]),
+            patch("gms_helpers.asset_cli.maintenance.print_lint_report"),
         ):
             result, output = _capture_output(asset_helper.maint_lint_command, SimpleNamespace(fix=False))
         self.assertTrue(result)
@@ -599,17 +599,17 @@ class TestMaintenanceCommands(unittest.TestCase):
         self.assertIn("Validating JSON syntax", output)
 
         with (
-            patch("gms_helpers.asset_helper.find_orphaned_assets", return_value=[("obj", "object")]),
-            patch("gms_helpers.asset_helper.find_missing_assets", return_value=["missing.yy"]),
-            patch("gms_helpers.asset_helper.print_orphan_report"),
+            patch("gms_helpers.asset_cli.maintenance.find_orphaned_assets", return_value=[("obj", "object")]),
+            patch("gms_helpers.asset_cli.maintenance.find_missing_assets", return_value=["missing.yy"]),
+            patch("gms_helpers.asset_cli.maintenance.print_orphan_report"),
         ):
             result, output = _capture_output(asset_helper.maint_list_orphans_command, SimpleNamespace())
         self.assertTrue(result)
         self.assertIn("orphaned and missing assets", output)
 
         with (
-            patch("gms_helpers.asset_helper.prune_missing_assets", return_value=["ghost.yy"]),
-            patch("gms_helpers.asset_helper.print_prune_report"),
+            patch("gms_helpers.asset_cli.maintenance.prune_missing_assets", return_value=["ghost.yy"]),
+            patch("gms_helpers.asset_cli.maintenance.print_prune_report"),
         ):
             result, output = _capture_output(
                 asset_helper.maint_prune_missing_command,
@@ -620,8 +620,8 @@ class TestMaintenanceCommands(unittest.TestCase):
 
         issues = [SimpleNamespace(severity="error"), SimpleNamespace(severity="warning")]
         with (
-            patch("gms_helpers.asset_helper.validate_folder_paths", return_value=issues),
-            patch("gms_helpers.asset_helper.print_path_validation_report"),
+            patch("gms_helpers.asset_cli.maintenance.validate_folder_paths", return_value=issues),
+            patch("gms_helpers.asset_cli.maintenance.print_path_validation_report"),
         ):
             result, output = _capture_output(
                 asset_helper.maint_validate_paths_command,
@@ -647,7 +647,7 @@ class TestMaintenanceCommands(unittest.TestCase):
         self.assertIn("Would remove 2 duplicate resource entries", output)
         save_json.assert_not_called()
 
-        with patch("gms_helpers.asset_helper.run_auto_maintenance") as run_maintenance:
+        with patch("gms_helpers.asset_cli.maintenance.run_auto_maintenance") as run_maintenance:
             result, output = _capture_output(asset_helper.maint_fix_issues_command, SimpleNamespace(verbose=True))
         self.assertTrue(result)
         self.assertIn("Auto-maintenance completed successfully", output)
@@ -659,7 +659,7 @@ class TestMaintenanceCommands(unittest.TestCase):
                 "gms_helpers.maintenance.event_sync.sync_object_events",
                 return_value={"orphaned_found": 1, "orphaned_fixed": 1, "missing_found": 1, "missing_created": 1},
             ),
-            patch("gms_helpers.asset_helper.os.path.exists", return_value=True),
+            patch("gms_helpers.asset_cli.maintenance.os.path.exists", return_value=True),
         ):
             result, output = _capture_output(
                 asset_helper.maint_sync_events_command,
@@ -701,7 +701,7 @@ class TestMaintenanceCommands(unittest.TestCase):
             "errors": ["failed one", "failed two"],
             "deleted_files": [f"file_{i}.yy" for i in range(25)],
         }
-        with patch("gms_helpers.asset_helper.delete_orphan_files", return_value=cleanup_result):
+        with patch("gms_helpers.asset_cli.maintenance.delete_orphan_files", return_value=cleanup_result):
             result, output = _capture_output(
                 asset_helper.maint_clean_orphans_command,
                 SimpleNamespace(delete=False, skip_types=["folder"]),
@@ -717,7 +717,7 @@ class TestMaintenanceCommands(unittest.TestCase):
             "errors": [],
             "deleted_files": [],
         }
-        with patch("gms_helpers.asset_helper.delete_orphan_files", return_value=cleanup_result_delete):
+        with patch("gms_helpers.asset_cli.maintenance.delete_orphan_files", return_value=cleanup_result_delete):
             result, output = _capture_output(
                 asset_helper.maint_clean_orphans_command,
                 SimpleNamespace(delete=True, skip_types=[]),
@@ -763,13 +763,13 @@ class TestMaintenanceCommands(unittest.TestCase):
             self.assertEqual(saved["counts"]["truly_orphan"], 2)
 
         with (
-            patch("gms_helpers.asset_helper.resolve_project_directory", return_value=Path("/tmp/project")),
+            patch("gms_helpers.asset_cli.maintenance.resolve_project_directory", return_value=Path("/tmp/project")),
             patch(
-                "gms_helpers.asset_helper.find_orphaned_assets", return_value=[("objects/o_ghost/o_ghost.yy", "object")]
+                "gms_helpers.asset_cli.maintenance.find_orphaned_assets", return_value=[("objects/o_ghost/o_ghost.yy", "object")]
             ),
-            patch("gms_helpers.asset_helper.get_keep_patterns", return_value=[]),
+            patch("gms_helpers.asset_cli.maintenance.get_keep_patterns", return_value=[]),
             patch(
-                "gms_helpers.asset_helper.move_to_trash",
+                "gms_helpers.asset_cli.maintenance.move_to_trash",
                 return_value={
                     "errors": ["warn"],
                     "moved_count": 1,
@@ -785,7 +785,7 @@ class TestMaintenanceCommands(unittest.TestCase):
         self.assertIn("Final deletion from trash folder not yet implemented", output)
         self.assertIn("[ERROR] warn", output)
 
-        with patch("gms_helpers.asset_helper.remove_folder_from_yyp", return_value=(True, "Removed folder", [])):
+        with patch("gms_helpers.asset_cli.maintenance.remove_folder_from_yyp", return_value=(True, "Removed folder", [])):
             result, output = _capture_output(
                 asset_helper.remove_folder_command,
                 SimpleNamespace(folder_path="folders/Test.yy", force=False, dry_run=True),
@@ -794,7 +794,7 @@ class TestMaintenanceCommands(unittest.TestCase):
         self.assertIn("DRY RUN", output)
 
         folders = [{"name": "Audio", "path": "folders/Audio.yy"}, {"name": "Sprites", "path": "folders/Sprites.yy"}]
-        with patch("gms_helpers.asset_helper.list_folders_in_yyp", return_value=(True, folders, "2 folders found")):
+        with patch("gms_helpers.asset_cli.maintenance.list_folders_in_yyp", return_value=(True, folders, "2 folders found")):
             result, output = _capture_output(
                 asset_helper.list_folders_command,
                 SimpleNamespace(show_paths=True),
@@ -802,7 +802,7 @@ class TestMaintenanceCommands(unittest.TestCase):
         self.assertTrue(result)
         self.assertIn("Audio -> folders/Audio.yy", output)
 
-        with patch("gms_helpers.asset_helper.list_folders_in_yyp", return_value=(False, [], "bad project")):
+        with patch("gms_helpers.asset_cli.maintenance.list_folders_in_yyp", return_value=(False, [], "bad project")):
             result, output = _capture_output(
                 asset_helper.list_folders_command,
                 SimpleNamespace(show_paths=False),
@@ -816,8 +816,8 @@ class TestMaintenanceCommands(unittest.TestCase):
         self.assertIn("Maintenance system initialized", output)
 
         with (
-            patch("gms_helpers.asset_helper.resolve_project_directory", return_value=Path("/tmp/project")),
-            patch("gms_helpers.asset_helper.find_orphaned_assets", return_value=[]),
+            patch("gms_helpers.asset_cli.maintenance.resolve_project_directory", return_value=Path("/tmp/project")),
+            patch("gms_helpers.asset_cli.maintenance.find_orphaned_assets", return_value=[]),
         ):
             result, output = _capture_output(
                 asset_helper.maint_purge_command,

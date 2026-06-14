@@ -325,7 +325,7 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertEqual(result, config_path)
             self.assertIn("already exists", output)
 
-        with patch("gms_mcp.install.resolve_client_spec") as resolve_spec:
+        with patch("gms_mcp.install_support.flow.resolve_client_spec") as resolve_spec:
             resolve_spec.return_value = SimpleNamespace(key="client", workspace_supported=False, global_supported=True)
             self.assertIn(
                 "does not support workspace",
@@ -361,7 +361,7 @@ class TestInstallCoverage(unittest.TestCase):
         self.assertIn("skills install failed", output)
 
     def test_run_canonical_and_main_branches(self):
-        with patch("gms_mcp.install.CLIENT_ACTIONS", ["setup"]), patch("gms_mcp.install.CLIENT_SCOPES", ["workspace"]):
+        with patch("gms_mcp.install_support.flow.CLIENT_ACTIONS", ["setup"]), patch("gms_mcp.install_support.flow.CLIENT_SCOPES", ["workspace"]):
             result, output = _capture_output(
                 install_module._run_canonical_flow,
                 client="cursor",
@@ -382,8 +382,8 @@ class TestInstallCoverage(unittest.TestCase):
         self.assertIn("Unsupported action", output)
 
         with (
-            patch("gms_mcp.install.CLIENT_ACTIONS", ["setup", "check"]),
-            patch("gms_mcp.install.CLIENT_SCOPES", ["workspace"]),
+            patch("gms_mcp.install_support.flow.CLIENT_ACTIONS", ["setup", "check"]),
+            patch("gms_mcp.install_support.flow.CLIENT_SCOPES", ["workspace"]),
         ):
             result, output = _capture_output(
                 install_module._run_canonical_flow,
@@ -434,12 +434,8 @@ class TestInstallCoverage(unittest.TestCase):
 
             fake_stdin = SimpleNamespace(isatty=lambda: True)
             with (
-                patch("gms_mcp.install._detect_gm_project_roots", return_value=candidates),
-                patch.object(
-                    install_module.sys,
-                    "stdin",
-                    fake_stdin,
-                ),
+                patch("gms_mcp.install_support.common._detect_gm_project_roots", return_value=candidates),
+                patch("gms_mcp.install_support.common.sys.stdin", fake_stdin),
                 patch("builtins.input", side_effect=["bad", "9", "2"]),
             ):
                 selected, output = _capture_output(
@@ -454,12 +450,8 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertIn("Out of range", output)
 
             with (
-                patch("gms_mcp.install._detect_gm_project_roots", return_value=candidates),
-                patch.object(
-                    install_module.sys,
-                    "stdin",
-                    fake_stdin,
-                ),
+                patch("gms_mcp.install_support.common._detect_gm_project_roots", return_value=candidates),
+                patch("gms_mcp.install_support.common.sys.stdin", fake_stdin),
                 patch("builtins.input", return_value=""),
             ):
                 selected, _output = _capture_output(
@@ -471,7 +463,7 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertIsNone(selected[0])
 
             with (
-                patch.object(install_module.sys, "stdin", fake_stdin),
+                patch("gms_mcp.install_support.project.sys.stdin", fake_stdin),
                 patch("builtins.input", side_effect=["maybe", "n"]),
             ):
                 result, output = _capture_output(
@@ -488,10 +480,10 @@ class TestInstallCoverage(unittest.TestCase):
 
             config_path = workspace / install_module.PROJECT_CONFIG_FILE
             with (
-                patch.object(install_module.sys, "stdin", fake_stdin),
+                patch("gms_mcp.install_support.project.sys.stdin", fake_stdin),
                 patch("builtins.input", return_value="y"),
                 patch(
-                    "gms_mcp.install.create_default_config_file",
+                    "gms_mcp.install_support.project.create_default_config_file",
                     return_value=config_path,
                 ),
             ):
@@ -507,10 +499,10 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertIn("Created project config", output)
 
             with (
-                patch.object(install_module.sys, "stdin", fake_stdin),
+                patch("gms_mcp.install_support.project.sys.stdin", fake_stdin),
                 patch("builtins.input", return_value="y"),
                 patch(
-                    "gms_mcp.install.create_default_config_file",
+                    "gms_mcp.install_support.project.create_default_config_file",
                     side_effect=FileExistsError("exists"),
                 ),
             ):
@@ -526,10 +518,10 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertIn("already exists", output)
 
             with (
-                patch.object(install_module.sys, "stdin", fake_stdin),
+                patch("gms_mcp.install_support.project.sys.stdin", fake_stdin),
                 patch("builtins.input", return_value="y"),
                 patch(
-                    "gms_mcp.install.create_default_config_file",
+                    "gms_mcp.install_support.project.create_default_config_file",
                     side_effect=RuntimeError("boom"),
                 ),
             ):
@@ -590,9 +582,9 @@ class TestInstallCoverage(unittest.TestCase):
             resolve_path=lambda **_kwargs: Path("/tmp/unused"),
         )
         with (
-            patch("gms_mcp.install.resolve_client_spec", return_value=fake_spec),
+            patch("gms_mcp.install_support.flow.resolve_client_spec", return_value=fake_spec),
             patch(
-                "gms_mcp.install._scope_not_applicable_reason",
+                "gms_mcp.install_support.flow._scope_not_applicable_reason",
                 return_value="not applicable",
             ),
         ):
@@ -607,9 +599,9 @@ class TestInstallCoverage(unittest.TestCase):
         self.assertTrue(state.path.replace("\\", "/").endswith("custom/config.json"))
 
         with (
-            patch("gms_mcp.install.resolve_client_spec", return_value=fake_spec),
+            patch("gms_mcp.install_support.flow.resolve_client_spec", return_value=fake_spec),
             patch(
-                "gms_mcp.install._scope_not_applicable_reason",
+                "gms_mcp.install_support.flow._scope_not_applicable_reason",
                 return_value="not applicable",
             ),
         ):
@@ -623,9 +615,9 @@ class TestInstallCoverage(unittest.TestCase):
         self.assertTrue(state.path.replace("\\", "/").endswith("configs/workspace.json"))
 
         with (
-            patch("gms_mcp.install.resolve_client_spec", return_value=fake_spec),
+            patch("gms_mcp.install_support.flow.resolve_client_spec", return_value=fake_spec),
             patch(
-                "gms_mcp.install._scope_not_applicable_reason",
+                "gms_mcp.install_support.flow._scope_not_applicable_reason",
                 return_value="not applicable",
             ),
         ):
@@ -641,7 +633,7 @@ class TestInstallCoverage(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
-            with patch("gms_mcp.install._read_codex_server_entry", side_effect=ValueError("bad codex config")):
+            with patch("gms_mcp.install_support.flow._read_codex_server_entry", side_effect=ValueError("bad codex config")):
                 state = install_module._collect_client_check_state(
                     client="codex",
                     scope="workspace",
@@ -660,9 +652,9 @@ class TestInstallCoverage(unittest.TestCase):
             gm_project_root.mkdir()
 
             with (
-                patch("gms_mcp.install._generate_cursor_config"),
+                patch("gms_mcp.install_support.flow._generate_cursor_config"),
                 patch(
-                    "gms_mcp.install._make_server_config",
+                    "gms_mcp.install_support.flow._make_server_config",
                     return_value={"mcpServers": {"gms": {"command": "gms-mcp"}}},
                 ),
             ):
@@ -682,7 +674,7 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertIn("Cursor config would be written to", output)
 
-            with patch("gms_mcp.install._generate_codex_config", side_effect=ValueError("bad codex")):
+            with patch("gms_mcp.install_support.flow._generate_codex_config", side_effect=ValueError("bad codex")):
                 result, output = _capture_output(
                     install_module._run_setup_for_client,
                     client="codex",
@@ -700,7 +692,7 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertIn("Could not generate Codex config", output)
 
             with patch(
-                "gms_mcp.install._generate_codex_config",
+                "gms_mcp.install_support.flow._generate_codex_config",
                 return_value=(workspace / ".codex" / "mcp.toml", "payload", "merged\n"),
             ):
                 result, output = _capture_output(
@@ -719,7 +711,7 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertIn("Codex config updated", output)
 
-            with patch("gms_mcp.install._generate_antigravity_config", side_effect=ValueError("bad antigravity")):
+            with patch("gms_mcp.install_support.flow._generate_antigravity_config", side_effect=ValueError("bad antigravity")):
                 result, output = _capture_output(
                     install_module._run_setup_for_client,
                     client="antigravity",
@@ -737,7 +729,7 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertIn("Could not generate Antigravity config", output)
 
             with patch(
-                "gms_mcp.install._generate_antigravity_config",
+                "gms_mcp.install_support.flow._generate_antigravity_config",
                 return_value=(
                     Path("/tmp/antigravity.json"),
                     {"mcpServers": {"gms": {"command": "gms-mcp"}}},
@@ -762,9 +754,9 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertIn("Antigravity config would be merged into", output)
 
             with (
-                patch("gms_mcp.install._write_json"),
+                patch("gms_mcp.install_support.flow._write_json"),
                 patch(
-                    "gms_mcp.install._make_antigravity_server_config",
+                    "gms_mcp.install_support.flow._make_antigravity_server_config",
                     return_value={"mcpServers": {"gms": {"command": "gms-mcp"}}},
                 ),
             ):
@@ -785,13 +777,13 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertIn("Antigravity workspace config would be written to", output)
 
             with (
-                patch("gms_mcp.install._generate_claude_code_plugin"),
+                patch("gms_mcp.install_support.flow._generate_claude_code_plugin"),
                 patch(
-                    "gms_mcp.install._build_claude_plugin_manifest",
+                    "gms_mcp.install_support.flow._build_claude_plugin_manifest",
                     return_value={"name": "gms"},
                 ),
                 patch(
-                    "gms_mcp.install._make_claude_code_mcp_config",
+                    "gms_mcp.install_support.flow._make_claude_code_mcp_config",
                     return_value={"gms": {"command": "gms-mcp"}},
                 ),
             ):
@@ -812,13 +804,13 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertIn("Claude Code config would be written to", output)
 
             with (
-                patch("gms_mcp.install._generate_claude_code_plugin"),
+                patch("gms_mcp.install_support.flow._generate_claude_code_plugin"),
                 patch(
-                    "gms_mcp.install._build_claude_plugin_manifest",
+                    "gms_mcp.install_support.flow._build_claude_plugin_manifest",
                     return_value={"name": "gms"},
                 ),
                 patch(
-                    "gms_mcp.install._make_claude_code_mcp_config",
+                    "gms_mcp.install_support.flow._make_claude_code_mcp_config",
                     return_value={"gms": {"command": "gms-mcp"}},
                 ),
             ):
@@ -839,9 +831,9 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertIn("Claude Desktop plugin would be synced to", output)
 
             with (
-                patch("gms_mcp.install._write_json"),
+                patch("gms_mcp.install_support.flow._write_json"),
                 patch(
-                    "gms_mcp.install._make_server_config",
+                    "gms_mcp.install_support.flow._make_server_config",
                     return_value={"mcpServers": {"gms": {"command": "gms-mcp"}}},
                 ),
             ):
@@ -873,9 +865,9 @@ class TestInstallCoverage(unittest.TestCase):
         )
 
         with (
-            patch("gms_mcp.install._collect_client_check_state", return_value=state),
+            patch("gms_mcp.install_support.flow._collect_client_check_state", return_value=state),
             patch(
-                "gms_mcp.install._print_standard_check",
+                "gms_mcp.install_support.flow._print_standard_check",
                 return_value=11,
             ),
         ):
@@ -897,9 +889,9 @@ class TestInstallCoverage(unittest.TestCase):
         self.assertEqual(result, 11)
 
         with (
-            patch("gms_mcp.install._collect_client_check_state", return_value=state),
+            patch("gms_mcp.install_support.flow._collect_client_check_state", return_value=state),
             patch(
-                "gms_mcp.install._print_standard_check_json",
+                "gms_mcp.install_support.flow._print_standard_check_json",
                 return_value=12,
             ),
         ):
@@ -920,7 +912,7 @@ class TestInstallCoverage(unittest.TestCase):
             )
         self.assertEqual(result, 12)
 
-        with patch("gms_mcp.install._run_setup_for_client", return_value=2):
+        with patch("gms_mcp.install_support.flow._run_setup_for_client", return_value=2):
             result = install_module._run_canonical_flow(
                 client="openclaw",
                 scope="workspace",
@@ -939,13 +931,13 @@ class TestInstallCoverage(unittest.TestCase):
         self.assertEqual(result, 2)
 
         with (
-            patch("gms_mcp.install._run_setup_for_client", return_value=0),
+            patch("gms_mcp.install_support.flow._run_setup_for_client", return_value=0),
             patch(
-                "gms_mcp.install.resolve_client_spec",
+                "gms_mcp.install_support.flow.resolve_client_spec",
                 return_value=SimpleNamespace(key="openclaw"),
             ),
             patch(
-                "gms_mcp.install._maybe_install_openclaw_skills",
+                "gms_mcp.install_support.flow._maybe_install_openclaw_skills",
                 return_value=2,
             ),
         ):
@@ -967,25 +959,25 @@ class TestInstallCoverage(unittest.TestCase):
         self.assertEqual(result, 2)
 
         with (
-            patch("gms_mcp.install._run_setup_for_client", return_value=0),
+            patch("gms_mcp.install_support.flow._run_setup_for_client", return_value=0),
             patch(
-                "gms_mcp.install.resolve_client_spec",
+                "gms_mcp.install_support.flow.resolve_client_spec",
                 return_value=SimpleNamespace(key="openclaw"),
             ),
             patch(
-                "gms_mcp.install._maybe_install_openclaw_skills",
+                "gms_mcp.install_support.flow._maybe_install_openclaw_skills",
                 return_value=0,
             ),
             patch(
-                "gms_mcp.install._collect_client_check_state",
+                "gms_mcp.install_support.flow._collect_client_check_state",
                 return_value=state,
             ),
             patch(
-                "gms_mcp.install._print_standard_check",
+                "gms_mcp.install_support.flow._print_standard_check",
                 return_value=0,
             ),
             patch(
-                "gms_mcp.install._print_standard_app_setup_summary",
+                "gms_mcp.install_support.flow._print_standard_app_setup_summary",
                 return_value=13,
             ),
         ):

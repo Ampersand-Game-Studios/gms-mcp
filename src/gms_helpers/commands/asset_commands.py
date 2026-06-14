@@ -2,24 +2,23 @@
 
 from typing import Any, Callable
 
-# Import all the create_* functions from asset_helper.py
-from ..asset_helper import (
-    create_script,
-    create_object,
-    create_sprite,
-    create_room,
+from ..asset_cli.create import (
+    create_animcurve,
     create_folder,
     create_font,
-    create_shader,
-    create_animcurve,
-    create_sound,
+    create_note,
+    create_object,
     create_path,
+    create_room,
+    create_script,
+    create_sequence,
+    create_shader,
+    create_sound,
+    create_sprite,
     create_tileset,
     create_timeline,
-    create_sequence,
-    create_note,
-    delete_asset,
 )
+from ..asset_cli.delete import delete_asset
 from ..results import AssetResult, OperationResult, normalize_result
 
 

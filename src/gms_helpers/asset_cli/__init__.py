@@ -1,12 +1,5 @@
-#!/usr/bin/env python3
-"""Public facade for GameMaker asset helper commands."""
-
-from __future__ import annotations
-
-import sys
-
-from .asset_cli import (
-    GameMakerContextError,
+from .context import GameMakerContextError, validate_asset_directory_structure, validate_gamemaker_context
+from .create import (
     create_animcurve,
     create_folder,
     create_font,
@@ -21,9 +14,10 @@ from .asset_cli import (
     create_sprite,
     create_tileset,
     create_timeline,
-    delete_asset,
+)
+from .delete import delete_asset
+from .maintenance import (
     list_folders_command,
-    main,
     maint_audit_command,
     maint_clean_old_files_command,
     maint_clean_orphans_command,
@@ -38,34 +32,7 @@ from .asset_cli import (
     maint_validate_json_command,
     maint_validate_paths_command,
     remove_folder_command,
-    validate_asset_directory_structure,
-    validate_gamemaker_context,
 )
-from .asset_types import (
-    AnimCurveAsset,
-    FolderAsset,
-    FontAsset,
-    NoteAsset,
-    ObjectAsset,
-    PathAsset,
-    RoomAsset,
-    ScriptAsset,
-    SequenceAsset,
-    ShaderAsset,
-    SoundAsset,
-    SpriteAsset,
-    TileSetAsset,
-    TimelineAsset,
-)
-from .exceptions import GMSError
+from .parser import main
 
 __all__ = [name for name in globals() if not name.startswith("_")]
-
-if __name__ == "__main__":
-    try:
-        success = main()
-        sys.exit(0 if success else 1)
-    except GMSError as e:
-        sys.exit(e.exit_code)
-    except Exception:
-        sys.exit(1)

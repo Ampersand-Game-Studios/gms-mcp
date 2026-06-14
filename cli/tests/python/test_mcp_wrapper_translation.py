@@ -357,15 +357,15 @@ class TestTextureGroupWrappers(MCPToolTestCase):
         with (
             patch("gms_mcp.server.tools.texture_groups._resolve_project_directory", return_value=Path("/tmp/project")),
             patch(
-                "gms_helpers.texture_groups.load_project_yyp",
+                "gms_helpers.texture_group.project.load_project_yyp",
                 return_value=(Path("/tmp/project/TestGame.yyp"), {}),
             ),
             patch(
-                "gms_helpers.texture_groups.get_project_configs",
+                "gms_helpers.texture_group.project.get_project_configs",
                 return_value=["desktop"],
             ),
             patch(
-                "gms_helpers.texture_groups.get_texture_groups_list",
+                "gms_helpers.texture_group.project.get_texture_groups_list",
                 return_value=[{"name": "Default"}],
             ),
         ):
@@ -377,11 +377,11 @@ class TestTextureGroupWrappers(MCPToolTestCase):
         with (
             patch("gms_mcp.server.tools.texture_groups._resolve_project_directory", return_value=Path("/tmp/project")),
             patch(
-                "gms_helpers.texture_groups.load_project_yyp",
+                "gms_helpers.texture_group.project.load_project_yyp",
                 return_value=(Path("/tmp/project/TestGame.yyp"), {}),
             ),
             patch(
-                "gms_helpers.texture_groups.find_texture_group",
+                "gms_helpers.texture_group.project.find_texture_group",
                 return_value=None,
             ),
         ):
@@ -398,7 +398,7 @@ class TestTextureGroupWrappers(MCPToolTestCase):
                     "configs": ["desktop"],
                     "project_root": "/tmp/project",
                 },
-                "gms_helpers.texture_groups.texture_group_members",
+                "gms_helpers.texture_group.scan.texture_group_members",
             ),
             (
                 "gm_texture_group_scan",
@@ -408,7 +408,7 @@ class TestTextureGroupWrappers(MCPToolTestCase):
                     "include_assets": True,
                     "project_root": "/tmp/project",
                 },
-                "gms_helpers.texture_groups.texture_group_scan",
+                "gms_helpers.texture_group.scan.texture_group_scan",
             ),
             (
                 "gm_texture_group_create",
@@ -419,7 +419,7 @@ class TestTextureGroupWrappers(MCPToolTestCase):
                     "dry_run": True,
                     "project_root": "/tmp/project",
                 },
-                "gms_helpers.texture_groups.texture_group_create",
+                "gms_helpers.texture_group.mutations.texture_group_create",
             ),
             (
                 "gm_texture_group_update",
@@ -430,17 +430,17 @@ class TestTextureGroupWrappers(MCPToolTestCase):
                     "dry_run": True,
                     "project_root": "/tmp/project",
                 },
-                "gms_helpers.texture_groups.texture_group_update",
+                "gms_helpers.texture_group.mutations.texture_group_update",
             ),
             (
                 "gm_texture_group_rename",
                 {"old_name": "old", "new_name": "new", "dry_run": True, "project_root": "/tmp/project"},
-                "gms_helpers.texture_groups.texture_group_rename",
+                "gms_helpers.texture_group.mutations.texture_group_rename",
             ),
             (
                 "gm_texture_group_delete",
                 {"name": "old", "dry_run": True, "project_root": "/tmp/project"},
-                "gms_helpers.texture_groups.texture_group_delete",
+                "gms_helpers.texture_group.mutations.texture_group_delete",
             ),
             (
                 "gm_texture_group_assign",
@@ -450,7 +450,7 @@ class TestTextureGroupWrappers(MCPToolTestCase):
                     "dry_run": True,
                     "project_root": "/tmp/project",
                 },
-                "gms_helpers.texture_groups.texture_group_assign",
+                "gms_helpers.texture_group.mutations.texture_group_assign",
             ),
         ]
 
@@ -460,7 +460,7 @@ class TestTextureGroupWrappers(MCPToolTestCase):
                     "gms_mcp.server.tools.texture_groups._resolve_project_directory", return_value=Path("/tmp/project")
                 ),
                 patch(
-                    "gms_helpers.texture_groups.load_project_yyp",
+                    "gms_helpers.texture_group.project.load_project_yyp",
                     return_value=(Path("/tmp/project/TestGame.yyp"), {}),
                 ),
                 patch(
