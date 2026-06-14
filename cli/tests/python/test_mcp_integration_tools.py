@@ -202,9 +202,7 @@ class TestMCPIntegrationTools(unittest.TestCase):
     def test_failed_mutation_rolls_back_created_files(self):
         yyp_path = self.project_root / "TestProject.yyp"
         yyp_data = json.loads(yyp_path.read_text(encoding="utf-8"))
-        yyp_data["resources"].append(
-            {"id": {"name": "scr_conflict", "path": "scripts/scr_conflict/scr_conflict.yy"}}
-        )
+        yyp_data["resources"].append({"id": {"name": "scr_conflict", "path": "scripts/scr_conflict/scr_conflict.yy"}})
         yyp_path.write_text(json.dumps(yyp_data, indent=2), encoding="utf-8")
 
         result = self._call_tool(
@@ -305,7 +303,9 @@ class TestMCPIntegrationTools(unittest.TestCase):
                 },
                 clear=False,
             ),
-            patch("gms_mcp.server.verification_policy.compile_verify_project", return_value=fake_compile) as compile_mock,
+            patch(
+                "gms_mcp.server.verification_policy.compile_verify_project", return_value=fake_compile
+            ) as compile_mock,
         ):
             flushed = self._call_tool("gm_verification_flush", {"project_root": str(self.project_root)})
             status_after = self._call_tool("gm_verification_status", {"project_root": str(self.project_root)})
@@ -472,8 +472,9 @@ class TestMCPIntegrationTools(unittest.TestCase):
                 "project_root": str(self.project_root),
             },
         )
-        self.assertTrue(dry_run.get("blocked"))
-        self.assertFalse(dry_run.get("deleted"))
+        self.assertFalse(dry_run.get("ok"))
+        self.assertTrue(dry_run.get("data", {}).get("blocked"))
+        self.assertFalse(dry_run.get("data", {}).get("deleted"))
 
         applied = self._call_tool(
             "gm_safe_delete",
@@ -487,8 +488,8 @@ class TestMCPIntegrationTools(unittest.TestCase):
             },
         )
         self.assertTrue(applied.get("ok"), msg=applied)
-        self.assertTrue(applied.get("deleted"), msg=applied)
-        self.assertGreaterEqual(int(applied.get("cleaned_refs", {}).get("replacements", 0)), 1)
+        self.assertTrue(applied.get("data", {}).get("deleted"), msg=applied)
+        self.assertGreaterEqual(int(applied.get("data", {}).get("cleaned_refs", {}).get("replacements", 0)), 1)
         self.assertFalse((self.project_root / "scripts" / "scr_target").exists())
 
         build_index = self._call_tool(

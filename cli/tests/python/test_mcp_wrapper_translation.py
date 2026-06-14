@@ -640,7 +640,7 @@ class TestWorkflowWrappers(MCPToolTestCase):
                 project_root="/tmp/project",
             )
         self.assertTrue(result["ok"])
-        self.assertTrue(result["dry_run"])
+        self.assertTrue(result["data"]["dry_run"])
 
 
 class TestRunnerWrappers(MCPToolTestCase):

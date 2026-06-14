@@ -16,6 +16,7 @@ from gms_helpers.results import (
     OperationResult,
     RunnerResult,
     legacy_bool_result,
+    normalize_result,
 )
 from gms_helpers.workflow import duplicate_asset, rename_asset, delete_asset, lint_project
 from gms_mcp.server.direct import _capture_output
@@ -62,6 +63,23 @@ class TestGMSResults(unittest.TestCase):
         self.assertTrue(ok["ok"])
         self.assertFalse(fail["ok"])
         self.assertEqual(fail["error"]["type"], "legacy_boolean_result")
+
+    def test_normalize_result_wraps_lists_as_structured_data(self):
+        result = normalize_result([{"name": "r_test"}], operation="Room list", data_key="rooms")
+
+        payload = result.to_dict()
+        self.assertTrue(payload["ok"])
+        self.assertEqual(payload["data"]["rooms"], [{"name": "r_test"}])
+        self.assertEqual(payload["data"]["count"], 1)
+
+    def test_normalize_result_wraps_legacy_error_dict(self):
+        result = normalize_result({"error": "bad input", "items": []}, operation="Legacy helper")
+
+        payload = result.to_dict()
+        self.assertFalse(payload["ok"])
+        self.assertEqual(payload["message"], "bad input")
+        self.assertEqual(payload["error"]["code"], "legacy_dict_error")
+        self.assertEqual(payload["error"]["type"], "legacy_dict_result")
 
     def test_asset_result_inheritance(self):
         """Test AssetResult inherits from OperationResult and has extra fields."""

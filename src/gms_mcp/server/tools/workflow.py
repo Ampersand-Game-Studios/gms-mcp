@@ -30,6 +30,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         _ = ctx
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
+        from gms_helpers.results import normalize_result
         from gms_helpers.workflow import safe_delete_asset
 
         if not dry_run and _requires_dry_run_for_tool("gm_safe_delete"):
@@ -38,7 +39,7 @@ def register(mcp: Any, ContextType: Any) -> None:
                 "Use dry_run=true, add gm_safe_delete to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
             )
 
-        return safe_delete_asset(
+        result = safe_delete_asset(
             project_root=Path(project_root),
             asset_type=asset_type,
             asset_name=asset_name,
@@ -46,6 +47,9 @@ def register(mcp: Any, ContextType: Any) -> None:
             clean_refs=clean_refs,
             dry_run=dry_run,
         )
+        if result.get("blocked"):
+            result = {**result, "ok": False, "error": "Safe delete blocked by dependencies"}
+        return normalize_result(result, operation="Safe delete").to_dict()
 
     @mcp.tool()
     async def gm_workflow_duplicate(

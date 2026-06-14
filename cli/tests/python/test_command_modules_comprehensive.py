@@ -102,6 +102,18 @@ class TestEventCommands(unittest.TestCase):
         self.assertTrue(result)
         mock_add.assert_called_once_with("o_player", "create", "")
 
+    @patch("gms_helpers.commands.event_commands.list_events")
+    def test_handle_event_list_returns_structured_result(self, mock_list):
+        """Event list commands wrap raw helper lists in a result envelope."""
+        mock_list.return_value = [{"event": "create"}]
+        self.test_args.object = "o_player"
+
+        result = handle_event_list(self.test_args)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["events"], [{"event": "create"}])
+        self.assertEqual(result.data["count"], 1)
+
 
 class TestWorkflowCommands(unittest.TestCase):
     """Test workflow command functions."""
@@ -163,6 +175,19 @@ class TestRoomCommands(unittest.TestCase):
         self.assertTrue(result)
         mock_add.assert_called_once_with("r_test", "Instances_New", "instance", 100)
 
+    @patch("gms_helpers.commands.room_commands.list_instances")
+    def test_handle_room_instance_list_returns_structured_result(self, mock_list):
+        """Instance list commands wrap raw helper lists in a result envelope."""
+        mock_list.return_value = [{"name": "inst_1"}]
+        self.test_args.room_name = "r_test"
+        self.test_args.layer = None
+
+        result = handle_room_instance_list(self.test_args)
+
+        self.assertTrue(result.success)
+        self.assertEqual(result.data["instances"], [{"name": "inst_1"}])
+        self.assertEqual(result.data["room_name"], "r_test")
+
 
 class TestMaintenanceCommands(unittest.TestCase):
     """Test maintenance command functions."""
@@ -187,6 +212,16 @@ class TestMaintenanceCommands(unittest.TestCase):
 
         self.assertTrue(result)
         mock_normalize.assert_called_once_with(project_root=".", fix=False, asset_type="room")
+
+    @patch("gms_helpers.commands.maintenance_commands.maint_validate_json_command")
+    def test_handle_maintenance_validate_json_normalizes_bool_failure(self, mock_validate):
+        """Maintenance commands expose structured failures instead of bare booleans."""
+        mock_validate.return_value = False
+
+        result = handle_maintenance_validate_json(self.test_args)
+
+        self.assertFalse(result.success)
+        self.assertEqual(result.error.type, "legacy_boolean_result")
 
 
 if __name__ == "__main__":
