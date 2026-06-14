@@ -40,7 +40,7 @@ from .utils import (
     insert_into_resources,
     insert_into_folders,
 )
-from .assets import ASSET_TYPES
+from .asset_types import ASSET_TYPES
 from .exceptions import (
     AssetExistsError,
     AssetNotFoundError,

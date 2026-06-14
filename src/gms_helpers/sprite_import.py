@@ -153,7 +153,7 @@ def import_strip_to_sprite(
 
     Returns: Operation result dict with success, sprite_name, frame_count, frame_size, path
     """
-    from .assets import SpriteAsset
+    from .asset_types import SpriteAsset
     from .utils import update_yyp_file
 
     project_root = Path(project_root)

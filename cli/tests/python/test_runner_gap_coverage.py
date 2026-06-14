@@ -49,9 +49,9 @@ class TestRunnerGapCoverage(unittest.TestCase):
         return GameMakerRunner(self.project_root)
 
     def test_platform_helpers_and_state_helpers(self):
-        with patch("gms_helpers.runner.platform.system", return_value="Linux"):
+        with patch("gms_helpers.runner_support.targets.platform.system", return_value="Linux"):
             self.assertEqual(detect_default_target_platform(), "Linux")
-        with patch("gms_helpers.runner.platform.system", return_value="Darwin"):
+        with patch("gms_helpers.runner_support.targets.platform.system", return_value="Darwin"):
             self.assertEqual(detect_default_target_platform(), "macOS")
 
         self.assertEqual(normalize_platform_target("android"), "Android")
@@ -88,12 +88,12 @@ class TestRunnerGapCoverage(unittest.TestCase):
             (sub_root / "gamemaker").mkdir()
             (sub_root / "gamemaker" / "Game.yyp").write_text("{}", encoding="utf-8")
             runner = GameMakerRunner(sub_root)
-            with patch("gms_helpers.runner.find_yyp", side_effect=[SystemExit(), sub_root / "gamemaker" / "Game.yyp"]):
+            with patch("gms_helpers.runner_support.discovery.find_yyp", side_effect=[SystemExit(), sub_root / "gamemaker" / "Game.yyp"]):
                 self.assertEqual(runner.find_project_file().name, "Game.yyp")
             self.assertEqual(runner.project_root, (sub_root / "gamemaker").resolve())
 
             runner = GameMakerRunner(sub_root)
-            with patch("gms_helpers.runner.find_yyp", side_effect=[SystemExit(), SystemExit()]):
+            with patch("gms_helpers.runner_support.discovery.find_yyp", side_effect=[SystemExit(), SystemExit()]):
                 with self.assertRaises(FileNotFoundError):
                     runner.find_project_file()
         finally:
@@ -130,8 +130,8 @@ class TestRunnerGapCoverage(unittest.TestCase):
         license_dir.mkdir(parents=True)
         license_path = license_dir / "license.plist"
         license_path.write_text("<plist/>", encoding="utf-8")
-        with patch("gms_helpers.runner.platform.system", return_value="Linux"):
-            with patch("gms_helpers.runner.Path.home", return_value=home_dir):
+        with patch("gms_helpers.runner_support.discovery.platform.system", return_value="Linux"):
+            with patch("gms_helpers.runner_support.discovery.Path.home", return_value=home_dir):
                 self.assertEqual(runner.find_license_file(), license_path)
 
         nested_root = self.project_root / "nested-home"
@@ -143,8 +143,8 @@ class TestRunnerGapCoverage(unittest.TestCase):
         older.write_text("old", encoding="utf-8")
         newer.write_text("new", encoding="utf-8")
         os.utime(older, (older.stat().st_atime, older.stat().st_mtime - 10))
-        with patch("gms_helpers.runner.platform.system", return_value="Linux"):
-            with patch("gms_helpers.runner.Path.home", return_value=nested_root):
+        with patch("gms_helpers.runner_support.discovery.platform.system", return_value="Linux"):
+            with patch("gms_helpers.runner_support.discovery.Path.home", return_value=nested_root):
                 self.assertEqual(runner.find_license_file(), newer)
 
         with patch.object(runner, "find_gamemaker_runtime", return_value=Path("/fake/Igor")):
@@ -279,7 +279,7 @@ class TestRunnerGapCoverage(unittest.TestCase):
         game_path = Path("/tmp/game.ios")
         debug_log_path = Path("/tmp/debug.log")
         ps_output = f"101 /tmp/Game.app/Contents/MacOS/Mac_Runner {game_path}\n102 tail -F {debug_log_path}\n"
-        with patch("gms_helpers.runner.subprocess.run", return_value=SimpleNamespace(stdout=ps_output)):
+        with patch("gms_helpers.runner_support.macos.subprocess.run", return_value=SimpleNamespace(stdout=ps_output)):
             runner_pids, tail_pids = runner._find_macos_validation_helper_pids(game_path, debug_log_path)
         self.assertEqual(runner_pids, {101})
         self.assertEqual(tail_pids, {102})
@@ -311,7 +311,7 @@ class TestRunnerGapCoverage(unittest.TestCase):
 
         completed = SimpleNamespace(returncode=0, stdout="stopped\n")
         with patch.object(runner, "_build_platform_action_command", return_value=["igor", "Stop"]):
-            with patch("gms_helpers.runner.subprocess.run", return_value=completed):
+            with patch("gms_helpers.runner_support.macos.subprocess.run", return_value=completed):
                 self.assertTrue(runner._stop_platform_process("Windows"))
 
         kill_calls = []
@@ -321,7 +321,7 @@ class TestRunnerGapCoverage(unittest.TestCase):
             if sig == 0:
                 raise ProcessLookupError()
 
-        with patch("gms_helpers.runner.os.kill", side_effect=fake_kill):
+        with patch("gms_helpers.runner_support.macos.os.kill", side_effect=fake_kill):
             runner._terminate_pid(123, "runner")
         self.assertEqual(kill_calls[0][1], __import__("signal").SIGTERM)
 

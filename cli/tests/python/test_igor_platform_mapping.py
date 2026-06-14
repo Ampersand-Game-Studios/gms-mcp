@@ -41,7 +41,7 @@ class TestPrefabsAutoDetection(unittest.TestCase):
 
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
-    @patch("gms_helpers.runner.platform.system", return_value="Darwin")
+    @patch("gms_helpers.runner_support.discovery.platform.system", return_value="Darwin")
     def test_prefabs_path_prefers_users_shared_on_macos(self, _mock_system):
         runner = GameMakerRunner(self.project_root)
 
@@ -53,8 +53,8 @@ class TestPrefabsAutoDetection(unittest.TestCase):
 
         with patch.dict(os.environ, {}, clear=True):
             # On Windows, clearing env vars can break Path.home() resolution.
-            with patch("gms_helpers.runner.Path.home", return_value=Path("/fake/home")):
-                with patch("gms_helpers.runner.Path.exists", autospec=True, side_effect=fake_exists):
+            with patch("gms_helpers.runner_support.discovery.Path.home", return_value=Path("/fake/home")):
+                with patch("gms_helpers.runner_support.discovery.Path.exists", autospec=True, side_effect=fake_exists):
                     found = runner.get_prefabs_path()
 
         self.assertIsNotNone(found)
