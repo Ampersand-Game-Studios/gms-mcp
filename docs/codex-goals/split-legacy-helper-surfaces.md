@@ -26,7 +26,7 @@ Refactor the large GMS MCP helper surfaces into smaller, testable modules while 
 ## Split Checklist
 
 - [x] Split `texture_groups.py`.
-- [ ] Split `assets.py`.
+- [x] Split `assets.py`.
 - [ ] Split `asset_helper.py`.
 - [ ] Split `runner.py`.
 - [ ] Split `gms_mcp/install.py`.
@@ -88,6 +88,21 @@ PYTHONPATH=src ./.venv/bin/python -m pytest cli/tests/python/test_final_verifica
 ```
 
 Result: `35 passed, 23 subtests passed`.
+- Split `src/gms_helpers/assets.py` into a thin public facade plus:
+  - `src/gms_helpers/asset_types/code.py`
+  - `src/gms_helpers/asset_types/visual.py`
+  - `src/gms_helpers/asset_types/project.py`
+  - `src/gms_helpers/asset_types/media.py`
+  - `src/gms_helpers/asset_types/registry.py`
+- Preserved the existing `gms_helpers.assets.get_config` patch/import surface through the facade.
+- Updated internal source imports to use `gms_helpers.asset_types` directly.
+- Validation passed:
+
+```bash
+./.venv/bin/python -m pytest cli/tests/python/test_assets_comprehensive.py cli/tests/python/test_asset_helper.py cli/tests/python/test_asset_helper_additional_coverage.py cli/tests/python/test_asset_helper_command_coverage.py cli/tests/python/test_assets_texture_workflow_95.py cli/tests/python/test_asset_texture_workflow_gap_coverage.py cli/tests/python/test_workflow.py cli/tests/python/test_workflow_enhanced.py cli/tests/python/test_sprite_multiframe.py -q
+```
+
+Result: `173 passed, 103 subtests passed`.
 
 ## Current Known Issues
 

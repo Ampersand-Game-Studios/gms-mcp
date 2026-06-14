@@ -17,7 +17,7 @@ from .utils import (
     list_folders_in_yyp,
 )
 from .asset_creation_flow import create_project_asset, run_post_creation_maintenance, run_pre_creation_maintenance
-from .assets import (
+from .asset_types import (
     ScriptAsset,
     ObjectAsset,
     SpriteAsset,
