@@ -58,7 +58,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - **Diagnostic output**: Refined tool outputs to be cleaner and more consistent across the code intelligence suite.
-- **Legacy Helper Results**: Command/MCP paths that still call print-heavy legacy helpers now normalize raw booleans and ad-hoc error dictionaries into structured `success`/`ok`/`message`/`error` result payloads.
+- **Legacy Helper Results**: Command/MCP paths that still call print-heavy legacy helpers now normalize raw booleans, ad-hoc error dictionaries, list payloads, and direct safe-delete workflow results into structured `success`/`ok`/`message`/`error` result payloads with operation data under `data`.
 - **MCP Write Validation**: MCP mutation tools now validate typed operation models before transactions, direct helper calls, or CLI subprocess fallback. Domain validation failures stop at the MCP boundary instead of retrying through a generic fallback path, and real destructive MCP writes no longer accept `prefer_cli` or infrastructure fallback to the broad CLI path.
 - **Standardized Versioning**: Locked default asset creation to GameMaker 2024.x+ standards.
 - **Quality Reporting Pipeline**: `scripts/generate_quality_reports.py` now collects subprocess coverage correctly, combines parallel `.coverage*` data before writing `coverage.xml`, and keeps the published markdown/XML/JSON quality artifacts aligned with real CLI execution paths.

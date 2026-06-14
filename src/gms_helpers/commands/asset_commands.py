@@ -20,7 +20,7 @@ from ..asset_helper import (
     create_note,
     delete_asset,
 )
-from ..results import AssetResult, OperationResult
+from ..results import AssetResult, OperationResult, normalize_result
 
 
 _ASSET_DIRS = {
@@ -53,11 +53,14 @@ def _asset_path(asset_type: str, args: Any) -> str | None:
 def _asset_result(asset_type: str, args: Any, result: Any, *, operation: str) -> AssetResult | Any:
     if isinstance(result, OperationResult):
         return result
-    if not isinstance(result, bool):
-        return result
 
     name = getattr(args, "name", None)
-    if result:
+    asset_data = {
+        "asset_name": name,
+        "asset_type": asset_type,
+        "asset_path": _asset_path(asset_type, args),
+    }
+    if isinstance(result, bool) and result:
         return AssetResult(
             success=True,
             message=f"{operation.title()} {asset_type} '{name}' completed successfully",
@@ -65,12 +68,19 @@ def _asset_result(asset_type: str, args: Any, result: Any, *, operation: str) ->
             asset_type=asset_type,
             asset_path=_asset_path(asset_type, args),
         )
-    return AssetResult(
-        success=False,
-        message=f"Failed to {operation} {asset_type} '{name}'",
-        asset_name=name,
-        asset_type=asset_type,
-        asset_path=_asset_path(asset_type, args),
+    if isinstance(result, bool):
+        return AssetResult.fail(
+            f"Failed to {operation} {asset_type} '{name}'",
+            code="asset_operation_failed",
+            error_type="asset_error",
+            details=asset_data,
+            data=asset_data,
+        )
+    return normalize_result(
+        result,
+        operation=f"Asset {operation}",
+        result_cls=AssetResult,
+        data=asset_data,
     )
 
 

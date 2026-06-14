@@ -269,7 +269,8 @@ class TestCommandWrappers(unittest.TestCase):
 
         with patch.object(asset_commands, "delete_asset", return_value={"ok": True}) as delete_asset:
             result = asset_commands.handle_asset_delete(SimpleNamespace(name="x"))
-        self.assertEqual(result, {"ok": True})
+        self.assertTrue(result.success)
+        self.assertTrue(result.to_dict()["ok"])
         delete_asset.assert_called_once()
 
     def test_event_wrappers_forward_arguments(self):
@@ -294,7 +295,9 @@ class TestCommandWrappers(unittest.TestCase):
         duplicate_event.assert_called_once_with("o_player", "create", 1)
 
         with patch.object(event_commands, "list_events", return_value=["create"]) as list_events:
-            self.assertEqual(event_commands.handle_event_list(SimpleNamespace(object="o_player")), ["create"])
+            result = event_commands.handle_event_list(SimpleNamespace(object="o_player"))
+            self.assertTrue(result.success)
+            self.assertEqual(result.data["events"], ["create"])
         list_events.assert_called_once_with("o_player")
 
         with patch.object(
@@ -376,7 +379,9 @@ class TestCommandWrappers(unittest.TestCase):
         remove_layer.assert_called_once_with("r_main", "Actors")
 
         with patch.object(room_commands, "list_layers", return_value=["Actors"]) as list_layers:
-            self.assertEqual(room_commands.handle_room_layer_list(SimpleNamespace(room_name="r_main")), ["Actors"])
+            result = room_commands.handle_room_layer_list(SimpleNamespace(room_name="r_main"))
+            self.assertTrue(result.success)
+            self.assertEqual(result.data["layers"], ["Actors"])
         list_layers.assert_called_once_with("r_main")
 
         with patch.object(room_commands, "duplicate_room", return_value=True) as duplicate_room:
@@ -392,7 +397,9 @@ class TestCommandWrappers(unittest.TestCase):
         delete_room.assert_called_once_with("r_old", True)
 
         with patch.object(room_commands, "list_rooms", return_value=["r_old"]) as list_rooms:
-            self.assertEqual(room_commands.handle_room_list(SimpleNamespace(verbose=True)), ["r_old"])
+            result = room_commands.handle_room_list(SimpleNamespace(verbose=True))
+            self.assertTrue(result.success)
+            self.assertEqual(result.data["rooms"], ["r_old"])
         list_rooms.assert_called_once_with(True)
 
         with patch.object(room_commands, "add_instance", return_value=True) as add_instance:
@@ -410,10 +417,9 @@ class TestCommandWrappers(unittest.TestCase):
         remove_instance.assert_called_once_with("r_main", "inst_1")
 
         with patch.object(room_commands, "list_instances", return_value=["inst_1"]) as list_instances:
-            self.assertEqual(
-                room_commands.handle_room_instance_list(SimpleNamespace(room_name="r_main", layer="Actors")),
-                ["inst_1"],
-            )
+            result = room_commands.handle_room_instance_list(SimpleNamespace(room_name="r_main", layer="Actors"))
+            self.assertTrue(result.success)
+            self.assertEqual(result.data["instances"], ["inst_1"])
         list_instances.assert_called_once_with("r_main", "Actors")
 
     def test_workflow_wrappers_and_safe_delete_paths(self):
@@ -421,7 +427,8 @@ class TestCommandWrappers(unittest.TestCase):
             result = workflow_commands.handle_workflow_duplicate(
                 SimpleNamespace(project_root=".", asset_path="scripts/scr_old/scr_old.yy", new_name="scr_new", yes=True)
             )
-        self.assertEqual(result, {"ok": True})
+        self.assertTrue(result.success)
+        self.assertTrue(result.to_dict()["ok"])
         duplicate_asset.assert_called_once()
 
         with patch.object(workflow_commands, "rename_asset", return_value={"ok": True}) as rename_asset:
@@ -469,8 +476,8 @@ class TestCommandWrappers(unittest.TestCase):
                         force=False,
                         clean_refs=False,
                         apply=False,
+                    )
                 )
-            )
             self.assertEqual(bool(result), expected)
             self.assertEqual(result.success, expected)
             self.assertEqual(result.to_dict()["ok"], expected)

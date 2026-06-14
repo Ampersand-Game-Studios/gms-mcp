@@ -5,7 +5,7 @@ from typing import Any
 from ..auto_maintenance import run_auto_maintenance
 from ..health import gm_mcp_health
 from ..maintenance.normalize_names import normalize_asset_names
-from ..results import MaintenanceResult, OperationResult
+from ..results import MaintenanceResult, OperationResult, normalize_result
 from ..asset_helper import (
     maint_lint_command,
     maint_validate_json_command,
@@ -23,16 +23,15 @@ from ..asset_helper import (
 def _maintenance_result(result: Any, operation: str) -> Any:
     if isinstance(result, OperationResult):
         return result
-    if isinstance(result, bool):
-        if result:
-            return MaintenanceResult(success=True, message=f"{operation} completed")
-        return MaintenanceResult.fail(
-            f"{operation} failed",
-            code="maintenance_failed",
-            error_type="maintenance_error",
-            details={"operation": operation},
-        )
-    return result
+    return normalize_result(
+        result,
+        operation=operation,
+        result_cls=MaintenanceResult,
+        success_message=f"{operation} completed",
+        failure_message=f"{operation} failed",
+        code="maintenance_failed",
+        error_type="maintenance_error",
+    )
 
 
 def handle_maintenance_auto(args):

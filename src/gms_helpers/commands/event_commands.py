@@ -3,7 +3,7 @@
 from ..event_helper import add_event, remove_event, list_events, duplicate_event
 from ..maintenance.event_sync import sync_object_events
 from ..path_safety import project_child_path, validate_resource_name
-from ..results import OperationResult
+from ..results import OperationResult, normalize_result
 
 
 def _event_result(success: bool, operation: str, **data):
@@ -52,7 +52,13 @@ def handle_event_duplicate(args):
 
 def handle_event_list(args):
     """Handle event listing."""
-    return list_events(args.object)
+    events = list_events(args.object)
+    return normalize_result(
+        events,
+        operation="Event list",
+        data_key="events",
+        data={"object": args.object},
+    )
 
 
 def handle_event_validate(args):
