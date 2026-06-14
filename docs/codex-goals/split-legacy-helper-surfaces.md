@@ -28,7 +28,7 @@ Refactor the large GMS MCP helper surfaces into smaller, testable modules while 
 - [x] Split `texture_groups.py`.
 - [x] Split `assets.py`.
 - [x] Split `asset_helper.py`.
-- [ ] Split `runner.py`.
+- [x] Split `runner.py`.
 - [ ] Split `gms_mcp/install.py`.
 - [ ] Run focused validation after each split.
 - [ ] Run final validation suite.
@@ -118,6 +118,22 @@ Result: `173 passed, 103 subtests passed`.
 ```
 
 Result: `60 passed, 80 subtests passed`.
+- Split `src/gms_helpers/runner.py` into a thin public facade plus:
+  - `src/gms_helpers/runner_support/targets.py`
+  - `src/gms_helpers/runner_support/discovery.py`
+  - `src/gms_helpers/runner_support/artifacts.py`
+  - `src/gms_helpers/runner_support/igor.py`
+  - `src/gms_helpers/runner_support/macos.py`
+  - `src/gms_helpers/runner_support/execution.py`
+- Kept `GameMakerRunner` and convenience functions exported from `gms_helpers.runner`.
+- Updated runner tests to patch the owning implementation modules.
+- Validation passed:
+
+```bash
+./.venv/bin/python -m pytest cli/tests/python/test_runner_95_coverage.py cli/tests/python/test_runner_gap_coverage.py cli/tests/python/test_runner_session_integration.py cli/tests/python/test_igor_platform_mapping.py -q
+```
+
+Result: `57 passed`.
 
 ## Current Known Issues
 

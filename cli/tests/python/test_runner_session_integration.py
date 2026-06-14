@@ -72,7 +72,7 @@ class TestRunnerLicenseDiscovery(unittest.TestCase):
 
         shutil.rmtree(self.tmp_dir, ignore_errors=True)
 
-    @patch("gms_helpers.runner.platform.system", return_value="Darwin")
+    @patch("gms_helpers.runner_support.discovery.platform.system", return_value="Darwin")
     def test_find_license_file_prefers_license_plist(self, _mock_system):
         runner = GameMakerRunner(self.project_root)
         license_root = Path(self.project_root) / "Library/Application Support/GameMakerStudio2/0"
@@ -176,8 +176,8 @@ class TestRunnerStopGame(unittest.TestCase):
             with patch.object(runner, "_stop_platform_process", return_value=False):
                 with patch.object(runner, "_terminate_pid", side_effect=lambda pid, _label: killed_pids.add(pid)):
                     with patch.object(runner._session_manager, "is_process_alive", side_effect=fake_is_alive):
-                        with patch("gms_helpers.runner.time.monotonic", side_effect=[0.0, 0.0, 6.0]):
-                            with patch("gms_helpers.runner.time.sleep", return_value=None):
+                        with patch("gms_helpers.runner_support.macos.time.monotonic", side_effect=[0.0, 0.0, 6.0]):
+                            with patch("gms_helpers.runner_support.macos.time.sleep", return_value=None):
                                 result = runner._stop_macos_run_session(session)
 
         self.assertTrue(result["ok"])
@@ -578,15 +578,15 @@ class TestRunnerLaunchGuards(unittest.TestCase):
 class TestRunnerPlatformDefaults(unittest.TestCase):
     """Tests for platform default/normalization helpers."""
 
-    @patch("gms_helpers.runner.platform.system", return_value="Darwin")
+    @patch("gms_helpers.runner_support.targets.platform.system", return_value="Darwin")
     def test_detect_default_target_platform_macos(self, _mock_system):
         self.assertEqual(detect_default_target_platform(), "macOS")
 
-    @patch("gms_helpers.runner.platform.system", return_value="Linux")
+    @patch("gms_helpers.runner_support.targets.platform.system", return_value="Linux")
     def test_detect_default_target_platform_linux(self, _mock_system):
         self.assertEqual(detect_default_target_platform(), "Linux")
 
-    @patch("gms_helpers.runner.platform.system", return_value="Windows")
+    @patch("gms_helpers.runner_support.targets.platform.system", return_value="Windows")
     def test_detect_default_target_platform_windows(self, _mock_system):
         self.assertEqual(detect_default_target_platform(), "Windows")
 

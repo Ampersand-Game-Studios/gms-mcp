@@ -33,18 +33,18 @@ class TestRunner95Coverage(unittest.TestCase):
         self.temp_dir.cleanup()
 
     def test_prefabs_license_and_launch_target_remaining_paths(self):
-        with patch("gms_helpers.runner.platform.system", return_value="Windows"):
+        with patch("gms_helpers.runner_support.discovery.platform.system", return_value="Windows"):
             with patch.dict(os.environ, {}, clear=True):
                 self.assertIsNone(self.runner.get_prefabs_path())
 
-        with patch("gms_helpers.runner.platform.system", return_value="Linux"):
+        with patch("gms_helpers.runner_support.discovery.platform.system", return_value="Linux"):
             with patch.dict(os.environ, {}, clear=True):
-                with patch("gms_helpers.runner.Path.home", return_value=self.project_root / "home"):
+                with patch("gms_helpers.runner_support.discovery.Path.home", return_value=self.project_root / "home"):
                     self.assertIsNone(self.runner.get_prefabs_path())
 
-        with patch("gms_helpers.runner.platform.system", return_value="Windows"):
+        with patch("gms_helpers.runner_support.discovery.platform.system", return_value="Windows"):
             with patch.dict(os.environ, {"USERNAME": "tester"}, clear=True):
-                with patch("gms_helpers.runner.Path.home", return_value=self.project_root / "missing-home"):
+                with patch("gms_helpers.runner_support.discovery.Path.home", return_value=self.project_root / "missing-home"):
                     self.assertIsNone(self.runner.find_license_file())
 
         linux_home = self.project_root / "linux-home"
@@ -52,8 +52,8 @@ class TestRunner95Coverage(unittest.TestCase):
         base_dir.mkdir(parents=True)
         direct_license = base_dir / "license.plist"
         direct_license.write_text("<plist/>", encoding="utf-8")
-        with patch("gms_helpers.runner.platform.system", return_value="Linux"):
-            with patch("gms_helpers.runner.Path.home", return_value=linux_home):
+        with patch("gms_helpers.runner_support.discovery.platform.system", return_value="Linux"):
+            with patch("gms_helpers.runner_support.discovery.Path.home", return_value=linux_home):
                 self.assertEqual(self.runner.find_license_file(), direct_license)
 
         self.assertIn(
@@ -87,8 +87,8 @@ class TestRunner95Coverage(unittest.TestCase):
         missing_log = self.project_root / "missing.log"
         process = MagicMock()
         process.poll.side_effect = [1]
-        with patch("gms_helpers.runner.time.monotonic", side_effect=[0.0, 0.1, 2.0]):
-            with patch("gms_helpers.runner.time.sleep"):
+        with patch("gms_helpers.runner_support.macos.time.monotonic", side_effect=[0.0, 0.1, 2.0]):
+            with patch("gms_helpers.runner_support.macos.time.sleep"):
                 self.assertFalse(self.runner._wait_for_macos_main_loop(process, missing_log, 0, timeout_seconds=1.0))
 
         bad_log = self.project_root / "debug.log"
@@ -96,15 +96,15 @@ class TestRunner95Coverage(unittest.TestCase):
         process = MagicMock()
         process.poll.side_effect = [None, 1]
         with patch.object(Path, "open", side_effect=OSError("bad log")):
-            with patch("gms_helpers.runner.time.monotonic", side_effect=[0.0, 0.1, 2.0]):
-                with patch("gms_helpers.runner.time.sleep"):
+            with patch("gms_helpers.runner_support.macos.time.monotonic", side_effect=[0.0, 0.1, 2.0]):
+                with patch("gms_helpers.runner_support.macos.time.sleep"):
                     self.assertFalse(self.runner._wait_for_macos_main_loop(process, bad_log, 0, timeout_seconds=1.0))
 
         process = MagicMock()
         process.poll.return_value = 1
         with patch.object(self.runner, "_find_macos_validation_helper_pids", return_value=({1}, {2})):
-            with patch("gms_helpers.runner.time.monotonic", side_effect=[0.0, 2.0]):
-                with patch("gms_helpers.runner.time.sleep"):
+            with patch("gms_helpers.runner_support.macos.time.monotonic", side_effect=[0.0, 2.0]):
+                with patch("gms_helpers.runner_support.macos.time.sleep"):
                     pid, runner_pids, tail_pids = self.runner._wait_for_macos_runner_start(
                         process,
                         Path("/tmp/game.ios"),
@@ -120,12 +120,12 @@ class TestRunner95Coverage(unittest.TestCase):
         game_path = Path("/tmp/game.ios")
         debug_log = Path("/tmp/debug.log")
         ps_output = f"\ninvalid\nnot_a_pid command\n101 /tmp/Game.app/Contents/MacOS/Mac_Runner {game_path}\n"
-        with patch("gms_helpers.runner.subprocess.run", return_value=SimpleNamespace(stdout=ps_output)):
+        with patch("gms_helpers.runner_support.macos.subprocess.run", return_value=SimpleNamespace(stdout=ps_output)):
             runner_pids, tail_pids = self.runner._find_macos_validation_helper_pids(game_path, debug_log)
         self.assertEqual(runner_pids, {101})
         self.assertEqual(tail_pids, set())
 
-        with patch("gms_helpers.runner.os.kill", side_effect=RuntimeError("blocked")):
+        with patch("gms_helpers.runner_support.macos.os.kill", side_effect=RuntimeError("blocked")):
             self.runner._terminate_pid(10, "runner")
 
         kill_calls = []
@@ -138,9 +138,9 @@ class TestRunner95Coverage(unittest.TestCase):
             if sig == expected_signal:
                 raise RuntimeError("cannot kill")
 
-        with patch("gms_helpers.runner.os.kill", side_effect=stubborn_kill):
-            with patch("gms_helpers.runner.time.monotonic", side_effect=[0.0, 0.1, 6.0]):
-                with patch("gms_helpers.runner.time.sleep"):
+        with patch("gms_helpers.runner_support.macos.os.kill", side_effect=stubborn_kill):
+            with patch("gms_helpers.runner_support.macos.time.monotonic", side_effect=[0.0, 0.1, 6.0]):
+                with patch("gms_helpers.runner_support.macos.time.sleep"):
                     self.runner._terminate_pid(20, "runner")
         self.assertIn(expected_signal, kill_calls)
 
@@ -163,7 +163,7 @@ class TestRunner95Coverage(unittest.TestCase):
                 ):
                     with patch.object(self.runner, "_terminate_pid"):
                         with patch.object(self.runner._session_manager, "clear_session"):
-                            with patch("gms_helpers.runner.time.monotonic", side_effect=[0.0, 6.0]):
+                            with patch("gms_helpers.runner_support.macos.time.monotonic", side_effect=[0.0, 6.0]):
                                 result = self.runner._stop_macos_run_session(session)
         self.assertFalse(result["ok"])
         self.assertIn("still alive", result["message"])
@@ -183,7 +183,7 @@ class TestRunner95Coverage(unittest.TestCase):
                 ):
                     with patch.object(self.runner, "_terminate_pid"):
                         with patch.object(self.runner._session_manager, "clear_session"):
-                            with patch("gms_helpers.runner.time.monotonic", side_effect=[0.0, 6.0]):
+                            with patch("gms_helpers.runner_support.macos.time.monotonic", side_effect=[0.0, 6.0]):
                                 result = self.runner._stop_macos_run_session(session)
         self.assertTrue(result["ok"])
         self.assertIn("manual cleanup", result["message"])
@@ -272,7 +272,7 @@ class TestRunner95Coverage(unittest.TestCase):
                                     with patch.object(
                                         self.runner._session_manager, "create_session", return_value=session
                                     ):
-                                        with patch("gms_helpers.runner.subprocess.run") as mock_unzip:
+                                        with patch("gms_helpers.runner_support.execution.subprocess.run") as mock_unzip:
                                             result = self.runner._run_project_ide_temp_approach(
                                                 platform_target="macOS",
                                                 background=True,
