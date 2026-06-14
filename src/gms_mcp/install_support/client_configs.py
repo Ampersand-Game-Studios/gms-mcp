@@ -5,6 +5,7 @@ import json
 import os
 import shlex
 import shutil
+import sys
 import tempfile
 from pathlib import Path
 from typing import Iterable, Optional
@@ -21,9 +22,9 @@ from .common import (
     _write_json,
 )
 
-try:
+if sys.version_info >= (3, 11):
     import tomllib as _toml_parser
-except ModuleNotFoundError:
+else:
     try:
         import tomli as _toml_parser
     except ModuleNotFoundError:
@@ -874,4 +875,3 @@ def _generate_claude_code_plugin(
     written.append(mcp_config_path)
 
     return written
-

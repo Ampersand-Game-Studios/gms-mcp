@@ -1,10 +1,11 @@
 from __future__ import annotations
+# pyright: reportAttributeAccessIssue=false
 
 import os
 import subprocess
 import threading
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from .targets import ensure_igor_supported_runtime_type, normalize_platform_target
 

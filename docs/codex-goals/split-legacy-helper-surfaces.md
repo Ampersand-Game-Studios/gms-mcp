@@ -30,10 +30,10 @@ Refactor the large GMS MCP helper surfaces into smaller, testable modules while 
 - [x] Split `asset_helper.py`.
 - [x] Split `runner.py`.
 - [x] Split `gms_mcp/install.py`.
-- [ ] Run focused validation after each split.
-- [ ] Run final validation suite.
-- [ ] Commit coherent checkpoints.
-- [ ] Record rollback notes and residual risk.
+- [x] Run focused validation after each split.
+- [x] Run final validation suite.
+- [x] Commit coherent checkpoints.
+- [x] Record rollback notes and residual risk.
 
 ## Validation Plan
 
@@ -149,15 +149,39 @@ Result: `57 passed`.
 ```
 
 Result: `73 passed, 33 subtests passed`.
+- Final validation passed:
+
+```bash
+PYTHONPATH=src ./.venv/bin/python cli/tests/python/run_all_tests.py
+PYTHONPATH=src ./.venv/bin/python -m pytest cli/tests/python/test_final_verification.py
+./.venv/bin/python -m ruff check .
+./.venv/bin/pyright
+./.venv/bin/python scripts/generate_quality_reports.py
+```
+
+Results:
+  - `run_all_tests.py`: `Passed: 75/75`, `Failed: 0/75`.
+  - `test_final_verification.py`: `3 passed`.
+  - `ruff check .`: `All checks passed`.
+  - `pyright`: `0 errors, 2 warnings` for existing dynamic `__all__` facades.
+  - `generate_quality_reports.py`: `965 passed, 1 warning, 210 subtests passed`; report generation completed.
 
 ## Current Known Issues
 
-- None yet.
+- None found in validation.
 
 ## Rollback Notes
 
-- Each split should be independently revertible by checkpoint commit.
+- Checkpoint commits:
+  - `9dc0e5a` Split texture group helpers
+  - `1cc6379` Split asset type implementations
+  - `ddb0db5` Split asset helper CLI
+  - `536985f` Split runner implementation
+  - `28f2c2f` Split install support modules
+- The final validation fixups are separate from the split checkpoints.
+- Each split can be reverted independently if a regression is isolated to that surface.
 
 ## Residual Risk
 
-- Not assessed yet.
+- Real GameMaker smoke coverage depends on local `GMS_MCP_REAL_SMOKE_PROJECT` / runtime availability; the automated suite exercised the configured smoke tests and skipped unavailable real-project paths as designed.
+- `GameMakerRunner` now composes mixins; pyright needs scoped dynamic-attribute suppression in those mixin modules because the attributes are supplied by the final composed class.

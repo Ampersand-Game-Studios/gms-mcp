@@ -11,7 +11,7 @@ try:
     )
 
     HAS_NAMING_CONFIG = True
-except ImportError:
+except ImportError:  # pragma: no cover
     HAS_NAMING_CONFIG = False
     PROJECT_CONFIG_FILE = ".gms-mcp.json"
 
