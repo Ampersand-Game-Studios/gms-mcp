@@ -44,7 +44,7 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
   - **Runtime Management**: list/pin/unpin/verify GameMaker runtimes, including LTS2026 channel detection
   - **Runner**: compile/run (with runtime version pinning) + stop/status. Accepts `VM`/`YYC` plus LTS2026 UI aliases `GMS2 VM`/`GMS2 YYC`; GMRT labels are rejected until GameMaker documents Igor CLI support.
   - **TCP Bridge (optional)**: live game commands + log capture via `gm_bridge_install`, `gm_bridge_status`, `gm_run_command`, `gm_run_logs` (see `documentation/BRIDGE.md`). Bridge lifecycle/events stay off MCP stdout so `gm_run(..., enable_bridge=true)` remains stdio-safe.
-  - **Escape hatch**: `gm_cli` (run arbitrary `gms` args)
+  - **Read-only helper CLI compatibility**: `gm_cli` permits help/version and an explicit allowlist of read-only `gms` inspections. It is not GameMaker's official `gm-cli`; use named MCP tools for mutations, runner actions, documentation-cache operations, telemetry, and skills.
   - **Project info**: `gm_project_info`
 
 ### Install
@@ -123,7 +123,7 @@ After changing `.cursor/mcp.json`, **Reload Window** in Cursor to pick up MCP co
   - The server and underlying CLI tools check for both `GM_PROJECT_ROOT` and `PROJECT_ROOT` environment variables (useful for agents / terminal sessions).
 - **Execution model / "no silent hangs"**:
   - By default, tools use **isolated subprocess execution**. This ensures they are cancellable, avoid blocking the MCP server, and prevent "silent hangs" on Windows.
-  - Subprocess execution (via `gm_cli` or default fallback) isolates the child process from MCP stdin (setting it to `DEVNULL`).
+  - Subprocess execution for approved `gm_cli` inspection calls or default tool fallbacks isolates the child process from MCP stdin (setting it to `DEVNULL`).
   - Streaming logs via `ctx.log()` is **disabled** during subprocess execution to prevent stdio deadlocks with MCP clients like Cursor.
   - Direct/background runner paths also avoid stdout pollution: bridge lifecycle logging is internal, background Igor output is collected without echoing into the JSON-RPC stream, and spawned local game processes do not inherit MCP stdio.
   - Every invocation writes a complete diagnostic log file under **`.gms_mcp/logs/`** in the resolved project directory.

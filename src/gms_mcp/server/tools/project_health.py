@@ -14,6 +14,7 @@ from ..project import (
     _resolve_project_directory_no_deps,
     _resolve_repo_root,
 )
+from ..raw_cli_policy import evaluate_gm_cli_args, raw_cli_blocked_result
 from ..subprocess_runner import _run_cli_async
 
 
@@ -66,12 +67,20 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Run the existing `gms` CLI.
+        Run an explicitly allowed read-only command from this project's `gms` helper CLI.
+
+        This is not GameMaker's official `gm-cli`. Raw mutations, runner actions,
+        documentation-cache operations, telemetry, and skills commands are blocked;
+        use their named MCP tools instead.
 
         - If `prefer_cli=true` (default): run in a subprocess with captured output + timeout.
         - If `prefer_cli=false`: try in-process first, and (optionally) fall back to subprocess.
-        Example args: ["maintenance", "auto", "--fix", "--verbose"]
+        Example args: ["event", "list", "o_player"]
         """
+        decision = evaluate_gm_cli_args(args)
+        if not decision.allowed:
+            return raw_cli_blocked_result(decision)
+
         # If prefer_cli=True, run the subprocess path (streamed + cancellable).
         if prefer_cli:
             cli_dict = (

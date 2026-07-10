@@ -23,7 +23,7 @@ This repo includes an MCP server (`gms-mcp`) that mirrors the `gms` CLI as tools
   - `gm_get_project_stats`: Quick project-wide statistics.
 - **Maintenance**: auto + all subcommands
 - **Runner**: compile/run + stop/status
-- **Escape hatch**: `gm_cli` (shell-out to `gms.py` with arbitrary args)
+- **Read-only helper CLI compatibility**: `gm_cli` permits help/version and an explicit read-only allowlist from this project's `gms` helper CLI. It is separate from GameMaker's official `gm-cli`; use named MCP tools for writes, runner actions, documentation-cache operations, telemetry, and skills.
 
 MCP setup/notes: `README.md` (Cursor config: `gms-mcp-init --cursor`; other client examples: `gms-mcp-init --vscode --windsurf --antigravity --openclaw`; Antigravity global setup/check: `--antigravity-setup` / `--antigravity-check` / `--antigravity-check-json` and one-shot `--antigravity-app-setup`; Codex: `gms-mcp-init --codex` / `--codex-global`, plus `--codex-check` and `--codex-dry-run-only`).
 

@@ -909,7 +909,7 @@ class TestProjectHealthTools(MCPToolTestCase):
             new=AsyncMock(return_value=async_result),
         ):
             result = self.call_tool(
-                "gm_cli", args=["maintenance", "auto"], project_root="/tmp/project", prefer_cli=True
+                "gm_cli", args=["event", "list", "o_player"], project_root="/tmp/project", prefer_cli=True
             )
         self.assertTrue(result["ok"])
 
@@ -918,7 +918,7 @@ class TestProjectHealthTools(MCPToolTestCase):
             return_value=SimpleNamespace(as_dict=lambda: {"ok": True, "stdout": "good", "stderr": ""}),
         ):
             result = self.call_tool(
-                "gm_cli", args=["maintenance", "auto"], project_root="/tmp/project", prefer_cli=False
+                "gm_cli", args=["event", "list", "o_player"], project_root="/tmp/project", prefer_cli=False
             )
         self.assertTrue(result["ok"])
 
@@ -930,7 +930,7 @@ class TestProjectHealthTools(MCPToolTestCase):
         ):
             result = self.call_tool(
                 "gm_cli",
-                args=["maintenance", "auto"],
+                args=["event", "list", "o_player"],
                 project_root="/tmp/project",
                 prefer_cli=False,
                 fallback_to_subprocess=False,
@@ -953,11 +953,29 @@ class TestProjectHealthTools(MCPToolTestCase):
         ):
             result = self.call_tool(
                 "gm_cli",
-                args=["maintenance", "auto"],
+                args=["event", "list", "o_player"],
                 project_root="/tmp/project",
                 prefer_cli=False,
             )
         self.assertEqual(result["direct_error"], "direct failed")
+
+        with (
+            patch(
+                "gms_mcp.server.tools.project_health._run_cli_async",
+                new=AsyncMock(),
+            ) as run_cli,
+            patch("gms_mcp.server.tools.project_health._run_gms_inprocess") as run_direct,
+        ):
+            blocked = self.call_tool(
+                "gm_cli",
+                args=["asset", "delete", "script", "scr_not_allowed"],
+                project_root="/tmp/project",
+            )
+        self.assertFalse(blocked["ok"])
+        self.assertTrue(blocked["blocked_by_policy"])
+        self.assertEqual(blocked["policy"], "gm_cli_read_only")
+        run_cli.assert_not_awaited()
+        run_direct.assert_not_called()
 
         with (
             patch(

@@ -57,6 +57,7 @@ All notable changes to this project will be documented in this file.
 - **macOS Runner Smoke Reliability**: The mockless `.app` launch smoke now verifies that the executable actually runs and cleans up the child process instead of assuming a detached game process exits immediately.
 
 ### Changed
+- **Raw Helper CLI Safety**: `gm_cli` now permits only an explicit read-only allowlist from this project's `gms` helper CLI. Raw write, runner, documentation-cache, telemetry, and skills paths are blocked before in-process or subprocess execution; named MCP tools remain the supported interface. This is separate from GameMaker's official `gm-cli`.
 - **Diagnostic output**: Refined tool outputs to be cleaner and more consistent across the code intelligence suite.
 - **Legacy Helper Results**: Command/MCP paths that still call print-heavy legacy helpers now normalize raw booleans, ad-hoc error dictionaries, list payloads, and direct safe-delete workflow results into structured `success`/`ok`/`message`/`error` result payloads with operation data under `data`.
 - **MCP Write Validation**: MCP mutation tools now validate typed operation models before transactions, direct helper calls, or CLI subprocess fallback. Domain validation failures stop at the MCP boundary instead of retrying through a generic fallback path, and real destructive MCP writes no longer accept `prefer_cli` or infrastructure fallback to the broad CLI path.
