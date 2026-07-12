@@ -1,6 +1,8 @@
 import unittest
 import os
 import json
+import shutil
+import subprocess
 import tempfile
 import io
 import sys
@@ -61,6 +63,7 @@ class TestInstallAutodetect(unittest.TestCase):
         os.environ["GMS_MCP_GMS_PATH"] = "C:\\path\\to\\gms.exe"
         os.environ["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"] = "60"
         os.environ["GMS_MCP_ENABLE_DIRECT"] = "1"
+        os.environ["GMS_MCP_IGOR_PROCESSOR_COUNT"] = "2"
 
         try:
             config = _make_server_config(
@@ -76,17 +79,28 @@ class TestInstallAutodetect(unittest.TestCase):
             self.assertEqual(env["GMS_MCP_GMS_PATH"], "C:\\path\\to\\gms.exe")
             self.assertEqual(env["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"], "60")
             self.assertEqual(env["GMS_MCP_ENABLE_DIRECT"], "1")
+            self.assertEqual(env["GMS_MCP_IGOR_PROCESSOR_COUNT"], "2")
             self.assertEqual(env["GM_PROJECT_ROOT"], "${workspaceFolder}/gamemaker")
 
         finally:
             # Clean up env vars
-            for var in ["GMS_MCP_GMS_PATH", "GMS_MCP_DEFAULT_TIMEOUT_SECONDS", "GMS_MCP_ENABLE_DIRECT"]:
+            for var in [
+                "GMS_MCP_GMS_PATH",
+                "GMS_MCP_DEFAULT_TIMEOUT_SECONDS",
+                "GMS_MCP_ENABLE_DIRECT",
+                "GMS_MCP_IGOR_PROCESSOR_COUNT",
+            ]:
                 if var in os.environ:
                     del os.environ[var]
 
     def test_make_server_config_no_autodetect(self):
         # Ensure they AREN'T set
-        for var in ["GMS_MCP_GMS_PATH", "GMS_MCP_DEFAULT_TIMEOUT_SECONDS", "GMS_MCP_ENABLE_DIRECT"]:
+        for var in [
+            "GMS_MCP_GMS_PATH",
+            "GMS_MCP_DEFAULT_TIMEOUT_SECONDS",
+            "GMS_MCP_ENABLE_DIRECT",
+            "GMS_MCP_IGOR_PROCESSOR_COUNT",
+        ]:
             if var in os.environ:
                 del os.environ[var]
 
@@ -99,6 +113,7 @@ class TestInstallAutodetect(unittest.TestCase):
         self.assertNotIn("GMS_MCP_GMS_PATH", env)
         self.assertNotIn("GMS_MCP_DEFAULT_TIMEOUT_SECONDS", env)
         self.assertNotIn("GMS_MCP_ENABLE_DIRECT", env)
+        self.assertNotIn("GMS_MCP_IGOR_PROCESSOR_COUNT", env)
         self.assertEqual(env["GM_PROJECT_ROOT"], "${workspaceFolder}")
 
     def test_main_help_includes_star_footer(self):
@@ -229,12 +244,12 @@ class TestClaudeCodeSupport(unittest.TestCase):
         self.assertEqual(_workspace_folder_var("antigravity"), "${workspaceFolder}")
 
     def test_workspace_folder_var_claude_code(self):
-        """Claude Code should use ${CLAUDE_PROJECT_DIR}."""
-        self.assertEqual(_workspace_folder_var("claude-code"), "${CLAUDE_PROJECT_DIR}")
+        """Claude Code should use the project directory with a safe fallback."""
+        self.assertEqual(_workspace_folder_var("claude-code"), "${CLAUDE_PROJECT_DIR:-.}")
 
     def test_workspace_folder_var_claude_code_global(self):
-        """Claude Code global should use ${CLAUDE_PROJECT_DIR}."""
-        self.assertEqual(_workspace_folder_var("claude-code-global"), "${CLAUDE_PROJECT_DIR}")
+        """Claude Code global should use the project directory with a safe fallback."""
+        self.assertEqual(_workspace_folder_var("claude-code-global"), "${CLAUDE_PROJECT_DIR:-.}")
 
     def test_make_claude_code_plugin_manifest_structure(self):
         """Plugin manifest should have required fields."""
@@ -243,7 +258,8 @@ class TestClaudeCodeSupport(unittest.TestCase):
         self.assertIn("name", manifest)
         self.assertEqual(manifest["name"], "gms-mcp")
         self.assertIn("description", manifest)
-        self.assertIn("version", manifest)
+        self.assertNotIn("version", manifest)
+        self.assertNotIn("mcpServers", manifest)
         self.assertIn("author", manifest)
         self.assertIn("name", manifest["author"])
         self.assertIn("repository", manifest)
@@ -259,12 +275,13 @@ class TestClaudeCodeSupport(unittest.TestCase):
             args=[],
         )
 
-        self.assertIn("gms", config)
-        server = config["gms"]
+        self.assertEqual(set(config), {"mcpServers"})
+        self.assertIn("gms", config["mcpServers"])
+        server = config["mcpServers"]["gms"]
         self.assertEqual(server["command"], "gms-mcp")
         self.assertEqual(server["args"], [])
         self.assertIn("env", server)
-        self.assertEqual(server["env"]["GM_PROJECT_ROOT"], "${CLAUDE_PROJECT_DIR}")
+        self.assertEqual(server["env"]["GM_PROJECT_ROOT"], "${CLAUDE_PROJECT_DIR:-.}")
         self.assertEqual(server["env"]["PYTHONUNBUFFERED"], "1")
 
     def test_make_claude_code_mcp_config_custom_server_name(self):
@@ -275,9 +292,9 @@ class TestClaudeCodeSupport(unittest.TestCase):
             args=["-m", "gms_mcp.bootstrap_server"],
         )
 
-        self.assertIn("custom-gms", config)
-        self.assertNotIn("gms", config)
-        server = config["custom-gms"]
+        self.assertIn("custom-gms", config["mcpServers"])
+        self.assertNotIn("gms", config["mcpServers"])
+        server = config["mcpServers"]["custom-gms"]
         self.assertEqual(server["command"], "python")
         self.assertEqual(server["args"], ["-m", "gms_mcp.bootstrap_server"])
 
@@ -293,7 +310,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
                 args=[],
             )
 
-            env = config["gms"]["env"]
+            env = config["mcpServers"]["gms"]["env"]
             self.assertEqual(env["GMS_MCP_GMS_PATH"], "/path/to/gms")
             self.assertEqual(env["GMS_MCP_ENABLE_DIRECT"], "1")
         finally:
@@ -314,7 +331,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
         self.assertIn("[mcp_servers.gms-codex]", config)
         self.assertIn('command = "gms-mcp"', config)
         self.assertIn(
-            f"GM_PROJECT_ROOT = {_make_codex_toml_value(str(workspace_root))}",
+            f"GM_PROJECT_ROOT = {_make_codex_toml_value('.')}",
             config,
         )
         self.assertIn("[mcp_servers.gms-codex.env]", config)
@@ -337,7 +354,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
             self.assertIn('GMS_MCP_GMS_PATH = "/path/to/gms"', config)
             self.assertIn('GMS_MCP_ENABLE_DIRECT = "1"', config)
             self.assertIn(
-                f"GM_PROJECT_ROOT = {_make_codex_toml_value(str(gm_root))}",
+                f"GM_PROJECT_ROOT = {_make_codex_toml_value('gamemaker')}",
                 config,
             )
         finally:
@@ -369,7 +386,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
                 env = _build_codex_env(gm_project_root=gm_project, workspace_root=workspace)
                 self.assertEqual(
                     env["GM_PROJECT_ROOT"],
-                    str(gm_project),
+                    "game",
                 )
                 self.assertEqual(env["PYTHONUNBUFFERED"], "1")
                 self.assertEqual(env["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"], "45")
@@ -380,6 +397,14 @@ class TestClaudeCodeSupport(unittest.TestCase):
                 self.assertIn("GMS_MCP_DEFAULT_TIMEOUT_SECONDS=45", env_args)
             finally:
                 del os.environ["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"]
+
+    def test_build_codex_env_rejects_project_outside_workspace(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            root = Path(tmpdir)
+            workspace = root / "workspace"
+            workspace.mkdir()
+            with self.assertRaisesRegex(ValueError, "must be inside the workspace"):
+                _build_codex_env(gm_project_root=root / "external", workspace_root=workspace)
 
     def test_resolve_antigravity_config_path_default(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -752,6 +777,8 @@ class TestClaudeCodeSupport(unittest.TestCase):
             output = buffer.getvalue()
             self.assertEqual(ret, 0)
             self.assertIn("[DRY-RUN] Codex config would be written to:", output)
+            self.assertIn('GM_PROJECT_ROOT = "."', output)
+            self.assertNotIn(f'GM_PROJECT_ROOT = "{workspace}"', output)
             self.assertFalse((workspace / ".codex" / "mcp.toml").exists())
 
     def test_main_openclaw_dry_run(self):
@@ -1124,6 +1151,9 @@ class TestClaudeCodeSupport(unittest.TestCase):
 
             self.assertEqual(ret, 0)
             self.assertTrue((workspace / ".codex" / "mcp.toml").exists())
+            workspace_config = (workspace / ".codex" / "mcp.toml").read_text(encoding="utf-8")
+            self.assertIn('GM_PROJECT_ROOT = "."', workspace_config)
+            self.assertNotIn(str(workspace), workspace_config)
             self.assertIn("[INFO] Codex config written to:", output)
             self.assertIn("[INFO] Codex app setup global preview target:", output)
             self.assertIn("[INFO] Active server entry 'gms-app' source:", output)
@@ -1176,12 +1206,30 @@ class TestClaudeCodeSupport(unittest.TestCase):
             with open(manifest_path) as f:
                 manifest = json.load(f)
             self.assertEqual(manifest["name"], "gms-mcp")
+            self.assertNotIn("version", manifest)
+            self.assertNotIn("mcpServers", manifest)
 
             # Validate MCP config content
             with open(mcp_config_path) as f:
                 mcp_config = json.load(f)
-            self.assertIn("gms", mcp_config)
-            self.assertEqual(mcp_config["gms"]["env"]["GM_PROJECT_ROOT"], "${CLAUDE_PROJECT_DIR}")
+            self.assertEqual(set(mcp_config), {"mcpServers"})
+            self.assertIn("gms", mcp_config["mcpServers"])
+            self.assertEqual(
+                mcp_config["mcpServers"]["gms"]["env"]["GM_PROJECT_ROOT"],
+                "${CLAUDE_PROJECT_DIR:-.}",
+            )
+
+    def test_repository_claude_plugin_uses_one_mcp_authority(self):
+        repo_root = Path(__file__).resolve().parents[3]
+        manifest = json.loads((repo_root / ".claude-plugin" / "plugin.json").read_text(encoding="utf-8"))
+        marketplace = json.loads((repo_root / ".claude-plugin" / "marketplace.json").read_text(encoding="utf-8"))
+        mcp_config = json.loads((repo_root / ".mcp.json").read_text(encoding="utf-8"))
+
+        self.assertNotIn("version", manifest)
+        self.assertNotIn("mcpServers", manifest)
+        self.assertNotIn("version", marketplace["plugins"][0])
+        self.assertEqual(set(mcp_config), {"mcpServers"})
+        self.assertIn("gms", mcp_config["mcpServers"])
 
     def test_generate_claude_code_plugin_with_bundle_assets_copies_hooks(self):
         with tempfile.TemporaryDirectory() as tmpdir:
@@ -1197,8 +1245,93 @@ class TestClaudeCodeSupport(unittest.TestCase):
             )
 
             session_start = plugin_dir / "hooks" / "session-start.sh"
+            notify_errors = plugin_dir / "hooks" / "notify-errors.sh"
+            hooks_manifest = plugin_dir / "hooks" / "hooks.json"
             self.assertTrue(session_start.exists())
+            self.assertTrue(notify_errors.exists())
+            self.assertTrue(hooks_manifest.exists())
             self.assertIn("gms-mcp doctor --notify", session_start.read_text(encoding="utf-8"))
+
+            config = json.loads(hooks_manifest.read_text(encoding="utf-8"))
+            self.assertEqual(set(config), {"description", "hooks"})
+            self.assertEqual(set(config["hooks"]), {"SessionStart", "PostToolUse", "PostToolUseFailure"})
+            for event_name, groups in config["hooks"].items():
+                self.assertIsInstance(groups, list)
+                self.assertGreater(len(groups), 0)
+                for group in groups:
+                    self.assertIsInstance(group.get("matcher"), str)
+                    handlers = group.get("hooks")
+                    self.assertIsInstance(handlers, list)
+                    self.assertGreater(len(handlers), 0)
+                    for handler in handlers:
+                        self.assertEqual(handler.get("type"), "command")
+                        self.assertEqual(handler.get("command"), "bash")
+                        self.assertEqual(handler.get("timeout"), 30)
+                        args = handler.get("args")
+                        self.assertIsInstance(args, list)
+                        self.assertEqual(len(args), 1)
+                        prefix = "${CLAUDE_PLUGIN_ROOT}/"
+                        self.assertTrue(args[0].startswith(prefix))
+                        self.assertTrue((plugin_dir / args[0][len(prefix) :]).is_file())
+
+                if event_name in {"PostToolUse", "PostToolUseFailure"}:
+                    self.assertIn("gm_run|gm_compile", groups[0]["matcher"])
+                    self.assertIn("mcp__plugin_gms-mcp_gms__", groups[0]["matcher"])
+
+            bash = shutil.which("bash")
+            if bash:
+                workspace = Path(tmpdir) / "workspace"
+                workspace.mkdir()
+                (workspace / "fixture.yyp").write_text("{}\n", encoding="utf-8")
+                hook_env = {
+                    **os.environ,
+                    "PATH": os.pathsep.join(filter(None, [str(Path(bash).parent), "/usr/bin", "/bin"])),
+                }
+                session_result = subprocess.run(
+                    [bash, str(session_start)],
+                    cwd=workspace,
+                    env=hook_env,
+                    input=json.dumps({"hook_event_name": "SessionStart"}),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                )
+                self.assertEqual(session_result.returncode, 0, session_result.stderr)
+                self.assertIn("GameMaker project detected", session_result.stdout)
+
+                failure_result = subprocess.run(
+                    [bash, str(notify_errors)],
+                    input=json.dumps(
+                        {
+                            "hook_event_name": "PostToolUseFailure",
+                            "tool_name": "mcp__plugin_gms-mcp_gms__gm_compile",
+                            "error": "Compile failed in objects/o_player/Create_0.gml:12",
+                        }
+                    ),
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                )
+                self.assertEqual(failure_result.returncode, 0, failure_result.stderr)
+                self.assertIn("Compile issues detected", failure_result.stdout)
+
+    def test_generate_claude_plugin_renders_custom_server_hook_matchers(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            plugin_dir = Path(tmpdir) / "gms-mcp"
+            _generate_claude_code_plugin(
+                plugin_dir=plugin_dir,
+                server_name="studio-gms",
+                command="gms-mcp",
+                args_prefix=[],
+                dry_run=False,
+                include_bundle_assets=True,
+            )
+
+            hooks = json.loads((plugin_dir / "hooks" / "hooks.json").read_text(encoding="utf-8"))["hooks"]
+            for event_name in ("PostToolUse", "PostToolUseFailure"):
+                matcher = hooks[event_name][0]["matcher"]
+                self.assertNotIn("gms-mcp_gms__", matcher)
+                self.assertRegex("mcp__plugin_gms-mcp_studio-gms__gm_compile", matcher)
 
 
 if __name__ == "__main__":

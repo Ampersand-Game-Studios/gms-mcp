@@ -1,0 +1,2 @@
+recursive-include skills *.md .gitkeep
+recursive-include hooks *.sh *.json .gitkeep

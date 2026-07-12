@@ -192,18 +192,6 @@ class TestEntrypoints(unittest.TestCase):
         self.assertEqual(server.name, "GameMaker MCP")
         register_all.assert_called_once_with(server, FakeContext)
 
-        class FakeServerClass:
-            _gms_mcp_patched = False
-
-            async def _handle_request(self, message, req, session, lifespan_context, raise_exceptions):
-                return "ok"
-
-        fake_lowlevel_mod = types.ModuleType("mcp.server.lowlevel.server")
-        fake_lowlevel_mod.Server = FakeServerClass
-        fake_mcp = types.ModuleType("mcp")
-        fake_mcp_server = types.ModuleType("mcp.server")
-        fake_mcp_lowlevel = types.ModuleType("mcp.server.lowlevel")
-
         run_server = Mock()
         with (
             patch(
@@ -211,20 +199,10 @@ class TestEntrypoints(unittest.TestCase):
                 return_value=SimpleNamespace(run=run_server),
             ),
             patch("gms_mcp.gamemaker_mcp_server._dbg"),
-            patch.dict(
-                sys.modules,
-                {
-                    "mcp": fake_mcp,
-                    "mcp.server": fake_mcp_server,
-                    "mcp.server.lowlevel": fake_mcp_lowlevel,
-                    "mcp.server.lowlevel.server": fake_lowlevel_mod,
-                },
-            ),
         ):
             result = gamemaker_mcp_server.main()
         self.assertEqual(result, 0)
         run_server.assert_called_once()
-        self.assertTrue(FakeServerClass._gms_mcp_patched)
 
         stderr = io.StringIO()
         with (
@@ -289,10 +267,10 @@ class TestCommandWrappers(unittest.TestCase):
         with patch.object(event_commands, "duplicate_event", return_value=True) as duplicate_event:
             self.assertTrue(
                 event_commands.handle_event_duplicate(
-                    SimpleNamespace(object="o_player", source_event="create", target_num=1)
+                    SimpleNamespace(object="o_player", source_event="create", target_event="create:1")
                 )
             )
-        duplicate_event.assert_called_once_with("o_player", "create", 1)
+        duplicate_event.assert_called_once_with("o_player", "create", "create:1")
 
         with patch.object(event_commands, "list_events", return_value=["create"]) as list_events:
             result = event_commands.handle_event_list(SimpleNamespace(object="o_player"))
@@ -423,7 +401,10 @@ class TestCommandWrappers(unittest.TestCase):
         list_instances.assert_called_once_with("r_main", "Actors")
 
     def test_workflow_wrappers_and_safe_delete_paths(self):
-        with patch.object(workflow_commands, "duplicate_asset", return_value={"ok": True}) as duplicate_asset:
+        with (
+            patch.object(workflow_commands, "transaction_is_active", return_value=True),
+            patch.object(workflow_commands, "duplicate_asset", return_value={"ok": True}) as duplicate_asset,
+        ):
             result = workflow_commands.handle_workflow_duplicate(
                 SimpleNamespace(project_root=".", asset_path="scripts/scr_old/scr_old.yy", new_name="scr_new", yes=True)
             )
@@ -431,17 +412,14 @@ class TestCommandWrappers(unittest.TestCase):
         self.assertTrue(result.to_dict()["ok"])
         duplicate_asset.assert_called_once()
 
-        with patch.object(workflow_commands, "rename_asset", return_value={"ok": True}) as rename_asset:
+        with (
+            patch.object(workflow_commands, "transaction_is_active", return_value=True),
+            patch.object(workflow_commands, "rename_asset", return_value={"ok": True}) as rename_asset,
+        ):
             workflow_commands.handle_workflow_rename(
                 SimpleNamespace(project_root=".", asset_path="scripts/scr_old/scr_old.yy", new_name="scr_new")
             )
         rename_asset.assert_called_once()
-
-        with patch.object(workflow_commands, "delete_asset", return_value={"ok": True}) as delete_asset:
-            workflow_commands.handle_workflow_delete(
-                SimpleNamespace(project_root=".", asset_path="scripts/scr_old/scr_old.yy", dry_run=True)
-            )
-        delete_asset.assert_called_once()
 
         with patch.object(workflow_commands, "swap_sprite_png", return_value={"ok": True}) as swap_sprite_png:
             workflow_commands.handle_workflow_swap_sprite(
@@ -474,7 +452,6 @@ class TestCommandWrappers(unittest.TestCase):
                         asset_type="script",
                         asset_name="scr_test",
                         force=False,
-                        clean_refs=False,
                         apply=False,
                     )
                 )
@@ -641,8 +618,8 @@ class TestServerHelpers(unittest.TestCase):
             self.assertEqual(server_project._list_yyp_files(root), [root / "game.yyp"])
             self.assertEqual(server_project._search_upwards_for_yyp(nested), root.resolve())
             self.assertEqual(server_project._search_upwards_for_gamemaker_yyp(gm_project), gm_project.resolve())
-            self.assertEqual(server_project._resolve_project_directory_no_deps(str(root)), root)
-            self.assertEqual(server_project._resolve_project_directory_no_deps(str(gm_root)), gm_project)
+            self.assertEqual(server_project._resolve_project_directory_no_deps(str(root)), root.resolve())
+            self.assertEqual(server_project._resolve_project_directory_no_deps(str(gm_root)), gm_project.resolve())
             self.assertEqual(server_project._resolve_repo_root(str(root)), root.resolve())
             self.assertEqual(server_project._find_yyp_file(root), "game.yyp")
             self.assertIsNone(server_project._find_yyp_file(root / "missing"))
@@ -650,15 +627,15 @@ class TestServerHelpers(unittest.TestCase):
             self.assertIsNone(server_project._resolve_project_directory("nope") if False else None)
 
             file_path = root / "game.yyp"
-            self.assertEqual(server_project._resolve_project_directory_no_deps(str(file_path)), root)
+            self.assertEqual(server_project._resolve_project_directory_no_deps(str(file_path)), root.resolve())
 
             with patch.dict(os.environ, {"GM_PROJECT_ROOT": str(root)}, clear=False):
-                self.assertEqual(server_project._resolve_project_directory_no_deps(None), root)
+                self.assertEqual(server_project._resolve_project_directory_no_deps(None), root.resolve())
 
         with tempfile.TemporaryDirectory() as temp_dir:
             with (
                 patch.dict(os.environ, {}, clear=True),
-                patch("gms_mcp.project_detection.Path.cwd", return_value=Path(temp_dir)),
+                patch.object(server_project, "_SERVER_START_DIRECTORY", Path(temp_dir)),
             ):
                 with self.assertRaises(FileNotFoundError):
                     server_project._resolve_project_directory_no_deps(None)
@@ -797,8 +774,13 @@ class TestEventTools(MCPToolTestCase):
                 ),
                 (
                     "gm_event_duplicate",
-                    {"object": "o_player", "source_event": "create", "target_num": 2, "project_root": "/tmp/project"},
-                    ["event", "duplicate", "o_player", "create", "2"],
+                    {
+                        "object": "o_player",
+                        "source_event": "create",
+                        "target_event": "create:2",
+                        "project_root": "/tmp/project",
+                    },
+                    ["event", "duplicate", "o_player", "create", "create:2"],
                 ),
                 (
                     "gm_event_list",
@@ -902,80 +884,6 @@ class TestProjectHealthTools(MCPToolTestCase):
             health = self.call_tool("gm_mcp_health", project_root="/tmp/project")
         self.assertTrue(health["ok"])
         self.assertIn("data", health)
-
-        async_result = SimpleNamespace(as_dict=lambda: {"ok": True, "stdout": "a\nb\nc", "stderr": ""})
-        with patch(
-            "gms_mcp.server.tools.project_health._run_cli_async",
-            new=AsyncMock(return_value=async_result),
-        ):
-            result = self.call_tool(
-                "gm_cli", args=["event", "list", "o_player"], project_root="/tmp/project", prefer_cli=True
-            )
-        self.assertTrue(result["ok"])
-
-        with patch(
-            "gms_mcp.server.tools.project_health._run_gms_inprocess",
-            return_value=SimpleNamespace(as_dict=lambda: {"ok": True, "stdout": "good", "stderr": ""}),
-        ):
-            result = self.call_tool(
-                "gm_cli", args=["event", "list", "o_player"], project_root="/tmp/project", prefer_cli=False
-            )
-        self.assertTrue(result["ok"])
-
-        with patch(
-            "gms_mcp.server.tools.project_health._run_gms_inprocess",
-            return_value=SimpleNamespace(
-                as_dict=lambda: {"ok": False, "error": "direct failed", "stdout": "", "stderr": ""}
-            ),
-        ):
-            result = self.call_tool(
-                "gm_cli",
-                args=["event", "list", "o_player"],
-                project_root="/tmp/project",
-                prefer_cli=False,
-                fallback_to_subprocess=False,
-            )
-        self.assertFalse(result["ok"])
-        self.assertEqual(result["error"], "direct failed")
-
-        async_result = SimpleNamespace(as_dict=lambda: {"ok": True, "stdout": "cli", "stderr": ""})
-        with (
-            patch(
-                "gms_mcp.server.tools.project_health._run_gms_inprocess",
-                return_value=SimpleNamespace(
-                    as_dict=lambda: {"ok": False, "error": "direct failed", "stdout": "", "stderr": ""}
-                ),
-            ),
-            patch(
-                "gms_mcp.server.tools.project_health._run_cli_async",
-                new=AsyncMock(return_value=async_result),
-            ),
-        ):
-            result = self.call_tool(
-                "gm_cli",
-                args=["event", "list", "o_player"],
-                project_root="/tmp/project",
-                prefer_cli=False,
-            )
-        self.assertEqual(result["direct_error"], "direct failed")
-
-        with (
-            patch(
-                "gms_mcp.server.tools.project_health._run_cli_async",
-                new=AsyncMock(),
-            ) as run_cli,
-            patch("gms_mcp.server.tools.project_health._run_gms_inprocess") as run_direct,
-        ):
-            blocked = self.call_tool(
-                "gm_cli",
-                args=["asset", "delete", "script", "scr_not_allowed"],
-                project_root="/tmp/project",
-            )
-        self.assertFalse(blocked["ok"])
-        self.assertTrue(blocked["blocked_by_policy"])
-        self.assertEqual(blocked["policy"], "gm_cli_read_only")
-        run_cli.assert_not_awaited()
-        run_direct.assert_not_called()
 
         with (
             patch(

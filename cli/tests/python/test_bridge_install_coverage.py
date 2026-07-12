@@ -185,20 +185,9 @@ class TestInstallCoverage(unittest.TestCase):
         entry = install_module._resolve_json_entry_root(
             {"mcpServers": {"gms": {"command": "cmd"}}, "plain": {}},
             server_name="gms",
-            allow_plain_top_level=False,
         )
         self.assertEqual(entry["command"], "cmd")
-        self.assertIsNone(
-            install_module._resolve_json_entry_root(
-                {"gms": {"command": "cmd"}}, server_name="gms", allow_plain_top_level=False
-            )
-        )
-        self.assertEqual(
-            install_module._resolve_json_entry_root(
-                {"gms": {"command": "cmd"}}, server_name="gms", allow_plain_top_level=True
-            )["command"],
-            "cmd",
-        )
+        self.assertIsNone(install_module._resolve_json_entry_root({"gms": {"command": "cmd"}}, server_name="gms"))
 
         env = {}
         install_module._apply_safe_profile_env(env, enabled=True)
@@ -361,7 +350,10 @@ class TestInstallCoverage(unittest.TestCase):
         self.assertIn("skills install failed", output)
 
     def test_run_canonical_and_main_branches(self):
-        with patch("gms_mcp.install_support.flow.CLIENT_ACTIONS", ["setup"]), patch("gms_mcp.install_support.flow.CLIENT_SCOPES", ["workspace"]):
+        with (
+            patch("gms_mcp.install_support.flow.CLIENT_ACTIONS", ["setup"]),
+            patch("gms_mcp.install_support.flow.CLIENT_SCOPES", ["workspace"]),
+        ):
             result, output = _capture_output(
                 install_module._run_canonical_flow,
                 client="cursor",
@@ -538,6 +530,31 @@ class TestInstallCoverage(unittest.TestCase):
 
     def test_collect_client_check_state_special_cases(self):
         with tempfile.TemporaryDirectory() as temp_dir:
+            workspace = Path(temp_dir)
+            bare_config = workspace / "bare.json"
+            bare_config.write_text(
+                json.dumps(
+                    {
+                        "gms": {
+                            "command": "gms-mcp",
+                            "args": [],
+                            "env": {"GM_PROJECT_ROOT": "/tmp/project", "PYTHONUNBUFFERED": "1"},
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            state = install_module._collect_client_check_state(
+                client="claude-code",
+                scope="workspace",
+                workspace_root=workspace,
+                server_name="gms",
+                config_path_override=str(bare_config),
+            )
+            self.assertFalse(state.readiness.ready)
+            self.assertIsNone(state.entry)
+
+        with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir) / "workspace"
             workspace.mkdir()
             home_dir = Path(temp_dir) / "home"
@@ -633,7 +650,9 @@ class TestInstallCoverage(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             workspace = Path(temp_dir)
-            with patch("gms_mcp.install_support.flow._read_codex_server_entry", side_effect=ValueError("bad codex config")):
+            with patch(
+                "gms_mcp.install_support.flow._read_codex_server_entry", side_effect=ValueError("bad codex config")
+            ):
                 state = install_module._collect_client_check_state(
                     client="codex",
                     scope="workspace",
@@ -711,7 +730,9 @@ class TestInstallCoverage(unittest.TestCase):
             self.assertEqual(result, 0)
             self.assertIn("Codex config updated", output)
 
-            with patch("gms_mcp.install_support.flow._generate_antigravity_config", side_effect=ValueError("bad antigravity")):
+            with patch(
+                "gms_mcp.install_support.flow._generate_antigravity_config", side_effect=ValueError("bad antigravity")
+            ):
                 result, output = _capture_output(
                     install_module._run_setup_for_client,
                     client="antigravity",

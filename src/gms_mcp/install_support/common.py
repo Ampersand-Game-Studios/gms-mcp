@@ -25,6 +25,8 @@ _FORWARDED_ENV_VARS = [
     "GMS_MCP_GMS_PATH",
     "GMS_MCP_DEFAULT_TIMEOUT_SECONDS",
     "GMS_MCP_ENABLE_DIRECT",
+    "GMS_MCP_IGOR_PROCESSOR_COUNT",
+    "GMS_MCP_TOOLSETS",
 ]
 _SAFE_PROFILE_TIMEOUT_SECONDS = 600
 _REDACTED_VALUE = "***REDACTED***"
@@ -33,8 +35,10 @@ _SAFE_ENV_OUTPUT_KEYS = {
     "GMS_MCP_DEFAULT_TIMEOUT_SECONDS",
     "GMS_MCP_ENABLE_DIRECT",
     "GMS_MCP_GMS_PATH",
+    "GMS_MCP_IGOR_PROCESSOR_COUNT",
     "GMS_MCP_REQUIRE_DRY_RUN",
     "GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST",
+    "GMS_MCP_TOOLSETS",
     "PYTHONUNBUFFERED",
 }
 
@@ -235,7 +239,7 @@ def _select_gm_project_root(
 def _workspace_folder_var(client: str) -> str:
     """Return the workspace/project directory variable for a given client."""
     if client in ("claude-code", "claude-code-global"):
-        return "${CLAUDE_PROJECT_DIR}"
+        return "${CLAUDE_PROJECT_DIR:-.}"
     return "${workspaceFolder}"
 
 
@@ -399,17 +403,11 @@ def _validate_common_entry(
     return ReadinessResult(ready=len(problems) == 0, problems=problems)
 
 
-def _resolve_json_entry_root(parsed: dict, *, server_name: str, allow_plain_top_level: bool) -> dict | None:
+def _resolve_json_entry_root(parsed: dict, *, server_name: str) -> dict | None:
     mcp_servers = parsed.get("mcpServers")
     if isinstance(mcp_servers, dict):
         entry = mcp_servers.get(server_name)
         return entry if isinstance(entry, dict) else None
-
-    if allow_plain_top_level:
-        plain_entry = parsed.get(server_name)
-        if isinstance(plain_entry, dict):
-            return plain_entry
-
     return None
 
 
@@ -417,14 +415,13 @@ def _read_json_server_entry(
     *,
     config_path: Path,
     server_name: str,
-    allow_plain_top_level: bool,
 ) -> tuple[dict | None, bool]:
     if not config_path.exists():
         return None, False
 
     text = config_path.read_text(encoding="utf-8")
     parsed = _parse_json_object_or_raise(text=text, source_label=str(config_path))
-    entry = _resolve_json_entry_root(parsed, server_name=server_name, allow_plain_top_level=allow_plain_top_level)
+    entry = _resolve_json_entry_root(parsed, server_name=server_name)
     return entry, True
 
 
@@ -434,7 +431,6 @@ def _collect_standard_check_state(
     scope: str,
     config_path: Path,
     server_name: str,
-    allow_plain_top_level: bool = False,
     require_project_root: bool = True,
     env_required: bool = True,
     not_applicable_reason: str | None = None,
@@ -454,7 +450,6 @@ def _collect_standard_check_state(
     entry, exists = _read_json_server_entry(
         config_path=config_path,
         server_name=server_name,
-        allow_plain_top_level=allow_plain_top_level,
     )
     readiness = _validate_common_entry(
         entry,
@@ -581,7 +576,6 @@ def _resolve_python_command(python_command: str) -> str:
     return requested
 
 
-
 def _parse_json_object_or_raise(*, text: str, source_label: str) -> dict:
     try:
         parsed = json.loads(text)
@@ -590,4 +584,3 @@ def _parse_json_object_or_raise(*, text: str, source_label: str) -> dict:
     if not isinstance(parsed, dict):
         raise ValueError(f"Malformed JSON in {source_label}: root must be an object.")
     return parsed
-

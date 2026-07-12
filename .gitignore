@@ -3,9 +3,6 @@ __pycache__/
 *.pyo
 .coverage
 .coverage.*
-uv.lock
-
-
 .venv/
 venv/
 .gms-mcp/
@@ -17,6 +14,7 @@ venv/
 
 build/
 dist/
+/output/
 *.egg-info/
 
 gamemaker/
@@ -27,8 +25,10 @@ gamemaker/
 .DS_Store
 
 # Local MCP client config (machine-specific)
-.mcp.json
-.claude-plugin/
+# Canonical Claude plugin metadata is versioned; ignore only local plugin state.
+.claude-plugin/*
+!.claude-plugin/plugin.json
+!.claude-plugin/marketplace.json
 mcp-configs/
 ops/telemetry/cloudflare/node_modules/
 ops/telemetry/cloudflare/.wrangler/

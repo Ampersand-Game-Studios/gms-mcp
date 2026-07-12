@@ -99,7 +99,6 @@ def _collect_client_check_state(
                 scope=scope,
                 config_path=mcp_path,
                 server_name=server_name,
-                allow_plain_top_level=True,
                 require_project_root=True,
                 env_required=True,
                 not_applicable_reason=not_applicable_reason,
@@ -119,14 +118,12 @@ def _collect_client_check_state(
                 state.path = str(plugin_dir)
             return state
 
-        allow_plain = spec.key == "claude-code"
         require_project_root = not (spec.key == "codex" and scope == "global")
         return _collect_standard_check_state(
             client=spec.key,
             scope=scope,
             config_path=target,
             server_name=server_name,
-            allow_plain_top_level=allow_plain,
             require_project_root=require_project_root,
             env_required=True,
             not_applicable_reason=not_applicable_reason,
@@ -256,11 +253,7 @@ def _run_setup_for_client(
 
     if spec.key == "claude-code":
         plugin_dir = target.parent if target.suffix == ".json" else target
-        manifest_payload = _build_claude_plugin_manifest(
-            server_name=server_name,
-            command=command,
-            args_prefix=args_prefix,
-        )
+        manifest_payload = _build_claude_plugin_manifest()
         mcp_payload = _make_claude_code_mcp_config(
             server_name=server_name,
             command=command,
@@ -285,11 +278,7 @@ def _run_setup_for_client(
         return 0
 
     if spec.key == "claude-desktop":
-        manifest_payload = _build_claude_plugin_manifest(
-            server_name=server_name,
-            command=command,
-            args_prefix=args_prefix,
-        )
+        manifest_payload = _build_claude_plugin_manifest()
         mcp_payload = _make_claude_code_mcp_config(
             server_name=server_name,
             command=command,

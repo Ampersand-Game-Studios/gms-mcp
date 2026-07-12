@@ -3,12 +3,15 @@ from __future__ import annotations
 import datetime as _dt
 import json
 import os
+import re
 import shlex
 import shutil
 import sys
 import tempfile
 from pathlib import Path
 from typing import Iterable, Optional
+
+from gms_helpers.bundle_assets import bundled_hooks_dir, bundled_skills_dir
 
 from .common import (
     _FORWARDED_ENV_VARS,
@@ -95,22 +98,11 @@ def _generate_example_configs(
     return out_paths
 
 
-def _get_package_version() -> str:
-    """Get the current package version, with fallback."""
-    try:
-        from importlib.metadata import version
-
-        return version("gms-mcp")
-    except Exception:
-        return "0.1.0"
-
-
 def _make_claude_code_plugin_manifest() -> dict:
     """Create the plugin.json manifest for Claude Code."""
     return {
         "name": "gms-mcp",
         "description": "GameMaker Studio MCP tools for asset management, code intelligence, and project maintenance",
-        "version": _get_package_version(),
         "author": {"name": "Ampersand Game Studios", "url": "https://github.com/Ampersand-Game-Studios/gms-mcp"},
         "repository": "https://github.com/Ampersand-Game-Studios/gms-mcp",
         "license": "MIT",
@@ -128,11 +120,11 @@ def _make_claude_code_mcp_config(
     """
     Create the .mcp.json config for Claude Code.
 
-    Uses ${CLAUDE_PROJECT_DIR} which dynamically resolves to whichever
-    project Claude Code is currently open in.
+    Uses ${CLAUDE_PROJECT_DIR:-.}, which resolves to the active Claude Code
+    project and remains valid when Claude invokes the plugin outside a project.
     """
     env: dict[str, str] = {
-        "GM_PROJECT_ROOT": "${CLAUDE_PROJECT_DIR}",
+        "GM_PROJECT_ROOT": "${CLAUDE_PROJECT_DIR:-.}",
         "PYTHONUNBUFFERED": "1",  # Ensure Python output is not buffered
     }
 
@@ -144,10 +136,12 @@ def _make_claude_code_mcp_config(
     _apply_safe_profile_env(env, enabled=safe_profile)
 
     return {
-        server_name: {
-            "command": command,
-            "args": args,
-            "env": env,
+        "mcpServers": {
+            server_name: {
+                "command": command,
+                "args": args,
+                "env": env,
+            }
         }
     }
 
@@ -164,8 +158,15 @@ def _build_codex_env(
     }
 
     if include_project_root:
-        resolved_root = str(gm_project_root if gm_project_root is not None else workspace_root)
-        env["GM_PROJECT_ROOT"] = resolved_root
+        resolved_workspace = workspace_root.expanduser().resolve()
+        resolved_root = (gm_project_root if gm_project_root is not None else workspace_root).expanduser().resolve()
+        try:
+            relative_root = resolved_root.relative_to(resolved_workspace)
+        except ValueError as exc:
+            raise ValueError(
+                "Codex workspace GM_PROJECT_ROOT must be inside the workspace so the generated config remains portable."
+            ) from exc
+        env["GM_PROJECT_ROOT"] = relative_root.as_posix() or "."
 
     for env_var in _FORWARDED_ENV_VARS:
         val = os.environ.get(env_var)
@@ -757,10 +758,6 @@ def _print_codex_app_setup_summary(*, workspace_root: Path, server_name: str) ->
     return 0
 
 
-def _repo_root() -> Path:
-    return Path(__file__).resolve().parents[3]
-
-
 def _copy_tree(*, source: Path, destination: Path, dry_run: bool, written: list[Path]) -> None:
     if not source.exists():
         return
@@ -780,33 +777,41 @@ def _copy_tree(*, source: Path, destination: Path, dry_run: bool, written: list[
         written.append(target)
 
 
-def _build_claude_plugin_manifest(
-    *,
-    server_name: str,
-    command: str,
-    args_prefix: list[str],
-) -> dict:
+def _build_claude_plugin_manifest() -> dict:
     manifest = _make_claude_code_plugin_manifest()
-    template_path = _repo_root() / ".claude-plugin" / "plugin.json"
-    if template_path.exists():
-        try:
-            parsed = _parse_json_object_or_raise(
-                text=template_path.read_text(encoding="utf-8"),
-                source_label=str(template_path),
-            )
-            manifest.update(parsed)
-        except Exception:
-            pass
-
     manifest["name"] = manifest.get("name") or "gms-mcp"
-    manifest["mcpServers"] = {
-        server_name: {
-            "command": command,
-            "args": args_prefix,
-            "env": {},
-        }
-    }
     return manifest
+
+
+def _render_claude_hook_server_name(*, hooks_manifest_path: Path, server_name: str, dry_run: bool) -> None:
+    """Bind bundled MCP hook matchers to the configured plugin server name."""
+    if dry_run or not hooks_manifest_path.is_file():
+        return
+    payload = _parse_json_object_or_raise(
+        text=hooks_manifest_path.read_text(encoding="utf-8"),
+        source_label=str(hooks_manifest_path),
+    )
+    hooks = payload.get("hooks")
+    if not isinstance(hooks, dict):
+        raise ValueError(f"Malformed Claude hooks manifest: {hooks_manifest_path}")
+
+    source_prefix = "mcp__plugin_gms-mcp_gms__"
+    target_prefix = f"mcp__plugin_gms-mcp_{re.escape(server_name)}__"
+    replacements = 0
+    for event_name in ("PostToolUse", "PostToolUseFailure"):
+        groups = hooks.get(event_name)
+        if not isinstance(groups, list):
+            raise ValueError(f"Malformed Claude hooks manifest: missing {event_name} groups")
+        for group in groups:
+            if not isinstance(group, dict) or not isinstance(group.get("matcher"), str):
+                continue
+            matcher = group["matcher"]
+            if source_prefix in matcher:
+                group["matcher"] = matcher.replace(source_prefix, target_prefix)
+                replacements += 1
+    if replacements != 2:
+        raise ValueError(f"Claude hooks manifest did not contain both expected GMS MCP matchers: {hooks_manifest_path}")
+    _write_json(hooks_manifest_path, payload, dry_run=False)
 
 
 def _generate_claude_code_plugin(
@@ -840,26 +845,27 @@ def _generate_claude_code_plugin(
 
     if include_bundle_assets:
         _copy_tree(
-            source=_repo_root() / "hooks",
+            source=bundled_hooks_dir(),
             destination=plugin_dir / "hooks",
             dry_run=dry_run,
             written=written,
         )
         _copy_tree(
-            source=_repo_root() / "skills",
+            source=bundled_skills_dir(),
             destination=plugin_dir / "skills",
             dry_run=dry_run,
             written=written,
+        )
+        _render_claude_hook_server_name(
+            hooks_manifest_path=plugin_dir / "hooks" / "hooks.json",
+            server_name=server_name,
+            dry_run=dry_run,
         )
 
     # Create plugin manifest
     manifest_dir = plugin_dir / ".claude-plugin"
     manifest_path = manifest_dir / "plugin.json"
-    manifest = _build_claude_plugin_manifest(
-        server_name=server_name,
-        command=command,
-        args_prefix=args_prefix,
-    )
+    manifest = _build_claude_plugin_manifest()
     _write_json(manifest_path, manifest, dry_run=dry_run)
     written.append(manifest_path)
 

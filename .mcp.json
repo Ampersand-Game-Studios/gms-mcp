@@ -1,0 +1,12 @@
+{
+  "mcpServers": {
+    "gms": {
+      "command": "gms-mcp",
+      "args": [],
+      "env": {
+        "GM_PROJECT_ROOT": "${CLAUDE_PROJECT_DIR:-.}",
+        "PYTHONUNBUFFERED": "1"
+      }
+    }
+  }
+}

@@ -587,6 +587,7 @@ def main(argv: list[str] | None = None) -> int:
                 _build_codex_env(
                     gm_project_root,
                     workspace_root,
+                    include_project_root=False,
                     safe_profile=bool(args.safe_profile),
                 )
             )
@@ -724,11 +725,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[DRY-RUN] {plugin_dir / '.claude-plugin' / 'plugin.json'}:")
             print(
                 json.dumps(
-                    _build_claude_plugin_manifest(
-                        server_name=args.server_name,
-                        command=command,
-                        args_prefix=args_prefix,
-                    ),
+                    _build_claude_plugin_manifest(),
                     indent=2,
                 )
             )

@@ -4,21 +4,12 @@ import shutil
 from pathlib import Path
 from typing import Dict, Any
 
+from ..bundle_assets import bundled_skills_dir
+
 
 def get_skills_source_dir() -> Path:
     """Return the path to the bundled skills directory."""
-    # Priority 1: skills directory at repo root (Claude Code plugin structure)
-    repo_root = Path(__file__).parent.parent.parent.parent
-    root_skills = repo_root / "skills"
-    if root_skills.exists():
-        return root_skills
-
-    # Priority 2: installed package location
-    pkg_skills = Path(__file__).parent.parent / "skills"
-    if pkg_skills.exists():
-        return pkg_skills
-
-    raise FileNotFoundError("Skills directory not found")
+    return bundled_skills_dir()
 
 
 def _platform_name(openclaw: bool) -> str:

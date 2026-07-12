@@ -20,7 +20,9 @@ class TestBridgeOneShotEnable(unittest.TestCase):
         self._td = tempfile.TemporaryDirectory()
         self.project_root = Path(self._td.name)
         self._previous_verify_mode = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY")
+        self._previous_toolsets = os.environ.get("GMS_MCP_TOOLSETS")
         os.environ["GMS_MCP_POST_MUTATION_VERIFY"] = "off"
+        os.environ["GMS_MCP_TOOLSETS"] = "bridge"
         for d in ("objects", "sprites", "scripts", "rooms", "folders"):
             (self.project_root / d).mkdir(parents=True, exist_ok=True)
 
@@ -54,6 +56,10 @@ class TestBridgeOneShotEnable(unittest.TestCase):
             os.environ.pop("GMS_MCP_POST_MUTATION_VERIFY", None)
         else:
             os.environ["GMS_MCP_POST_MUTATION_VERIFY"] = self._previous_verify_mode
+        if self._previous_toolsets is None:
+            os.environ.pop("GMS_MCP_TOOLSETS", None)
+        else:
+            os.environ["GMS_MCP_TOOLSETS"] = self._previous_toolsets
         try:
             self._td.cleanup()
         except Exception:
