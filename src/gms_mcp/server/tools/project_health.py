@@ -1,21 +1,17 @@
 from __future__ import annotations
 
 import argparse
-from typing import Any, Dict, List
+from typing import Any, Dict
 
 from ...update_status import get_update_status
-from ..direct import _run_gms_inprocess
 from ..dispatch import _run_with_fallback
 from ..mcp_types import Context
-from ..output import _apply_output_mode
 from ..project import (
     _ensure_cli_on_sys_path,
     _find_yyp_file,
     _resolve_project_directory_no_deps,
     _resolve_repo_root,
 )
-from ..raw_cli_policy import evaluate_gm_cli_args, raw_cli_blocked_result
-from ..subprocess_runner import _run_cli_async
 
 
 def register(mcp: Any, ContextType: Any) -> None:
@@ -53,84 +49,6 @@ def register(mcp: Any, ContextType: Any) -> None:
         payload = result.to_dict()
         payload["ok"] = payload.pop("success")
         return payload
-
-    @mcp.tool()
-    async def gm_cli(
-        args: List[str],
-        project_root: str = ".",
-        prefer_cli: bool = True,
-        timeout_seconds: int = 30,
-        output_mode: str = "tail",
-        tail_lines: int = 120,
-        quiet: bool = True,
-        fallback_to_subprocess: bool = True,
-        ctx: Context | None = None,
-    ) -> Dict[str, Any]:
-        """
-        Run an explicitly allowed read-only command from this project's `gms` helper CLI.
-
-        This is not GameMaker's official `gm-cli`. Raw mutations, runner actions,
-        documentation-cache operations, telemetry, and skills commands are blocked;
-        use their named MCP tools instead.
-
-        - If `prefer_cli=true` (default): run in a subprocess with captured output + timeout.
-        - If `prefer_cli=false`: try in-process first, and (optionally) fall back to subprocess.
-        Example args: ["event", "list", "o_player"]
-        """
-        decision = evaluate_gm_cli_args(args)
-        if not decision.allowed:
-            return raw_cli_blocked_result(decision)
-
-        # If prefer_cli=True, run the subprocess path (streamed + cancellable).
-        if prefer_cli:
-            cli_dict = (
-                await _run_cli_async(
-                    args,
-                    project_root,
-                    timeout_seconds=timeout_seconds,
-                    tool_name="gm_cli",
-                    ctx=ctx,
-                )
-            ).as_dict()
-            return _apply_output_mode(
-                cli_dict,
-                output_mode=output_mode,
-                tail_lines=tail_lines,
-                quiet=quiet,
-            )
-
-        # Otherwise, attempt in-process first (legacy behavior).
-        inprocess_dict = _run_gms_inprocess(args, project_root).as_dict()
-        shaped_inprocess = _apply_output_mode(
-            inprocess_dict,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-        )
-        if shaped_inprocess.get("ok"):
-            return shaped_inprocess
-
-        if not fallback_to_subprocess:
-            shaped_inprocess["error"] = shaped_inprocess.get("error") or "In-process gms execution failed"
-            return shaped_inprocess
-
-        # Backup: subprocess with timeout (streamed + cancellable).
-        cli_dict = (
-            await _run_cli_async(
-                args,
-                project_root,
-                timeout_seconds=timeout_seconds,
-                tool_name="gm_cli",
-                ctx=ctx,
-            )
-        ).as_dict()
-        cli_dict["direct_error"] = shaped_inprocess.get("error") or "In-process gms execution failed"
-        return _apply_output_mode(
-            cli_dict,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-        )
 
     # -----------------------------
     # Diagnostic tools

@@ -21,7 +21,7 @@ from gms_helpers.exceptions import (
     ValidationError,
 )
 from gms_helpers.utils import find_yyp, validate_working_directory
-from gms_mcp.server.direct import _capture_output
+from gms_mcp.server.direct_worker import _capture_output
 
 
 class TestGMSExceptions(unittest.TestCase):

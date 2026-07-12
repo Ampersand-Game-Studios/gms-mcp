@@ -3,6 +3,8 @@ import asyncio
 import json
 import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -60,13 +62,25 @@ def _create_basic_gamemaker_project(project_root: Path, *, name: str = "TestProj
     return yyp_path
 
 
+def _hold_direct_worker(args):
+    Path(args.entered_path).write_text(str(Path.cwd()), encoding="utf-8")
+    deadline = time.monotonic() + 5
+    while not Path(args.release_path).exists() and time.monotonic() < deadline:
+        time.sleep(0.01)
+    if not Path(args.release_path).exists():
+        raise TimeoutError("direct worker was not released")
+    return True
+
+
 class TestMCPIntegrationTools(unittest.TestCase):
     def setUp(self):
         self._temp_dir = tempfile.TemporaryDirectory()
         self.project_root = Path(self._temp_dir.name)
         _create_basic_gamemaker_project(self.project_root)
         self._previous_verify_mode = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY")
+        self._previous_toolsets = os.environ.get("GMS_MCP_TOOLSETS")
         os.environ["GMS_MCP_POST_MUTATION_VERIFY"] = "off"
+        os.environ["GMS_MCP_TOOLSETS"] = "all"
 
         from gms_mcp.gamemaker_mcp_server import build_server
 
@@ -77,6 +91,10 @@ class TestMCPIntegrationTools(unittest.TestCase):
             os.environ.pop("GMS_MCP_POST_MUTATION_VERIFY", None)
         else:
             os.environ["GMS_MCP_POST_MUTATION_VERIFY"] = self._previous_verify_mode
+        if self._previous_toolsets is None:
+            os.environ.pop("GMS_MCP_TOOLSETS", None)
+        else:
+            os.environ["GMS_MCP_TOOLSETS"] = self._previous_toolsets
         try:
             self._temp_dir.cleanup()
         except Exception:
@@ -126,6 +144,18 @@ class TestMCPIntegrationTools(unittest.TestCase):
         # Confirm files were actually created in the project.
         self.assertTrue((self.project_root / "scripts" / "scr_utils" / "scr_utils.yy").exists())
         self.assertTrue((self.project_root / "scripts" / "scr_utils" / "scr_utils.gml").exists())
+        from gms_helpers.utils import load_json_loose
+
+        script_data = load_json_loose(self.project_root / "scripts" / "scr_utils" / "scr_utils.yy")
+        project_data = load_json_loose(self.project_root / "TestProject.yyp")
+        parent_path = script_data["parent"]["path"]
+        self.assertEqual(parent_path, "folders/Scripts.yy")
+        self.assertNotEqual(parent_path, "TestProject.yyp")
+        self.assertIn(parent_path, {folder["folderPath"] for folder in project_data["Folders"]})
+
+        from gms_helpers.transactions import validate_project_after_mutation
+
+        self.assertTrue(validate_project_after_mutation(self.project_root).success)
 
         out = asyncio.run(
             self.mcp.call_tool(
@@ -139,6 +169,118 @@ class TestMCPIntegrationTools(unittest.TestCase):
         self.assertTrue(any(a.get("name") == "scr_utils" for a in scripts), msg=str(scripts))
         self.assertIn("transaction", result)
         self.assertTrue(result["transaction"]["committed"])
+
+    def test_collision_events_work_end_to_end_through_mcp(self):
+        for object_name in ("o_player", "o_enemy", "o_wall"):
+            created = self._call_tool(
+                "gm_create_object",
+                {"name": object_name, "project_root": str(self.project_root)},
+            )
+            self.assertTrue(created.get("ok"), msg=created)
+
+        source = self._call_tool(
+            "gm_event_add",
+            {
+                "object": "o_player",
+                "event": "collision:o_enemy",
+                "template": "// collision source\n",
+                "project_root": str(self.project_root),
+            },
+        )
+        self.assertTrue(source.get("ok"), msg=source)
+
+        duplicated = self._call_tool(
+            "gm_event_duplicate",
+            {
+                "object": "o_player",
+                "source_event": "collision:o_enemy",
+                "target_event": "collision:o_wall",
+                "project_root": str(self.project_root),
+            },
+        )
+        self.assertTrue(duplicated.get("ok"), msg=duplicated)
+
+        collision_path = self.project_root / "objects" / "o_player" / "Collision_o_wall.gml"
+        self.assertEqual(collision_path.read_text(encoding="utf-8"), "// collision source\n")
+        from gms_helpers.utils import load_json_loose
+
+        object_data = load_json_loose(self.project_root / "objects" / "o_player" / "o_player.yy")
+        wall_event = next(
+            event
+            for event in object_data["eventList"]
+            if isinstance(event.get("collisionObjectId"), dict) and event["collisionObjectId"].get("name") == "o_wall"
+        )
+        self.assertEqual(
+            wall_event["collisionObjectId"],
+            {"name": "o_wall", "path": "objects/o_wall/o_wall.yy"},
+        )
+
+        listed = self._call_tool(
+            "gm_event_list",
+            {"object": "o_player", "project_root": str(self.project_root)},
+        )
+        self.assertTrue(listed.get("ok"), msg=listed)
+        self.assertIn("Collision_o_wall.gml", listed.get("stdout", ""))
+
+        numeric = self._call_tool(
+            "gm_event_add",
+            {
+                "object": "o_player",
+                "event": "collision:0",
+                "project_root": str(self.project_root),
+            },
+        )
+        self.assertFalse(numeric["ok"])
+        self.assertEqual(numeric["error"], "Invalid MCP tool arguments")
+
+        removed = self._call_tool(
+            "gm_event_remove",
+            {
+                "object": "o_player",
+                "event": "collision:o_wall",
+                "project_root": str(self.project_root),
+            },
+        )
+        self.assertTrue(removed.get("ok"), msg=removed)
+        self.assertFalse(collision_path.exists())
+
+    def test_explicit_parent_path_is_validated_and_preserved_through_mcp(self):
+        folder = self._call_tool(
+            "gm_create_folder",
+            {
+                "name": "Gameplay",
+                "path": "folders/Gameplay.yy",
+                "project_root": str(self.project_root),
+            },
+        )
+        self.assertTrue(folder.get("ok"), msg=folder)
+
+        created = self._call_tool(
+            "gm_create_object",
+            {
+                "name": "o_explicit_parent",
+                "parent_path": "folders/Gameplay.yy",
+                "project_root": str(self.project_root),
+            },
+        )
+        self.assertTrue(created.get("ok"), msg=created)
+
+        from gms_helpers.utils import load_json_loose
+
+        object_data = load_json_loose(self.project_root / "objects" / "o_explicit_parent" / "o_explicit_parent.yy")
+        self.assertEqual(object_data["parent"]["path"], "folders/Gameplay.yy")
+
+        rejected = self._call_tool(
+            "gm_create_object",
+            {
+                "name": "o_missing_parent",
+                "parent_path": "folders/Missing.yy",
+                "project_root": str(self.project_root),
+            },
+        )
+        self.assertFalse(rejected["ok"])
+        self.assertTrue(any(error["field"] == "parent_path" for error in rejected["validation_errors"]))
+        self.assertFalse((self.project_root / "objects" / "o_missing_parent").exists())
 
     def test_mcp_boundary_rejects_path_like_resource_names(self):
         result = self._call_tool(
@@ -163,20 +305,90 @@ class TestMCPIntegrationTools(unittest.TestCase):
         self.assertNotIn("transaction", result)
         self.assertFalse((self.project_root / "objects" / "player").exists())
 
-    def test_mcp_boundary_rejects_invalid_workflow_asset_path_before_transaction(self):
+    def test_mcp_boundary_rejects_invalid_safe_delete_name_before_transaction(self):
         result = self._call_tool(
-            "gm_workflow_delete",
+            "gm_safe_delete",
             {
-                "asset_path": "../scripts/scr_escape/scr_escape.yy",
-                "dry_run": False,
+                "asset_type": "script",
+                "asset_name": "../scr_escape",
+                "dry_run": True,
                 "project_root": str(self.project_root),
             },
         )
 
         self.assertFalse(result["ok"])
         self.assertEqual(result["error"], "Invalid MCP tool arguments")
-        self.assertTrue(any(error["field"] == "asset_path" for error in result["validation_errors"]))
+        self.assertTrue(any(error["field"] == "asset_name" for error in result["validation_errors"]))
         self.assertNotIn("transaction", result)
+
+    def test_default_project_root_cannot_follow_another_direct_calls_cwd(self):
+        from gms_mcp.server.direct import _run_direct
+
+        other_temp = tempfile.TemporaryDirectory()
+        self.addCleanup(other_temp.cleanup)
+        other_root = Path(other_temp.name)
+        _create_basic_gamemaker_project(other_root, name="OtherProject")
+        for project in (self.project_root, other_root):
+            created = self._call_tool(
+                "gm_create_script",
+                {"name": "scr_target", "project_root": str(project)},
+            )
+            self.assertTrue(created["ok"])
+
+        direct_entered = self.project_root.parent / "direct-entered"
+        release_direct = self.project_root.parent / "release-direct"
+
+        direct_thread = threading.Thread(
+            target=_run_direct,
+            args=(
+                _hold_direct_worker,
+                SimpleNamespace(
+                    entered_path=str(direct_entered),
+                    release_path=str(release_direct),
+                ),
+                str(other_root),
+            ),
+        )
+        direct_thread.start()
+        deadline = time.monotonic() + 5
+        while not direct_entered.exists() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(direct_entered.exists())
+        try:
+            with patch.dict(os.environ, {"GM_PROJECT_ROOT": str(self.project_root)}, clear=False):
+                deleted = self._call_tool(
+                    "gm_safe_delete",
+                    {
+                        "asset_type": "script",
+                        "asset_name": "scr_target",
+                        "force": True,
+                        "dry_run": False,
+                        "project_root": ".",
+                    },
+                )
+        finally:
+            release_direct.write_text("release", encoding="utf-8")
+            direct_thread.join(timeout=5)
+
+        self.assertTrue(deleted["ok"])
+        self.assertEqual(Path(deleted["transaction"]["project_root"]), self.project_root.resolve())
+        self.assertFalse((self.project_root / "scripts" / "scr_target").exists())
+        self.assertTrue((other_root / "scripts" / "scr_target").exists())
+
+    def test_health_reports_missing_project_instead_of_rejecting_the_call(self):
+        missing_temp = tempfile.TemporaryDirectory()
+        self.addCleanup(missing_temp.cleanup)
+        missing_project = Path(missing_temp.name)
+
+        with (
+            patch("gms_helpers.runner.GameMakerRunner.find_gamemaker_runtime", return_value=None),
+            patch("gms_helpers.runner.GameMakerRunner.find_license_file", return_value=None),
+        ):
+            result = self._call_tool("gm_mcp_health", {"project_root": str(missing_project)})
+
+        self.assertFalse(result["ok"])
+        project_check = next(check for check in result["data"]["checks"] if check["id"] == "project")
+        self.assertEqual(project_check["status"], "error")
 
     def test_write_operation_models_cover_core_write_tools(self):
         from gms_mcp.server.validation import write_operation_model_names
@@ -185,14 +397,12 @@ class TestMCPIntegrationTools(unittest.TestCase):
         expected = {
             "gm_create_script",
             "gm_create_object",
-            "gm_asset_delete",
             "gm_event_add",
             "gm_event_remove",
             "gm_room_layer_add",
             "gm_room_instance_add",
             "gm_safe_delete",
             "gm_workflow_rename",
-            "gm_workflow_delete",
             "gm_sprite_add_frame",
             "gm_texture_group_update",
             "gm_texture_group_assign",
@@ -331,7 +541,7 @@ class TestMCPIntegrationTools(unittest.TestCase):
             "gm_bridge_status",
             "gm_doc_categories",
             "gm_event_list",
-            "gm_workflow_delete",
+            "gm_safe_delete",
             "gm_room_ops_list",
             "gm_texture_group_list",
             "gm_texture_group_assign",
@@ -423,16 +633,17 @@ class TestMCPIntegrationTools(unittest.TestCase):
         )
         self.assertTrue(events.get("ok"), msg=events.get("error") or events.get("stdout"))
 
-        workflow_delete = self._call_tool(
-            "gm_workflow_delete",
+        safe_delete = self._call_tool(
+            "gm_safe_delete",
             {
-                "asset_path": "scripts/scr_utils/scr_utils.yy",
+                "asset_type": "script",
+                "asset_name": "scr_utils",
                 "dry_run": True,
                 "project_root": str(self.project_root),
             },
         )
-        self.assertTrue(workflow_delete.get("ok"), msg=workflow_delete.get("error") or workflow_delete.get("stdout"))
-        self.assertIn("dry-run", (workflow_delete.get("stdout") or "").lower())
+        self.assertTrue(safe_delete.get("ok"), msg=safe_delete)
+        self.assertTrue(safe_delete.get("data", {}).get("dry_run"))
 
         rooms = self._call_tool(
             "gm_room_ops_list",
@@ -483,14 +694,13 @@ class TestMCPIntegrationTools(unittest.TestCase):
                 "asset_name": "scr_target",
                 "dry_run": False,
                 "force": True,
-                "clean_refs": True,
                 "project_root": str(self.project_root),
             },
         )
         self.assertTrue(applied.get("ok"), msg=applied)
         self.assertTrue(applied.get("data", {}).get("deleted"), msg=applied)
-        self.assertGreaterEqual(int(applied.get("data", {}).get("cleaned_refs", {}).get("replacements", 0)), 1)
         self.assertFalse((self.project_root / "scripts" / "scr_target").exists())
+        self.assertIn("scr_target", caller_file.read_text(encoding="utf-8"))
 
         build_index = self._call_tool(
             "gm_build_index",
@@ -503,6 +713,27 @@ class TestMCPIntegrationTools(unittest.TestCase):
             {"project_root": str(self.project_root), "max_results": 5},
         )
         self.assertTrue(symbols.get("ok"), msg=symbols.get("error") or symbols.get("stdout"))
+
+    def test_workflow_rename_reuses_parent_transaction_without_nested_lock(self):
+        created = self._call_tool(
+            "gm_create_script",
+            {"name": "scr_before", "project_root": str(self.project_root)},
+        )
+        self.assertTrue(created.get("ok"), msg=created)
+
+        renamed = self._call_tool(
+            "gm_workflow_rename",
+            {
+                "asset_path": "scripts/scr_before/scr_before.yy",
+                "new_name": "scr_after",
+                "project_root": str(self.project_root),
+            },
+        )
+
+        self.assertTrue(renamed.get("ok"), msg=renamed)
+        self.assertTrue(renamed.get("transaction", {}).get("committed"), msg=renamed)
+        self.assertFalse((self.project_root / "scripts" / "scr_before").exists())
+        self.assertTrue((self.project_root / "scripts" / "scr_after" / "scr_after.yy").exists())
 
 
 if __name__ == "__main__":

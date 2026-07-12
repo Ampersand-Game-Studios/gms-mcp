@@ -3,7 +3,10 @@
 
 from __future__ import annotations
 
+import json
+import tempfile
 import unittest
+from pathlib import Path
 
 from gms_mcp.server.validation import invalid_arguments_result, validate_mcp_tool_arguments, write_operation_model_names
 
@@ -17,14 +20,12 @@ class TestMCPValidationModels(unittest.TestCase):
         names = set(write_operation_model_names())
 
         expected = {
-            "gm_asset_delete",
             "gm_create_object",
             "gm_event_add",
             "gm_room_instance_add",
             "gm_safe_delete",
             "gm_sprite_import_strip",
             "gm_texture_group_assign",
-            "gm_workflow_delete",
             "gm_workflow_swap_sprite",
         }
 
@@ -78,7 +79,11 @@ class TestMCPValidationModels(unittest.TestCase):
     def test_event_and_texture_group_models_validate_structured_inputs(self):
         event_errors = validate_mcp_tool_arguments(
             "gm_event_duplicate",
-            {"object": "objects/o_player/o_player.yy", "source_event": "step:not_int", "target_num": True},
+            {
+                "object": "objects/o_player/o_player.yy",
+                "source_event": "step:not_int",
+                "target_event": "collision:0",
+            },
         )
         texture_errors = validate_mcp_tool_arguments(
             "gm_texture_group_update",
@@ -97,7 +102,7 @@ class TestMCPValidationModels(unittest.TestCase):
 
         self.assertIn("object", _fields(event_errors))
         self.assertIn("source_event", _fields(event_errors))
-        self.assertIn("target_num", _fields(event_errors))
+        self.assertIn("target_event", _fields(event_errors))
         self.assertIn("name", _fields(texture_errors))
         self.assertIn("patch", _fields(texture_errors))
         self.assertIn("configs[1]", _fields(texture_errors))
@@ -106,6 +111,62 @@ class TestMCPValidationModels(unittest.TestCase):
         self.assertIn("asset_identifiers[2]", _fields(assign_errors))
         self.assertIn("name_contains", _fields(assign_errors))
         self.assertIn("folder_prefix", _fields(assign_errors))
+
+    def test_collision_event_validation_resolves_existing_object_targets(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            project_root = Path(temp_dir)
+            resources = []
+            for object_name in ("o_enemy", "o_wall"):
+                object_dir = project_root / "objects" / object_name
+                object_dir.mkdir(parents=True)
+                (object_dir / f"{object_name}.yy").write_text(
+                    json.dumps({"name": object_name, "resourceType": "GMObject"}),
+                    encoding="utf-8",
+                )
+                resources.append(
+                    {
+                        "id": {
+                            "name": object_name,
+                            "path": f"objects/{object_name}/{object_name}.yy",
+                        }
+                    }
+                )
+            (project_root / "TestGame.yyp").write_text(json.dumps({"resources": resources}), encoding="utf-8")
+
+            add_errors = validate_mcp_tool_arguments(
+                "gm_event_add",
+                {
+                    "object": "o_player",
+                    "event": "collision:o_wall",
+                    "project_root": str(project_root),
+                },
+            )
+            duplicate_errors = validate_mcp_tool_arguments(
+                "gm_event_duplicate",
+                {
+                    "object": "o_player",
+                    "source_event": "collision:o_enemy",
+                    "target_event": "collision:o_wall",
+                    "project_root": str(project_root),
+                },
+            )
+            numeric_errors = validate_mcp_tool_arguments(
+                "gm_event_add",
+                {"object": "o_player", "event": "collision:0", "project_root": str(project_root)},
+            )
+            missing_errors = validate_mcp_tool_arguments(
+                "gm_event_add",
+                {
+                    "object": "o_player",
+                    "event": "collision:o_missing",
+                    "project_root": str(project_root),
+                },
+            )
+
+        self.assertEqual(add_errors, [])
+        self.assertEqual(duplicate_errors, [])
+        self.assertIn("event", _fields(numeric_errors))
+        self.assertIn("event", _fields(missing_errors))
 
     def test_legacy_generic_validation_still_covers_read_tools(self):
         errors = validate_mcp_tool_arguments(

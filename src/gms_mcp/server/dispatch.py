@@ -6,9 +6,9 @@ from typing import Any, Callable, Dict, List
 from ..telemetry import note_tool_execution
 from ..execution_policy import ExecutionMode, policy_manager
 from .destructive_policy import destructive_cli_blocked_result, is_real_destructive_cli_workflow
-from .direct import _run_direct
+from .direct import _run_direct, _run_direct_thread_shielded
 from .output import _apply_output_mode
-from .subprocess_runner import _run_cli_async
+from .subprocess_runner import _default_timeout_seconds_for_cli_args, _run_cli_async
 
 
 _DIRECT_DOMAIN_FAILURE_EXIT_CODES = {2, 3, 4, 5, 6, 9}
@@ -81,6 +81,8 @@ async def _run_with_fallback(
     policy = policy_manager.get_policy(derived_tool_name)
     effective_mode = policy.mode
     effective_timeout = timeout_seconds if timeout_seconds is not None else policy.timeout_seconds
+    if effective_timeout is None:
+        effective_timeout = _default_timeout_seconds_for_cli_args(cli_args)
     destructive_cli_disabled = is_real_destructive_cli_workflow(derived_tool_name, direct_args)
 
     # Respect manual override via prefer_cli
@@ -138,7 +140,13 @@ async def _run_with_fallback(
     # ExecutionMode.DIRECT
     _ = ctx
 
-    direct_result = _run_direct(direct_handler, direct_args, project_root)
+    direct_result = await _run_direct_thread_shielded(
+        _run_direct,
+        direct_handler,
+        direct_args,
+        project_root,
+        effective_timeout,
+    )
     if direct_result.ok:
         result = _apply_output_mode(
             direct_result.as_dict(),
@@ -199,7 +207,7 @@ async def _run_with_fallback(
     cli_result = await _run_cli_async(
         cli_args,
         project_root,
-        timeout_seconds=timeout_seconds,
+        timeout_seconds=effective_timeout,
         tool_name=derived_tool_name,
         ctx=ctx,
     )

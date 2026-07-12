@@ -51,7 +51,6 @@ _TRANSACTIONAL_TOOL_PREFIXES = (
     "gm_workflow_",
 )
 _TRANSACTIONAL_TOOL_NAMES = {
-    "gm_asset_delete",
     "gm_bridge_install",
     "gm_bridge_uninstall",
     "gm_bridge_enable_one_shot",
@@ -81,6 +80,59 @@ _NON_TRANSACTIONAL_TOOL_NAMES = {
     "gm_texture_group_scan",
     "gm_sprite_frame_count",
 }
+_READ_ONLY_TOOL_NAMES = {
+    "gm_bridge_status",
+    "gm_capabilities",
+    "gm_check_updates",
+    "gm_diagnostics",
+    "gm_doc_cache_stats",
+    "gm_doc_categories",
+    "gm_doc_list",
+    "gm_doc_lookup",
+    "gm_doc_search",
+    "gm_event_list",
+    "gm_event_validate",
+    "gm_find_definition",
+    "gm_find_references",
+    "gm_get_asset_graph",
+    "gm_get_project_stats",
+    "gm_list_assets",
+    "gm_list_symbols",
+    "gm_maintenance_list_orphans",
+    "gm_maintenance_validate_json",
+    "gm_maintenance_validate_paths",
+    "gm_mcp_health",
+    "gm_project_info",
+    "gm_read_asset",
+    "gm_room_instance_list",
+    "gm_room_layer_list",
+    "gm_room_ops_list",
+    "gm_run_logs",
+    "gm_run_status",
+    "gm_runtime_list",
+    "gm_runtime_verify",
+    "gm_search_references",
+    "gm_sprite_frame_count",
+    "gm_texture_group_list",
+    "gm_texture_group_members",
+    "gm_texture_group_read",
+    "gm_texture_group_scan",
+    "gm_verification_status",
+}
+_DESTRUCTIVE_TOOL_MARKERS = (
+    "_clean_",
+    "_dedupe_",
+    "_delete",
+    "_fix",
+    "_normalize_",
+    "_prune_",
+    "_remove",
+    "_rename",
+    "_stop",
+    "_swap_",
+    "_sync_",
+    "_uninstall",
+)
 
 
 def _tool_family_for_function(func) -> str:
@@ -138,11 +190,19 @@ def _result_from_value(value) -> str:
     return "ok"
 
 
-def _bind_tool_arguments(func, args: tuple[Any, ...], kwargs: dict[str, Any]) -> dict[str, Any]:
+def _bind_tool_call(
+    func, args: tuple[Any, ...], kwargs: dict[str, Any]
+) -> tuple[dict[str, Any], tuple[Any, ...], dict[str, Any]]:
     signature = inspect.signature(func)
     bound = signature.bind_partial(*args, **kwargs)
     bound.apply_defaults()
-    return dict(bound.arguments)
+    if "project_root" in bound.arguments:
+        from gms_mcp.server.project import _stable_project_candidate
+
+        bound.arguments["project_root"] = str(
+            _stable_project_candidate(str(bound.arguments.get("project_root") or "."))
+        )
+    return dict(bound.arguments), bound.args, bound.kwargs
 
 
 def _tool_call_is_dry_run(arguments: dict[str, Any]) -> bool:
@@ -238,6 +298,7 @@ def _run_transactional_sync(tool_name: str, arguments: dict[str, Any], call):
     tx.begin()
     try:
         result = call()
+        tx.capture_mutation_state()
         if _result_from_value(result) == "error":
             tx.rollback()
             return _annotate_transaction_result(result, tx.to_dict())
@@ -250,7 +311,9 @@ def _run_transactional_sync(tool_name: str, arguments: dict[str, Any], call):
         )
         return _annotate_transaction_result(result, transaction)
     except Exception:
-        tx.rollback()
+        if not tx.committed:
+            tx.capture_mutation_state()
+            tx.rollback()
         raise
     finally:
         tx.cleanup()
@@ -262,13 +325,14 @@ async def _run_transactional_async(tool_name: str, arguments: dict[str, Any], ca
     project_root = _resolve_transaction_project_root(arguments)
     decision = decide_mutation_verification(tool_name)
     tx = GameMakerProjectTransaction(project_root, tool_name)
-    tx.begin()
+    await tx.begin_async()
     try:
         result = await call()
+        await tx.capture_mutation_state_async()
         if _result_from_value(result) == "error":
-            tx.rollback()
+            await tx.rollback_async()
             return _annotate_transaction_result(result, tx.to_dict())
-        transaction = tx.commit(verify_compile=decision.action == "compile")
+        transaction = await tx.commit_async(verify_compile=decision.action == "compile")
         transaction = _apply_verification_decision(
             project_root=project_root,
             tool_name=tool_name,
@@ -276,11 +340,13 @@ async def _run_transactional_async(tool_name: str, arguments: dict[str, Any], ca
             transaction=transaction,
         )
         return _annotate_transaction_result(result, transaction)
-    except Exception:
-        tx.rollback()
+    except BaseException:
+        if not tx.committed:
+            await tx.capture_mutation_state_async()
+            await tx.rollback_async()
         raise
     finally:
-        tx.cleanup()
+        await tx.cleanup_async()
 
 
 def _wrap_tool_registration(mcp) -> None:
@@ -296,7 +362,7 @@ def _wrap_tool_registration(mcp) -> None:
                 reset_tool_execution_context()
                 start = time.monotonic()
                 try:
-                    arguments = _bind_tool_arguments(func, args, kwargs)
+                    arguments, call_args, call_kwargs = _bind_tool_call(func, args, kwargs)
                     validation_errors = validate_mcp_tool_arguments(tool_name, arguments)
                     if validation_errors:
                         result = invalid_arguments_result(tool_name, validation_errors)
@@ -304,10 +370,10 @@ def _wrap_tool_registration(mcp) -> None:
                         result = await _run_transactional_async(
                             tool_name,
                             arguments,
-                            lambda: func(*args, **kwargs),
+                            lambda: func(*call_args, **call_kwargs),
                         )
                     else:
-                        result = await func(*args, **kwargs)
+                        result = await func(*call_args, **call_kwargs)
                     duration_ms = int((time.monotonic() - start) * 1000)
                     execution = get_tool_execution_context() or {}
                     _record_mcp_event(
@@ -358,7 +424,7 @@ def _wrap_tool_registration(mcp) -> None:
             reset_tool_execution_context()
             start = time.monotonic()
             try:
-                arguments = _bind_tool_arguments(func, args, kwargs)
+                arguments, call_args, call_kwargs = _bind_tool_call(func, args, kwargs)
                 validation_errors = validate_mcp_tool_arguments(tool_name, arguments)
                 if validation_errors:
                     result = invalid_arguments_result(tool_name, validation_errors)
@@ -366,10 +432,10 @@ def _wrap_tool_registration(mcp) -> None:
                     result = _run_transactional_sync(
                         tool_name,
                         arguments,
-                        lambda: func(*args, **kwargs),
+                        lambda: func(*call_args, **call_kwargs),
                     )
                 else:
-                    result = func(*args, **kwargs)
+                    result = func(*call_args, **call_kwargs)
                 duration_ms = int((time.monotonic() - start) * 1000)
                 execution = get_tool_execution_context() or {}
                 _record_mcp_event(
@@ -416,18 +482,24 @@ def _wrap_tool_registration(mcp) -> None:
         return sync_wrapped
 
     def instrumented_tool(*tool_args, **tool_kwargs):
-        decorator = original_tool(*tool_args, **tool_kwargs)
-
         def _decorate(func):
-            registered = decorator(func)
             tool_name = str(tool_kwargs.get("name") or getattr(func, "__name__", "tool"))
             tool_family = _tool_family_for_function(func)
-            tool_manager = getattr(mcp, "_tool_manager", None)
-            if tool_manager is not None:
-                tool = tool_manager.get_tool(tool_name)
-                if tool is not None:
-                    tool.fn = _instrument_callable(tool.fn, tool_name, tool_family)
-            return registered
+            wrapped = _instrument_callable(func, tool_name, tool_family)
+            registration_kwargs = dict(tool_kwargs)
+            if "annotations" not in registration_kwargs:
+                from mcp.types import ToolAnnotations
+
+                is_read_only = tool_name in _READ_ONLY_TOOL_NAMES
+                registration_kwargs["annotations"] = ToolAnnotations(
+                    readOnlyHint=is_read_only,
+                    destructiveHint=(
+                        not is_read_only and any(marker in tool_name for marker in _DESTRUCTIVE_TOOL_MARKERS)
+                    ),
+                    idempotentHint=is_read_only,
+                )
+            decorator = original_tool(*tool_args, **registration_kwargs)
+            return decorator(wrapped)
 
         return _decorate
 
@@ -509,75 +581,6 @@ def main() -> int:
         )
         sys.stderr.write(f"\nDetails: {e}\n")
         return 1
-
-    # region agent log
-    # Instrument the MCP protocol boundary: log every incoming request type.
-    # This tells us whether Cursor is hanging during initialize/list-tools/call-tool,
-    # or whether the request never arrives.
-    try:
-        import mcp.server.lowlevel.server as _lls
-
-        if not getattr(_lls.Server, "_gms_mcp_patched", False):
-            _orig_handle_request = _lls.Server._handle_request
-
-            async def _patched_handle_request(self, message, req, session, lifespan_context, raise_exceptions):
-                t0 = time.monotonic()
-                req_type = type(req).__name__
-                req_id = getattr(message, "request_id", None)
-                # Best-effort extraction of tool name for CallToolRequest (helps confirm if Cursor ever sends it)
-                tool_name = None
-                try:
-                    tool_name = getattr(req, "params", None) and getattr(req.params, "name", None)
-                except Exception:
-                    tool_name = None
-                _dbg(
-                    "H4",
-                    "src/gms_mcp/gamemaker_mcp_server.py:lowlevel:_handle_request:entry",
-                    "received request",
-                    {"pid": os.getpid(), "req_type": req_type, "request_id": req_id, "tool_name": tool_name},
-                )
-                try:
-                    result = await _orig_handle_request(self, message, req, session, lifespan_context, raise_exceptions)
-                    dt_ms = int((time.monotonic() - t0) * 1000)
-                    _dbg(
-                        "H4",
-                        "src/gms_mcp/gamemaker_mcp_server.py:lowlevel:_handle_request:exit",
-                        "request handled",
-                        {"pid": os.getpid(), "req_type": req_type, "request_id": req_id, "elapsed_ms": dt_ms},
-                    )
-                    return result
-                except Exception as e:
-                    dt_ms = int((time.monotonic() - t0) * 1000)
-                    _dbg(
-                        "H4",
-                        "src/gms_mcp/gamemaker_mcp_server.py:lowlevel:_handle_request:error",
-                        "request handler raised",
-                        {
-                            "pid": os.getpid(),
-                            "req_type": req_type,
-                            "request_id": req_id,
-                            "elapsed_ms": dt_ms,
-                            "error": str(e),
-                        },
-                    )
-                    raise
-
-            _lls.Server._handle_request = _patched_handle_request  # type: ignore[assignment]
-            _lls.Server._gms_mcp_patched = True  # type: ignore[attr-defined]
-            _dbg(
-                "H4",
-                "src/gms_mcp/gamemaker_mcp_server.py:main:patch_ok",
-                "patched lowlevel Server._handle_request",
-                {"pid": os.getpid()},
-            )
-    except Exception as e:
-        _dbg(
-            "H4",
-            "src/gms_mcp/gamemaker_mcp_server.py:main:patch_failed",
-            "failed to patch lowlevel request handler",
-            {"pid": os.getpid(), "error": str(e)},
-        )
-    # endregion
 
     # region agent log
     _dbg(

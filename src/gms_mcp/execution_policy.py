@@ -9,8 +9,8 @@ from typing import Dict, Optional
 class ExecutionMode(Enum):
     """How a tool should be executed."""
 
-    DIRECT = auto()  # In-process (fast, but blocks server and not cancellable)
-    SUBPROCESS = auto()  # External process (safer, cancellable, but slower)
+    DIRECT = auto()  # Typed handler in an isolated, timeout-bounded worker process
+    SUBPROCESS = auto()  # Generic CLI invocation in an isolated process group
 
 
 @dataclass
@@ -65,8 +65,8 @@ class PolicyManager:
             "asset-create-sprite",
             "workflow-duplicate",
             "workflow-rename",
-            "workflow-delete",
             "event-add",
+            "event-duplicate",
             "event-remove",
         ]
         for tool in fast_write_tools:
@@ -77,8 +77,15 @@ class PolicyManager:
         self._policies[tool_name] = policy
 
     def get_policy(self, tool_name: str) -> ToolPolicy:
-        """Get the policy for a tool, falling back to global default."""
-        return self._policies.get(tool_name, ToolPolicy(mode=self._default_mode))
+        """Get the exact or most-specific command-prefix policy."""
+        exact = self._policies.get(tool_name)
+        if exact is not None:
+            return exact
+
+        matches = [(name, policy) for name, policy in self._policies.items() if tool_name.startswith(f"{name}-")]
+        if matches:
+            return max(matches, key=lambda item: len(item[0]))[1]
+        return ToolPolicy(mode=self._default_mode)
 
 
 # Global instance

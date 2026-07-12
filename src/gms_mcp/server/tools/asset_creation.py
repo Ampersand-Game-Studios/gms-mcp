@@ -5,7 +5,6 @@ from typing import Any, Dict
 
 from ..debug import _dbg
 from ..dispatch import _run_with_fallback
-from ..dry_run_policy import _dry_run_policy_blocked_result, _requires_dry_run_for_tool
 from ..mcp_types import Context
 from ..project import _ensure_cli_on_sys_path, _resolve_repo_root
 
@@ -169,7 +168,7 @@ def register(mcp: Any, ContextType: Any) -> None:
 
         Args:
             name: Sprite asset name (e.g., spr_player)
-            parent_path: Parent folder path (e.g., "folders/Sprites.yy")
+            parent_path: Existing parent folder path; omit to reuse or create the default Sprites folder
             frame_count: Number of animation frames (default: 1)
         """
         repo_root = _resolve_repo_root(project_root)
@@ -891,50 +890,6 @@ def register(mcp: Any, ContextType: Any) -> None:
 
         return await _run_with_fallback(
             direct_handler=handle_asset_create,
-            direct_args=args,
-            cli_args=cli_args,
-            project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
-        )
-
-    @mcp.tool()
-    async def gm_asset_delete(
-        asset_type: str,
-        name: str,
-        dry_run: bool = False,
-        project_root: str = ".",
-        prefer_cli: bool = False,
-        output_mode: str = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
-        ctx: Context | None = None,
-    ) -> Dict[str, Any]:
-        """Delete an asset (supports dry-run)."""
-        repo_root = _resolve_repo_root(project_root)
-        _ensure_cli_on_sys_path(repo_root)
-        from gms_helpers.commands.asset_commands import handle_asset_delete
-
-        args = argparse.Namespace(
-            asset_type=asset_type,
-            name=name,
-            dry_run=dry_run,
-            project_root=project_root,
-        )
-        cli_args = ["asset", "delete", asset_type, name]
-        if dry_run:
-            cli_args.append("--dry-run")
-        if not dry_run and _requires_dry_run_for_tool("gm_asset_delete"):
-            return _dry_run_policy_blocked_result(
-                "gm_asset_delete",
-                "Use dry_run=true, add gm_asset_delete to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
-            )
-
-        return await _run_with_fallback(
-            direct_handler=handle_asset_delete,
             direct_args=args,
             cli_args=cli_args,
             project_root=project_root,

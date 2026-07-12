@@ -165,7 +165,13 @@ class TestBridgeToolWrappers(unittest.TestCase):
             ):
                 result = self.call_tool("gm_bridge_enable_one_shot", project_root=str(project_root))
             self.assertTrue(result["ok"])
-            mock_add_layer.assert_called_once_with("r_start", "Instances", "instance", 0)
+            mock_add_layer.assert_called_once_with(
+                "r_start",
+                "Instances",
+                "instance",
+                0,
+                project_root=project_root,
+            )
             mock_save.assert_called_once()
 
             room_with_string_order = {

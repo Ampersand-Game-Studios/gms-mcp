@@ -48,6 +48,13 @@ class TestExecutionPolicy(unittest.TestCase):
         self.assertEqual(policy.mode, ExecutionMode.DIRECT)
         self.assertEqual(policy.timeout_seconds, 10)
 
+    def test_command_operands_do_not_defeat_prefix_policy(self):
+        pm = PolicyManager()
+
+        self.assertEqual(pm.get_policy("event-add-o_player").mode, ExecutionMode.DIRECT)
+        self.assertEqual(pm.get_policy("workflow-rename-objects/o_player/o_player.yy").mode, ExecutionMode.DIRECT)
+        self.assertEqual(pm.get_policy("run-compile").mode, ExecutionMode.SUBPROCESS)
+
 
 class TestServerPolicyIntegration(unittest.TestCase):
     @patch("gms_mcp.server.dispatch._run_direct")
@@ -100,6 +107,7 @@ class TestServerPolicyIntegration(unittest.TestCase):
         self.assertTrue(result["direct_used"])
         self.assertTrue(mock_direct.called)
         self.assertFalse(mock_cli.called)
+        self.assertGreater(mock_direct.call_args.args[3], 0)
 
 
 if __name__ == "__main__":

@@ -3,12 +3,12 @@
 
 This runner:
 - discovers tools from FastMCP `list_tools()`
-- executes each tool in an isolated copy of the BLANK GAME1 fixture
+- executes each tool in an isolated copy of a generated minimal fixture
 - applies per-tool preconditions for tools with required args/state
 - writes a deterministic JSON report
 
 Default fixture:
-  gamemaker/BLANK GAME1
+  build/mcp-smoke/base-project (generated automatically)
 """
 
 from __future__ import annotations
@@ -30,11 +30,13 @@ from typing import Any, Awaitable, Callable, Dict, List, Optional
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
+DEFAULT_BASE_PROJECT = REPO_ROOT / "build" / "mcp-smoke" / "base-project"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from gms_helpers.asset_types import ObjectAsset, RoomAsset, ScriptAsset, SpriteAsset
 from gms_helpers.bridge_server import get_bridge_server, stop_bridge_server
-from gms_helpers.utils import load_json_loose
+from gms_helpers.utils import load_json_loose, update_yyp_file
 from gms_mcp.gamemaker_mcp_server import build_server
 
 
@@ -192,8 +194,10 @@ class ToolRunRecord:
 
 
 def create_minimal_base_project(project_root: Path) -> None:
-    """Create a small GameMaker-like project fixture for CI-safe MCP smoke runs."""
+    """Create a deterministic, GameMaker-loadable project for portable MCP smoke runs."""
     project_root = Path(project_root).resolve()
+    if project_root.exists():
+        shutil.rmtree(project_root)
     project_root.mkdir(parents=True, exist_ok=True)
     for directory in (
         "animcurves",
@@ -213,27 +217,76 @@ def create_minimal_base_project(project_root: Path) -> None:
     ):
         (project_root / directory).mkdir(parents=True, exist_ok=True)
 
+    room_name = "r_mcp_smoke"
+    room_relative_path = f"rooms/{room_name}/{room_name}.yy"
+    room_path = project_root / room_relative_path
+    room_path.parent.mkdir(parents=True, exist_ok=True)
+    room_path.write_text(
+        json.dumps(
+            RoomAsset().create_yy_data(
+                room_name,
+                "folders/Rooms.yy",
+                width=640,
+                height=360,
+            ),
+            indent=2,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
     yyp_path = project_root / "mcp_smoke.yyp"
-    if yyp_path.exists():
-        return
     yyp_path.write_text(
         json.dumps(
             {
-                "$GMProject": "",
+                "$GMProject": "v1",
                 "%Name": "mcp_smoke",
-                "name": "mcp_smoke",
-                "resources": [],
-                "Folders": [],
+                "AudioGroups": [
+                    {
+                        "$GMAudioGroup": "v1",
+                        "%Name": "audiogroup_default",
+                        "exportDir": "",
+                        "name": "audiogroup_default",
+                        "resourceType": "GMAudioGroup",
+                        "resourceVersion": "2.0",
+                        "targets": -1,
+                    }
+                ],
+                "configs": {"children": [], "name": "Default"},
+                "defaultScriptType": 0,
+                "Folders": [
+                    {
+                        "$GMFolder": "",
+                        "%Name": "Rooms",
+                        "folderPath": "folders/Rooms.yy",
+                        "name": "Rooms",
+                        "resourceType": "GMFolder",
+                        "resourceVersion": "2.0",
+                    }
+                ],
+                "ForcedPrefabProjectReferences": [],
                 "IncludedFiles": [],
-                "RoomOrderNodes": [],
+                "isEcma": False,
+                "LibraryEmitters": [],
+                "MetaData": {"IDEVersion": "2024.14.3.217"},
+                "name": "mcp_smoke",
+                "resources": [{"id": {"name": room_name, "path": room_relative_path}}],
+                "resourceType": "GMProject",
+                "resourceVersion": "2.0",
+                "RoomOrderNodes": [{"roomId": {"name": room_name, "path": room_relative_path}}],
+                "templateType": "game",
                 "TextureGroups": [
                     {
                         "$GMTextureGroup": "",
                         "%Name": "Default",
                         "autocrop": True,
                         "border": 2,
+                        "compressFormat": "bz2",
+                        "customOptions": "",
+                        "directory": "",
                         "groupParent": None,
                         "isScaled": True,
+                        "loadType": "default",
                         "mipsToGenerate": 0,
                         "name": "Default",
                         "resourceType": "GMTextureGroup",
@@ -241,18 +294,17 @@ def create_minimal_base_project(project_root: Path) -> None:
                         "targets": -1,
                     }
                 ],
-                "configs": {
-                    "children": [],
-                    "name": "Default",
-                },
-                "resourceType": "GMProject",
-                "resourceVersion": "2.0",
             },
             indent=2,
         )
         + "\n",
         encoding="utf-8",
     )
+
+
+def should_initialize_minimal_base(base_project: Path, explicitly_requested: bool) -> bool:
+    """Auto-create only the disposable default path unless replacement was explicit."""
+    return explicitly_requested or base_project.resolve() == DEFAULT_BASE_PROJECT.resolve()
 
 
 class MCPToolSmokeRunner:
@@ -284,7 +336,11 @@ class MCPToolSmokeRunner:
 
         self.create_tool_defaults: Dict[str, Dict[str, Any]] = {
             "gm_create_animcurve": {"name": "curve_tool_smoke", "skip_maintenance": True},
-            "gm_create_folder": {"name": "SmokeFolder", "path": "folders", "skip_maintenance": True},
+            "gm_create_folder": {
+                "name": "SmokeFolder",
+                "path": "folders/SmokeFolder.yy",
+                "skip_maintenance": True,
+            },
             "gm_create_font": {"name": "fnt_tool_smoke", "skip_maintenance": True},
             "gm_create_note": {"name": "note_tool_smoke", "skip_maintenance": True},
             "gm_create_object": {"name": "o_tool_smoke", "skip_maintenance": True},
@@ -300,8 +356,7 @@ class MCPToolSmokeRunner:
         }
 
         self.scenarios: Dict[str, Callable[[Path], Awaitable[tuple[Dict[str, Any], Any]]]] = {
-            "gm_asset_delete": self._scenario_asset_delete,
-            "gm_cli": self._scenario_cli,
+            "gm_safe_delete": self._scenario_safe_delete,
             "gm_doc_lookup": self._scenario_doc_lookup,
             "gm_doc_search": self._scenario_doc_search,
             "gm_event_add": self._scenario_event_add,
@@ -342,7 +397,6 @@ class MCPToolSmokeRunner:
             "gm_texture_group_read": self._scenario_texture_group_read,
             "gm_texture_group_rename": self._scenario_texture_group_rename,
             "gm_texture_group_update": self._scenario_texture_group_update,
-            "gm_workflow_delete": self._scenario_workflow_delete,
             "gm_workflow_duplicate": self._scenario_workflow_duplicate,
             "gm_workflow_rename": self._scenario_workflow_rename,
             "gm_workflow_swap_sprite": self._scenario_workflow_swap_sprite,
@@ -438,6 +492,12 @@ class MCPToolSmokeRunner:
         tools = list(all_tools)
         if self.include_tools:
             include = set(self.include_tools)
+            missing = sorted(include - set(tools))
+            if missing:
+                raise ValueError(
+                    "Requested MCP tools are not registered in the active profile: "
+                    f"{', '.join(missing)}. Set GMS_MCP_TOOLSETS=all or enable the relevant toolset."
+                )
             tools = [t for t in tools if t in include]
         if self.exclude_tools:
             tools = [t for t in tools if t not in self.exclude_tools]
@@ -523,25 +583,25 @@ class MCPToolSmokeRunner:
     # Generic prep helpers
     # ------------------------------------------------------------------
 
+    @staticmethod
+    def _create_fixture_asset(project_root: Path, asset: Any, name: str, **kwargs: Any) -> None:
+        """Create isolated scenario state without depending on another MCP toolset."""
+        relative_path = asset.create_files(project_root, name, "", **kwargs)
+        resource_entry = {"id": {"name": name, "path": relative_path}}
+        if not update_yyp_file(resource_entry, project_root=project_root):
+            raise RuntimeError(f"Could not register smoke fixture asset: {name}")
+
     async def _create_script(self, project_root: Path, name: str) -> None:
-        args = self._with_project("gm_create_script", project_root, {"name": name, "skip_maintenance": True})
-        await self._ensure_ok("gm_create_script", args, label="precondition")
+        self._create_fixture_asset(project_root, ScriptAsset(), name)
 
     async def _create_object(self, project_root: Path, name: str) -> None:
-        args = self._with_project("gm_create_object", project_root, {"name": name, "skip_maintenance": True})
-        await self._ensure_ok("gm_create_object", args, label="precondition")
+        self._create_fixture_asset(project_root, ObjectAsset(), name)
 
     async def _create_room(self, project_root: Path, name: str) -> None:
-        args = self._with_project("gm_create_room", project_root, {"name": name, "skip_maintenance": True})
-        await self._ensure_ok("gm_create_room", args, label="precondition")
+        self._create_fixture_asset(project_root, RoomAsset(), name, width=640, height=360)
 
     async def _create_sprite(self, project_root: Path, name: str, frame_count: int = 1) -> None:
-        args = self._with_project(
-            "gm_create_sprite",
-            project_root,
-            {"name": name, "frame_count": frame_count, "skip_maintenance": True},
-        )
-        await self._ensure_ok("gm_create_sprite", args, label="precondition")
+        self._create_fixture_asset(project_root, SpriteAsset(), name, frame_count=frame_count)
 
     async def _create_texture_group(self, project_root: Path, name: str) -> None:
         args = self._with_project(
@@ -555,20 +615,15 @@ class MCPToolSmokeRunner:
     # Tool scenarios
     # ------------------------------------------------------------------
 
-    async def _scenario_asset_delete(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
+    async def _scenario_safe_delete(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
         name = "scr_delete_smoke"
         await self._create_script(project_root, name)
         args = self._with_project(
-            "gm_asset_delete",
+            "gm_safe_delete",
             project_root,
-            {"asset_type": "script", "name": name, "dry_run": True},
+            {"asset_type": "script", "asset_name": name, "dry_run": True},
         )
-        result = await self._call_tool("gm_asset_delete", args)
-        return args, result
-
-    async def _scenario_cli(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
-        args = self._with_project("gm_cli", project_root, {"args": ["--help"]})
-        result = await self._call_tool("gm_cli", args)
+        result = await self._call_tool("gm_safe_delete", args)
         return args, result
 
     async def _scenario_doc_lookup(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
@@ -606,7 +661,7 @@ class MCPToolSmokeRunner:
         args = self._with_project(
             "gm_event_duplicate",
             project_root,
-            {"object": obj_name, "source_event": "step:0", "target_num": 1},
+            {"object": obj_name, "source_event": "step:0", "target_event": "step:1"},
         )
         result = await self._call_tool("gm_event_duplicate", args)
         return args, result
@@ -1048,17 +1103,6 @@ class MCPToolSmokeRunner:
         result = await self._call_tool("gm_texture_group_delete", args)
         return args, result
 
-    async def _scenario_workflow_delete(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
-        script = "scr_workflow_delete_smoke"
-        await self._create_script(project_root, script)
-        args = self._with_project(
-            "gm_workflow_delete",
-            project_root,
-            {"asset_path": f"scripts/{script}/{script}.yy", "dry_run": True},
-        )
-        result = await self._call_tool("gm_workflow_delete", args)
-        return args, result
-
     async def _scenario_workflow_duplicate(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
         script = "scr_workflow_dup_src"
         await self._create_script(project_root, script)
@@ -1121,19 +1165,19 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--base-project",
         type=Path,
-        default=REPO_ROOT / "gamemaker" / "BLANK GAME1",
-        help="Path to BLANK project fixture (default: gamemaker/BLANK GAME1)",
+        default=DEFAULT_BASE_PROJECT,
+        help="Base project fixture (the default build/mcp-smoke/base-project is generated automatically)",
     )
     parser.add_argument(
         "--work-root",
         type=Path,
-        default=REPO_ROOT / "gamemaker" / ".mcp_tool_smoke_work",
+        default=REPO_ROOT / "build" / "mcp-smoke" / "work",
         help="Workspace root used for isolated per-tool project copies",
     )
     parser.add_argument(
         "--output",
         type=Path,
-        default=REPO_ROOT / "gamemaker" / "BLANK GAME1" / "mcp_tool_smoke_report.json",
+        default=REPO_ROOT / "build" / "reports" / "mcp_tool_smoke_report.json",
         help="Output JSON report path",
     )
     parser.add_argument(
@@ -1151,7 +1195,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--init-minimal-base",
         action="store_true",
-        help="Create a minimal base project at --base-project before running smoke checks",
+        help="Replace --base-project with a generated minimal project before running smoke checks",
     )
     parser.add_argument(
         "--keep-workdirs",
@@ -1168,6 +1212,7 @@ def parse_args() -> argparse.Namespace:
 
 async def _async_main() -> int:
     args = parse_args()
+    init_minimal_base = should_initialize_minimal_base(args.base_project, args.init_minimal_base)
     runner = MCPToolSmokeRunner(
         base_project=args.base_project,
         work_root=args.work_root,
@@ -1176,7 +1221,7 @@ async def _async_main() -> int:
         exclude_tools=args.exclude_tools,
         keep_workdirs=args.keep_workdirs,
         fail_fast=args.fail_fast,
-        init_minimal_base=args.init_minimal_base,
+        init_minimal_base=init_minimal_base,
     )
     return await runner.run()
 

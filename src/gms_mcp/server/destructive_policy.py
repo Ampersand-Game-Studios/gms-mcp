@@ -4,11 +4,9 @@ from typing import Any, Dict
 
 
 _DRY_RUN_GATED_WORKFLOWS = {
-    "asset-delete",
     "maintenance-dedupe-resources",
     "maintenance-prune-missing",
     "room-ops-delete",
-    "workflow-delete",
 }
 _FIX_GATED_WORKFLOWS = {
     "maintenance-auto",

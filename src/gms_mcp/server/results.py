@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import datetime as dt
 from dataclasses import asdict, dataclass, is_dataclass
+from enum import Enum
+from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 
@@ -8,10 +11,20 @@ def _jsonable_result(value: Any) -> Any:
     if value is None:
         return None
     if hasattr(value, "to_dict") and callable(value.to_dict):
-        return value.to_dict()
+        return _jsonable_result(value.to_dict())
     if is_dataclass(value) and not isinstance(value, type):
-        return asdict(value)
-    if isinstance(value, (dict, list, str, int, float, bool)):
+        return _jsonable_result(asdict(value))
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, Enum):
+        return _jsonable_result(value.value)
+    if isinstance(value, (dt.datetime, dt.date, dt.time)):
+        return value.isoformat()
+    if isinstance(value, dict):
+        return {str(key): _jsonable_result(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple, set, frozenset)):
+        return [_jsonable_result(item) for item in value]
+    if isinstance(value, (str, int, float, bool)):
         return value
     return str(value)
 

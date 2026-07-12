@@ -14,6 +14,25 @@ from ..project_detection import (
 )
 
 
+# Direct helpers temporarily change the process cwd.  Project arguments received
+# by the long-running MCP server must therefore be anchored to the directory in
+# which the server started, never to whatever transient cwd another tool owns.
+_SERVER_START_DIRECTORY = Path.cwd().resolve()
+
+
+def _stable_project_candidate(project_root: str | None) -> Path:
+    raw = str(project_root or "").strip()
+    if not raw or raw == ".":
+        raw = next(
+            (value for key in ("GM_PROJECT_ROOT", "PROJECT_ROOT") if (value := os.environ.get(key))),
+            str(_SERVER_START_DIRECTORY),
+        )
+    candidate = Path(raw).expanduser()
+    if not candidate.is_absolute():
+        candidate = _SERVER_START_DIRECTORY / candidate
+    return candidate.resolve()
+
+
 def _list_yyp_files(directory: Path) -> list[Path]:
     return _shared_list_yyp_files(directory)
 
@@ -27,7 +46,7 @@ def _search_upwards_for_gamemaker_yyp(start_dir: Path) -> Path | None:
 
 
 def _resolve_project_directory_no_deps(project_root: str | None) -> Path:
-    return resolve_project_directory(project_root)
+    return resolve_project_directory(_stable_project_candidate(project_root))
 
 
 def _resolve_repo_root(project_root: str | None) -> Path:
@@ -37,9 +56,7 @@ def _resolve_repo_root(project_root: str | None) -> Path:
     If project_root is provided, resolve it to an absolute path.
     Otherwise, use the current working directory.
     """
-    if project_root:
-        return Path(project_root).resolve()
-    return Path.cwd()
+    return _stable_project_candidate(project_root)
 
 
 def _cli_package_root() -> Path:
@@ -63,7 +80,7 @@ def _with_cli_pythonpath(env: dict[str, str] | None) -> dict[str, str]:
 
 
 def _resolve_project_directory(project_root: str | None) -> Path:
-    return resolve_project_directory(project_root)
+    return resolve_project_directory(_stable_project_candidate(project_root))
 
 
 def _find_yyp_file(project_directory: Path) -> Optional[str]:

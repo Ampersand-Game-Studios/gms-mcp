@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any, Dict
 
 from ..mcp_types import Context
-from ..project import _resolve_project_directory_no_deps
+from ..project import _resolve_project_directory_no_deps, _resolve_repo_root
 
 
 def register(mcp: Any, ContextType: Any) -> None:
@@ -23,7 +23,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         from gms_helpers.runtime_manager import RuntimeManager
         from pathlib import Path
 
-        project_directory = _resolve_project_directory_no_deps(project_root)
+        project_directory = _resolve_repo_root(project_root)
         manager = RuntimeManager(project_directory)
 
         installed = manager.list_installed()
