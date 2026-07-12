@@ -1,6 +1,9 @@
 from __future__ import annotations
 # pyright: reportAttributeAccessIssue=false
 
+import hashlib
+import os
+import shutil
 import subprocess
 import threading
 from pathlib import Path
@@ -15,16 +18,59 @@ class RunnerIgorMixin:
         """Reset the remembered result state for a new runner action."""
         self.last_action_label = action_label
         self.last_failure_message = None
+        self.last_failure_retryable = False
 
-    def _remember_failure(self, message: str) -> None:
+    def _remember_failure(self, message: str, *, retryable: bool = False) -> None:
         """Store the most recent runner failure for command wrappers."""
         self.last_failure_message = message
+        self.last_failure_retryable = retryable
+
+    @staticmethod
+    def _compile_stage_succeeded(output_lines: List[str]) -> bool:
+        output = "\n".join(output_lines)
+        compile_finished = "Final Compile finished" in output and "Saving IFF file" in output
+        return compile_finished and ("Igor complete." in output or "Stats : GMA" in output)
+
+    def _is_retryable_igor_failure(self, returncode: int, output_lines: List[str]) -> bool:
+        output = "\n".join(output_lines)
+        return (
+            returncode != 0
+            and "System.AccessViolationException" in output
+            and not self._compile_stage_succeeded(output_lines)
+        )
+
+    @staticmethod
+    def _infrastructure_attempt_limit() -> int:
+        raw = os.environ.get("GMS_MCP_IGOR_INFRA_ATTEMPTS", "3").strip()
+        try:
+            return min(3, max(1, int(raw)))
+        except ValueError:
+            return 3
 
     def _system_temp_root(self) -> Path:
         """Return the system temp directory used for Igor cache/temp folders."""
         import tempfile
 
         return Path(tempfile.gettempdir())
+
+    def _igor_work_root(self) -> Path:
+        """Return the project/runtime-scoped disposable Igor work directory."""
+        if not self.runtime_path:
+            raise RuntimeNotFoundError("GameMaker runtime path is not initialized.")
+        project_file = self.find_project_file()
+        runtime_scope = str(Path(self.runtime_path).resolve())
+        project_scope = str(project_file.resolve())
+        work_key = hashlib.sha256(f"{project_scope}\0{runtime_scope}".encode("utf-8")).hexdigest()[:16]
+        return self._system_temp_root() / "gms-mcp" / work_key
+
+    def _reset_igor_transient_state(self) -> None:
+        """Discard one project's disposable cache before an infrastructure retry."""
+        work_root = self._igor_work_root()
+        expected_parent = (self._system_temp_root() / "gms-mcp").resolve()
+        if work_root.parent.resolve() != expected_parent:
+            raise RuntimeError(f"Refusing to clear unexpected Igor work path: {work_root}")
+        if work_root.exists():
+            shutil.rmtree(work_root)
 
     def _append_runtime_type_arg(self, cmd: List[str], runtime_type: str) -> None:
         """Append the Igor runtime switch when requested."""
@@ -43,9 +89,11 @@ class RunnerIgorMixin:
         if not license_file:
             raise LicenseNotFoundError("GameMaker license file not found. Please log into GameMaker IDE first.")
 
-        system_temp = self._system_temp_root()
-        cache_dir = system_temp / "gms_cache"
-        temp_dir = system_temp / "gms_temp"
+        work_root = self._igor_work_root()
+        cache_dir = work_root / "cache"
+        temp_dir = work_root / "temp"
+        cache_dir.mkdir(parents=True, exist_ok=True)
+        temp_dir.mkdir(parents=True, exist_ok=True)
 
         cmd = [str(igor_path)]
         cmd.extend([f"/lf={license_file}"])
@@ -128,6 +176,8 @@ class RunnerIgorMixin:
 
     def _build_stage_failure_message(self, stage_label: str, returncode: int, output_lines: List[str]) -> str:
         """Build a stage-aware failure summary instead of a generic compile error."""
+        if self._is_retryable_igor_failure(returncode, output_lines):
+            return "GameMaker runtime aborted with System.AccessViolationException before compilation completed."
         if stage_label == "package/export":
             if self._is_macos_signing_failure(output_lines):
                 return (
@@ -175,7 +225,31 @@ class RunnerIgorMixin:
         return self._build_platform_action_command(action, platform_target, runtime_type)
 
     def compile_project(self, platform_target: Optional[str] = None, runtime_type: str = "VM") -> bool:
-        """Compile the GameMaker project."""
+        """Compile the project, retrying only a confirmed pre-compile Igor infrastructure abort."""
+        attempt_limit = self._infrastructure_attempt_limit()
+        self.infrastructure_attempt_count = 0
+        self.retried_infrastructure_failure = False
+        for attempt in range(1, attempt_limit + 1):
+            self.infrastructure_attempt_count = attempt
+            success = self._compile_project_once(platform_target, runtime_type)
+            if success or self.last_failure_retryable is not True or attempt >= attempt_limit:
+                return success
+            self.retried_infrastructure_failure = True
+            try:
+                self._reset_igor_transient_state()
+            except OSError as exc:
+                message = f"Could not clear GameMaker transient state before retry: {exc}"
+                self._remember_failure(message)
+                print(f"[ERROR] {message}")
+                return False
+            print(
+                f"[RETRY] GameMaker runtime infrastructure abort on attempt {attempt}/{attempt_limit}; "
+                "cleared transient state and retrying."
+            )
+        return False
+
+    def _compile_project_once(self, platform_target: Optional[str] = None, runtime_type: str = "VM") -> bool:
+        """Run one compile attempt."""
         platform_target = normalize_platform_target(platform_target)
 
         try:
@@ -190,8 +264,16 @@ class RunnerIgorMixin:
                 project_name = self.find_project_file().stem
                 debug_log = self._macos_debug_log_path()
                 game_path = self.project_root / "output" / project_name / "game.ios"
-                start_offset = debug_log.stat().st_size if debug_log.exists() else 0
                 baseline_runner_pids, baseline_tail_pids = self._find_macos_validation_helper_pids(game_path, debug_log)
+                if not baseline_runner_pids and not baseline_tail_pids:
+                    # GameMaker may truncate and then quickly regrow the same log
+                    # beyond its prior size. Starting from a clean transient log
+                    # prevents a stale byte offset from missing the new main-loop marker.
+                    try:
+                        debug_log.unlink(missing_ok=True)
+                    except OSError:
+                        pass
+                start_offset = debug_log.stat().st_size if debug_log.exists() else 0
                 output_lines: List[str] = []
                 output_thread: Optional[threading.Thread] = None
                 process = None
@@ -244,7 +326,11 @@ class RunnerIgorMixin:
                         return_code,
                         output_lines,
                     )
-                self._remember_failure(failure_message)
+                retryable = self._is_retryable_igor_failure(
+                    process.returncode if process is not None else -1,
+                    output_lines,
+                )
+                self._remember_failure(failure_message, retryable=retryable)
                 print(f"[ERROR] {failure_message}")
                 return False
 
@@ -276,7 +362,10 @@ class RunnerIgorMixin:
                 process.returncode,
                 output_lines,
             )
-            self._remember_failure(failure_message)
+            self._remember_failure(
+                failure_message,
+                retryable=self._is_retryable_igor_failure(process.returncode, output_lines),
+            )
             print(f"[ERROR] {failure_message}")
             return False
 

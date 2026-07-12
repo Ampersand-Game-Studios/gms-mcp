@@ -53,7 +53,15 @@ def handle_runner_compile(args) -> RunnerResult:
 
         if success:
             print("[SUCCESS] Compilation completed successfully!")
-            return RunnerResult(success=True, message="Compilation completed successfully", exit_code=0)
+            return RunnerResult(
+                success=True,
+                message="Compilation completed successfully",
+                exit_code=0,
+                data={
+                    "infrastructure_attempt_count": runner.infrastructure_attempt_count,
+                    "retried_infrastructure_failure": runner.retried_infrastructure_failure,
+                },
+            )
         else:
             failure_message = runner.last_failure_message or "Build validation failed!"
             print(f"[ERROR] {failure_message}")
@@ -67,6 +75,10 @@ def handle_runner_compile(args) -> RunnerResult:
                     details={"platform": platform, "runtime": runtime},
                 ),
                 exit_code=1,
+                data={
+                    "infrastructure_attempt_count": runner.infrastructure_attempt_count,
+                    "retried_infrastructure_failure": runner.retried_infrastructure_failure,
+                },
             )
 
     except Exception as e:

@@ -150,7 +150,7 @@ def gm_mcp_health(project_root: Optional[str] = None) -> MaintenanceResult:
         )
     )
 
-    dependencies = ["mcp", "fastmcp", "pathlib", "colorama", "tqdm"]
+    dependencies = ["mcp", "colorama"]
     found_deps: List[str] = []
     missing_deps: List[str] = []
     for dep in dependencies:
@@ -166,7 +166,7 @@ def gm_mcp_health(project_root: Optional[str] = None) -> MaintenanceResult:
                 id="dependencies",
                 status="error",
                 summary=f"Missing dependencies: {', '.join(missing_deps)}",
-                details=["Run 'pip install -r src/gms_mcp/requirements.txt' to fix."],
+                details=["Run 'uv tool install --upgrade gms-mcp' to fix."],
                 data={"found": found_deps, "missing": missing_deps},
             )
         )

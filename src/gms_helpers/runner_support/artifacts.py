@@ -15,6 +15,8 @@ from .targets import normalize_platform_target
 
 
 class RunnerArtifactMixin:
+    project_root: Path
+
     def _normalize_path_for_popen(self) -> dict:
         """Return platform-safe keyword args for launching subprocesses."""
         return normalize_path_for_popen()
@@ -25,11 +27,11 @@ class RunnerArtifactMixin:
 
     def _start_game_process(self, launch_path: Path) -> subprocess.Popen:
         """Start a game process without inheriting the caller's stdio handles."""
-        return start_game_process(launch_path)
+        return start_game_process(launch_path, cwd=launch_path.parent)
 
     def _run_igor_command(self, cmd: List[str]) -> subprocess.Popen:
         """Start an Igor command with shared process settings."""
-        return run_igor_command(cmd)
+        return run_igor_command(cmd, cwd=self.project_root)
 
     def _find_macos_app_binary(self, app_bundle: Path) -> Optional[Path]:
         """Return the first executable inside a macOS .app bundle."""

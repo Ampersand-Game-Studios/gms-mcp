@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import errno
+import os
 import platform
 import subprocess
 from pathlib import Path
@@ -15,6 +16,20 @@ def normalize_path_for_popen() -> dict:
     if platform.system() != "Windows":
         process_kwargs["start_new_session"] = True
     return process_kwargs
+
+
+def build_igor_environment() -> dict[str, str]:
+    """Build a bounded-concurrency environment for the GameMaker Igor runtime."""
+    environment = os.environ.copy()
+    raw_count = environment.get("GMS_MCP_IGOR_PROCESSOR_COUNT", "1").strip()
+    try:
+        processor_count = int(raw_count)
+    except ValueError as exc:
+        raise ValueError("GMS_MCP_IGOR_PROCESSOR_COUNT must be an integer between 1 and 256.") from exc
+    if not 1 <= processor_count <= 256:
+        raise ValueError("GMS_MCP_IGOR_PROCESSOR_COUNT must be an integer between 1 and 256.")
+    environment["DOTNET_PROCESSOR_COUNT"] = str(processor_count)
+    return environment
 
 
 def build_macos_launch_guidance(launch_target: Path, error: OSError, action: str) -> str:
@@ -54,7 +69,7 @@ def build_macos_launch_guidance(launch_target: Path, error: OSError, action: str
     return f"{action_name} failed for macOS with: {error}"
 
 
-def start_game_process(launch_path: Path) -> subprocess.Popen:
+def start_game_process(launch_path: Path, *, cwd: Path | None = None) -> subprocess.Popen:
     """Start a game process without inheriting the caller's stdio handles."""
     try:
         process_kwargs = normalize_path_for_popen()
@@ -67,6 +82,7 @@ def start_game_process(launch_path: Path) -> subprocess.Popen:
         )
         return subprocess.Popen(
             [str(launch_path)],
+            cwd=str(cwd or launch_path.parent),
             **process_kwargs,
         )
     except OSError as exc:
@@ -75,7 +91,7 @@ def start_game_process(launch_path: Path) -> subprocess.Popen:
         raise
 
 
-def run_igor_command(cmd: List[str]) -> subprocess.Popen:
+def run_igor_command(cmd: List[str], *, cwd: Path | None = None) -> subprocess.Popen:
     """Start an Igor command with shared process settings."""
     process_kwargs = {
         "stdout": subprocess.PIPE,
@@ -83,10 +99,11 @@ def run_igor_command(cmd: List[str]) -> subprocess.Popen:
         "text": True,
         "bufsize": 1,
         "universal_newlines": True,
+        "env": build_igor_environment(),
     }
     process_kwargs.update(normalize_path_for_popen())
     try:
-        return subprocess.Popen(cmd, **process_kwargs)
+        return subprocess.Popen(cmd, cwd=str(cwd) if cwd is not None else None, **process_kwargs)
     except OSError as exc:
         if platform.system() == "Darwin":
             igor_path = Path(cmd[0]) if cmd else Path("<unknown>")

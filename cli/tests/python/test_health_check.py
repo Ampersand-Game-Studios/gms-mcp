@@ -28,7 +28,7 @@ class TestHealthCheck(unittest.TestCase):
         mock_runner.find_license_file.return_value = Path("/fake/license.plist")
 
         # Mock dependencies to all be present using sys.modules
-        mock_modules = {"mcp": MagicMock(), "fastmcp": MagicMock(), "colorama": MagicMock(), "tqdm": MagicMock()}
+        mock_modules = {"mcp": MagicMock(), "colorama": MagicMock()}
         with patch.dict("sys.modules", mock_modules):
             result = gm_mcp_health("/fake/project")
 

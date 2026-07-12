@@ -8,6 +8,8 @@ import time
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from ..runner_process import build_igor_environment
+
 
 class RunnerMacOSMixin:
     def _macos_debug_log_path(self) -> Path:
@@ -86,9 +88,15 @@ class RunnerMacOSMixin:
             "text": True,
             "bufsize": 1,
             "universal_newlines": True,
+            "cwd": str(self.project_root),
+            "env": build_igor_environment(),
         }
         process_kwargs.update(self._normalize_path_for_popen())
-        completed = subprocess.run(cmd, check=False, **process_kwargs)
+        try:
+            completed = subprocess.run(cmd, check=False, timeout=20, **process_kwargs)
+        except subprocess.TimeoutExpired:
+            print("[WARN] Igor Stop command timed out after 20 seconds.")
+            return False
 
         if completed.stdout:
             for line in completed.stdout.splitlines():

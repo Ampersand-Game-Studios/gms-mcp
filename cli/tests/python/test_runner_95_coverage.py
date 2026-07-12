@@ -44,7 +44,9 @@ class TestRunner95Coverage(unittest.TestCase):
 
         with patch("gms_helpers.runner_support.discovery.platform.system", return_value="Windows"):
             with patch.dict(os.environ, {"USERNAME": "tester"}, clear=True):
-                with patch("gms_helpers.runner_support.discovery.Path.home", return_value=self.project_root / "missing-home"):
+                with patch(
+                    "gms_helpers.runner_support.discovery.Path.home", return_value=self.project_root / "missing-home"
+                ):
                     self.assertIsNone(self.runner.find_license_file())
 
         linux_home = self.project_root / "linux-home"
