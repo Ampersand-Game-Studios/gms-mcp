@@ -144,24 +144,21 @@ class TestGameMakerMachineLock(unittest.TestCase):
                     child_env = parent_lock.delegation_environment("compile")
                     self.assertTrue(delegation_path.is_file())
 
-                    with (
-                        patch.dict(os.environ, child_env),
-                        patch("gms_helpers.gamemaker_machine_lock.os.getppid", return_value=os.getpid()),
-                    ):
+                    with patch.dict(os.environ, child_env):
                         self.assertFalse(_consume_valid_delegation("run", root))
                     self.assertTrue(delegation_path.is_file())
 
+                    # Entry-point shims can make the eventual consumer a
+                    # grandchild. The unguessable, project-bound, single-use
+                    # token is the authority rather than process ancestry.
                     with (
                         patch.dict(os.environ, child_env),
-                        patch("gms_helpers.gamemaker_machine_lock.os.getppid", return_value=os.getpid()),
+                        patch("gms_helpers.gamemaker_machine_lock.os.getppid", return_value=-1),
                     ):
                         self.assertTrue(_consume_valid_delegation("compile", root))
                     self.assertFalse(delegation_path.exists())
 
-                    with (
-                        patch.dict(os.environ, child_env),
-                        patch("gms_helpers.gamemaker_machine_lock.os.getppid", return_value=os.getpid()),
-                    ):
+                    with patch.dict(os.environ, child_env):
                         self.assertFalse(_consume_valid_delegation("compile", root))
 
     def test_public_compile_and_stop_operations_use_the_machine_lock(self):

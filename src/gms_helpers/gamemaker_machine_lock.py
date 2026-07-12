@@ -220,15 +220,12 @@ def _consume_valid_delegation(operation: str, project_root: Path) -> bool:
 
     expected_hash = str(metadata.get("delegation_token_sha256") or "")
     actual_hash = hashlib.sha256(token.encode("utf-8")).hexdigest()
-    owner_pid = metadata.get("pid")
     metadata_project = os.path.normcase(str(metadata.get("project_root") or ""))
     expected_project = os.path.normcase(str(project_root))
     valid = (
         secrets.compare_digest(actual_hash, expected_hash)
         and metadata.get("delegate_operation") == operation
         and metadata_project == expected_project
-        and isinstance(owner_pid, int)
-        and owner_pid == os.getppid()
     )
     if not valid:
         return False
