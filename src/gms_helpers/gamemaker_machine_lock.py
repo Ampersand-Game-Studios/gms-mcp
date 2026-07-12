@@ -176,8 +176,9 @@ def _consume_valid_delegation(operation: str, project_root: Path) -> bool:
     if not token:
         return False
     try:
-        raw = _lock_path().read_bytes()
-        metadata = json.loads(raw[1:].decode("utf-8"))
+        with _lock_path().open("rb") as lock_file:
+            lock_file.seek(1)
+            metadata = json.loads(lock_file.read().decode("utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return False
     if not isinstance(metadata, dict):

@@ -48,6 +48,20 @@ class TestGameMakerProjectTransactions(unittest.TestCase):
                     transaction.cleanup()
                 self.assertFalse(transaction_is_active())
 
+    def test_journal_ignores_windows_reserved_device_paths(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self._project(Path(temp_dir))
+            journal = root / "journal.jsonl"
+            journal.write_text("", encoding="utf-8")
+            backup = root / "backup"
+            backup.mkdir()
+            context = transactions_module._TransactionJournalContext(root, journal, backup)
+
+            with patch.object(transactions_module.os, "name", "nt"):
+                self.assertIsNone(transactions_module._journal_relative_path(context, "nul"))
+                self.assertIsNone(transactions_module._journal_relative_path(context, "NUL.txt"))
+                self.assertIsNone(transactions_module._journal_relative_path(context, r"\\.\COM1"))
+
     def test_validation_accepts_inherited_option_envelopes_and_metadata_only_events(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

@@ -49,6 +49,14 @@ _JOURNAL_WRITE_GUARD = threading.Lock()
 _AUDIT_HOOK_GUARD = threading.Lock()
 _AUDIT_HOOK_INSTALLED = False
 _ThreadResult = TypeVar("_ThreadResult")
+_WINDOWS_DEVICE_NAMES = {
+    "aux",
+    "con",
+    "nul",
+    "prn",
+    *(f"com{index}" for index in range(1, 10)),
+    *(f"lpt{index}" for index in range(1, 10)),
+}
 
 
 async def _run_thread_shielded(callable_to_run: Callable[[], _ThreadResult]) -> _ThreadResult:
@@ -193,6 +201,9 @@ def _journal_relative_path(
     dir_fd: Any = None,
 ) -> str | None:
     try:
+        raw_name = os.fsdecode(raw_path).replace("/", "\\").rsplit("\\", 1)[-1].rstrip(" .")
+        if os.name == "nt" and raw_name.split(".", 1)[0].casefold() in _WINDOWS_DEVICE_NAMES:
+            return None
         resolved = _audit_absolute_path(raw_path, dir_fd)
         if resolved is None:
             return None

@@ -164,23 +164,23 @@ class TestDocSearch(unittest.TestCase):
     def test_lookup_success_and_suggestions(self):
         doc = _sample_doc()
         with (
-            patch("gms_helpers.gml_docs.search.fetch_function_doc", return_value=doc),
-            patch("gms_helpers.gml_docs.search.fetch_function_index", return_value=self.index),
+            patch.object(doc_search, "fetch_function_doc", return_value=doc),
+            patch.object(doc_search, "fetch_function_index", return_value=self.index),
         ):
             result = doc_search.lookup("draw_sprite", force_refresh=True)
         self.assertTrue(result["ok"])
         self.assertFalse(result["cached"])
 
         with (
-            patch("gms_helpers.gml_docs.search.fetch_function_doc", return_value=None),
-            patch("gms_helpers.gml_docs.search.fetch_function_index", return_value=self.index),
+            patch.object(doc_search, "fetch_function_doc", return_value=None),
+            patch.object(doc_search, "fetch_function_index", return_value=self.index),
         ):
             result = doc_search.lookup("dra_sprite")
         self.assertFalse(result["ok"])
         self.assertIn("draw_sprite", result["suggestions"])
 
     def test_search_scores_and_filters_results(self):
-        with patch("gms_helpers.gml_docs.search.fetch_function_index", return_value=self.index):
+        with patch.object(doc_search, "fetch_function_index", return_value=self.index):
             result = doc_search.search("draw")
             drawing = doc_search.search("draw", category="Drawing", limit=1)
             fuzzy = doc_search.search("drw_sprte")
@@ -191,7 +191,7 @@ class TestDocSearch(unittest.TestCase):
         self.assertTrue(any(item["name"] == "draw_sprite" for item in fuzzy["results"]))
 
     def test_list_functions_and_categories(self):
-        with patch("gms_helpers.gml_docs.search.fetch_function_index", return_value=self.index):
+        with patch.object(doc_search, "fetch_function_index", return_value=self.index):
             invalid = doc_search.list_functions(pattern="(")
             filtered = doc_search.list_functions(category="Drawing", pattern="^draw_", limit=5)
             categories = doc_search.list_categories()

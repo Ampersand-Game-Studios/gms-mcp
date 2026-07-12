@@ -3,6 +3,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest.mock import MagicMock, patch
@@ -223,6 +224,10 @@ class TestVerificationPolicy(unittest.TestCase):
                 start_new_session=True,
             )
             try:
+                deadline = time.monotonic() + 2
+                while process.pid not in _compile_verification_process_pids(root) and time.monotonic() < deadline:
+                    time.sleep(0.02)
+                self.assertIn(process.pid, _compile_verification_process_pids(root))
                 cleanup = _terminate_compile_verification_processes(root, set())
                 process.wait(timeout=5)
             finally:
