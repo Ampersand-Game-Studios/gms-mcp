@@ -189,5 +189,3 @@ def texture_group_scan(
         "mismatched_assets": mismatched,
         "assets": assets_rows if include_assets else None,
     }
-
-

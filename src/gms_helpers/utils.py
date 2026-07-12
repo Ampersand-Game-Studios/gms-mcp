@@ -104,6 +104,9 @@ def atomic_write_text(path: Path | str, content: str, encoding: str = "utf-8") -
             fh.flush()
             os.fsync(fh.fileno())
         tmp_path.replace(target)
+        from .transactions import mark_transaction_path_owned
+
+        mark_transaction_path_owned(target)
     except Exception:
         try:
             tmp_path.unlink()
@@ -117,7 +120,7 @@ def atomic_write_text(path: Path | str, content: str, encoding: str = "utf-8") -
 # ------------------------------------------------------------------
 def find_yyp(project_root: Path) -> Path:
     """Pick the first .yyp file in the project root."""
-    yyp_files = list(project_root.glob("*.yyp"))
+    yyp_files = sorted(project_root.glob("*.yyp"), key=lambda path: path.name.casefold())
     if not yyp_files:
         raise ProjectNotFoundError(f"No .yyp file found in project root: {project_root}")
     return yyp_files[0]
@@ -140,6 +143,82 @@ def verify_parent_path_exists(yyp_data: Dict[str, Any], parent_path: str) -> boo
         if folder.get("folderPath") == parent_path:
             return True
     return False
+
+
+_DEFAULT_ASSET_FOLDER_NAMES = {
+    "animcurve": "Animation Curves",
+    "font": "Fonts",
+    "note": "Notes",
+    "object": "Objects",
+    "path": "Paths",
+    "room": "Rooms",
+    "script": "Scripts",
+    "sequence": "Sequences",
+    "shader": "Shaders",
+    "sound": "Sounds",
+    "sprite": "Sprites",
+    "tileset": "Tile Sets",
+    "timeline": "Timelines",
+}
+
+
+def ensure_default_asset_parent(project_root: Path, asset_kind: str, folder_prefix: str) -> str:
+    """Resolve or create a deterministic logical folder for an unparented asset."""
+    from .path_safety import project_child_path
+
+    root = Path(project_root).resolve()
+    yyp_path = find_yyp(root)
+    project_data = load_json_loose(yyp_path)
+    if not isinstance(project_data, dict):
+        raise ValidationError(f"Could not load GameMaker project: {yyp_path}")
+
+    folders = project_data.get("Folders")
+    if folders is None:
+        folders = project_data.pop("folders", [])
+    if not isinstance(folders, list):
+        raise ValidationError(f"GameMaker project has an invalid Folders list: {yyp_path}")
+
+    defined_paths: Dict[str, Dict[str, Any]] = {}
+    for folder in folders:
+        if not isinstance(folder, dict):
+            continue
+        folder_path = folder.get("folderPath")
+        if isinstance(folder_path, str):
+            defined_paths[folder_path] = folder
+    canonical_name = _DEFAULT_ASSET_FOLDER_NAMES.get(asset_kind, folder_prefix.replace("_", " ").title())
+    canonical_path = f"folders/{canonical_name}.yy"
+
+    for defined_path in sorted(defined_paths, key=str.casefold):
+        if defined_path.casefold() == canonical_path.casefold():
+            return defined_path
+
+    comparable_parents: Dict[str, int] = {}
+    resource_prefix = f"{folder_prefix}/"
+    for resource in project_data.get("resources", []) or []:
+        resource_id = resource.get("id") if isinstance(resource, dict) else None
+        resource_path = resource_id.get("path") if isinstance(resource_id, dict) else None
+        if not isinstance(resource_path, str) or not resource_path.replace("\\", "/").startswith(resource_prefix):
+            continue
+        normalized_path = resource_path.replace("\\", "/")
+        try:
+            asset_path = project_child_path(*Path(normalized_path).parts, project_root=root, kind="asset path")
+        except ValidationError:
+            continue
+        asset_data = load_json_loose(asset_path)
+        parent = asset_data.get("parent") if isinstance(asset_data, dict) else None
+        parent_path = parent.get("path") if isinstance(parent, dict) else None
+        if isinstance(parent_path, str) and parent_path in defined_paths:
+            comparable_parents[parent_path] = comparable_parents.get(parent_path, 0) + 1
+
+    if comparable_parents:
+        return sorted(comparable_parents, key=lambda path: (-comparable_parents[path], path.casefold()))[0]
+
+    if not insert_into_folders(folders, canonical_name, canonical_path):
+        raise ValidationError(f"Could not create default GameMaker folder: {canonical_path}")
+    project_data["Folders"] = folders
+    save_pretty_json_gm(yyp_path, project_data)
+    print(f"[OK] Added default {asset_kind} folder '{canonical_path}' to {yyp_path.name}")
+    return canonical_path
 
 
 # ------------------------------------------------------------------
@@ -242,6 +321,9 @@ def create_dummy_png(file_path, width=64, height=64):
 
     with open(path, "wb") as f:
         f.write(png_data)
+    from .transactions import mark_transaction_path_owned
+
+    mark_transaction_path_owned(path)
 
 
 def load_json(file_path):
@@ -597,9 +679,9 @@ def dedupe_resources(yyp_data, interactive=True):
     return yyp_data, removed_count, report
 
 
-def update_yyp_file(resource_entry):
+def update_yyp_file(resource_entry, project_root: str | Path | None = None):
     """Add a resource entry to the main .yyp file with duplicate checking."""
-    yyp_file = find_yyp_file()
+    yyp_file = find_yyp(Path(project_root).resolve()) if project_root is not None else find_yyp_file()
 
     try:
         project_data = load_json(yyp_file)
@@ -649,33 +731,34 @@ def validate_parent_path(parent_path):
     If the folder is missing the process now aborts instead of only emitting
     a warning - this prevents dangling assets from being created.
     """
+    return validate_parent_path_for_project(Path.cwd(), parent_path)
+
+
+def validate_parent_path_for_project(project_root: str | Path, parent_path: str) -> bool:
+    """Validate a logical parent path against a specific GameMaker project."""
     if not parent_path:
-        return True  # No parent path is valid
+        return True
 
     try:
-        # Load the .yyp file to check Folders list
-        yyp_file = find_yyp_file()
-        project_data = load_json(yyp_file)
+        yyp_file = find_yyp(Path(project_root).resolve())
+        project_data = load_json_loose(yyp_file)
+        if not isinstance(project_data, dict):
+            raise ValidationError(f"Could not load GameMaker project: {yyp_file}")
         folders = project_data.get("Folders", [])
-
-        # Check if the parent_path exists in the Folders list
-        folder_paths = {folder.get("folderPath", "") for folder in folders}
+        folder_paths = {folder.get("folderPath", "") for folder in folders if isinstance(folder, dict)}
 
         if parent_path in folder_paths:
             return True
 
-        # Folder not found -> stop immediately and show the user what went wrong
-        available = "\n  - ".join(sorted(p for p in folder_paths if p))
+        available = "\n  - ".join(sorted(path for path in folder_paths if path))
         raise ValidationError(
             f"Parent folder path '{parent_path}' not found in project Folders list.\n"
             f"Available folder paths:\n  - {available}"
         )
-
     except GMSError:
-        # Re-raise GMS errors
         raise
-    except Exception as e:
-        raise ValidationError(f"Error validating parent path '{parent_path}': {e}")
+    except Exception as exc:
+        raise ValidationError(f"Error validating parent path '{parent_path}': {exc}") from exc
 
 
 def remove_folder_from_yyp(folder_path, force=False, dry_run=False):

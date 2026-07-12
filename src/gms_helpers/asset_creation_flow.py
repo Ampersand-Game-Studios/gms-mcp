@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from .auto_maintenance import handle_maintenance_failure, run_auto_maintenance, validate_asset_creation_safe
-from .utils import update_yyp_file, validate_name, validate_parent_path
+from .utils import update_yyp_file, validate_name, validate_parent_path_for_project
 
 
 def run_pre_creation_maintenance(args: Any, operation: str) -> Any:
@@ -14,7 +14,8 @@ def run_pre_creation_maintenance(args: Any, operation: str) -> Any:
     if getattr(args, "skip_maintenance", False):
         return True
     print("[VALIDATE] Running pre-creation validation...")
-    pre_result = run_auto_maintenance(".", fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
+    project_root = getattr(args, "project_root", ".")
+    pre_result = run_auto_maintenance(project_root, fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
     if not validate_asset_creation_safe(pre_result):
         return handle_maintenance_failure(operation, pre_result)
     return True
@@ -26,7 +27,7 @@ def run_post_creation_maintenance(args: Any, operation: str) -> bool:
         return True
     print("[MAINT] Running post-creation maintenance...")
     post_result = run_auto_maintenance(
-        ".",
+        getattr(args, "project_root", "."),
         fix_issues=not getattr(args, "no_auto_fix", False),
         verbose=getattr(args, "maintenance_verbose", True),
     )
@@ -42,7 +43,7 @@ def validate_named_asset(args: Any, asset_type: str, *, allow_constructor: bool 
         validate_name(args.name, asset_type, allow_constructor=True)
     else:
         validate_name(args.name, asset_type)
-    validate_parent_path(args.parent_path)
+    validate_parent_path_for_project(getattr(args, "project_root", Path.cwd()), args.parent_path)
 
 
 def create_project_asset(
@@ -62,10 +63,11 @@ def create_project_asset(
         return precheck
 
     validate_named_asset(args, asset_type, allow_constructor=allow_constructor)
-    relative_path = asset.create_files(Path("."), args.name, args.parent_path, **(kwargs or {}))
+    project_root = Path(getattr(args, "project_root", ".")).resolve()
+    relative_path = asset.create_files(project_root, args.name, args.parent_path, **(kwargs or {}))
     resource_entry = {"id": {"name": args.name, "path": relative_path}}
 
-    if not update_yyp_file(resource_entry):
+    if not update_yyp_file(resource_entry, project_root=project_root):
         print(f"[ERROR] Failed to update .yyp file for {label.lower()} '{args.name}'")
         return False
 

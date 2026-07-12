@@ -243,18 +243,18 @@ class TestUtilsCoverage(unittest.TestCase):
         self.assertIn("save fail", output)
 
         with (
-            patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"),
+            patch("gms_helpers.utils.find_yyp", return_value=Path("demo.yyp")),
             patch(
-                "gms_helpers.utils.load_json",
+                "gms_helpers.utils.load_json_loose",
                 return_value={"Folders": [{"folderPath": "folders/A.yy"}]},
             ),
         ):
             self.assertTrue(validate_parent_path("folders/A.yy"))
 
         with (
-            patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"),
+            patch("gms_helpers.utils.find_yyp", return_value=Path("demo.yyp")),
             patch(
-                "gms_helpers.utils.load_json",
+                "gms_helpers.utils.load_json_loose",
                 return_value={"Folders": [{"folderPath": "folders/A.yy"}]},
             ),
         ):
@@ -262,9 +262,9 @@ class TestUtilsCoverage(unittest.TestCase):
                 validate_parent_path("folders/B.yy")
 
         with (
-            patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"),
+            patch("gms_helpers.utils.find_yyp", return_value=Path("demo.yyp")),
             patch(
-                "gms_helpers.utils.load_json",
+                "gms_helpers.utils.load_json_loose",
                 side_effect=GMSError("boom"),
             ),
         ):
@@ -272,9 +272,9 @@ class TestUtilsCoverage(unittest.TestCase):
                 validate_parent_path("folders/A.yy")
 
         with (
-            patch("gms_helpers.utils.find_yyp_file", return_value="demo.yyp"),
+            patch("gms_helpers.utils.find_yyp", return_value=Path("demo.yyp")),
             patch(
-                "gms_helpers.utils.load_json",
+                "gms_helpers.utils.load_json_loose",
                 side_effect=RuntimeError("bad"),
             ),
         ):

@@ -19,6 +19,8 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from copy import deepcopy
 
+from .utils import atomic_write_text
+
 # Configuration file names
 PROJECT_CONFIG_FILE = ".gms-mcp.json"
 GLOBAL_CONFIG_DIR = ".gms-mcp"
@@ -397,9 +399,7 @@ def create_default_config_file(project_root: Union[str, Path], overwrite: bool =
 
     defaults = _get_factory_defaults()
 
-    with open(config_path, "w", encoding="utf-8") as f:
-        json.dump(defaults, f, indent=2, ensure_ascii=False)
-        f.write("\n")
+    atomic_write_text(config_path, json.dumps(defaults, indent=2, ensure_ascii=False) + "\n")
 
     # Invalidate cache for this project
     NamingConfig.invalidate(project_root)

@@ -4,10 +4,12 @@ Safely moves assets to a trash folder instead of permanent deletion.
 """
 
 import os
-import shutil
 import datetime
 from pathlib import Path
 from typing import List, Dict, Any, Optional
+
+from ...transactions import transactional_rename
+from ...utils import atomic_write_text
 
 
 def move_to_trash(project_root: str, files_to_move: List[str], trash_name: Optional[str] = None) -> Dict[str, Any]:
@@ -43,7 +45,7 @@ def move_to_trash(project_root: str, files_to_move: List[str], trash_name: Optio
 
         try:
             # Move the file
-            shutil.move(str(src), str(dst))
+            transactional_rename(src, dst)
             moved_count += 1
             manifest.append(rel_path)
         except Exception as e:
@@ -52,11 +54,9 @@ def move_to_trash(project_root: str, files_to_move: List[str], trash_name: Optio
     # Write manifest file
     if manifest:
         manifest_path = trash_root / "MANIFEST.txt"
-        with open(manifest_path, "w", encoding="utf-8") as f:
-            f.write(f"Maintenance Trash Manifest - {timestamp}\n")
-            f.write("=" * 40 + "\n")
-            for item in manifest:
-                f.write(f"{item}\n")
+        manifest_text = f"Maintenance Trash Manifest - {timestamp}\n" + "=" * 40 + "\n"
+        manifest_text += "".join(f"{item}\n" for item in manifest)
+        atomic_write_text(manifest_path, manifest_text)
 
     return {
         "trash_folder": str(trash_root.relative_to(project_root_path)),

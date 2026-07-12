@@ -72,14 +72,14 @@ class TestEventHelper95Coverage(unittest.TestCase):
 
     def test_duplicate_event_remaining_paths(self):
         with self.assertRaises(ValidationError):
-            duplicate_event("o_test", "invalid", 1)
+            duplicate_event("o_test", "invalid", "invalid:1")
 
         with self.assertRaises(AssetNotFoundError):
-            duplicate_event("o_missing", "step:0", 1)
+            duplicate_event("o_missing", "step:0", "step:1")
 
         with patch("gms_helpers.event_helper.load_json_loose", return_value=None):
             with self.assertRaises(GMSError):
-                duplicate_event("o_test", "step:0", 1)
+                duplicate_event("o_test", "step:0", "step:1")
 
         source_path = self.project_root / "objects" / "o_test" / "Step_0.gml"
         source_path.write_text("// source\n", encoding="utf-8")
@@ -88,7 +88,7 @@ class TestEventHelper95Coverage(unittest.TestCase):
             return_value={"name": "o_test", "eventList": None},
         ):
             with patch("gms_helpers.event_helper.save_json_loose") as mock_save:
-                self.assertTrue(duplicate_event("o_test", "step:0", 1))
+                self.assertTrue(duplicate_event("o_test", "step:0", "step:1"))
         saved_data = mock_save.call_args.args[1]
         self.assertEqual(saved_data["eventList"][0]["eventNum"], 1)
 

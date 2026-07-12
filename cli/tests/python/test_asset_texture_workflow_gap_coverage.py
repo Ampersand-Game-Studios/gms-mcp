@@ -56,8 +56,6 @@ from gms_helpers.texture_groups import (
 from gms_helpers.utils import load_json_loose, save_pretty_json
 from gms_helpers.workflow import (
     _asset_from_path,
-    _cleanup_symbol_references,
-    _copy_tree,
     _patch_gml_stub,
     _try_import,
     duplicate_asset,
@@ -425,22 +423,12 @@ class TestWorkflowGapCoverage(unittest.TestCase, WorkflowProjectMixin):
                 with patch("gms_helpers.workflow.load_json_loose", return_value=None):
                     duplicate_asset(project_root, "scripts/scr_old/scr_old.yy", "scr_copy")
 
-            with patch("gms_helpers.reference_scanner.comprehensive_rename_asset", return_value=False):
-                with patch(
-                    "gms_helpers.auto_maintenance.run_auto_maintenance", return_value=SimpleNamespace(has_errors=True)
-                ):
-                    with patch.dict(os.environ, {}, clear=True):
-                        result = rename_asset(project_root, "scripts/scr_old/scr_old.yy", "scr_new")
+            result = rename_asset(project_root, "scripts/scr_old/scr_old.yy", "scr_new")
             self.assertTrue(result.success)
-            self.assertTrue(result.warnings)
+            self.assertFalse(result.warnings)
 
             missing = safe_delete_asset(project_root, "script", "missing")
             self.assertFalse(missing["ok"])
-
-            gml_path = project_root / "scripts" / "scr_new" / "scr_new.gml"
-            gml_path.write_text("function scr_new() {\n    scr_new();\n}\n", encoding="utf-8")
-            cleanup = _cleanup_symbol_references(project_root, "scr_new")
-            self.assertGreaterEqual(cleanup["replacements"], 2)
 
         finally:
             shutil.rmtree(project_root, ignore_errors=True)
@@ -495,26 +483,22 @@ class TestWorkflowGapCoverage(unittest.TestCase, WorkflowProjectMixin):
         finally:
             shutil.rmtree(project_root, ignore_errors=True)
 
-    def test_copy_tree_and_patch_gml_stub(self):
-        src = Path(tempfile.mkdtemp())
+    def test_patch_gml_stub_is_semantic_and_reports_missing_file(self):
         dst = Path(tempfile.mkdtemp())
         try:
-            (src / "nested").mkdir()
-            (src / "nested" / "file.txt").write_text("hello", encoding="utf-8")
-
-            fake_tqdm = SimpleNamespace(tqdm=lambda items, **kwargs: items)
-            with patch("gms_helpers.workflow.tqdm", fake_tqdm):
-                with patch("gms_helpers.workflow.sys.stdout.isatty", return_value=True):
-                    _copy_tree(src, dst)
-            self.assertEqual((dst / "nested" / "file.txt").read_text(encoding="utf-8"), "hello")
-
             gml_file = dst / "stub.gml"
-            gml_file.write_text("function old_name() {\n    return 1;\n}\n", encoding="utf-8")
-            _patch_gml_stub(gml_file, "new_name")
-            self.assertIn("function new_name() {", gml_file.read_text(encoding="utf-8"))
-            _patch_gml_stub(dst / "missing.gml", "unused")
+            gml_file.write_text(
+                'function old_name() {\n    // old_name docs\n    return "old_name";\n}\n',
+                encoding="utf-8",
+            )
+            _patch_gml_stub(gml_file, "old_name", "new_name")
+            rewritten = gml_file.read_text(encoding="utf-8")
+            self.assertIn("function new_name() {", rewritten)
+            self.assertIn("// old_name docs", rewritten)
+            self.assertIn('"old_name"', rewritten)
+            with self.assertRaises(FileNotFoundError):
+                _patch_gml_stub(dst / "missing.gml", "old_name", "new_name")
         finally:
-            shutil.rmtree(src, ignore_errors=True)
             shutil.rmtree(dst, ignore_errors=True)
 
 

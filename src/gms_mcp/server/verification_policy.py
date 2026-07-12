@@ -19,7 +19,6 @@ _SMART_VERIFY_VALUES = {"smart", "risk", "risky", "batch", "batched"}
 _OFF_VALUES = {"", "0", "false", "no", "off", "none"}
 
 _HIGH_RISK_TOOL_NAMES = {
-    "gm_asset_delete",
     "gm_bridge_install",
     "gm_bridge_uninstall",
     "gm_bridge_enable_one_shot",
@@ -37,7 +36,6 @@ _HIGH_RISK_TOOL_NAMES = {
     "gm_texture_group_create",
     "gm_texture_group_delete",
     "gm_texture_group_rename",
-    "gm_workflow_delete",
     "gm_workflow_duplicate",
     "gm_workflow_rename",
 }
@@ -119,7 +117,9 @@ def decide_mutation_verification(tool_name: str) -> MutationVerificationDecision
         if risk == "batchable":
             return MutationVerificationDecision(mode=mode, action="defer", risk=risk, reason=reason)
         return MutationVerificationDecision(mode=mode, action="compile", risk=risk, reason=reason)
-    return MutationVerificationDecision(mode=mode, action="skip", risk=risk, reason="post-mutation compile verification is off")
+    return MutationVerificationDecision(
+        mode=mode, action="skip", risk=risk, reason="post-mutation compile verification is off"
+    )
 
 
 def _state_path(project_root: Path) -> Path:

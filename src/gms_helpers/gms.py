@@ -283,7 +283,7 @@ def setup_script_parser(subparsers):
     parser.add_argument(
         "--parent-path",
         default="",
-        help='Optional parent folder path (e.g. "folders/Scripts.yy"). If omitted, asset is created at project root.',
+        help='Optional parent folder path (e.g. "folders/Scripts.yy"). If omitted, an appropriate logical folder is reused or created.',
     )
     parser.add_argument(
         "--constructor", action="store_true", help="Create a constructor script (allows PascalCase naming)"
@@ -306,7 +306,7 @@ def setup_object_parser(subparsers):
     parser.add_argument(
         "--parent-path",
         default="",
-        help='Optional parent folder path (e.g. "folders/Objects.yy"). If omitted, asset is created at project root.',
+        help='Optional parent folder path (e.g. "folders/Objects.yy"). If omitted, an appropriate logical folder is reused or created.',
     )
     parser.add_argument("--sprite-id", help="Sprite resource ID")
     parser.add_argument("--parent-object", help="Parent object name (for inheritance)")
@@ -328,7 +328,7 @@ def setup_sprite_parser(subparsers):
     parser.add_argument(
         "--parent-path",
         default="",
-        help='Optional parent folder path (e.g. "folders/Sprites.yy"). If omitted, asset is created at project root.',
+        help='Optional parent folder path (e.g. "folders/Sprites.yy"). If omitted, an appropriate logical folder is reused or created.',
     )
     parser.add_argument("--frame-count", type=int, default=1, help="Number of animation frames (default: 1)")
     parser.add_argument("--skip-maintenance", action="store_true", help="Skip pre/post validation")
@@ -349,7 +349,7 @@ def setup_room_parser(subparsers):
     parser.add_argument(
         "--parent-path",
         default="",
-        help='Optional parent folder path (e.g. "folders/Rooms.yy"). If omitted, asset is created at project root.',
+        help='Optional parent folder path (e.g. "folders/Rooms.yy"). If omitted, an appropriate logical folder is reused or created.',
     )
     parser.add_argument("--width", type=int, default=1024, help="Room width (default: 1024)")
     parser.add_argument("--height", type=int, default=768, help="Room height (default: 768)")
@@ -387,7 +387,7 @@ def setup_font_parser(subparsers):
     parser.add_argument(
         "--parent-path",
         default="",
-        help='Optional parent folder path (e.g. "folders/Fonts.yy"). If omitted, asset is created at project root.',
+        help='Optional parent folder path (e.g. "folders/Fonts.yy"). If omitted, an appropriate logical folder is reused or created.',
     )
     parser.add_argument("--font-name", default="Arial", help="Font family name (default: Arial)")
     parser.add_argument("--size", type=int, default=12, help="Font size (default: 12)")
@@ -417,7 +417,7 @@ def setup_shader_parser(subparsers):
     parser.add_argument(
         "--parent-path",
         default="",
-        help='Optional parent folder path (e.g. "folders/Shaders.yy"). If omitted, asset is created at project root.',
+        help='Optional parent folder path (e.g. "folders/Shaders.yy"). If omitted, an appropriate logical folder is reused or created.',
     )
     parser.add_argument(
         "--shader-type",
@@ -444,7 +444,7 @@ def setup_animcurve_parser(subparsers):
     parser.add_argument(
         "--parent-path",
         default="",
-        help="Optional parent folder path. If omitted, asset is created at project root.",
+        help="Optional parent folder path. If omitted, an appropriate logical folder is reused or created.",
     )
     parser.add_argument(
         "--curve-type",
@@ -471,7 +471,7 @@ def setup_sound_parser(subparsers):
     parser.add_argument(
         "--parent-path",
         default="",
-        help="Optional parent folder path. If omitted, asset is created at project root.",
+        help="Optional parent folder path. If omitted, an appropriate logical folder is reused or created.",
     )
     parser.add_argument("--volume", type=float, default=1.0, help="Volume (0.0-1.0, default: 1.0)")
     parser.add_argument("--pitch", type=float, default=1.0, help="Pitch (default: 1.0)")
@@ -505,7 +505,7 @@ def setup_path_parser(subparsers):
     parser.add_argument(
         "--parent-path",
         default="",
-        help="Optional parent folder path. If omitted, asset is created at project root.",
+        help="Optional parent folder path. If omitted, an appropriate logical folder is reused or created.",
     )
     parser.add_argument("--closed", action="store_true", help="Make path closed (loops back to start)")
     parser.add_argument("--precision", type=int, default=4, help="Path precision (default: 4)")
@@ -533,7 +533,7 @@ def setup_tileset_parser(subparsers):
     parser.add_argument(
         "--parent-path",
         default="",
-        help="Optional parent folder path. If omitted, asset is created at project root.",
+        help="Optional parent folder path. If omitted, an appropriate logical folder is reused or created.",
     )
     parser.add_argument("--sprite-id", help="Sprite resource ID to use for tiles")
     parser.add_argument("--tile-width", type=int, default=32, help="Tile width (default: 32)")
@@ -560,7 +560,7 @@ def setup_timeline_parser(subparsers):
     parser.add_argument(
         "--parent-path",
         default="",
-        help="Optional parent folder path. If omitted, asset is created at project root.",
+        help="Optional parent folder path. If omitted, an appropriate logical folder is reused or created.",
     )
     parser.add_argument("--skip-maintenance", action="store_true", help="Skip pre/post validation")
     parser.add_argument("--no-auto-fix", action="store_true", help="Do not automatically fix issues")
@@ -580,7 +580,7 @@ def setup_sequence_parser(subparsers):
     parser.add_argument(
         "--parent-path",
         default="",
-        help="Optional parent folder path. If omitted, asset is created at project root.",
+        help="Optional parent folder path. If omitted, an appropriate logical folder is reused or created.",
     )
     parser.add_argument("--length", type=float, default=60.0, help="Sequence length in frames (default: 60.0)")
     parser.add_argument("--playback-speed", type=float, default=30.0, help="Playback speed in FPS (default: 30.0)")
@@ -602,7 +602,7 @@ def setup_note_parser(subparsers):
     parser.add_argument(
         "--parent-path",
         default="",
-        help="Optional parent folder path. If omitted, asset is created at project root.",
+        help="Optional parent folder path. If omitted, an appropriate logical folder is reused or created.",
     )
     parser.add_argument("--content", help="Initial note content")
     parser.add_argument("--skip-maintenance", action="store_true", help="Skip pre/post validation")
@@ -640,7 +640,7 @@ def setup_event_commands(subparsers):
     dup_parser = event_subparsers.add_parser("duplicate", help="Duplicate an event within an object")
     dup_parser.add_argument("object", help="Object name (e.g., o_player)")
     dup_parser.add_argument("source_event", help="Source event specification (e.g., step:0)")
-    dup_parser.add_argument("target_num", type=int, help="Target event number")
+    dup_parser.add_argument("target_event", help="Target event specification (e.g., step:1 or collision:o_wall)")
     dup_parser.set_defaults(func=handle_event_duplicate)
 
     # List command
@@ -684,18 +684,11 @@ def setup_workflow_commands(subparsers):
     rename_parser.add_argument("new_name", help="New asset name")
     rename_parser.set_defaults(func=handle_workflow_rename)
 
-    # Delete command
-    delete_parser = workflow_subparsers.add_parser("delete", help="Delete an asset")
-    delete_parser.add_argument("asset_path", help="Asset .yy path relative to project root")
-    delete_parser.add_argument("--dry-run", action="store_true", help="Preview without deleting")
-    delete_parser.set_defaults(func=handle_workflow_delete)
-
     # Safe delete command
     safe_delete_parser = workflow_subparsers.add_parser("safe-delete", help="Dependency-aware asset deletion")
     safe_delete_parser.add_argument("--asset-type", required=True, help="Asset type (e.g., script, object, sprite)")
     safe_delete_parser.add_argument("--asset-name", required=True, help="Asset name (e.g., o_player)")
     safe_delete_parser.add_argument("--force", action="store_true", help="Allow delete when dependencies exist")
-    safe_delete_parser.add_argument("--clean-refs", action="store_true", help="Attempt best-effort reference cleanup")
     safe_delete_parser.add_argument("--apply", action="store_true", help="Apply deletion (default is dry-run)")
     safe_delete_parser.set_defaults(func=handle_workflow_safe_delete)
 
@@ -1140,7 +1133,6 @@ from .commands.event_commands import (
 from .commands.workflow_commands import (
     handle_workflow_duplicate,
     handle_workflow_rename,
-    handle_workflow_delete,
     handle_workflow_swap_sprite,
     handle_workflow_safe_delete,
 )

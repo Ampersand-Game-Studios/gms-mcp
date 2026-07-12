@@ -241,5 +241,3 @@ def _replace_asset_group_references(
                     changed = True
 
     return changed, warnings
-
-

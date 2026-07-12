@@ -48,7 +48,6 @@ from .room_commands import (
 from .workflow_commands import (
     handle_workflow_duplicate,
     handle_workflow_rename,
-    handle_workflow_delete,
     handle_workflow_swap_sprite,
 )
 from .skills_commands import (

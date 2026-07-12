@@ -11,19 +11,27 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-from .utils import load_json_loose, save_json_loose, find_yyp, validate_working_directory
+from .utils import atomic_write_text, load_json_loose, save_json_loose, find_yyp, validate_working_directory
 from .exceptions import GMSError, ProjectNotFoundError, AssetNotFoundError, ValidationError
 from .path_safety import project_child_path, validate_resource_name
+from .transactions import transactional_unlink
 
 # ------------------------------------------------------------------
 # Internal Helpers
 # ------------------------------------------------------------------
 
 
-def _find_room_file(room_name: str) -> Path:
+def _find_room_file(room_name: str, project_root: str | Path | None = None) -> Path:
     """Find the .yy file for a room."""
     room_name = validate_resource_name(room_name, "room")
-    room_path = project_child_path("rooms", room_name, f"{room_name}.yy", kind=f"room '{room_name}'")
+    root = Path(project_root).resolve() if project_root is not None else Path.cwd().resolve()
+    room_path = project_child_path(
+        "rooms",
+        room_name,
+        f"{room_name}.yy",
+        project_root=root,
+        kind=f"room '{room_name}'",
+    )
     if not room_path.exists():
         raise AssetNotFoundError(f"Room file not found: {room_path}")
     return room_path
@@ -56,14 +64,21 @@ def _find_layer_by_name(room_data: Dict[str, Any], layer_name: str) -> Dict[str,
 # ------------------------------------------------------------------
 
 
-def add_instance(room_name: str, object_name: str, x: float, y: float, layer_name: str = "Instances") -> str:
+def add_instance(
+    room_name: str,
+    object_name: str,
+    x: float,
+    y: float,
+    layer_name: str = "Instances",
+    project_root: str | Path | None = None,
+) -> str:
     """
     Add an object instance to a room layer.
     Returns the new instance name (UUID).
     """
     room_name = validate_resource_name(room_name, "room")
     object_name = validate_resource_name(object_name, "object")
-    room_path = _find_room_file(room_name)
+    room_path = _find_room_file(room_name, project_root)
     room_data = _load_room_data(room_path)
 
     layer = _find_layer_by_name(room_data, layer_name)
@@ -173,7 +188,7 @@ def remove_instance(room_name: str, instance_id: str):
     # Check for and remove creation code file if it exists
     creation_code_path = project_child_path("rooms", room_name, f"{instance_id}.gml", kind="creation code path")
     if creation_code_path.exists():
-        creation_code_path.unlink()
+        transactional_unlink(creation_code_path)
         print(f"[OK] Removed creation code file: {creation_code_path}")
 
     _save_room_data(room_path, room_data)
@@ -298,7 +313,7 @@ def set_creation_code(room_name: str, instance_id: str, code: str):
 
     # Create the code file
     code_path = project_child_path("rooms", room_name, f"{instance_id}.gml", kind="creation code path")
-    code_path.write_text(code, encoding="utf-8")
+    atomic_write_text(code_path, code)
 
     # Update instance to indicate it has code
     found_inst["hasCreationCode"] = True

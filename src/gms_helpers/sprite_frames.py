@@ -1,11 +1,11 @@
 """Sprite frame manipulation utilities for multi-frame sprite support."""
 
-import shutil
 from pathlib import Path
 from typing import Optional
 
-from .utils import generate_uuid, ensure_directory, load_json_loose, save_pretty_json, create_dummy_png
 from .exceptions import ValidationError
+from .transactions import transactional_copy2, transactional_rmtree, transactional_unlink
+from .utils import create_dummy_png, ensure_directory, generate_uuid, load_json_loose, save_pretty_json
 
 
 def add_frame(
@@ -102,7 +102,7 @@ def add_frame(
     # Save main PNG
     main_png = sprite_folder / f"{new_frame_uuid}.png"
     if source_png and Path(source_png).exists():
-        shutil.copy2(source_png, main_png)
+        transactional_copy2(source_png, main_png)
     else:
         create_dummy_png(main_png, width=width, height=height)
 
@@ -111,7 +111,7 @@ def add_frame(
     ensure_directory(layer_dir)
     layer_png = layer_dir / f"{layer_uuid}.png"
     if source_png and Path(source_png).exists():
-        shutil.copy2(source_png, layer_png)
+        transactional_copy2(source_png, layer_png)
     else:
         create_dummy_png(layer_png, width=width, height=height)
 
@@ -188,11 +188,11 @@ def remove_frame(
     # Delete PNG files
     main_png = sprite_folder / f"{removed_frame_uuid}.png"
     if main_png.exists():
-        main_png.unlink()
+        transactional_unlink(main_png)
 
     layer_dir = sprite_folder / "layers" / removed_frame_uuid
     if layer_dir.exists():
-        shutil.rmtree(layer_dir)
+        transactional_rmtree(layer_dir)
 
     # Save updated .yy
     save_pretty_json(sprite_yy, yy_data)

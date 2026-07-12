@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from ..base_asset import BaseAsset
+from ..utils import atomic_write_text
 from .naming import get_config
 
 
@@ -315,7 +316,7 @@ class NoteAsset(BaseAsset):
                 kwargs.get("content")
                 or f"# {name}\n\nThis is a note created by the CLI helper tools.\n\nAdd your documentation here."
             )
-            note_path.write_text(content, encoding="utf-8")
+            atomic_write_text(note_path, content)
             print(f"Created {note_path.name}")
 
     def validate_name(self, name: str) -> bool:

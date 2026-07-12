@@ -72,5 +72,3 @@ def find_texture_group(
         if cmp == target:
             return i, tg
     return None
-
-
