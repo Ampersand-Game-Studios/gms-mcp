@@ -11,10 +11,10 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
 
 ### What it provides
 
-- **Full `gms` parity** exposed as MCP tools, with **safe execution safeguards** and **local diagnostic logging**:
-  - **Assets**: create *all* supported asset types + delete
+- A **curated core MCP surface** with opt-in domain toolsets, **safe execution safeguards**, and **bounded local diagnostic logging**:
+  - **Assets**: create all supported asset types through the optional `assets` toolset; dependency-aware deletion uses `gm_safe_delete`
   - **Events**: add/remove/duplicate/list/validate/fix
-  - **Workflow**: duplicate/rename/delete/**safe-delete**/swap-sprite
+  - **Workflow**: duplicate/rename/**safe-delete**/swap-sprite
   - **Rooms**: ops (duplicate/rename/delete/list), layers (add/remove/list), instances (add/remove/list)
   - **Code Intelligence** (GML symbol analysis for navigation and understanding):
     - `gm_build_index`: Build/rebuild the GML symbol index (cached for performance)
@@ -44,8 +44,9 @@ If this repo also had a top-level `mcp/` directory, Python would import the repo
   - **Runtime Management**: list/pin/unpin/verify GameMaker runtimes, including LTS2026 channel detection
   - **Runner**: compile/run (with runtime version pinning) + stop/status. Accepts `VM`/`YYC` plus LTS2026 UI aliases `GMS2 VM`/`GMS2 YYC`; GMRT labels are rejected until GameMaker documents Igor CLI support.
   - **TCP Bridge (optional)**: live game commands + log capture via `gm_bridge_install`, `gm_bridge_status`, `gm_run_command`, `gm_run_logs` (see `documentation/BRIDGE.md`). Bridge lifecycle/events stay off MCP stdout so `gm_run(..., enable_bridge=true)` remains stdio-safe.
-  - **Escape hatch**: `gm_cli` (run arbitrary `gms` args)
   - **Project info**: `gm_project_info`
+
+The default `core` profile keeps the tool list focused. Set `GMS_MCP_TOOLSETS` to a comma-separated list of `assets`, `bridge`, `docs`, `events`, `maintenance`, `rooms`, `runtime`, and `texture-groups`, or set it to `all`. Call `gm_capabilities` to inspect the active profile; restart the MCP server after changing it.
 
 ### Install
 
@@ -106,6 +107,7 @@ Telemetry is opt-in and default-off.
 - `GMS_MCP_GMS_PATH`
 - `GMS_MCP_DEFAULT_TIMEOUT_SECONDS`
 - `GMS_MCP_ENABLE_DIRECT`
+- `GMS_MCP_IGOR_PROCESSOR_COUNT`
 
 The Cursor config is written to `.cursor/mcp.json` and:
 
@@ -123,16 +125,17 @@ After changing `.cursor/mcp.json`, **Reload Window** in Cursor to pick up MCP co
   - The server and underlying CLI tools check for both `GM_PROJECT_ROOT` and `PROJECT_ROOT` environment variables (useful for agents / terminal sessions).
 - **Execution model / "no silent hangs"**:
   - By default, tools use **isolated subprocess execution**. This ensures they are cancellable, avoid blocking the MCP server, and prevent "silent hangs" on Windows.
-  - Subprocess execution (via `gm_cli` or default fallback) isolates the child process from MCP stdin (setting it to `DEVNULL`).
+  - Subprocess fallbacks isolate the child process from MCP stdin (setting it to `DEVNULL`).
   - Streaming logs via `ctx.log()` is **disabled** during subprocess execution to prevent stdio deadlocks with MCP clients like Cursor.
   - Direct/background runner paths also avoid stdout pollution: bridge lifecycle logging is internal, background Igor output is collected without echoing into the JSON-RPC stream, and spawned local game processes do not inherit MCP stdio.
-  - Every invocation writes a complete diagnostic log file under **`.gms_mcp/logs/`** in the resolved project directory.
+  - Subprocess invocations write bounded, pruned diagnostic logs under **`.gms_mcp/logs/`**. Direct stdout/stderr capture is also bounded before it enters an MCP response.
   - Tools apply **category-aware default max runtimes** (overrideable) to prevent indefinite blocking. Override globally with `GMS_MCP_DEFAULT_TIMEOUT_SECONDS`.
-  - To bypass subprocess overhead and use faster **in-process execution**, set `GMS_MCP_ENABLE_DIRECT=1`. This is faster but less resilient to hangs in library code.
+  - To use typed **direct handlers** instead of the generic CLI subprocess path, set `GMS_MCP_ENABLE_DIRECT=1`. Each call still runs in a disposable, timeout-bounded worker process so helper code cannot change the MCP server's cwd, environment, arguments, or stdio.
+  - Direct transaction cancellation is deferred until the worker finishes or reaches its bounded timeout. This prevents caller cancellation from abandoning a half-written GameMaker project; generic CLI subprocess calls remain immediately cancellable with process-tree cleanup.
   - Mutation tools validate typed operation models at the MCP boundary before transactions, direct helper calls, or subprocess fallback. Invalid write arguments return `Invalid MCP tool arguments` and do not retry through another execution path.
   - Real destructive MCP writes run through typed direct handlers only. `prefer_cli=true` is rejected for those calls, and direct infrastructure failures do not fall back to generic CLI execution.
   - To require dry-run mode for destructive operations, set `GMS_MCP_REQUIRE_DRY_RUN=1` (enabled by default for `--antigravity-setup`).
-  - To allow specific destructive tools while this policy is enabled, set `GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST` to a comma-separated list (for example: `gm_asset_delete,gm_workflow_delete,gm_safe_delete`).
+  - To allow a real safe-delete while this policy is enabled, set `GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST=gm_safe_delete`.
   - Post-mutation compile verification defaults to smart mode. Set `GMS_MCP_POST_MUTATION_VERIFY=compile` to compile after every transactional mutation, `smart` to keep the default explicitly, or `off` to disable post-mutation compile verification.
   - In smart mode, high-risk structural mutations compile immediately, while batchable edits like sprite-frame changes create a pending marker in `.gms_mcp/verification_state.json`. Use `gm_verification_status` to inspect it and `gm_verification_flush` to run one compile when the batch is complete.
 

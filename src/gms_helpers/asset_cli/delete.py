@@ -7,8 +7,9 @@ def delete_asset(args):
     """Delete an asset from the project."""
     try:
         import os
-        import shutil
         from pathlib import Path
+
+        from ..transactions import transactional_rmtree, transactional_unlink
 
         # Import utilities with fallback
         try:
@@ -131,10 +132,10 @@ def delete_asset(args):
         if files_to_delete:
             try:
                 if disk_path.is_file():
-                    disk_path.unlink()
+                    transactional_unlink(disk_path)
                     print(f"[OK] Deleted file: {disk_path}")
                 else:
-                    shutil.rmtree(disk_path)
+                    transactional_rmtree(disk_path)
                     print(f"[OK] Deleted folder: {disk_path}")
             except Exception as e:
                 print(f"[WARN] Warning: Could not delete files on disk: {e}")

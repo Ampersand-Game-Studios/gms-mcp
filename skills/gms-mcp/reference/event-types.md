@@ -10,8 +10,8 @@ description: Complete event type and specification reference
 Events are specified as `event_type` or `event_type:subtype`.
 
 ```bash
-gms event add <object> <event_spec>
-gms event remove <object> <event_spec>
+gms event add o_player collision:o_wall
+gms event remove o_player alarm:0
 ```
 
 ## Event Types
@@ -65,13 +65,6 @@ gms event remove <object> <event_spec>
 | `other` | 30=Animation End | `other:30` |
 | `other` | 70=User Event 0 | `other:70` |
 
-### Async Events
-| Event | Subtypes | Examples |
-|-------|----------|----------|
-| `async` | 75=HTTP | `async:75` |
-| `async` | 63=Networking | `async:63` |
-| `async` | 66=Save/Load | `async:66` |
-
 ## Common Key Codes
 
 | Key | Code | Key | Code |
@@ -88,34 +81,39 @@ gms event remove <object> <event_spec>
 
 ### Add Event
 ```bash
-gms event add <object> <event_spec> [--template FILE]
+gms event add o_player create --template templates/player_create.gml
 ```
 
 ### Remove Event
 ```bash
-gms event remove <object> <event_spec> [--keep-file]
+gms event remove o_player alarm:0 --keep-file
 ```
 - `--keep-file` - Don't delete the .gml file
 
 ### List Events
 ```bash
-gms event list <object>
+gms event list o_player
 ```
 
 ### Duplicate Event
 ```bash
-gms event duplicate <object> <source_event> <target_num>
+gms event duplicate o_player step:0 step:1
 ```
-Example: `gms event duplicate o_player step:0 1` copies step to begin step
+Examples:
+
+- `gms event duplicate o_player step:0 step:1` copies step to begin step.
+- `gms event duplicate o_player collision:o_enemy collision:o_wall` copies collision handling to another existing object target.
+
+Collision event files use `Collision_<object_name>.gml`, and their `collisionObjectId` is a GameMaker object reference. Numeric collision subtypes such as `collision:0` are invalid.
 
 ### Validate Events
 ```bash
-gms event validate <object>
+gms event validate o_player
 ```
 
 ### Fix Event Issues
 ```bash
-gms event fix <object> [--no-safe-mode]
+gms event fix o_player --no-safe-mode
 ```
 - Default (safe mode): Only removes orphan .gml files
 - `--no-safe-mode`: Also adds orphan events to .yy

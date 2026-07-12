@@ -78,35 +78,12 @@ def _run_ordinal() -> int:
     return run_number * 100 + (run_attempt - 1)
 
 
-def _compute_candidate(*, ref_type: str, ref_name: str, version_override: str | None) -> Computed:
+def _compute_candidate(*, ref_name: str) -> Computed:
     existing_strings = _fetch_pypi_versions(PROJECT_NAME)
     existing_versions = set(_parse_versions(existing_strings))
 
-    if version_override:
-        v = Version(version_override)
-        if not v.is_postrelease:
-            raise SystemExit("VERSION_OVERRIDE must be a .postN version (packaging-only republish).")
-        base_exists = any(
-            (ev.base_version == v.base_version) and (not ev.is_prerelease) and (not ev.is_devrelease)
-            for ev in existing_versions
-        )
-        if not base_exists:
-            raise SystemExit(
-                f"No existing final/post release found on PyPI for base {v.base_version}; refusing to publish a post-release."
-            )
-        if v in existing_versions:
-            raise SystemExit(f"Version already exists on PyPI: {v}")
-        return Computed(version=str(v), should_publish=True, reason="workflow_dispatch override")
-
-    if ref_type == "tag":
-        if not ref_name.startswith("v"):
-            raise SystemExit("Tag must be of form vX.Y.Z")
-        v = Version(ref_name[1:])
-        if v in existing_versions:
-            raise SystemExit(f"Tag version already exists on PyPI: {v}")
-        if v.is_prerelease or v.is_devrelease or v.is_postrelease:
-            raise SystemExit("Tag releases must be final versions (no dev/rc/post suffix).")
-        return Computed(version=str(v), should_publish=True, reason="tag release")
+    if ref_name not in {"dev", "pre-release", "main"}:
+        raise SystemExit(f"Unsupported release branch: {ref_name!r}")
 
     base = _latest_final_base(list(existing_versions))
     next_base = _bump_patch(base)
@@ -116,10 +93,8 @@ def _compute_candidate(*, ref_type: str, ref_name: str, version_override: str | 
         candidate = Version(str(next_base))
     elif ref_name == "dev":
         candidate = Version(f"{next_base}.dev{ordinal}")
-    elif ref_name == "prerelease":
+    else:  # pre-release
         candidate = Version(f"{next_base}rc{ordinal}")
-    else:
-        candidate = Version(f"{next_base}.dev{ordinal}")
 
     if candidate in existing_versions:
         return Computed(version=str(candidate), should_publish=False, reason="version already on PyPI")
@@ -128,11 +103,9 @@ def _compute_candidate(*, ref_type: str, ref_name: str, version_override: str | 
 
 
 def main() -> int:
-    ref_type = os.environ.get("GITHUB_REF_TYPE") or ""
-    ref_name = os.environ.get("GITHUB_REF_NAME") or ""
-    version_override = (os.environ.get("VERSION_OVERRIDE") or "").strip() or None
+    ref_name = os.environ.get("RELEASE_REF_NAME") or os.environ.get("GITHUB_REF_NAME") or ""
 
-    computed = _compute_candidate(ref_type=ref_type, ref_name=ref_name, version_override=version_override)
+    computed = _compute_candidate(ref_name=ref_name)
 
     _github_output_set("version", computed.version)
     _github_output_set("should_publish", "true" if computed.should_publish else "false")

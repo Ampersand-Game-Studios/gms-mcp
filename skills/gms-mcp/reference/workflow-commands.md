@@ -5,14 +5,14 @@ description: Complete workflow operation command reference
 
 # Workflow Commands Reference
 
-High-level asset operations: duplicate, rename, delete, swap.
+High-level asset operations: duplicate, token-aware rename, dependency-aware delete, and sprite swap.
 
 ## Duplicate Asset
 
 Copy an asset to create a variant.
 
 ```bash
-gms workflow duplicate <asset_path> <new_name> [--yes]
+gms workflow duplicate objects/o_enemy/o_enemy.yy o_enemy_fast --yes
 ```
 - `--yes` - Skip confirmation prompt
 
@@ -20,6 +20,8 @@ gms workflow duplicate <asset_path> <new_name> [--yes]
 - The .yy configuration file
 - Associated files (.gml, images, etc.)
 - Internal references updated to new name
+- Local sprite/room identities regenerated where GameMaker requires uniqueness
+- External dependency references preserved
 
 **Examples:**
 ```bash
@@ -41,14 +43,18 @@ gms workflow duplicate objects/o_enemy/o_enemy.yy o_enemy_boss --yes
 Rename an asset and update all references.
 
 ```bash
-gms workflow rename <asset_path> <new_name>
+gms workflow rename scripts/scr_old_name/scr_old_name.yy scr_new_name
 ```
 
 **What gets updated:**
 - The .yy file and directory name
 - The asset's internal name field
 - The project .yyp file
-- All GML code references
+- Exact executable GML identifier references
+- Structured GameMaker resource references
+
+Comments, ordinary strings, and longer identifiers containing the old name are intentionally unchanged. The exact first string argument to `asset_get_index(...)` is an explicit asset reference and is updated.
+If GML declares, assigns, or accepts a parameter with the same name as the asset, rename stops before mutation and reports the ambiguous binding.
 
 **Examples:**
 ```bash
@@ -56,28 +62,30 @@ gms workflow rename scripts/scr_old_name/scr_old_name.yy scr_new_name
 gms workflow rename objects/o_player/o_player.yy o_hero
 ```
 
-## Delete Asset
+## Dependency-aware Delete
 
-Remove an asset from the project.
+Preview or remove an asset by type and name. Preview is the default.
 
 ```bash
-gms workflow delete <asset_path> [--dry-run]
+gms workflow safe-delete --asset-type script --asset-name scr_old --apply
 ```
-- `--dry-run` - Preview without deleting
+- `--apply` - Perform the deletion after dependency analysis
+- `--force` - Permit deletion with dependencies; references remain unchanged and are reported
 
-**Important:** Always check for references first!
+**Examples:**
 ```bash
-gms symbol find-references asset_name
-gms workflow delete path/to/asset.yy --dry-run
-gms workflow delete path/to/asset.yy
+gms workflow safe-delete --asset-type script --asset-name scr_old
+gms workflow safe-delete --asset-type script --asset-name scr_old --apply
 ```
+
+There is no automatic `undefined` substitution. Referenced assets are blocked unless `--force` is explicit.
 
 ## Swap Sprite
 
 Replace a sprite's PNG source image.
 
 ```bash
-gms workflow swap-sprite <sprite_path> <png_path>
+gms workflow swap-sprite sprites/spr_player/spr_player.yy art/player.png
 ```
 
 **What gets preserved:**
@@ -120,10 +128,8 @@ gms symbol build --force             # Rebuild index
 
 ### Safe Delete
 ```bash
-gms symbol find-references asset_name  # Check dependencies
-gms workflow delete path/to/asset.yy --dry-run
-gms workflow delete path/to/asset.yy
-gms maintenance auto                   # Verify project
+gms workflow safe-delete --asset-type object --asset-name o_unused
+gms workflow safe-delete --asset-type object --asset-name o_unused --apply
 ```
 
 ### Update Art

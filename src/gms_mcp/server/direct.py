@@ -1,23 +1,41 @@
+"""Process-isolated execution for typed helper handlers."""
+
 from __future__ import annotations
 
 import argparse
-import contextlib
-import io
+import asyncio
+import inspect
+import json
 import os
+import subprocess
 import sys
-import traceback
+import tempfile
+import time
 from pathlib import Path
-from typing import Any, Callable, Optional, Tuple
+from typing import Any, Callable, TypeVar
 
 from ..telemetry import SUPPRESS_CLI_TELEMETRY_ENV_VAR
-from .project import _resolve_project_directory
+from .project import _resolve_project_directory, _with_cli_pythonpath
 from .results import ToolRunResult
 
 
-def _dict_result_is_ok(result: dict[str, Any]) -> bool:
-    from gms_helpers.results import result_dict_is_ok
+_DirectThreadResult = TypeVar("_DirectThreadResult")
 
-    return result_dict_is_ok(result)
+
+async def _run_direct_thread_shielded(
+    callable_to_run: Callable[..., _DirectThreadResult],
+    *args: Any,
+    **kwargs: Any,
+) -> _DirectThreadResult:
+    """Finish isolated worker management before propagating task cancellation."""
+    worker = asyncio.create_task(asyncio.to_thread(callable_to_run, *args, **kwargs))
+    try:
+        return await asyncio.shield(worker)
+    except asyncio.CancelledError as cancellation:
+        try:
+            await worker
+        finally:
+            raise cancellation
 
 
 def _normalize_direct_result(result_value: Any, *, operation: str) -> Any:
@@ -25,7 +43,6 @@ def _normalize_direct_result(result_value: Any, *, operation: str) -> Any:
 
     if isinstance(result_value, (bool, dict, list)):
         return normalize_result(result_value, operation=operation).to_dict()
-
     return result_value
 
 
@@ -49,150 +66,183 @@ def _result_failure_message(result_value: Any) -> str | None:
     return None
 
 
-@contextlib.contextmanager
-def _pushd(target_directory: Path):
-    """Temporarily change working directory."""
-    previous_directory = Path.cwd()
-    os.chdir(target_directory)
-    try:
-        yield
-    finally:
-        os.chdir(previous_directory)
-
-
-def _capture_output(callable_to_run: Callable[[], Any]) -> Tuple[bool, str, str, Any, Optional[str], Optional[int]]:
-    # ... buffers ...
-    stdout_bytes = io.BytesIO()
-    stderr_bytes = io.BytesIO()
-    stdout_buffer = io.TextIOWrapper(stdout_bytes, encoding="utf-8", errors="replace", line_buffering=True)
-    stderr_buffer = io.TextIOWrapper(stderr_bytes, encoding="utf-8", errors="replace", line_buffering=True)
-    result_value: Any = None
-    error_text: Optional[str] = None
-
-    system_exit_code: Any | None = None
-    from gms_helpers.exceptions import GMSError
-
-    with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
+def _module_name_from_source(source_path: Path) -> str | None:
+    """Recover an importable module name when a top-level file ran as ``__main__``."""
+    candidates: list[tuple[int, str]] = []
+    for entry in sys.path:
+        root = Path(entry or os.curdir).resolve()
         try:
-            result_value = callable_to_run()
-            if hasattr(result_value, "success"):
-                ok = result_value.success
-            elif isinstance(result_value, bool):
-                ok = result_value
-            elif isinstance(result_value, dict):
-                ok = _dict_result_is_ok(result_value)
-            else:
-                ok = True
-        except GMSError as e:
-            ok = False
-            error_text = f"{type(e).__name__}: {e.message}"
-            system_exit_code = e.exit_code
-        except SystemExit as e:
-            system_exit_code = getattr(e, "code", None)
-            ok = system_exit_code in (0, None)
-        except Exception:
-            ok = False
-            error_text = traceback.format_exc()
+            relative = source_path.relative_to(root).with_suffix("")
+        except ValueError:
+            continue
+        parts = relative.parts
+        if parts and all(part.isidentifier() for part in parts):
+            candidates.append((len(parts), ".".join(parts)))
+    return min(candidates, default=(0, ""))[1] or None
 
-    try:
-        stdout_buffer.flush()
-        stderr_buffer.flush()
-    except Exception:
-        pass
 
-    stdout_text = ""
-    stderr_text = ""
-    try:
-        stdout_text = stdout_bytes.getvalue().decode("utf-8", errors="replace")
-        stderr_text = stderr_bytes.getvalue().decode("utf-8", errors="replace")
-    except Exception:
-        # Best-effort fallback
-        stdout_text = ""
-        stderr_text = ""
+def _handler_reference(handler: Callable[[argparse.Namespace], Any]) -> tuple[str, str, Path | None]:
+    module_name = str(getattr(handler, "__module__", ""))
+    qualname = str(getattr(handler, "__qualname__", ""))
+    source_file = inspect.getsourcefile(handler)
+    if module_name == "__main__" and source_file:
+        module_name = _module_name_from_source(Path(source_file).resolve()) or module_name
+    if not module_name or not qualname or module_name == "__main__" or "<locals>" in qualname:
+        raise TypeError("Direct handlers must be importable top-level callables")
+    module_root: Path | None = None
+    if source_file:
+        source_path = Path(source_file).resolve()
+        module_parts = module_name.split(".")
+        parent_index = max(0, len(module_parts) - 1)
+        if parent_index < len(source_path.parents):
+            module_root = source_path.parents[parent_index]
+    return module_name, qualname, module_root
 
-    if system_exit_code is not None and not ok and not error_text:
-        pieces = [f"SystemExit: {system_exit_code!r}"]
-        if stdout_text:
-            pieces.append("stdout:\n" + stdout_text)
-        if stderr_text:
-            pieces.append("stderr:\n" + stderr_text)
-        error_text = "\n".join(pieces)
 
-    return ok, stdout_text, stderr_text, result_value, error_text, system_exit_code
+def _request_value(value: Any) -> Any:
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
+    if isinstance(value, Path):
+        return str(value)
+    if isinstance(value, list):
+        return [_request_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_request_value(item) for item in value]
+    if isinstance(value, dict):
+        return {str(key): _request_value(item) for key, item in value.items()}
+    return str(value)
+
+
+def _worker_environment(module_root: Path | None) -> dict[str, str]:
+    from gms_helpers.transactions import transaction_subprocess_environment
+
+    environment = _with_cli_pythonpath(os.environ.copy())
+    environment[SUPPRESS_CLI_TELEMETRY_ENV_VAR] = "1"
+    environment.update(transaction_subprocess_environment())
+    if module_root is not None:
+        current = [part for part in environment.get("PYTHONPATH", "").split(os.pathsep) if part]
+        root_value = str(module_root)
+        if root_value not in current:
+            environment["PYTHONPATH"] = os.pathsep.join([root_value, *current])
+    return environment
 
 
 def _run_direct(
-    handler: Callable[[argparse.Namespace], Any], args: argparse.Namespace, project_root: str | None
+    handler: Callable[[argparse.Namespace], Any],
+    args: argparse.Namespace,
+    project_root: str | None,
+    timeout_seconds: int | None = None,
+    normalize_result: bool = True,
 ) -> ToolRunResult:
+    """Run one typed handler in a disposable child process."""
     project_directory = _resolve_project_directory(project_root)
-
-    def _invoke() -> Any:
-        from gms_helpers.utils import validate_working_directory
-
-        with _pushd(project_directory):
-            # Mirror CLI behavior: validate and then run in the resolved directory.
-            validate_working_directory()
-            # Normalize project_root after chdir so downstream handlers behave consistently.
-            setattr(args, "project_root", ".")
-            return handler(args)
-
-    ok, stdout_text, stderr_text, result_value, error_text, exit_code = _capture_output(_invoke)
-    result_value = _normalize_direct_result(result_value, operation=getattr(handler, "__name__", "direct_helper"))
-    if not ok and not error_text:
-        error_text = _result_failure_message(result_value)
-    return ToolRunResult(
-        ok=ok,
-        stdout=stdout_text,
-        stderr=stderr_text,
-        direct_used=True,
-        exit_code=exit_code,
-        error=error_text,
-        execution_mode="direct",
-        result=result_value,
-    )
-
-
-def _run_gms_inprocess(cli_args: list[str], project_root: str | None) -> ToolRunResult:
-    """
-    Run `gms_helpers/gms.py` in-process (no subprocess), by importing it and calling `main()`.
-
-    This avoids the class of hangs where a spawned Python process wedges (pip, PATH, antivirus, etc.).
-    """
-    project_root_value = project_root or "."
-
-    def _invoke() -> bool:
-        # Import the CLI entrypoint and run it as if invoked from command line.
-        from gms_helpers import gms as gms_module
-
-        previous_argv = sys.argv[:]
-        previous_suppression = os.environ.get(SUPPRESS_CLI_TELEMETRY_ENV_VAR)
+    module_name, qualname, module_root = _handler_reference(handler)
+    request = {
+        "handler_module": module_name,
+        "handler_qualname": qualname,
+        "args": _request_value(vars(args)),
+        "project_root": str(project_directory),
+    }
+    started = time.monotonic()
+    with tempfile.TemporaryDirectory(prefix="gms-mcp-direct-") as temp_dir:
+        request_path = Path(temp_dir) / "request.json"
+        response_path = Path(temp_dir) / "response.json"
+        request_path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+        command = [
+            sys.executable,
+            "-u",
+            "-m",
+            "gms_mcp.server.direct_worker",
+            str(request_path),
+            str(response_path),
+        ]
+        process = subprocess.Popen(
+            command,
+            cwd=project_directory,
+            env=_worker_environment(module_root),
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=os.name != "nt",
+            creationflags=(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200) if os.name == "nt" else 0),
+        )
         try:
-            os.environ[SUPPRESS_CLI_TELEMETRY_ENV_VAR] = "1"
-            sys.argv = ["gms", "--project-root", str(project_root_value), *cli_args]
-            try:
-                return bool(gms_module.main())
-            except SystemExit as e:
-                # argparse throws SystemExit on invalid args / help, etc.
-                code = int(getattr(e, "code", 1) or 0)
-                return code == 0
-        finally:
-            if previous_suppression is None:
-                os.environ.pop(SUPPRESS_CLI_TELEMETRY_ENV_VAR, None)
-            else:
-                os.environ[SUPPRESS_CLI_TELEMETRY_ENV_VAR] = previous_suppression
-            sys.argv = previous_argv
+            process.wait(timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None)
+        except subprocess.TimeoutExpired:
+            from .subprocess_runner import _terminate_process_tree
 
-    ok, stdout_text, stderr_text, result_value, error_text, exit_code = _capture_output(_invoke)
-    result_value = _normalize_direct_result(result_value, operation="gms_module")
+            terminated = _terminate_process_tree(process)
+            elapsed = time.monotonic() - started
+            return ToolRunResult(
+                ok=False,
+                stdout="",
+                stderr="",
+                direct_used=True,
+                exit_code=process.returncode,
+                error=f"Direct worker timed out after {timeout_seconds} seconds",
+                pid=process.pid,
+                elapsed_seconds=elapsed,
+                timed_out=True,
+                command=command,
+                cwd=str(project_directory),
+                execution_mode="direct:isolated",
+                result={"terminated": terminated},
+            )
+
+        elapsed = time.monotonic() - started
+        if not response_path.exists():
+            return ToolRunResult(
+                ok=False,
+                stdout="",
+                stderr="",
+                direct_used=True,
+                exit_code=process.returncode,
+                error=f"Direct worker exited without a response (exit {process.returncode})",
+                pid=process.pid,
+                elapsed_seconds=elapsed,
+                command=command,
+                cwd=str(project_directory),
+                execution_mode="direct:isolated",
+            )
+
+        try:
+            payload = json.loads(response_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            return ToolRunResult(
+                ok=False,
+                stdout="",
+                stderr="",
+                direct_used=True,
+                exit_code=process.returncode,
+                error=f"Direct worker returned an invalid response: {exc}",
+                pid=process.pid,
+                elapsed_seconds=elapsed,
+                command=command,
+                cwd=str(project_directory),
+                execution_mode="direct:isolated",
+            )
+
+    raw_result = payload.get("result")
+    result_value = (
+        _normalize_direct_result(raw_result, operation=getattr(handler, "__name__", "direct_helper"))
+        if normalize_result
+        else raw_result
+    )
+    ok = bool(payload.get("ok"))
+    error_text = payload.get("error")
     if not ok and not error_text:
         error_text = _result_failure_message(result_value)
     return ToolRunResult(
         ok=ok,
-        stdout=stdout_text,
-        stderr=stderr_text,
+        stdout=str(payload.get("stdout") or ""),
+        stderr=str(payload.get("stderr") or ""),
         direct_used=True,
-        exit_code=exit_code if exit_code is not None else (0 if ok else 1),
-        error=error_text,
-        execution_mode="direct:module",
+        exit_code=payload.get("exit_code") if payload.get("exit_code") is not None else process.returncode,
+        error=str(error_text) if error_text else None,
+        pid=process.pid,
+        elapsed_seconds=elapsed,
+        command=command,
+        cwd=str(project_directory),
+        execution_mode="direct:isolated",
         result=result_value,
     )

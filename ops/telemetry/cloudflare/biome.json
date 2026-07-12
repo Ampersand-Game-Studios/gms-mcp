@@ -1,5 +1,5 @@
 {
-  "$schema": "https://biomejs.dev/schemas/2.2.0/schema.json",
+  "$schema": "https://biomejs.dev/schemas/2.4.14/schema.json",
   "vcs": {
     "enabled": false,
     "clientKind": "git",
@@ -35,13 +35,9 @@
       "!**/ios/**/build",
       "!**/evals/communication/email-cases.json",
       "!**/.turbo",
-      "!**/.turbo/**",
       "!**/dist-*",
-      "!**/dist-*/**",
       "!**/android/app/src/main/assets/public",
-      "!**/android/app/src/main/assets/public/**",
-      "!**/ios/**/public",
-      "!**/ios/**/public/**"
+      "!**/ios/**/public"
     ]
   },
   "formatter": {

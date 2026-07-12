@@ -3,15 +3,12 @@
 
 from __future__ import annotations
 
-import builtins
 import json
-import os
 import re
 import shutil
 import subprocess
 import sys
 import tempfile
-import types
 import unittest
 from pathlib import Path
 from types import SimpleNamespace
@@ -59,7 +56,6 @@ from gms_helpers.texture_groups import (
 from gms_helpers.utils import load_json_loose, save_pretty_json
 from gms_helpers.workflow import (
     _c,
-    _cleanup_symbol_references,
     _collect_incoming_dependencies,
     delete_asset,
     duplicate_asset,
@@ -415,7 +411,8 @@ class TestTextureGroups95Coverage(unittest.TestCase):
             ):
                 with patch("gms_helpers.texture_group.mutations.get_asset_yy_path", side_effect=[None, self.sprite_yy]):
                     with patch(
-                        "gms_helpers.texture_group.mutations._replace_asset_group_references", return_value=(True, ["warned"])
+                        "gms_helpers.texture_group.mutations._replace_asset_group_references",
+                        return_value=(True, ["warned"]),
                     ):
                         rename_res = texture_group_rename(
                             self.project_root, "old", "new", update_references=True, dry_run=True
@@ -487,7 +484,7 @@ class TestWorkflow95Coverage(unittest.TestCase):
         save_pretty_json(self.yyp_path, yyp_data)
         return rel_path
 
-    def test_color_output_and_dependency_cleanup_helpers(self):
+    def test_color_output_and_semantic_dependency_helpers(self):
         fake_colorama = SimpleNamespace(
             Fore=SimpleNamespace(GREEN="<g>"),
             Style=SimpleNamespace(RESET_ALL="</g>"),
@@ -511,19 +508,11 @@ class TestWorkflow95Coverage(unittest.TestCase):
             deps = _collect_incoming_dependencies(self.project_root, "target")
         self.assertEqual(deps[0]["relation"], "unknown")
 
-        (self.project_root / "scripts" / "caller").mkdir(parents=True)
-        gml_path = self.project_root / "scripts" / "caller" / "caller.gml"
-        gml_path.write_text("target();", encoding="utf-8")
-        original_read_text = Path.read_text
-
-        def selective_read_text(path_obj, *args, **kwargs):
-            if path_obj == gml_path:
-                raise OSError("locked")
-            return original_read_text(path_obj, *args, **kwargs)
-
-        with patch.object(Path, "read_text", selective_read_text):
-            cleanup = _cleanup_symbol_references(self.project_root, "target")
-        self.assertEqual(cleanup["replacements"], 0)
+        (self.project_root / "scripts" / "comment_only").mkdir(parents=True)
+        gml_path = self.project_root / "scripts" / "comment_only" / "comment_only.gml"
+        gml_path.write_text('// target()\nvar label = "target";\n', encoding="utf-8")
+        with patch("gms_helpers.introspection.build_asset_graph", return_value={"nodes": [], "edges": []}):
+            self.assertEqual(_collect_incoming_dependencies(self.project_root, "target"), [])
 
     def test_duplicate_rename_delete_swap_and_lint_branches(self):
         original_path = self._register_script("original")
@@ -535,7 +524,7 @@ class TestWorkflow95Coverage(unittest.TestCase):
         real_loader = load_json_loose
 
         def duplicate_loader(path_obj):
-            if Path(path_obj) == self.yyp_path:
+            if Path(path_obj).resolve() == self.yyp_path.resolve():
                 return None
             return real_loader(path_obj)
 
@@ -543,24 +532,9 @@ class TestWorkflow95Coverage(unittest.TestCase):
             with self.assertRaises(JSONParseError):
                 duplicate_asset(self.project_root, original_path, "copy")
 
-        fake_maintenance = types.ModuleType("gms_helpers.auto_maintenance")
-        fake_maintenance.run_auto_maintenance = lambda *args, **kwargs: SimpleNamespace(has_errors=True)
-        with patch.dict(sys.modules, {"gms_helpers.auto_maintenance": fake_maintenance}):
-            with patch.dict(os.environ, {"PYTEST_CURRENT_TEST": ""}, clear=True):
-                result = duplicate_asset(self.project_root, original_path, "copy_warn")
-        self.assertTrue(any("maintenance found issues" in warning for warning in result.warnings))
-
-        original_import = builtins.__import__
-
-        def import_without_auto_maintenance(name, globals=None, locals=None, fromlist=(), level=0):
-            if name == "auto_maintenance" and level == 1:
-                raise ImportError("missing")
-            return original_import(name, globals, locals, fromlist, level)
-
-        with patch("builtins.__import__", side_effect=import_without_auto_maintenance):
-            with patch.dict(os.environ, {"PYTEST_CURRENT_TEST": ""}, clear=True):
-                result = duplicate_asset(self.project_root, original_path, "copy_no_maint")
+        result = duplicate_asset(self.project_root, original_path, "copy_clean")
         self.assertTrue(result.success)
+        self.assertFalse(any("maintenance" in warning.lower() for warning in result.warnings))
 
         rename_source = self._register_script("rename_me")
         (self.project_root / "scripts" / "exists").mkdir(parents=True)
@@ -580,7 +554,7 @@ class TestWorkflow95Coverage(unittest.TestCase):
         rename_source = self._register_script("rename_again")
 
         def yyp_none_loader(path_obj):
-            if Path(path_obj) == self.yyp_path:
+            if Path(path_obj).resolve() == self.yyp_path.resolve():
                 return None
             return real_loader(path_obj)
 
@@ -589,31 +563,14 @@ class TestWorkflow95Coverage(unittest.TestCase):
                 rename_asset(self.project_root, "scripts/rename_again/rename_again.yy", "renamed")
 
         rename_source = self._register_script("scan_me")
-        absolute_scanner = types.ModuleType("reference_scanner")
-        absolute_scanner.comprehensive_rename_asset = lambda *args, **kwargs: False
-
-        def import_with_absolute_fallback(name, globals=None, locals=None, fromlist=(), level=0):
-            if name == "reference_scanner" and level == 1:
-                raise ImportError("relative missing")
-            if name == "auto_maintenance" and level == 1:
-                raise ImportError("maintenance missing")
-            return original_import(name, globals, locals, fromlist, level)
-
-        with patch.dict(sys.modules, {"reference_scanner": absolute_scanner}):
-            with patch("builtins.__import__", side_effect=import_with_absolute_fallback):
-                with patch.dict(os.environ, {"PYTEST_CURRENT_TEST": ""}, clear=True):
-                    result = rename_asset(self.project_root, rename_source, "scan_done")
-        self.assertTrue(
-            any(
-                "fully updated" in warning or "Reference scanner not available" in warning
-                for warning in result.warnings
-            )
-        )
+        result = rename_asset(self.project_root, rename_source, "scan_done")
+        self.assertTrue(result.success)
+        self.assertTrue((self.project_root / "scripts" / "scan_done" / "scan_done.yy").is_file())
 
         delete_source = self._register_script("delete_me")
 
         def delete_none_loader(path_obj):
-            if Path(path_obj) == self.yyp_path:
+            if Path(path_obj).resolve() == self.yyp_path.resolve():
                 return None
             return real_loader(path_obj)
 
@@ -622,8 +579,7 @@ class TestWorkflow95Coverage(unittest.TestCase):
                 delete_asset(self.project_root, delete_source, dry_run=False)
 
         delete_source = self._register_script("delete_ok")
-        with patch("builtins.__import__", side_effect=import_without_auto_maintenance):
-            result = delete_asset(self.project_root, delete_source, dry_run=False)
+        result = delete_asset(self.project_root, delete_source, dry_run=False)
         self.assertTrue(result.success)
 
         sprite_dir = self.project_root / "sprites" / "spr_test"

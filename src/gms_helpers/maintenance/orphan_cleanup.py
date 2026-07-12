@@ -8,7 +8,9 @@ import shutil
 import json
 from pathlib import Path
 from typing import List, Set, Dict, Any, Optional
+
 from .orphans import find_orphaned_assets
+from ..transactions import transactional_rmdir, transactional_unlink
 
 
 def find_delete_candidates(project_root: str, skip_types: Optional[Set[str]] = None) -> List[str]:
@@ -246,7 +248,7 @@ def delete_orphan_files(
                 for file_to_delete in files_to_delete:
                     file_path = Path(project_root) / file_to_delete
                     if file_path.exists():
-                        file_path.unlink()
+                        transactional_unlink(file_path)
                         result["deleted_files"].append(file_to_delete)
                         result["total_deleted"] += 1
 
@@ -256,7 +258,7 @@ def delete_orphan_files(
                     try:
                         # Only delete if directory is empty
                         if not any(parent_dir.iterdir()):
-                            parent_dir.rmdir()
+                            transactional_rmdir(parent_dir)
                             relative_dir = parent_dir.relative_to(project_root)
                             result["deleted_directories"].append(str(relative_dir))
                     except OSError:

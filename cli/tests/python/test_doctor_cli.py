@@ -212,6 +212,7 @@ class TestDoctorCLI(unittest.TestCase):
         }
         buffer = io.StringIO()
         argv_backup = sys.argv[:]
+        loaded_cli = sys.modules.pop("gms_mcp.cli", None)
         try:
             sys.argv = ["-m", "doctor", "--json"]
             with patch("gms_mcp.doctor.build_doctor_report", return_value=report), redirect_stdout(buffer):
@@ -219,6 +220,8 @@ class TestDoctorCLI(unittest.TestCase):
                     runpy.run_module("gms_mcp.cli", run_name="__main__")
         finally:
             sys.argv = argv_backup
+            if loaded_cli is not None:
+                sys.modules["gms_mcp.cli"] = loaded_cli
 
         self.assertEqual(exc.exception.code, 0)
         self.assertEqual(json.loads(buffer.getvalue()), report)

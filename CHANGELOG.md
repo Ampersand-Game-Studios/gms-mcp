@@ -38,25 +38,32 @@ All notable changes to this project will be documented in this file.
   - Normalized path comparison behavior to avoid case-related mismatches on macOS case-insensitive volumes.
   - Added a dedicated mockless macOS smoke test for real `.app` bundle launch path resolution.
   - Added macOS-specific launch/runtime permission diagnostics for sandbox blocks and unsigned binaries, including actionable remediation guidance.
-- **Coverage Audit Expansion**: Added focused coverage suites for CLI wrappers, helper-heavy modules, install/setup flows, bridge tools, and reporting regressions. Project-wide statement coverage now clears 90% with release artifacts generated from the same pipeline used in CI.
+- **Coverage Audit Expansion**: Added focused coverage suites for CLI wrappers, helper-heavy modules, install/setup flows, bridge tools, and reporting regressions. Release artifacts now enforce 85% overall and 50% per-module statement coverage gates.
 - **LTS2026 Runtime Awareness**: Runtime discovery now classifies `2026.*` installs as LTS, and runner runtime labels accept the LTS2026 UI aliases `GMS2 VM` and `GMS2 YYC`.
 - **LTS2026 Asset Introspection Coverage**: Added regression coverage for particle-system assets and lower-case project-serializer key variants.
 - **Real GameMaker Verification Smoke**: Added `scripts/run_real_gamemaker_smoke.py` to copy a real project, exercise smart post-mutation verification, compile a high-risk mutation, defer a batchable sprite-frame mutation, and flush the pending compile once. CI now runs a macOS fixture matrix for 2024 and 2026/LTS real-project fixtures when configured.
 - **CI MCP Tool Smoke Coverage**: CI now runs a deterministic MCP tool smoke subset against a generated minimal GameMaker project fixture and publishes `mcp_tool_smoke_report.json` with quality artifacts.
+- **Curated MCP Profiles**: The default server now exposes a focused 29-tool core. Optional domains are enabled with `GMS_MCP_TOOLSETS`, and `gm_capabilities` reports the active profile.
+- **Release Certification**: Publication now consumes immutable artifacts from the exact successful CI commit and requires passing GameMaker 2024 and 2026 LTS compile fixtures, including collision-event serialization.
+- **Mutation Journal**: Project writes now use cross-thread/process locking, selective journal rollback, ownership conflict detection, and cancellation-safe cleanup.
 
 ### Fixed
 - **Spurious `.gms_mcp` Folder Creation**: Fixed an issue where the MCP server would create a `.gms_mcp/logs/` folder in the current working directory even when no GameMaker project was present. Debug logging now only activates when a valid project is detected.
 - **Object Creation Schema**: Fixed a critical bug where newly created objects were missing required `$GMObject: "v1"` markers, which prevented project compilation.
 - **Event Creation Schema**: Updated the event management system to use `resourceVersion: "2.0"` and required `%Name` fields, ensuring modern GameMaker compatibility.
 - **CLI Subcommand Registration**: Resolved an issue where `symbol` commands were not correctly registered in the main `gms` CLI entry point.
-- **Test Suite assertions**: Updated 371-test suite to reflect the new standardized asset versioning requirements.
+- **Test Suite Assertions**: Updated the full suite to reflect standardized asset versioning requirements.
 - **Run Session process termination on Windows**: Fixed `RunSessionManager.kill_process` to use fallback signal values when platform `signal` constants are unavailable, preventing Windows-only failures in process teardown and ensuring CI reliability across `test_run_session`.
 - **macOS Local Compile/Run Pipeline**: Fixed `gm_compile` and default local `gm_run` behavior on macOS so local validation uses Igor's run-based path instead of `PackageZip`, avoiding incorrect Developer ID signing/certificate failures during normal IDE-equivalent compile/run workflows. macOS background run sessions now track and stop the real `Mac_Runner` process cleanly.
 - **X Posting Workflow Retries**: Fixed the GitHub X posting workflows so transient `503 Service Unavailable` responses no longer honor unbounded server retry hints that exceed the job timeout. `5xx` retries now stay on the local bounded backoff, `429` retry hints remain capped to fit within the workflow budget, and Cloudflare challenge pages are classified/retried as edge failures instead of credential errors.
 - **GMRT Runner Requests**: `GMRT` and `GMRT VM` runtime labels are now recognized and rejected with an explicit unsupported message instead of being passed through as ambiguous Igor commands.
 - **macOS Runner Smoke Reliability**: The mockless `.app` launch smoke now verifies that the executable actually runs and cleans up the child process instead of assuming a detached game process exits immediately.
+- **LTS2026 Igor Stability**: Igor subprocesses now use bounded .NET processor concurrency by default, and confirmed pre-compile runtime abort retries clear only the affected project/runtime cache before trying again.
+- **Portable Codex Configuration**: Workspace `.codex/mcp.toml` files now store project-relative `GM_PROJECT_ROOT` values and reject roots outside the workspace, preventing usernames and machine-specific paths from being committed. Global Codex registration omits the project root entirely.
+- **Privacy-Safe Release Evidence**: Real GameMaker certification artifacts now publish only fixture filenames, hashes, IDE versions, runtime versions, and semantic checks; runner-local source, runtime, and work paths are omitted.
 
 ### Changed
+- **MCP Tool Surface**: Named, annotated tools are the only MCP execution surface. Destructive policy is derived from full command prefixes and `gm_safe_delete` is the sole general asset-deletion endpoint.
 - **Diagnostic output**: Refined tool outputs to be cleaner and more consistent across the code intelligence suite.
 - **Legacy Helper Results**: Command/MCP paths that still call print-heavy legacy helpers now normalize raw booleans, ad-hoc error dictionaries, list payloads, and direct safe-delete workflow results into structured `success`/`ok`/`message`/`error` result payloads with operation data under `data`.
 - **MCP Write Validation**: MCP mutation tools now validate typed operation models before transactions, direct helper calls, or CLI subprocess fallback. Domain validation failures stop at the MCP boundary instead of retrying through a generic fallback path, and real destructive MCP writes no longer accept `prefer_cli` or infrastructure fallback to the broad CLI path.
@@ -65,9 +72,15 @@ All notable changes to this project will be documented in this file.
 - **Smart Mutation Verification Default**: Post-mutation verification now defaults to smart mode, compiling high-risk structural mutations immediately while deferring batchable edits until `gm_verification_flush`.
 - **Coverage Gates**: Quality reports now fail below 85% overall statement coverage or 50% per-module statement coverage by default, with gate details recorded in `quality_summary.json`.
 - **Post-Mutation Compile Semantics**: Compile verification now treats a completed Igor compiler stage as a valid post-mutation compiler check even when a later local runner/package step exits non-zero for environment reasons.
+- **GameMaker Runtime Selection**: Unpinned projects prefer a runtime matching their recorded IDE family, then the newest stable runtime. Confirmed pre-compile LTS `AccessViolationException` aborts receive a bounded retry; compiler failures and post-compile exits do not.
+- **Asset Parent Defaults**: Omitted asset parents now resolve to the project's logical asset-type folders instead of placing new resources at project root.
+- **Token-Aware Workflows**: Rename, duplicate, and safe-delete use token-aware GML and structured resource updates without broad maintenance side effects; rename blocks ambiguous GML bindings before mutation.
+- **Bounded Diagnostics**: Direct output, subprocess logs, and debug logs are bounded; sensitive command values are redacted and child process trees are terminated on timeout or cancellation.
 
 ### Removed
 - **GitHub Actions X Posting**: Removed X API-based posting workflows, tweet staging, evergreen posting, posting history, and related tests. Release posts are now handled through Codex/browser automation using the X web UI.
+- **Redundant MCP Entry Points**: Removed `gm_cli`, `gm_asset_delete`, and `gm_workflow_delete` along with their duplicated policy paths.
+- **Unused Dependencies**: Removed the unused `fastmcp` and `tqdm` dependency surface and the duplicate requirements file; `uv.lock` is now authoritative.
 
 ## [0.1.1.dev41] - 2025-12-18 (Approximate)
 ### Added

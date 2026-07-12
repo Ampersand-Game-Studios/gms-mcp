@@ -4,7 +4,6 @@ from typing import Any, Dict
 
 from ..mcp_types import Context
 from ..project import _resolve_project_directory
-from ..direct import _pushd
 
 
 def register(mcp: Any, ContextType: Any) -> None:
@@ -200,56 +199,61 @@ def register(mcp: Any, ContextType: Any) -> None:
         if not install_result.get("ok"):
             return {"ok": False, "error": install_result.get("error") or install_result, "install": install_result}
 
-        # All room helpers are path-relative; operate from project_directory.
-        with _pushd(project_directory):
-            # Ensure the target layer exists (create instance layer if missing).
-            room_data = load_json_loose(room_file) or {}
-            layers = room_data.get("layers", []) if isinstance(room_data, dict) else []
-            layer_exists = any(isinstance(l, dict) and l.get("name") == layer for l in (layers or []))
-            if not layer_exists:
-                add_layer(target_room, layer, "instance", 0)
+        # Ensure the target layer exists (create instance layer if missing).
+        room_data = load_json_loose(room_file) or {}
+        layers = room_data.get("layers", []) if isinstance(room_data, dict) else []
+        layer_exists = any(isinstance(l, dict) and l.get("name") == layer for l in (layers or []))
+        if not layer_exists:
+            add_layer(target_room, layer, "instance", 0, project_root=project_directory)
 
-            # Idempotent instance placement: reuse existing __mcp_bridge instance if present.
-            room_data = load_json_loose(room_file) or {}
-            existing_instance_id = None
-            for lyr in room_data.get("layers", []) or []:
-                if not isinstance(lyr, dict) or lyr.get("resourceType") != "GMRInstanceLayer":
+        # Idempotent instance placement: reuse existing __mcp_bridge instance if present.
+        room_data = load_json_loose(room_file) or {}
+        existing_instance_id = None
+        for lyr in room_data.get("layers", []) or []:
+            if not isinstance(lyr, dict) or lyr.get("resourceType") != "GMRInstanceLayer":
+                continue
+            for inst in lyr.get("instances", []) or []:
+                if not isinstance(inst, dict):
                     continue
-                for inst in lyr.get("instances", []) or []:
-                    if not isinstance(inst, dict):
-                        continue
-                    obj = inst.get("objectId") or {}
-                    if isinstance(obj, dict) and obj.get("name") == BRIDGE_OBJECT_NAME:
-                        existing_instance_id = inst.get("name")
-                        break
-                if existing_instance_id:
+                obj = inst.get("objectId") or {}
+                if isinstance(obj, dict) and obj.get("name") == BRIDGE_OBJECT_NAME:
+                    existing_instance_id = inst.get("name")
                     break
+            if existing_instance_id:
+                break
 
-            instance_id = existing_instance_id or add_instance(target_room, BRIDGE_OBJECT_NAME, x, y, layer)
+        instance_id = existing_instance_id or add_instance(
+            target_room,
+            BRIDGE_OBJECT_NAME,
+            x,
+            y,
+            layer,
+            project_root=project_directory,
+        )
 
-            # Validate instanceCreationOrder includes instance_id; if not, patch it in.
-            room_data = load_json_loose(room_file) or {}
-            creation_order = room_data.get("instanceCreationOrder")
-            if not isinstance(creation_order, list):
-                creation_order = []
-                room_data["instanceCreationOrder"] = creation_order
+        # Validate instanceCreationOrder includes instance_id; if not, patch it in.
+        room_data = load_json_loose(room_file) or {}
+        creation_order = room_data.get("instanceCreationOrder")
+        if not isinstance(creation_order, list):
+            creation_order = []
+            room_data["instanceCreationOrder"] = creation_order
 
-            def _has(entry: Any) -> bool:
-                if isinstance(entry, str):
-                    return entry == instance_id
-                if isinstance(entry, dict):
-                    return entry.get("name") == instance_id or entry.get("%Name") == instance_id
-                return False
+        def _has(entry: Any) -> bool:
+            if isinstance(entry, str):
+                return entry == instance_id
+            if isinstance(entry, dict):
+                return entry.get("name") == instance_id or entry.get("%Name") == instance_id
+            return False
 
-            if not any(_has(e) for e in creation_order):
-                if creation_order and isinstance(creation_order[0], str):
-                    creation_order.append(instance_id)
-                else:
-                    creation_order.append({"name": instance_id, "path": f"rooms/{target_room}/{target_room}.yy"})
+        if not any(_has(e) for e in creation_order):
+            if creation_order and isinstance(creation_order[0], str):
+                creation_order.append(instance_id)
+            else:
+                creation_order.append({"name": instance_id, "path": f"rooms/{target_room}/{target_room}.yy"})
 
-                from gms_helpers.utils import save_json_loose
+            from gms_helpers.utils import save_json_loose
 
-                save_json_loose(room_file, room_data)
+            save_json_loose(room_file, room_data)
 
         return {
             "ok": True,

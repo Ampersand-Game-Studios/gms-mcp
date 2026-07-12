@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Literal, Tuple, List, Optional, TYPE_CHECKING
 
+from .transactions import mark_transaction_path_owned
 from .utils import generate_uuid, ensure_directory, load_json_loose, save_pretty_json
 from .exceptions import ValidationError
 
@@ -154,13 +155,14 @@ def import_strip_to_sprite(
     Returns: Operation result dict with success, sprite_name, frame_count, frame_size, path
     """
     from .asset_types import SpriteAsset
-    from .utils import update_yyp_file
+    from .utils import update_yyp_file, validate_parent_path_for_project
 
     project_root = Path(project_root)
     source_path = Path(source_path)
 
     if not source_path.exists():
         raise FileNotFoundError(f"Source file not found: {source_path}")
+    validate_parent_path_for_project(project_root, parent_path)
 
     # Split the source image
     frame_images = split_strip(source_path, frame_width, frame_height, layout, columns)
@@ -192,16 +194,18 @@ def import_strip_to_sprite(
         # Save main PNG
         main_png = sprite_folder / f"{frame_uuid}.png"
         frame_image.save(main_png, "PNG")
+        mark_transaction_path_owned(main_png)
 
         # Save layer PNG
         layer_dir = sprite_folder / "layers" / frame_uuid
         ensure_directory(layer_dir)
         layer_png = layer_dir / f"{layer_uuid}.png"
         frame_image.save(layer_png, "PNG")
+        mark_transaction_path_owned(layer_png)
 
     # Update .yyp file
     resource_entry = {"id": {"name": sprite_name, "path": relative_path}}
-    update_yyp_file(resource_entry)
+    update_yyp_file(resource_entry, project_root=project_root)
 
     return {
         "success": True,

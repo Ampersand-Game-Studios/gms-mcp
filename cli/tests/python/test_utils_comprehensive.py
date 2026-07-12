@@ -906,12 +906,15 @@ class TestUtilsFullCoverage(unittest.TestCase):
         from gms_helpers.naming_config import NamingConfig
 
         NamingConfig.clear_cache()
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.project_root = Path(self.temp_dir.name)
 
     def tearDown(self):
         """Clear naming config cache after tests."""
         from gms_helpers.naming_config import NamingConfig
 
         NamingConfig.clear_cache()
+        self.temp_dir.cleanup()
 
     def test_validate_name_all_asset_types(self):
         """Test validate_name for all asset types with invalid names."""
@@ -1028,15 +1031,17 @@ class TestUtilsFullCoverage(unittest.TestCase):
 
     def test_update_yyp_file_save_error(self):
         """Test update_yyp_file when save fails."""
-        from gms_helpers.utils import update_yyp_file, save_json
+        from gms_helpers.utils import update_yyp_file
         from unittest.mock import patch
 
-        # Create valid project
-        with open("test_project.yyp", "w") as f:
+        yyp_path = self.project_root / "test_project.yyp"
+        with yyp_path.open("w", encoding="utf-8") as f:
             json.dump({"resources": []}, f)
 
-        # Mock save_json to raise exception
-        with patch("gms_helpers.utils.save_json", side_effect=Exception("Save failed")):
+        with (
+            patch("gms_helpers.utils.find_yyp_file", return_value=yyp_path),
+            patch("gms_helpers.utils.save_json", side_effect=Exception("Save failed")),
+        ):
             resource_entry = {"id": {"name": "test", "path": "test.yy"}}
             result = update_yyp_file(resource_entry)
 

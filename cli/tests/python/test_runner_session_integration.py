@@ -450,6 +450,40 @@ class TestRunnerBackgroundMode(unittest.TestCase):
             Path(session.log_file).resolve(), (self.project_root / "output" / "test_project" / "debug.log").resolve()
         )
 
+    def test_macos_foreground_run_tracks_runner_pid_before_releasing_start_lock(self):
+        """macOS foreground runs should cross the same durable runner/session barrier as background runs."""
+        runner = GameMakerRunner(self.project_root)
+        fake_process = MagicMock(pid=12345, returncode=0)
+        fake_process.poll.return_value = None
+        fake_process.wait.return_value = 0
+        output_thread = MagicMock()
+
+        with patch.object(runner, "_build_platform_action_command", return_value=["igor", "--", "Mac", "Run"]):
+            with patch.object(runner, "_find_macos_validation_helper_pids", return_value=(set(), set())):
+                with patch.object(runner, "_run_igor_command", return_value=fake_process):
+                    with patch.object(runner, "_collect_igor_output_async", return_value=([], output_thread)):
+                        with patch.object(runner, "_wait_for_macos_runner_start", return_value=(222, {222}, {333})):
+                            with patch.object(
+                                runner._session_manager,
+                                "create_session",
+                                wraps=runner._session_manager.create_session,
+                            ) as create_session:
+                                result = runner.run_project_direct(
+                                    platform_target="macOS",
+                                    runtime_type="VM",
+                                    background=False,
+                                    output_location="temp",
+                                )
+
+        self.assertTrue(result)
+        self.assertEqual(create_session.call_args.kwargs["pid"], 222)
+        self.assertEqual(
+            Path(create_session.call_args.kwargs["exe_path"]).resolve(),
+            (self.project_root / "output" / "test_project" / "game.ios").resolve(),
+        )
+        output_thread.join.assert_called_once_with(timeout=5)
+        self.assertIsNone(runner._session_manager.get_current_session())
+
 
 class TestRunnerLaunchTargetDetection(unittest.TestCase):
     """Tests for platform-specific launch artifact detection."""

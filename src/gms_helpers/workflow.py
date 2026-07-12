@@ -13,15 +13,14 @@ Implemented Features:
     C-4 swap_sprite_png
     C-5 lint_project
 
-Optional Extras (6):
-    - Progress bars (tqdm) where useful
+Optional Extras:
     - Colourised output (colorama)
     - Global `yes` flag handled by callers (cli_ext)
 """
 
 from __future__ import annotations
 
-import json
+import copy
 import os
 import re
 import shutil
@@ -34,11 +33,9 @@ from typing import Dict, Any, List, Tuple, Optional
 from .utils import (
     load_json_loose,
     save_pretty_json_gm,
-    strip_trailing_commas,
-    ensure_directory,
     find_yyp,
     insert_into_resources,
-    insert_into_folders,
+    generate_uuid,
 )
 from .asset_types import ASSET_TYPES
 from .exceptions import (
@@ -48,9 +45,19 @@ from .exceptions import (
     JSONParseError,
 )
 from .results import OperationResult, AssetResult, MaintenanceResult
+from .transactions import (
+    mark_transaction_tree_owned,
+    transaction_is_active,
+    transactional_copy2,
+    transactional_copytree,
+    transactional_rename,
+    transactional_replace,
+    transactional_rmtree,
+    transactional_unlink,
+)
 
 # ---------------------------------------------------------------------------
-# Optional extras - tqdm + colorama
+# Optional color output
 # ---------------------------------------------------------------------------
 
 
@@ -61,7 +68,6 @@ def _try_import(name: str):
         return None
 
 
-tqdm = _try_import("tqdm")
 colorama = _try_import("colorama")
 if colorama:
     colorama.init()
@@ -134,95 +140,377 @@ def _validate_asset_name(name: str) -> str:
     return candidate
 
 
+_ASSET_DIRECTORIES = {
+    "animcurve": "animcurves",
+    "font": "fonts",
+    "folder": "folders",
+    "note": "notes",
+    "object": "objects",
+    "path": "paths",
+    "room": "rooms",
+    "script": "scripts",
+    "sequence": "sequences",
+    "shader": "shaders",
+    "sound": "sounds",
+    "sprite": "sprites",
+    "tileset": "tilesets",
+    "timeline": "timelines",
+}
+
+
+def _asset_directory(asset_type: str) -> str:
+    return _ASSET_DIRECTORIES.get(asset_type, f"{asset_type}s")
+
+
+def _replace_identity_values(value: Any, replacements: Dict[str, str]) -> Any:
+    """Replace known local identity tokens throughout copied metadata."""
+    if isinstance(value, list):
+        return [_replace_identity_values(item, replacements) for item in value]
+    if isinstance(value, dict):
+        return {key: _replace_identity_values(item, replacements) for key, item in value.items()}
+    if isinstance(value, str):
+        rewritten = value
+        for old_identity, new_identity in replacements.items():
+            rewritten = rewritten.replace(old_identity, new_identity)
+        return rewritten
+    return value
+
+
+def _collect_keyframe_ids(value: Any, identities: Dict[str, str]) -> None:
+    """Collect GameMaker keyframe IDs that must be unique in copied assets."""
+    if isinstance(value, list):
+        for item in value:
+            _collect_keyframe_ids(item, identities)
+        return
+    if not isinstance(value, dict):
+        return
+    identity = value.get("id")
+    if isinstance(identity, str) and re.fullmatch(r"[0-9a-fA-F]{32}", identity):
+        identities.setdefault(identity, generate_uuid())
+    for item in value.values():
+        _collect_keyframe_ids(item, identities)
+
+
+def _regenerate_duplicate_identities(asset_type: str, yy_data: Dict[str, Any]) -> Tuple[Dict[str, Any], Dict[str, str]]:
+    """Regenerate local IDs whose uniqueness is part of GameMaker's format."""
+    identities: Dict[str, str] = {}
+
+    if asset_type == "sprite":
+        for frame in yy_data.get("frames", []):
+            if isinstance(frame, dict):
+                identity = frame.get("name")
+                if isinstance(identity, str) and identity:
+                    identities.setdefault(identity, generate_uuid())
+        for layer in yy_data.get("layers", []):
+            if isinstance(layer, dict):
+                identity = layer.get("name")
+                if isinstance(identity, str) and identity:
+                    identities.setdefault(identity, generate_uuid())
+        _collect_keyframe_ids(yy_data.get("sequence"), identities)
+
+    if asset_type == "room":
+
+        def collect_instances(value: Any) -> None:
+            if isinstance(value, list):
+                for item in value:
+                    collect_instances(item)
+                return
+            if not isinstance(value, dict):
+                return
+            if value.get("resourceType") == "GMRInstance" or "$GMRInstance" in value:
+                identity = value.get("name")
+                if isinstance(identity, str) and identity.startswith("inst_"):
+                    identities.setdefault(identity, f"inst_{generate_uuid()}")
+            for item in value.values():
+                collect_instances(item)
+
+        collect_instances(yy_data.get("layers", []))
+
+    if asset_type in {"animcurve", "sequence", "sprite", "timeline"}:
+        _collect_keyframe_ids(yy_data, identities)
+
+    return _replace_identity_values(yy_data, identities), identities
+
+
+def _rename_identity_paths(asset_folder: Path, replacements: Dict[str, str]) -> None:
+    """Rename copied files/directories whose names contain regenerated IDs."""
+    if not replacements:
+        return
+    for path in sorted(asset_folder.rglob("*"), key=lambda item: len(item.parts), reverse=True):
+        new_name = path.name
+        for old_identity, new_identity in replacements.items():
+            new_name = new_name.replace(old_identity, new_identity)
+        if new_name != path.name:
+            destination = path.with_name(new_name)
+            if destination.exists():
+                raise AssetExistsError(f"Cannot regenerate duplicate identity; destination exists: {destination}")
+            transactional_rename(path, destination)
+
+
+def _validate_registered_asset(project_root: Path, asset_path: str, asset_name: str) -> List[str]:
+    """Return scoped consistency errors for one registered GameMaker asset."""
+    errors: List[str] = []
+    yy_path = project_root / asset_path
+    if not yy_path.exists():
+        errors.append(f"Asset file is missing: {asset_path}")
+        return errors
+    yy_data = load_json_loose(yy_path)
+    if not isinstance(yy_data, dict):
+        errors.append(f"Asset JSON is invalid: {asset_path}")
+        return errors
+    if yy_data.get("name") != asset_name:
+        errors.append(f"Asset metadata name is {yy_data.get('name')!r}, expected {asset_name!r}")
+    if "%Name" in yy_data and yy_data.get("%Name") != asset_name:
+        errors.append(f"Asset metadata %Name is {yy_data.get('%Name')!r}, expected {asset_name!r}")
+
+    yyp_path = find_yyp(project_root)
+    yyp_data = load_json_loose(yyp_path)
+    if not isinstance(yyp_data, dict):
+        errors.append(f"Project JSON is invalid: {yyp_path.name}")
+        return errors
+    matches = [
+        entry
+        for entry in yyp_data.get("resources", [])
+        if isinstance(entry, dict)
+        and isinstance(entry.get("id"), dict)
+        and entry["id"].get("name") == asset_name
+        and entry["id"].get("path") == asset_path
+    ]
+    if len(matches) != 1:
+        errors.append(f"Expected one .yyp resource entry for {asset_name!r} at {asset_path!r}; found {len(matches)}")
+    return errors
+
+
+def _duplicate_order_entry(entry: Any, new_name: str, old_path: str, new_path: str) -> Any | None:
+    """Clone one matching resource-order entry without changing unrelated fields."""
+
+    if isinstance(entry, str):
+        return new_path if entry.replace("\\", "/") == old_path else None
+    if not isinstance(entry, dict):
+        return None
+    entry_path = entry.get("path")
+    if not isinstance(entry_path, str) or entry_path.replace("\\", "/") != old_path:
+        return None
+    cloned = copy.deepcopy(entry)
+    cloned["path"] = new_path.replace("/", "\\") if "\\" in entry_path else new_path
+    if "name" in cloned:
+        cloned["name"] = new_name
+    return cloned
+
+
+def _renumber_order_entries(entries: List[Any]) -> None:
+    if any(isinstance(entry, dict) and isinstance(entry.get("order"), int) for entry in entries):
+        for index, entry in enumerate(entries):
+            if isinstance(entry, dict) and isinstance(entry.get("order"), int):
+                entry["order"] = index
+
+
+def _duplicate_resource_order_entries(
+    project_root: Path,
+    yyp_data: Dict[str, Any],
+    new_name: str,
+    old_path: str,
+    new_path: str,
+) -> None:
+    """Add the duplicated resource beside its source in structured order metadata."""
+
+    order_lists: List[Tuple[Path | None, Dict[str, Any], List[Any]]] = []
+    yyp_order = yyp_data.get("resourceOrder")
+    if isinstance(yyp_order, list):
+        order_lists.append((None, yyp_data, yyp_order))
+
+    for order_path in sorted(project_root.rglob("*.resource_order")):
+        order_data = load_json_loose(order_path)
+        if not isinstance(order_data, dict):
+            raise JSONParseError(f"Could not load resource-order metadata: {order_path}")
+        entries = order_data.get("ResourceOrderSettings")
+        if isinstance(entries, list):
+            order_lists.append((order_path, order_data, entries))
+
+    for order_path, order_data, entries in order_lists:
+        if any(_duplicate_order_entry(entry, new_name, new_path, new_path) is not None for entry in entries):
+            raise AssetExistsError(f"Resource-order metadata already contains '{new_name}' at '{new_path}'.")
+        updated: List[Any] = []
+        for entry in entries:
+            updated.append(entry)
+            clone = _duplicate_order_entry(entry, new_name, old_path, new_path)
+            if clone is not None:
+                updated.append(clone)
+        entries[:] = updated
+        _renumber_order_entries(entries)
+        if order_path is not None:
+            save_pretty_json_gm(order_path, order_data)
+
+    if old_path.startswith("rooms/") and new_path.startswith("rooms/"):
+        room_order = yyp_data.setdefault("RoomOrderNodes", [])
+        if not isinstance(room_order, list):
+            raise JSONParseError("Project RoomOrderNodes must be a list")
+        if any(
+            isinstance(entry, dict)
+            and isinstance(entry.get("roomId"), dict)
+            and (
+                entry["roomId"].get("name") == new_name
+                or str(entry["roomId"].get("path", "")).replace("\\", "/") == new_path
+            )
+            for entry in room_order
+        ):
+            raise AssetExistsError(f"Room order already contains '{new_name}' at '{new_path}'.")
+        new_node = {"roomId": {"name": new_name, "path": new_path}}
+        source_index = next(
+            (
+                index
+                for index, entry in enumerate(room_order)
+                if isinstance(entry, dict)
+                and isinstance(entry.get("roomId"), dict)
+                and str(entry["roomId"].get("path", "")).replace("\\", "/") == old_path
+            ),
+            None,
+        )
+        room_order.insert(source_index + 1 if source_index is not None else len(room_order), new_node)
+
+
+def _remove_resource_order_entries(
+    project_root: Path,
+    yyp_data: Dict[str, Any],
+    asset_path: str,
+) -> None:
+    """Remove one resource from structured order metadata."""
+
+    def keep(entry: Any) -> bool:
+        if isinstance(entry, str):
+            return entry.replace("\\", "/") != asset_path
+        if not isinstance(entry, dict):
+            return True
+        path = entry.get("path")
+        if not isinstance(path, str) or path.replace("\\", "/") != asset_path:
+            return True
+        return False
+
+    yyp_order = yyp_data.get("resourceOrder")
+    if isinstance(yyp_order, list):
+        yyp_order[:] = [entry for entry in yyp_order if keep(entry)]
+        _renumber_order_entries(yyp_order)
+
+    if asset_path.startswith("rooms/"):
+        room_order = yyp_data.get("RoomOrderNodes")
+        if isinstance(room_order, list):
+            room_order[:] = [
+                entry
+                for entry in room_order
+                if not (
+                    isinstance(entry, dict)
+                    and isinstance(entry.get("roomId"), dict)
+                    and str(entry["roomId"].get("path", "")).replace("\\", "/") == asset_path
+                )
+            ]
+
+    for order_path in sorted(project_root.rglob("*.resource_order")):
+        order_data = load_json_loose(order_path)
+        if not isinstance(order_data, dict):
+            raise JSONParseError(f"Could not load resource-order metadata: {order_path}")
+        entries = order_data.get("ResourceOrderSettings")
+        if not isinstance(entries, list):
+            continue
+        updated = [entry for entry in entries if keep(entry)]
+        if updated == entries:
+            continue
+        entries[:] = updated
+        _renumber_order_entries(entries)
+        save_pretty_json_gm(order_path, order_data)
+
+
 # ---------------------------------------------------------------------------
 # C-1: Duplicate Asset
 # ---------------------------------------------------------------------------
 
 
 def duplicate_asset(project_root: Path, asset_path: str, new_name: str, *, yes: bool = False) -> AssetResult:
-    project_root = Path(project_root)
+    project_root = Path(project_root).resolve()
     asset_type, src_folder, old_name = _asset_from_path(project_root, asset_path)
     new_name = _validate_asset_name(new_name)
-
-    # Get the plural form for directory path
-    plural_mapping = {
-        "script": "scripts",
-        "object": "objects",
-        "sprite": "sprites",
-        "room": "rooms",
-        "folder": "folders",
-    }
-    asset_dir = plural_mapping.get(asset_type, asset_type + "s")
+    if asset_type == "folder":
+        raise InvalidAssetTypeError("Folder resources cannot be duplicated with the asset workflow.")
+    asset_dir = _asset_directory(asset_type)
 
     dst_folder = project_root / asset_dir / new_name
     if dst_folder.exists():
         raise AssetExistsError(f"Destination asset '{new_name}' already exists.")
-
-    # Copy with progress bar
-    shutil.copytree(src_folder, dst_folder)
-
-    # Rename key files (yy + optional gml)
-    old_yy = dst_folder / f"{old_name}.yy"
-    new_yy = dst_folder / f"{new_name}.yy"
-    old_yy.rename(new_yy)
-
-    # Rename script gml stub if applicable
-    if asset_type == "script":
-        old_gml = dst_folder / f"{old_name}.gml"
-        if old_gml.exists():
-            new_gml = dst_folder / f"{new_name}.gml"
-            old_gml.rename(new_gml)
-            _patch_gml_stub(new_gml, new_name)
-
-    # Patch YY names (but NOT UUIDs)
-    yy_data = load_json_loose(new_yy)
-    if yy_data is None:
-        raise JSONParseError(f"Could not load {new_yy} for updating")
-    yy_data["name"] = new_name
-    if "%Name" in yy_data:
-        yy_data["%Name"] = new_name
-    save_pretty_json_gm(new_yy, yy_data)
-
-    # Update .yyp
+    source_yy = src_folder / f"{old_name}.yy"
+    source_data = load_json_loose(source_yy)
+    if not isinstance(source_data, dict):
+        raise JSONParseError(f"Could not load {source_yy} for duplication")
     yyp_path = find_yyp(project_root)
     yyp_data = load_json_loose(yyp_path)
-    if yyp_data is None:
+    if not isinstance(yyp_data, dict):
         raise JSONParseError(f"Could not load {yyp_path} for updating")
-    rel_path = f"{asset_dir}/{new_name}/{new_name}.yy"
     resources = yyp_data.setdefault("resources", [])
-    insert_into_resources(resources, new_name, rel_path)
-    save_pretty_json_gm(yyp_path, yyp_data)
+    source_entries = [
+        entry
+        for entry in resources
+        if isinstance(entry, dict)
+        and isinstance(entry.get("id"), dict)
+        and entry["id"].get("name") == old_name
+        and entry["id"].get("path") == asset_path
+    ]
+    if len(source_entries) != 1:
+        raise AssetNotFoundError(
+            f"Expected one registered source asset '{old_name}' at '{asset_path}', found {len(source_entries)}."
+        )
+    if any(
+        isinstance(entry, dict) and isinstance(entry.get("id"), dict) and entry["id"].get("name") == new_name
+        for entry in resources
+    ):
+        raise AssetExistsError(f"A project resource named '{new_name}' already exists.")
+
+    rel_path = f"{asset_dir}/{new_name}/{new_name}.yy"
+    try:
+        transactional_copytree(src_folder, dst_folder)
+        old_yy = dst_folder / f"{old_name}.yy"
+        new_yy = dst_folder / f"{new_name}.yy"
+        transactional_rename(old_yy, new_yy)
+
+        if asset_type == "script":
+            old_gml = dst_folder / f"{old_name}.gml"
+            if old_gml.exists():
+                new_gml = dst_folder / f"{new_name}.gml"
+                transactional_rename(old_gml, new_gml)
+                _patch_gml_stub(new_gml, old_name, new_name)
+        elif asset_type == "shader":
+            _rename_shader_files(dst_folder, old_name, new_name)
+
+        from .reference_scanner import rewrite_json_asset_references
+
+        yy_data = source_data
+        rewrite_json_asset_references(yy_data, old_name, new_name, asset_type, own_asset=True)
+        yy_data, identity_replacements = _regenerate_duplicate_identities(asset_type, yy_data)
+        _rename_identity_paths(dst_folder, identity_replacements)
+        save_pretty_json_gm(new_yy, yy_data)
+
+        insert_into_resources(resources, new_name, rel_path)
+        _duplicate_resource_order_entries(
+            project_root,
+            yyp_data,
+            new_name,
+            asset_path,
+            rel_path,
+        )
+        save_pretty_json_gm(yyp_path, yyp_data)
+    except Exception:
+        if not transaction_is_active():
+            transactional_rmtree(dst_folder, ignore_errors=True)
+        raise
+
+    validation_errors = _validate_registered_asset(project_root, rel_path, new_name)
+    if validation_errors:
+        raise JSONParseError("Duplicate validation failed: " + "; ".join(validation_errors))
 
     message = f"[OK] Duplicated asset -> {new_name}"
     print(_c(message, "green"))
 
-    warnings = []
-    # Run post-operation maintenance (disabled in test environments)
-    import os
-
-    if not os.environ.get("PYTEST_CURRENT_TEST"):
-        try:
-            from .auto_maintenance import run_auto_maintenance
-
-            print(_c("[MAINT] Running post-duplicate maintenance...", "blue"))
-            m_result = run_auto_maintenance(str(project_root), fix_issues=True, verbose=True)
-
-            if m_result.has_errors:
-                warn_msg = "Asset duplicated but maintenance found issues."
-                print(_c(f"[WARN] {warn_msg}", "yellow"))
-                warnings.append(warn_msg)
-            else:
-                print(_c("[OK] Asset duplicated and validated successfully!", "green"))
-        except ImportError:
-            # Fallback if auto_maintenance not available
-            pass
-    else:
-        print(_c("[OK] Asset duplicated successfully! (maintenance skipped in test)", "green"))
-
     return AssetResult(
         success=True,
         message=message,
-        warnings=warnings,
+        warnings=[],
         asset_name=new_name,
         asset_type=asset_type,
         asset_path=rel_path,
@@ -235,108 +523,99 @@ def duplicate_asset(project_root: Path, asset_path: str, new_name: str, *, yes: 
 
 
 def rename_asset(project_root: Path, asset_path: str, new_name: str) -> AssetResult:
-    project_root = Path(project_root)
+    project_root = Path(project_root).resolve()
     asset_type, src_folder, old_name = _asset_from_path(project_root, asset_path)
     new_name = _validate_asset_name(new_name)
-
-    # Get the plural form for directory path
-    plural_mapping = {
-        "script": "scripts",
-        "object": "objects",
-        "sprite": "sprites",
-        "room": "rooms",
-        "folder": "folders",
-    }
-    asset_dir = plural_mapping.get(asset_type, asset_type + "s")
+    if asset_type == "folder":
+        raise InvalidAssetTypeError("Folder resources cannot be renamed with the asset workflow.")
+    asset_dir = _asset_directory(asset_type)
 
     dst_folder = project_root / asset_dir / new_name
     if dst_folder.exists():
         raise AssetExistsError(f"Destination name '{new_name}' already exists.")
 
-    src_folder.rename(dst_folder)
+    old_yy = src_folder / f"{old_name}.yy"
+    yy_data = load_json_loose(old_yy)
+    if not isinstance(yy_data, dict):
+        raise JSONParseError(f"Could not load {old_yy} for updating")
+
+    yyp_path = find_yyp(project_root)
+    yyp_data = load_json_loose(yyp_path)
+    if not isinstance(yyp_data, dict):
+        raise JSONParseError(f"Could not load {yyp_path} for updating")
+    resources = yyp_data.get("resources", [])
+    source_entries = [
+        entry
+        for entry in resources
+        if isinstance(entry, dict)
+        and isinstance(entry.get("id"), dict)
+        and entry["id"].get("path") == asset_path
+        and entry["id"].get("name") == old_name
+    ]
+    if len(source_entries) != 1:
+        raise AssetNotFoundError(
+            f"Expected one registered source asset '{old_name}' at '{asset_path}', found {len(source_entries)}."
+        )
+    if any(
+        isinstance(entry, dict) and isinstance(entry.get("id"), dict) and entry["id"].get("name") == new_name
+        for entry in resources
+    ):
+        raise AssetExistsError(f"A project resource named '{new_name}' already exists.")
+
+    from .reference_scanner import preflight_asset_rename
+
+    preflight_asset_rename(project_root, old_name, new_name, asset_type)
+
+    transactional_rename(src_folder, dst_folder)
 
     # Rename key files
     old_yy = dst_folder / f"{old_name}.yy"
     new_yy = dst_folder / f"{new_name}.yy"
-    old_yy.rename(new_yy)
+    transactional_rename(old_yy, new_yy)
 
     if asset_type == "script":
         old_gml = dst_folder / f"{old_name}.gml"
         if old_gml.exists():
             new_gml = dst_folder / f"{new_name}.gml"
-            old_gml.rename(new_gml)
-            _patch_gml_stub(new_gml, new_name)
+            transactional_rename(old_gml, new_gml)
+            _patch_gml_stub(new_gml, old_name, new_name)
+    elif asset_type == "shader":
+        _rename_shader_files(dst_folder, old_name, new_name)
 
-    # Patch YY
-    yy_data = load_json_loose(new_yy)
-    if yy_data is None:
-        raise JSONParseError(f"Could not load {new_yy} for updating")
     yy_data["name"] = new_name
     if "%Name" in yy_data:
         yy_data["%Name"] = new_name
     save_pretty_json_gm(new_yy, yy_data)
 
     # Update .yyp entry
-    yyp_path = find_yyp(project_root)
-    yyp_data = load_json_loose(yyp_path)
-    if yyp_data is None:
-        raise JSONParseError(f"Could not load {yyp_path} for updating")
-
     new_rel_path = f"{asset_dir}/{new_name}/{new_name}.yy"
-    for res in yyp_data.get("resources", []):
-        if res["id"]["path"] == asset_path:
-            res["id"]["name"] = new_name
-            res["id"]["path"] = new_rel_path
-            break
-    # Resort resources array
-    yyp_data["resources"].sort(key=lambda r: r["id"]["name"].lower())
+    source_entry = source_entries[0]["id"]
+    source_entry["name"] = new_name
+    source_entry["path"] = new_rel_path
+    yyp_data["resources"].sort(
+        key=lambda entry: str(entry.get("id", {}).get("name", "")).lower() if isinstance(entry, dict) else ""
+    )
     save_pretty_json_gm(yyp_path, yyp_data)
+    mark_transaction_tree_owned(dst_folder)
 
     message = f"[OK] Renamed {old_name} -> {new_name}"
     print(_c(message, "green"))
 
-    warnings = []
-    # COMPREHENSIVE REFERENCE UPDATE: Scan and update ALL references to the old asset
-    try:
-        from .reference_scanner import comprehensive_rename_asset
+    from .reference_scanner import comprehensive_rename_asset
 
-        print(_c("[SCAN] Performing comprehensive reference scan and update...", "blue"))
-        ref_success = comprehensive_rename_asset(project_root, old_name, new_name, asset_type)
-        if not ref_success:
-            warn_msg = "Some references may not have been fully updated"
-            print(_c(f"[WARN] {warn_msg}", "yellow"))
-            warnings.append(warn_msg)
-    except ImportError:
-        warn_msg = "Reference scanner not available - manual reference checks may be needed"
-        print(_c(f"[WARN] {warn_msg}", "yellow"))
-        warnings.append(warn_msg)
+    print(_c("[SCAN] Updating executable GML tokens and structured resource references...", "blue"))
+    ref_success = comprehensive_rename_asset(project_root, old_name, new_name, asset_type)
+    if not ref_success:
+        raise JSONParseError("Rename validation failed: executable or structured stale references remain.")
 
-    # Run post-operation maintenance (disabled in test environments)
-    import os
-
-    if not os.environ.get("PYTEST_CURRENT_TEST"):
-        try:
-            from .auto_maintenance import run_auto_maintenance
-
-            print(_c("[MAINT] Running post-rename maintenance...", "blue"))
-            m_result = run_auto_maintenance(str(project_root), fix_issues=True, verbose=True)
-
-            if m_result.has_errors:
-                warn_msg = "Asset renamed but maintenance found issues."
-                print(_c(f"[WARN] {warn_msg}", "yellow"))
-                warnings.append(warn_msg)
-            else:
-                print(_c("[OK] Asset renamed and validated successfully!", "green"))
-        except ImportError:
-            # Fallback if auto_maintenance not available
-            pass
-    else:
-        print(_c("[OK] Asset renamed successfully! (maintenance skipped in test)", "green"))
+    validation_errors = _validate_registered_asset(project_root, new_rel_path, new_name)
+    if validation_errors:
+        raise JSONParseError("Rename validation failed: " + "; ".join(validation_errors))
 
     return AssetResult(
         success=True,
         message=message,
-        warnings=warnings,
+        warnings=[],
         asset_name=new_name,
         asset_type=asset_type,
         asset_path=new_rel_path,
@@ -348,54 +627,134 @@ def rename_asset(project_root: Path, asset_path: str, new_name: str) -> AssetRes
 # ---------------------------------------------------------------------------
 
 
-def delete_asset(project_root: Path, asset_path: str, *, dry_run: bool = False) -> OperationResult:
-    project_root = Path(project_root)
+def delete_asset(
+    project_root: Path,
+    asset_path: str,
+    *,
+    dry_run: bool = False,
+    force: bool = False,
+) -> OperationResult:
+    """Delete one registered asset, blocking live dependencies unless forced."""
+    project_root = Path(project_root).resolve()
     asset_type, folder_path, asset_name = _asset_from_path(project_root, asset_path)
 
-    if dry_run:
-        message = "[dry-run] Would delete folder " + str(folder_path)
-        print(_c(message, "yellow"))
-    else:
-        shutil.rmtree(folder_path, ignore_errors=True)
-        message = "Deleted folder " + str(folder_path)
-        print(_c(message, "red"))
-
-    # Update .yyp
     yyp_path = find_yyp(project_root)
     yyp_data = load_json_loose(yyp_path)
-    if yyp_data is None:
+    if not isinstance(yyp_data, dict):
         raise JSONParseError(f"Could not load {yyp_path} for updating")
+    resources = yyp_data.get("resources", [])
+    resource_entries = [
+        entry
+        for entry in resources
+        if isinstance(entry, dict)
+        and isinstance(entry.get("id"), dict)
+        and entry["id"].get("name") == asset_name
+        and entry["id"].get("path") == asset_path
+    ]
+    if len(resource_entries) != 1:
+        return OperationResult.fail(
+            f"Delete blocked: expected one registered asset '{asset_name}' at '{asset_path}', "
+            f"found {len(resource_entries)}.",
+            code="asset_registration_invalid",
+            error_type="validation_error",
+            data={"asset_name": asset_name, "asset_type": asset_type, "asset_path": asset_path},
+        )
 
-    resources_before = len(yyp_data.get("resources", []))
-    yyp_data["resources"] = [r for r in yyp_data.get("resources", []) if r["id"]["name"] != asset_name]
+    dependencies = _collect_incoming_dependencies(project_root, asset_name)
+    if dependencies and not force:
+        return OperationResult.fail(
+            f"Delete blocked: {len(dependencies)} dependent asset(s) reference '{asset_name}'.",
+            code="asset_has_dependencies",
+            error_type="dependency_error",
+            details={"dependencies": dependencies},
+            data={
+                "asset_name": asset_name,
+                "asset_type": asset_type,
+                "asset_path": asset_path,
+                "blocked": True,
+                "dependencies": dependencies,
+                "dependency_count": len(dependencies),
+                "dry_run": dry_run,
+                "force": force,
+            },
+        )
 
-    warnings = []
-    if len(yyp_data["resources"]) != resources_before:
-        if dry_run:
-            print(_c("[dry-run] Would remove .yyp resource entry", "yellow"))
-        else:
-            save_pretty_json_gm(yyp_path, yyp_data)
-            print(_c("Removed .yyp entry", "red"))
+    warnings: List[str] = []
+    if dependencies and force:
+        warnings.append(
+            f"Forced deletion leaves {len(dependencies)} dependent reference(s) unresolved; no code was rewritten."
+        )
 
-    # Run post-operation maintenance (only if not dry run)
-    if not dry_run:
-        try:
-            from .auto_maintenance import run_auto_maintenance
+    if dry_run:
+        message = f"[dry-run] Would delete {asset_type} '{asset_name}' at {asset_path}"
+        print(_c(message, "yellow"))
+        return OperationResult.ok(
+            message,
+            warnings=warnings,
+            data={
+                "asset_name": asset_name,
+                "asset_type": asset_type,
+                "asset_path": asset_path,
+                "blocked": False,
+                "dependencies": dependencies,
+                "dependency_count": len(dependencies),
+                "deleted": False,
+                "dry_run": True,
+                "force": force,
+            },
+        )
 
-            print(_c("[MAINT] Running post-delete maintenance...", "blue"))
-            m_result = run_auto_maintenance(str(project_root), fix_issues=True, verbose=True)
+    if not folder_path.exists():
+        return OperationResult.fail(
+            f"Delete blocked: asset path is missing: {folder_path}",
+            code="asset_files_missing",
+            error_type="validation_error",
+        )
+    if folder_path.is_dir():
+        transactional_rmtree(folder_path)
+    else:
+        transactional_unlink(folder_path)
+    yyp_data["resources"] = [entry for entry in resources if entry is not resource_entries[0]]
+    _remove_resource_order_entries(project_root, yyp_data, asset_path)
+    save_pretty_json_gm(yyp_path, yyp_data)
 
-            if m_result.has_errors:
-                warn_msg = "Asset deleted but maintenance found issues."
-                print(_c(f"[WARN] {warn_msg}", "yellow"))
-                warnings.append(warn_msg)
-            else:
-                print(_c("[OK] Asset deleted and project validated successfully!", "green"))
-        except ImportError:
-            # Fallback if auto_maintenance not available
-            pass
+    remaining_entries = [
+        entry
+        for entry in yyp_data.get("resources", [])
+        if isinstance(entry, dict)
+        and isinstance(entry.get("id"), dict)
+        and (entry["id"].get("name") == asset_name or entry["id"].get("path") == asset_path)
+    ]
+    if folder_path.exists() or remaining_entries:
+        raise JSONParseError(f"Delete validation failed for '{asset_name}'.")
+    if asset_type == "room" and any(
+        isinstance(entry, dict)
+        and isinstance(entry.get("roomId"), dict)
+        and (
+            entry["roomId"].get("name") == asset_name
+            or str(entry["roomId"].get("path", "")).replace("\\", "/") == asset_path
+        )
+        for entry in yyp_data.get("RoomOrderNodes", [])
+    ):
+        raise JSONParseError(f"Delete validation left a stale room-order entry for '{asset_name}'.")
 
-    return OperationResult(success=True, message=message, warnings=warnings)
+    message = f"Deleted {asset_type} '{asset_name}' at {asset_path}"
+    print(_c(message, "red"))
+    return OperationResult.ok(
+        message,
+        warnings=warnings,
+        data={
+            "asset_name": asset_name,
+            "asset_type": asset_type,
+            "asset_path": asset_path,
+            "blocked": False,
+            "dependencies": dependencies,
+            "dependency_count": len(dependencies),
+            "deleted": True,
+            "dry_run": False,
+            "force": force,
+        },
+    )
 
 
 def _resolve_asset_path(project_root: Path, asset_type: str, asset_name: str) -> Optional[str]:
@@ -414,11 +773,14 @@ def _resolve_asset_path(project_root: Path, asset_type: str, asset_name: str) ->
 def _collect_incoming_dependencies(project_root: Path, asset_name: str) -> List[Dict[str, Any]]:
     """Find all incoming graph edges that point to the target asset."""
     from .introspection import build_asset_graph
+    from .reference_scanner import count_gml_identifier, count_json_resource_references
 
-    graph = build_asset_graph(project_root, deep=True)
+    graph = build_asset_graph(project_root, deep=False)
     node_by_id = {node.get("id"): node for node in graph.get("nodes", []) if isinstance(node, dict)}
+    directory_types = {directory: asset_type for asset_type, directory in _ASSET_DIRECTORIES.items()}
 
     incoming: List[Dict[str, Any]] = []
+    seen: set[Tuple[str, str]] = set()
     for edge in graph.get("edges", []):
         if not isinstance(edge, dict):
             continue
@@ -429,55 +791,80 @@ def _collect_incoming_dependencies(project_root: Path, asset_name: str) -> List[
             continue
 
         source_node = node_by_id.get(source_name, {})
+        relation = str(edge.get("relation", "unknown"))
+        key = (source_name, relation)
+        if key not in seen:
+            seen.add(key)
+            incoming.append(
+                {
+                    "asset_name": source_name,
+                    "asset_type": source_node.get("type", "unknown"),
+                    "asset_path": source_node.get("path", ""),
+                    "relation": relation,
+                }
+            )
+
+    for gml_path in sorted(project_root.rglob("*.gml")):
+        relative = gml_path.relative_to(project_root)
+        if any(part in {".git", ".gms_mcp", ".gms-mcp", "build", "dist", "__pycache__"} for part in relative.parts):
+            continue
+        if len(relative.parts) < 2:
+            continue
+        source_name = relative.parts[1]
+        if source_name == asset_name:
+            continue
+        source = gml_path.read_text(encoding="utf-8", errors="replace")
+        if count_gml_identifier(source, asset_name) == 0:
+            continue
+        key = (source_name, "code_reference")
+        if key in seen:
+            continue
+        seen.add(key)
+        source_node = node_by_id.get(source_name, {})
         incoming.append(
             {
                 "asset_name": source_name,
-                "asset_type": source_node.get("type", "unknown"),
-                "asset_path": source_node.get("path", ""),
-                "relation": edge.get("relation", "unknown"),
+                "asset_type": source_node.get("type", directory_types.get(relative.parts[0], "unknown")),
+                "asset_path": source_node.get(
+                    "path",
+                    f"{relative.parts[0]}/{source_name}/{source_name}.yy",
+                ),
+                "relation": "code_reference",
             }
         )
 
+    target_nodes = [node for node in graph.get("nodes", []) if isinstance(node, dict) and node.get("id") == asset_name]
+    if target_nodes:
+        target_type = str(target_nodes[0].get("type", ""))
+        target_path = str(target_nodes[0].get("path", ""))
+        sources_with_dependencies = {str(item.get("asset_name", "")) for item in incoming}
+        for yy_path in sorted(project_root.rglob("*.yy")):
+            relative = yy_path.relative_to(project_root)
+            if any(part in {".git", ".gms_mcp", ".gms-mcp", "build", "dist", "__pycache__"} for part in relative.parts):
+                continue
+            if relative.as_posix() == target_path or not relative.parts:
+                continue
+            data = load_json_loose(yy_path)
+            if not isinstance(data, (dict, list)):
+                continue
+            if count_json_resource_references(data, target_type, asset_name) == 0:
+                continue
+            source_name = relative.stem if len(relative.parts) == 2 else relative.parts[1]
+            if source_name in sources_with_dependencies:
+                continue
+            source_type = directory_types.get(relative.parts[0], "unknown")
+            incoming.append(
+                {
+                    "asset_name": source_name,
+                    "asset_type": source_type,
+                    "asset_path": relative.as_posix(),
+                    "relation": "resource_reference",
+                }
+            )
+            sources_with_dependencies.add(source_name)
+
     incoming.sort(key=lambda d: (str(d.get("asset_type", "")), str(d.get("asset_name", ""))))
     return incoming
-
-
-def _cleanup_symbol_references(project_root: Path, asset_name: str) -> Dict[str, Any]:
-    """
-    Best-effort cleanup: replace direct symbol references in GML code with `undefined`.
-    This intentionally avoids rewriting JSON metadata structure.
-    """
-    pattern = re.compile(rf"\b{re.escape(asset_name)}\b")
-    roots = [project_root / "scripts", project_root / "objects", project_root / "rooms"]
-    touched_files: List[str] = []
-    replacements = 0
-
-    for root in roots:
-        if not root.exists():
-            continue
-        for gml_path in root.rglob("*.gml"):
-            try:
-                content = gml_path.read_text(encoding="utf-8")
-            except Exception:
-                continue
-
-            match_count = len(pattern.findall(content))
-            if match_count == 0:
-                continue
-
-            patched = pattern.sub("undefined", content)
-            if patched == content:
-                continue
-
-            gml_path.write_text(patched, encoding="utf-8")
-            replacements += match_count
-            touched_files.append(str(gml_path.relative_to(project_root).as_posix()))
-
-    return {
-        "replacement_token": "undefined",
-        "replacements": replacements,
-        "files": sorted(touched_files),
-    }
 
 
 def safe_delete_asset(
@@ -486,7 +873,6 @@ def safe_delete_asset(
     asset_name: str,
     *,
     force: bool = False,
-    clean_refs: bool = False,
     dry_run: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -506,17 +892,19 @@ def safe_delete_asset(
             "dependencies": [],
             "dependency_count": 0,
             "deleted": False,
-            "cleaned_refs": {"replacements": 0, "files": []},
             "warnings": [],
         }
 
     dependencies = _collect_incoming_dependencies(project_root, asset_name)
     blocked = len(dependencies) > 0 and not force
     warnings: List[str] = []
-    cleaned_refs: Dict[str, Any] = {"replacements": 0, "files": []}
 
     if blocked:
         warnings.append("Deletion blocked because dependent assets reference this target. Use force=True to continue.")
+    elif dependencies:
+        warnings.append(
+            f"Force permits deletion with {len(dependencies)} unresolved dependent reference(s); no code will be rewritten."
+        )
 
     if dry_run or blocked:
         message = (
@@ -532,19 +920,14 @@ def safe_delete_asset(
             "asset_path": asset_path,
             "dry_run": dry_run,
             "force": force,
-            "clean_refs": clean_refs,
             "dependencies": dependencies,
             "dependency_count": len(dependencies),
             "deleted": False,
-            "cleaned_refs": cleaned_refs,
             "warnings": warnings,
+            "message": message,
         }
 
-    if clean_refs and dependencies:
-        cleaned_refs = _cleanup_symbol_references(project_root, asset_name)
-        warnings.append("Reference cleanup is best-effort and currently rewrites direct GML symbol tokens only.")
-
-    delete_result = delete_asset(project_root, asset_path, dry_run=False)
+    delete_result = delete_asset(project_root, asset_path, dry_run=False, force=force)
     warnings.extend(delete_result.warnings)
 
     return {
@@ -555,11 +938,9 @@ def safe_delete_asset(
         "asset_path": asset_path,
         "dry_run": False,
         "force": force,
-        "clean_refs": clean_refs,
         "dependencies": dependencies,
         "dependency_count": len(dependencies),
         "deleted": bool(delete_result.success),
-        "cleaned_refs": cleaned_refs,
         "warnings": warnings,
         "message": delete_result.message,
     }
@@ -628,20 +1009,20 @@ def swap_sprite_png(
     last_err: Exception | None = None
     for attempt in range(1, 6):
         try:
-            shutil.copy2(png_source, tmp_png)
+            transactional_copy2(png_source, tmp_png)
             try:
-                os.replace(tmp_png, target_png)
+                transactional_replace(tmp_png, target_png)
             finally:
                 if tmp_png.exists():
                     # Best-effort cleanup
                     try:
-                        tmp_png.unlink()
+                        transactional_unlink(tmp_png)
                     except Exception:
                         pass
 
             # Also update the layer PNG if it exists
             if layer_png.parent.exists():
-                shutil.copy2(png_source, layer_png)
+                transactional_copy2(png_source, layer_png)
 
             frame_msg = f" frame {frame_index}" if frame_count > 1 else ""
             message = f"[OK] Replaced sprite image for {sprite_name}{frame_msg}"
@@ -728,36 +1109,28 @@ def lint_project(project_root: Path) -> MaintenanceResult:
 # ---------------------------------------------------------------------------
 
 
-def _copy_tree(src: Path, dst: Path):
-    """Recursive copy with optional progress bar."""
-    src = Path(src)
-    dst = Path(dst)
-    # Gather list for progress bar
-    all_files = [p for p in src.rglob("*") if p.is_file()]
-    iterator = all_files
-    if tqdm and sys.stdout.isatty():
-        iterator = tqdm.tqdm(all_files, desc="Copy", unit="file", leave=False)
-    for p in iterator:
-        rel = p.relative_to(src)
-        target = dst / rel
-        ensure_directory(target.parent)
-        shutil.copy2(p, target)
+def _patch_gml_stub(gml_file: Path, old_name: str, new_name: str) -> None:
+    """Rename an executable script identifier without touching prose or strings."""
+    from .reference_scanner import rewrite_gml_asset_identifiers
+    from .utils import atomic_write_text
+
+    text = gml_file.read_text(encoding="utf-8")
+    patched, replacements = rewrite_gml_asset_identifiers(text, {old_name: new_name})
+    if replacements:
+        atomic_write_text(gml_file, patched)
 
 
-def _patch_gml_stub(gml_file: Path, new_name: str):
-    """Replace function name inside auto-generated stub."""
-    try:
-        text = gml_file.read_text(encoding="utf-8")
-        # Very naive replacement of first word after "function "
-        patched = []
-        for line in text.splitlines():
-            if line.strip().startswith("function "):
-                patched.append(f"function {new_name}() {{")
-            else:
-                patched.append(line)
-        gml_file.write_text("\n".join(patched), encoding="utf-8")
-    except Exception:
-        pass
+def _rename_shader_files(asset_folder: Path, old_name: str, new_name: str) -> None:
+    """Keep GameMaker shader source filenames aligned with their resource name."""
+
+    for extension in (".vsh", ".fsh"):
+        source = asset_folder / f"{old_name}{extension}"
+        if not source.exists():
+            continue
+        destination = asset_folder / f"{new_name}{extension}"
+        if destination.exists():
+            raise AssetExistsError(f"Cannot rename shader source; destination exists: {destination}")
+        transactional_rename(source, destination)
 
 
 if __name__ == "__main__":

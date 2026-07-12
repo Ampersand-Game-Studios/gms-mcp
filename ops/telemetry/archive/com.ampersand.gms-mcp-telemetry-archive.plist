@@ -6,7 +6,9 @@
   <string>com.ampersand.gms-mcp-telemetry-archive</string>
   <key>ProgramArguments</key>
   <array>
-    <string>/Users/callum/Projects/Ampersand Game Studios/GMS MCP/gms-mcp/ops/telemetry/archive/run_telemetry_archive.sh</string>
+    <string>/bin/zsh</string>
+    <string>-lc</string>
+    <string>exec "$HOME/Projects/Ampersand Game Studios/GMS MCP/gms-mcp/ops/telemetry/archive/run_telemetry_archive.sh"</string>
   </array>
   <key>StartCalendarInterval</key>
   <dict>
@@ -19,11 +21,5 @@
   </dict>
   <key>RunAtLoad</key>
   <false/>
-  <key>StandardOutPath</key>
-  <string>/Users/callum/Library/Logs/gms-mcp-telemetry-archive.log</string>
-  <key>StandardErrorPath</key>
-  <string>/Users/callum/Library/Logs/gms-mcp-telemetry-archive.log</string>
-  <key>WorkingDirectory</key>
-  <string>/Users/callum/Projects/Ampersand Game Studios/GMS MCP/gms-mcp</string>
 </dict>
 </plist>

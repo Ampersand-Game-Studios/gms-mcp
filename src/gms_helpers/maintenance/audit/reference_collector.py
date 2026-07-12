@@ -9,10 +9,12 @@ This module implements:
 import os
 import json
 from pathlib import Path
-from typing import Set, Dict, List, Tuple, Optional
+from typing import Any, Set, Dict, List, Tuple, Optional
 from collections import defaultdict
 
 from ...diagnostics import Diagnostic, CODE_REFERENCE_MISSING, CODE_ORPHAN_FILE, CODE_CASE_MISMATCH
+from ...event_model import event_filename
+from ...exceptions import ValidationError
 from ...utils import load_json, find_yyp_file
 from ..path_utils import (
     build_filesystem_map,
@@ -292,9 +294,7 @@ class ReferenceCollector:
         # Paths typically don't have companion files
         pass
 
-    def _get_event_filename(
-        self, event_type: int, event_num: int, collision_object: Optional[str] = None
-    ) -> Optional[str]:
+    def _get_event_filename(self, event_type: int, event_num: int, collision_object: Any = None) -> Optional[str]:
         """
         Generate event filename based on GameMaker's naming convention.
 
@@ -306,36 +306,10 @@ class ReferenceCollector:
         Returns:
             Event filename or None if invalid
         """
-        # Map event types to their names
-        event_type_names = {
-            0: "Create",
-            1: "Destroy",
-            2: "Alarm",
-            3: "Step",
-            4: "Collision",
-            5: "Keyboard",
-            6: "Mouse",
-            7: "Other",
-            8: "Draw",
-            9: "KeyPress",
-            10: "KeyRelease",
-            11: "Trigger",
-            12: "CleanUp",
-            13: "Gesture",
-        }
-
-        if event_type not in event_type_names:
+        try:
+            return event_filename(event_type, event_num, collision_object)
+        except ValidationError:
             return None
-
-        event_name = event_type_names[event_type]
-
-        # Handle collision events specially
-        if event_type == 4 and collision_object:
-            # Collision events use the object name
-            return f"Collision_{collision_object}.gml"
-        else:
-            # Standard events use type_number format
-            return f"{event_name}_{event_num}.gml"
 
     def _apply_naming_conventions(self):
         """Apply naming convention inference for additional files."""

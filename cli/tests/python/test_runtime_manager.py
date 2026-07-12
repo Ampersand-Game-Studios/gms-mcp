@@ -5,7 +5,8 @@ import tempfile
 import json
 import os
 import platform
-from gms_helpers.runtime_manager import RuntimeManager, RuntimeInfo, classify_runtime_channel
+from gms_helpers.runtime_manager import RuntimeManager, RuntimeInfo, _runtime_sort_key, classify_runtime_channel
+from gms_helpers.runner_support.discovery import RunnerDiscoveryMixin
 
 
 class TestRuntimeManager(unittest.TestCase):
@@ -71,6 +72,19 @@ class TestRuntimeManager(unittest.TestCase):
                 selected = self.manager.select()
                 self.assertEqual(selected.version, "1.0.0.0")
 
+    def test_select_matches_project_channel_and_defaults_to_stable(self):
+        stable = RuntimeInfo("2024.14.4.268", "/stable", "/stable/Igor", True, "stable")
+        lts = RuntimeInfo("2026.0.0.23", "/lts", "/lts/Igor", True, "lts")
+
+        with mock.patch.object(RuntimeManager, "list_installed", return_value=[lts, stable]):
+            self.assertEqual(self.manager.select(), stable)
+
+            (self.project_root / "TestGame.yyp").write_text(
+                '{"MetaData":{"IDEVersion":"2026.0.1.20"}}',
+                encoding="utf-8",
+            )
+            self.assertEqual(self.manager.select(), lts)
+
     def test_classify_runtime_channel_handles_lts2026_and_beta_series(self):
         self.assertEqual(classify_runtime_channel("2026.0.0.23"), "lts")
         self.assertEqual(classify_runtime_channel("runtime-2026.0.0.23"), "lts")
@@ -82,7 +96,8 @@ class TestRuntimeManager(unittest.TestCase):
 
     def test_list_installed_discovers_apple_silicon_igor(self):
         runtime_root = (
-            self.project_root / "Library/Application Support/GameMakerStudio2/Cache/runtimes/runtime-2026.1.1.0.1"
+            self.project_root
+            / "Library/Application Support/GameMakerStudio2-LTS2026/Cache/runtimes/runtime-2026.1.1.0.1"
         )
         igor_file = runtime_root / "bin/igor/osx/arm64/Igor"
         igor_file.parent.mkdir(parents=True, exist_ok=True)
@@ -99,6 +114,32 @@ class TestRuntimeManager(unittest.TestCase):
         self.assertTrue(
             any(runtime.version == "2026.1.1.0.1" and runtime.release_channel == "lts" for runtime in runtimes)
         )
+
+    def test_runtime_versions_sort_numerically(self):
+        versions = ["2024.9.1.10", "2024.14.4.268", "2026.0.0.23"]
+
+        self.assertEqual(
+            sorted(versions, key=_runtime_sort_key, reverse=True), ["2026.0.0.23", "2024.14.4.268", "2024.9.1.10"]
+        )
+
+    def test_selected_lts_runtime_prefers_matching_prefabs_and_license_family(self):
+        install_root = self.project_root / "Shared" / "GameMakerStudio2-LTS2026"
+        runtime_path = install_root / "Cache" / "runtimes" / "runtime-2026.0.0.23"
+        runtime_path.mkdir(parents=True)
+        prefabs = install_root / "Prefabs"
+        prefabs.mkdir()
+        license_path = self.project_root / "Library/Application Support/GameMakerStudio2-LTS2026/user_1/licence.plist"
+        license_path.parent.mkdir(parents=True)
+        license_path.write_text("license", encoding="utf-8")
+
+        discovery = RunnerDiscoveryMixin()
+        discovery.runtime_path = runtime_path
+        with (
+            mock.patch.object(platform, "system", return_value="Darwin"),
+            mock.patch.object(Path, "home", return_value=self.project_root),
+        ):
+            self.assertEqual(discovery.get_prefabs_path(), prefabs)
+            self.assertEqual(discovery.find_license_file(), license_path)
 
 
 if __name__ == "__main__":

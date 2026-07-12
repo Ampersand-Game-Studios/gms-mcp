@@ -7,12 +7,12 @@ Default is dry-run (prints what would be deleted). Use --delete to actually remo
 
 import argparse
 import os
-import shutil
 from pathlib import Path
 import sys
 
 from ..utils import load_json_loose, find_yyp, resolve_project_directory
 from ..exceptions import ProjectNotFoundError, GMSError
+from ..transactions import transactional_rmtree, transactional_unlink
 
 
 def collect_referenced_folders(yyp_data, asset_type):
@@ -47,7 +47,7 @@ def clean_unused_folders(project_root, asset_type, do_delete=False):
             found += 1
             if folder.name.lower() not in referenced_lower:
                 if do_delete:
-                    shutil.rmtree(folder)
+                    transactional_rmtree(folder)
                     print(f"[DELETED] {folder}")
                     deleted += 1
                 else:
@@ -116,7 +116,7 @@ def clean_old_yy_files(project_root: str, do_delete: bool = False) -> tuple[int,
         for file_path in dir_path.rglob("*.old.yy"):
             found += 1
             if do_delete:
-                file_path.unlink()
+                transactional_unlink(file_path)
                 print(f"[DELETED] {file_path}")
                 deleted += 1
             else:

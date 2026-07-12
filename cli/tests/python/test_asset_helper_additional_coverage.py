@@ -197,7 +197,7 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                             )
                         )
                     stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_name"))
-                    stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path"))
+                    stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path_for_project"))
                     stack.enter_context(patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=False))
                     asset_cls = stack.enter_context(patch(f"gms_helpers.asset_cli.create.{class_name}"))
                     asset_cls.return_value.create_files.return_value = relative_path
@@ -222,7 +222,7 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                             )
                         )
                     stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_name"))
-                    stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path"))
+                    stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path_for_project"))
                     asset_cls = stack.enter_context(patch(f"gms_helpers.asset_cli.create.{class_name}"))
                     asset_cls.return_value.create_files.side_effect = RuntimeError("boom")
 
@@ -265,7 +265,7 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                         patch("gms_helpers.asset_creation_flow.validate_asset_creation_safe", return_value=True)
                     )
                     stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_name"))
-                    stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path"))
+                    stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path_for_project"))
                     stack.enter_context(patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=True))
                     handler = stack.enter_context(
                         patch("gms_helpers.asset_creation_flow.handle_maintenance_failure", return_value="post-failed")
@@ -362,7 +362,9 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                         side_effect=[_maintenance_result(False), _maintenance_result(True)],
                     )
                 )
-                stack.enter_context(patch("gms_helpers.asset_cli.delete.validate_asset_creation_safe", return_value=True))
+                stack.enter_context(
+                    patch("gms_helpers.asset_cli.delete.validate_asset_creation_safe", return_value=True)
+                )
                 handler = stack.enter_context(
                     patch("gms_helpers.asset_cli.delete.handle_maintenance_failure", return_value="delete-post-failed")
                 )
@@ -401,7 +403,11 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                 "gms_helpers.asset_cli.maintenance.validate_folder_paths",
                 RuntimeError("paths fail"),
             ),
-            ("maint_fix_issues_command", "gms_helpers.asset_cli.maintenance.run_auto_maintenance", RuntimeError("auto fail")),
+            (
+                "maint_fix_issues_command",
+                "gms_helpers.asset_cli.maintenance.run_auto_maintenance",
+                RuntimeError("auto fail"),
+            ),
         ]
         for func_name, patch_target, exc in command_cases:
             with self.subTest(func=func_name):
@@ -529,7 +535,10 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
         self.assertIn("No orphaned assets found", output)
 
         with (
-            patch("gms_helpers.asset_cli.maintenance.find_orphaned_assets", return_value=[("objects/o_a/o_a.yy", "object")]),
+            patch(
+                "gms_helpers.asset_cli.maintenance.find_orphaned_assets",
+                return_value=[("objects/o_a/o_a.yy", "object")],
+            ),
             patch(
                 "gms_helpers.asset_cli.maintenance.get_keep_patterns",
                 return_value=["o_a"],
@@ -543,7 +552,10 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
         self.assertIn("protected by keep patterns", output)
 
         with (
-            patch("gms_helpers.asset_cli.maintenance.find_orphaned_assets", return_value=[("objects/o_a/o_a.yy", "object")]),
+            patch(
+                "gms_helpers.asset_cli.maintenance.find_orphaned_assets",
+                return_value=[("objects/o_a/o_a.yy", "object")],
+            ),
             patch(
                 "gms_helpers.asset_cli.maintenance.get_keep_patterns",
                 return_value=[],
@@ -567,7 +579,10 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
         self.assertIn("audit fail", output)
 
     def test_main_error_paths(self):
-        with patch.object(sys, "argv", ["asset_helper"]), patch("gms_helpers.asset_cli.parser.validate_working_directory"):
+        with (
+            patch.object(sys, "argv", ["asset_helper"]),
+            patch("gms_helpers.asset_cli.parser.validate_working_directory"),
+        ):
             with self.assertRaises(SystemExit):
                 asset_helper.main()
 

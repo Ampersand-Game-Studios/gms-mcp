@@ -1,195 +1,82 @@
 ---
 name: debug-live
-description: Debug running games with bridge commands and logs
+description: Debug a running game with the MCP bridge's supported commands and buffered logs
 ---
 
 ## When to use
 
-- Sending commands to a running game
-- Reading real-time game logs
-- Live debugging without restarting
-- Inspecting game state during runtime
+- Querying a running game's room or instance state
+- Changing rooms or test globals without restarting
+- Spawning test instances
+- Reading logs emitted through `__mcp_log(...)`
 
-## What is the Bridge?
+## Bridge contract
 
-The bridge is a GameMaker extension that enables two-way communication between gms-mcp and a running game. It allows:
-- Sending GML commands to execute in the game
-- Receiving debug output and logs
-- Inspecting variables and game state
+The bridge exposes a fixed command protocol through MCP. It does not evaluate arbitrary GML. Supported commands are `ping`, `goto_room`, `get_var`, `set_var`, `spawn`, `room_info`, and `instance_count`.
+
+`gm_run_logs` returns buffered `__mcp_log(...)` entries. It is a snapshot call; there is no follow/stream option, and ordinary `show_debug_message(...)` output is not automatically included.
 
 ## Setup
 
-### Installing the Bridge Extension
+Install the bridge and place its controller in the startup room in one transaction. Omit `room_name` only when the `.yyp` has a valid first `RoomOrderNodes` entry.
 
-```bash
-# Install bridge extension to your project
-gms bridge install
-
-# Check installation status
-gms bridge status
-
-# Remove bridge extension
-gms bridge uninstall
+```mcp
+gm_bridge_enable_one_shot {"project_root":".","room_name":"r_start","layer":"Instances"}
+gm_bridge_status {"project_root":"."}
 ```
 
-**Note:** The bridge extension must be installed in your project before it can be used.
+Start the game in the background so the MCP server remains available for bridge calls.
 
-### Verifying Installation
-
-```bash
-gms bridge status
+```mcp
+gm_run {"project_root":".","background":true,"enable_bridge":true}
+gm_run_status {"project_root":"."}
+gm_bridge_status {"project_root":"."}
 ```
 
-Output shows:
-- Whether bridge extension is installed
-- Whether bridge is currently connected
-- Connection details
+Do not send commands until `gm_bridge_status` reports both `server_running: true` and `game_connected: true`.
 
-## Running with Bridge
+## Supported command examples
 
-```bash
-# Start game (bridge connects automatically if installed)
-gms run start
-
-# Check status
-gms run status
-gms bridge status
+```mcp
+gm_run_command {"project_root":".","command":"ping"}
+gm_run_command {"project_root":".","command":"room_info"}
+gm_run_command {"project_root":".","command":"instance_count o_enemy"}
+gm_run_command {"project_root":".","command":"get_var global.score"}
+gm_run_command {"project_root":".","command":"set_var global.debug_mode 1"}
+gm_run_command {"project_root":".","command":"spawn o_enemy 100 100"}
+gm_run_command {"project_root":".","command":"goto_room r_boss_fight"}
 ```
 
-## Sending Commands
+Names passed to `goto_room`, `spawn`, and `instance_count` must be registered GameMaker assets. `get_var` and `set_var` only support global variables.
 
-Execute GML code in the running game:
+## Reading logs
 
-```bash
-# Simple command
-gms run command "show_debug_message('Hello from MCP!')"
+Game code must call `__mcp_log(message)` for an entry to appear here.
 
-# Change a variable
-gms run command "global.debug_mode = true"
-
-# Call a function
-gms run command "player_heal(50)"
-
-# Spawn an instance
-gms run command "instance_create_layer(100, 100, 'Instances', o_enemy)"
+```mcp
+gm_run_logs {"project_root":".","lines":50}
 ```
 
-## Reading Logs
+Call `gm_run_logs` again for a later snapshot. The bridge keeps a bounded in-memory buffer; this workflow does not provide continuous streaming.
 
-View debug output from the running game:
+## Stop and remove
 
-```bash
-# Get recent logs
-gms run logs
-
-# Follow logs (continuous output)
-gms run logs --follow
+```mcp
+gm_run_stop {"project_root":"."}
+gm_bridge_uninstall {"project_root":"."}
 ```
 
-**Logs include:**
-- `show_debug_message()` output
-- Runtime errors
-- Bridge communication messages
+Uninstall the bridge before a release build. Verify removal and the stopped session explicitly:
 
-## Workflow: Live Debugging
-
-1. **Install bridge** (one-time)
-   ```bash
-   gms bridge install
-   ```
-
-2. **Start the game**
-   ```bash
-   gms run start
-   ```
-
-3. **Watch logs in another terminal**
-   ```bash
-   gms run logs --follow
-   ```
-
-4. **Send debug commands**
-   ```bash
-   gms run command "show_debug_message(string(player.hp))"
-   gms run command "global.invincible = true"
-   ```
-
-5. **Stop when done**
-   ```bash
-   gms run stop
-   ```
-
-## Workflow: Testing Specific Scenarios
-
-```bash
-# Start game
-gms run start
-
-# Teleport player to test area
-gms run command "player.x = 500; player.y = 300"
-
-# Give player items for testing
-gms run command "inventory_add(ITEM.SWORD, 1)"
-gms run command "player.gold = 9999"
-
-# Trigger specific state
-gms run command "room_goto(r_boss_fight)"
+```mcp
+gm_bridge_status {"project_root":"."}
+gm_run_status {"project_root":"."}
 ```
 
-## Workflow: Inspecting State
+## Failure checks
 
-```bash
-# Check player state
-gms run command "show_debug_message('HP: ' + string(player.hp))"
-gms run command "show_debug_message('Position: ' + string(player.x) + ',' + string(player.y))"
-
-# Check global state
-gms run command "show_debug_message('Score: ' + string(global.score))"
-
-# Count instances
-gms run command "show_debug_message('Enemies: ' + string(instance_number(o_enemy)))"
-```
-
-## Tips
-
-- Bridge adds minimal overhead - safe for development builds
-- Commands execute in the game's context (access to all variables/functions)
-- Use `show_debug_message()` in commands to see results in logs
-- Bridge auto-reconnects if game restarts
-- Remove bridge from release builds (`gms bridge uninstall`)
-
-## Common Issues
-
-### "Bridge not connected"
-```bash
-# Check if game is running
-gms run status
-
-# Check bridge status
-gms bridge status
-
-# Restart game
-gms run stop
-gms run start
-```
-
-### "Command failed"
-- Check GML syntax in your command
-- Ensure referenced objects/variables exist
-- Check logs for error details
-
-### "Bridge not found"
-```bash
-# Install the bridge extension
-gms bridge install
-
-# Verify
-gms bridge status
-```
-
-## Never Do
-
-- Ship release builds with bridge installed
-- Send commands that crash the game (test in safe ways)
-- Assume bridge commands are instant (there's slight latency)
-- Forget to uninstall bridge before distribution
+- Not installed: run `gm_bridge_enable_one_shot` and verify its returned room and instance ID.
+- Server not running: start with `gm_run` using `background: true` and `enable_bridge: true`.
+- Game not connected: verify the bridge instance is in the startup room's instance layer and creation order.
+- Unknown command: use only the fixed protocol listed above or deliberately extend `__mcp_execute_command` in the installed bridge.
+- Missing logs: confirm game code uses `__mcp_log(...)`, then request another snapshot.

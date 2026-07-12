@@ -25,7 +25,6 @@ Events are specified as `event_type` or `event_type:subtype_number`.
 | `keyrelease` | Key codes | `keyrelease:32` |
 | `collision` | Object name | `collision:o_wall` |
 | `other` | Various | `other:10` (room start) |
-| `async` | Various | `async:75` (HTTP) |
 
 ## Workflow
 
@@ -57,7 +56,10 @@ gms event remove o_player alarm:5 --keep-file  # Keep .gml file
 ### Duplicating an event
 ```bash
 # Copy step:0 to step:1 (begin step)
-gms event duplicate o_player step:0 1
+gms event duplicate o_player step:0 step:1
+
+# Copy collision handling to another existing target object
+gms event duplicate o_player collision:o_enemy collision:o_wall
 ```
 
 ### Validating events
@@ -115,6 +117,7 @@ gms event add o_player keypress:32    # Space pressed
 - Use `event validate` to catch mismatches before they cause issues
 - Use `--keep-file` when removing events if you want to preserve the code
 - Collision events use the object name, not `collision:0`
+- Collision targets must already be registered GameMaker object assets
 - Step event without subtype defaults to `step:0` (normal step)
 
 ## Never Do

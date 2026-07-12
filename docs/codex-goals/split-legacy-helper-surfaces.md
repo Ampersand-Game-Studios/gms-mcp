@@ -6,7 +6,7 @@ Refactor the large GMS MCP helper surfaces into smaller, testable modules while 
 
 ## Starting State
 
-- Repo: `/Users/callum/Projects/Ampersand Game Studios/GMS MCP/gms-mcp`
+- Repo: `Ampersand-Game-Studios/gms-mcp`
 - Branch: `dev`
 - Starting branch status: clean
 - Target modules:

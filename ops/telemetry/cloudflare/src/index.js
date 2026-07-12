@@ -302,7 +302,7 @@ function buildDailyAggregate(dayIso, events) {
 }
 
 async function listKeys(bucket, prefix) {
-  let cursor = undefined;
+  let cursor;
   const keys = [];
   do {
     const page = await bucket.list({ prefix, cursor });
@@ -315,7 +315,7 @@ async function listKeys(bucket, prefix) {
 }
 
 async function listObjects(bucket, prefix) {
-  let cursor = undefined;
+  let cursor;
   const objects = [];
   do {
     const page = await bucket.list({ prefix, cursor });
@@ -349,7 +349,7 @@ async function loadEventsForPrefix(bucket, prefix) {
       try {
         events.push(JSON.parse(trimmed));
       } catch (_error) {
-        continue;
+        // Malformed archived lines are ignored without rejecting the remaining batch.
       }
     }
   }

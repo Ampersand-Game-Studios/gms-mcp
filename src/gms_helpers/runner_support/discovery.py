@@ -10,6 +10,16 @@ from ..utils import find_yyp
 
 
 class RunnerDiscoveryMixin:
+    def _selected_install_root(self) -> Optional[Path]:
+        runtime_path = getattr(self, "runtime_path", None)
+        if not runtime_path:
+            return None
+        path = Path(runtime_path)
+        try:
+            return path.parents[2] if path.parent.name == "runtimes" and path.parent.parent.name == "Cache" else None
+        except IndexError:
+            return None
+
     def find_project_file(self) -> Path:
         """Find the .yyp file in the project root."""
         if self.yyp_file:
@@ -68,6 +78,10 @@ class RunnerDiscoveryMixin:
                 return prefabs_path
 
         system = platform.system()
+        install_root = self._selected_install_root()
+        selected_prefabs = install_root / "Prefabs" if install_root is not None else None
+        if selected_prefabs is not None and selected_prefabs.exists():
+            return selected_prefabs
 
         if system == "Windows":
             # Default Windows location
@@ -119,20 +133,37 @@ class RunnerDiscoveryMixin:
             return matches[0]
 
         system = platform.system()
+        install_root = self._selected_install_root()
+        install_family = install_root.name if install_root is not None else ""
 
         if system == "Windows":
-            base_paths = [
-                Path.home() / "AppData/Roaming/GameMakerStudio2",
-                Path("C:/Users") / os.getenv("USERNAME", "") / "AppData/Roaming/GameMakerStudio2",
-            ]
+            base_paths = []
+            if install_family:
+                base_paths.append(
+                    Path(os.environ.get("APPDATA", str(Path.home() / "AppData/Roaming"))) / install_family
+                )
+            base_paths.extend(
+                [
+                    Path.home() / "AppData/Roaming/GameMakerStudio2",
+                    Path("C:/Users") / os.getenv("USERNAME", "") / "AppData/Roaming/GameMakerStudio2",
+                ]
+            )
         elif system == "Darwin":
-            base_paths = [
-                Path.home() / "Library/Application Support/GameMakerStudio2",
-                Path("/Library/Application Support/GameMakerStudio2"),
-                Path("/Users/Shared/GameMakerStudio2"),
-            ]
+            base_paths = []
+            if install_family:
+                base_paths.append(Path.home() / "Library/Application Support" / install_family)
+            base_paths.extend(
+                [
+                    Path.home() / "Library/Application Support/GameMakerStudio2",
+                    Path("/Library/Application Support/GameMakerStudio2"),
+                    Path("/Users/Shared/GameMakerStudio2"),
+                ]
+            )
         else:  # Linux
-            base_paths = [Path.home() / ".config/GameMakerStudio2"]
+            base_paths = []
+            if install_family:
+                base_paths.append(Path.home() / ".config" / install_family)
+            base_paths.append(Path.home() / ".config/GameMakerStudio2")
 
         for base_path in base_paths:
             if not base_path.exists():

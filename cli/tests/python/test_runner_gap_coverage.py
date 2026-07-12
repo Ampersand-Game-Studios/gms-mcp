@@ -88,7 +88,10 @@ class TestRunnerGapCoverage(unittest.TestCase):
             (sub_root / "gamemaker").mkdir()
             (sub_root / "gamemaker" / "Game.yyp").write_text("{}", encoding="utf-8")
             runner = GameMakerRunner(sub_root)
-            with patch("gms_helpers.runner_support.discovery.find_yyp", side_effect=[SystemExit(), sub_root / "gamemaker" / "Game.yyp"]):
+            with patch(
+                "gms_helpers.runner_support.discovery.find_yyp",
+                side_effect=[SystemExit(), sub_root / "gamemaker" / "Game.yyp"],
+            ):
                 self.assertEqual(runner.find_project_file().name, "Game.yyp")
             self.assertEqual(runner.project_root, (sub_root / "gamemaker").resolve())
 
@@ -157,6 +160,10 @@ class TestRunnerGapCoverage(unittest.TestCase):
         self.assertIn("/lf=/fake/license.plist", normalized_cmd)
         self.assertIn("/rp=/fake/runtime", normalized_cmd)
         self.assertIn("--pf=/fake/Prefabs", normalized_cmd)
+        cache_arg = next(entry for entry in normalized_cmd if entry.startswith("/cache="))
+        temp_arg = next(entry for entry in normalized_cmd if entry.startswith("/temp="))
+        self.assertIn("/gms-mcp/", cache_arg)
+        self.assertEqual(Path(cache_arg.removeprefix("/cache=")).parent, Path(temp_arg.removeprefix("/temp=")).parent)
 
         with patch.object(runner, "find_gamemaker_runtime", return_value=None):
             with self.assertRaises(RuntimeNotFoundError):
@@ -233,6 +240,31 @@ class TestRunnerGapCoverage(unittest.TestCase):
         self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
         self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
         self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
+        self.assertEqual(kwargs["cwd"], str(Path("/fake/game").parent))
+
+        with patch("gms_helpers.runner_process.subprocess.Popen", return_value=SimpleNamespace(pid=2)) as mock_popen:
+            runner._run_igor_command(["/fake/Igor"])
+        _, kwargs = mock_popen.call_args
+        self.assertEqual(kwargs["cwd"], str(runner.project_root))
+        self.assertEqual(kwargs["env"]["DOTNET_PROCESSOR_COUNT"], "1")
+
+        with (
+            patch.dict(os.environ, {"DOTNET_PROCESSOR_COUNT": "8"}, clear=False),
+            patch("gms_helpers.runner_process.subprocess.Popen", return_value=SimpleNamespace(pid=3)) as mock_popen,
+        ):
+            runner._run_igor_command(["/fake/Igor"])
+        self.assertEqual(mock_popen.call_args.kwargs["env"]["DOTNET_PROCESSOR_COUNT"], "1")
+
+        with (
+            patch.dict(os.environ, {"GMS_MCP_IGOR_PROCESSOR_COUNT": "4"}),
+            patch("gms_helpers.runner_process.subprocess.Popen", return_value=SimpleNamespace(pid=4)) as mock_popen,
+        ):
+            runner._run_igor_command(["/fake/Igor"])
+        self.assertEqual(mock_popen.call_args.kwargs["env"]["DOTNET_PROCESSOR_COUNT"], "4")
+
+        with patch.dict(os.environ, {"GMS_MCP_IGOR_PROCESSOR_COUNT": "invalid"}):
+            with self.assertRaisesRegex(ValueError, "between 1 and 256"):
+                runner._run_igor_command(["/fake/Igor"])
 
     def test_streaming_ps_and_wait_helpers(self):
         runner = self._make_runner()
@@ -256,6 +288,18 @@ class TestRunnerGapCoverage(unittest.TestCase):
         )
         self.assertIn("Local run failed", runner._build_stage_failure_message("local run", 3, []))
         self.assertIn("Compile failed", runner._build_stage_failure_message("compile", 4, []))
+        access_violation = ["System.AccessViolationException: unstable runtime"]
+        self.assertTrue(runner._is_retryable_igor_failure(-6, access_violation))
+        self.assertIn(
+            "AccessViolationException", runner._build_stage_failure_message("local run", -6, access_violation)
+        )
+        completed_compile_then_abort = [
+            "Final Compile finished",
+            "Saving IFF file",
+            "Stats : GMA",
+            "System.AccessViolationException",
+        ]
+        self.assertFalse(runner._is_retryable_igor_failure(-6, completed_compile_then_abort))
 
         async_process = SimpleNamespace(stdout=iter(["test run\n"]))
         output_lines, thread = runner._collect_igor_output_async(async_process, "local compile validation")
@@ -311,8 +355,9 @@ class TestRunnerGapCoverage(unittest.TestCase):
 
         completed = SimpleNamespace(returncode=0, stdout="stopped\n")
         with patch.object(runner, "_build_platform_action_command", return_value=["igor", "Stop"]):
-            with patch("gms_helpers.runner_support.macos.subprocess.run", return_value=completed):
+            with patch("gms_helpers.runner_support.macos.subprocess.run", return_value=completed) as stop_run:
                 self.assertTrue(runner._stop_platform_process("Windows"))
+        self.assertEqual(stop_run.call_args.kwargs["env"]["DOTNET_PROCESSOR_COUNT"], "1")
 
         kill_calls = []
 
@@ -330,6 +375,103 @@ class TestRunnerGapCoverage(unittest.TestCase):
             with patch.object(runner, "_terminate_pid", side_effect=lambda pid, _label: terminated.append(pid)):
                 runner._cleanup_macos_validation_helpers(Path("/tmp/game.ios"), Path("/tmp/debug.log"), {1}, set())
         self.assertEqual(sorted(terminated), [2, 3])
+
+    def test_macos_compile_resets_stale_debug_log_before_waiting(self):
+        runner = self._make_runner()
+        debug_log = self.project_root / "output" / "TestGame" / "debug.log"
+        debug_log.parent.mkdir(parents=True)
+        debug_log.write_text("stale prefix\nEntering main loop.\n", encoding="utf-8")
+        fake_process = MagicMock()
+        fake_process.poll.return_value = 0
+        fake_process.returncode = 0
+        output_thread = MagicMock()
+
+        def verify_fresh_log(_process, path, start_offset, timeout_seconds):
+            self.assertEqual(path, debug_log.resolve())
+            self.assertEqual(start_offset, 0)
+            self.assertFalse(debug_log.exists())
+            self.assertEqual(timeout_seconds, 90.0)
+            return True
+
+        with (
+            patch.object(runner, "_build_macos_compile_validation_command", return_value=["igor", "Run"]),
+            patch.object(runner, "_find_macos_validation_helper_pids", return_value=(set(), set())),
+            patch.object(runner, "_run_igor_command", return_value=fake_process),
+            patch.object(runner, "_collect_igor_output_async", return_value=([], output_thread)),
+            patch.object(runner, "_wait_for_macos_main_loop", side_effect=verify_fresh_log),
+            patch.object(runner, "_cleanup_macos_validation_helpers"),
+        ):
+            self.assertTrue(runner._compile_project_once("macOS", "VM"))
+
+        output_thread.join.assert_called_once_with(timeout=5)
+
+    def test_infrastructure_retry_reset_removes_only_project_scoped_igor_state(self):
+        runner = self._make_runner()
+        runner.runtime_path = self.project_root / "runtime"
+        system_temp = self.project_root / "system-temp"
+
+        with patch.object(runner, "_system_temp_root", return_value=system_temp):
+            work_root = runner._igor_work_root()
+            (work_root / "cache").mkdir(parents=True)
+            (work_root / "temp").mkdir()
+            (work_root / "cache" / "poisoned.bin").write_bytes(b"bad")
+            unrelated = system_temp / "unrelated.txt"
+            unrelated.parent.mkdir(parents=True, exist_ok=True)
+            unrelated.write_text("keep", encoding="utf-8")
+
+            runner._reset_igor_transient_state()
+
+        self.assertFalse(work_root.exists())
+        self.assertEqual(unrelated.read_text(encoding="utf-8"), "keep")
+
+    def test_compile_and_run_retry_only_precompile_access_violation(self):
+        runner = self._make_runner()
+        compile_attempts = 0
+
+        def compile_once(*_args):
+            nonlocal compile_attempts
+            compile_attempts += 1
+            runner.last_failure_retryable = compile_attempts == 1
+            return compile_attempts == 2
+
+        with (
+            patch.dict(os.environ, {"GMS_MCP_IGOR_INFRA_ATTEMPTS": "2"}),
+            patch.object(runner, "_compile_project_once", side_effect=compile_once),
+            patch.object(runner, "_reset_igor_transient_state") as compile_reset,
+        ):
+            self.assertTrue(runner.compile_project("macOS", "VM"))
+        self.assertEqual(compile_attempts, 2)
+        self.assertEqual(runner.infrastructure_attempt_count, 2)
+        self.assertTrue(runner.retried_infrastructure_failure)
+        compile_reset.assert_called_once_with()
+
+        run_attempts = 0
+
+        def run_once(*_args):
+            nonlocal run_attempts
+            run_attempts += 1
+            runner.last_failure_retryable = run_attempts == 1
+            return {"ok": run_attempts == 2}
+
+        with (
+            patch.dict(os.environ, {"GMS_MCP_IGOR_INFRA_ATTEMPTS": "2"}),
+            patch.object(runner, "_run_project_classic_approach", side_effect=run_once),
+            patch.object(runner, "_reset_igor_transient_state") as run_reset,
+        ):
+            result = runner.run_project_direct("macOS", "VM", background=True)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["infrastructure_attempt_count"], 2)
+        self.assertTrue(result["retried_infrastructure_failure"])
+        run_reset.assert_called_once_with()
+
+        runner.last_failure_retryable = False
+        with (
+            patch.object(runner, "_compile_project_once", return_value=False) as genuine_failure,
+            patch.object(runner, "_reset_igor_transient_state") as no_reset,
+        ):
+            self.assertFalse(runner.compile_project("macOS", "VM"))
+        genuine_failure.assert_called_once()
+        no_reset.assert_not_called()
 
     def test_compile_and_run_paths(self):
         runner = self._make_runner()

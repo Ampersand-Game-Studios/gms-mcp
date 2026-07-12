@@ -7,7 +7,7 @@ from typing import Any, Dict
 from ..dispatch import _run_with_fallback
 from ..dry_run_policy import _dry_run_policy_blocked_result, _requires_dry_run_for_tool
 from ..mcp_types import Context
-from ..project import _ensure_cli_on_sys_path, _resolve_repo_root
+from ..project import _ensure_cli_on_sys_path, _resolve_project_directory, _resolve_repo_root
 
 
 def register(mcp: Any, ContextType: Any) -> None:
@@ -21,7 +21,6 @@ def register(mcp: Any, ContextType: Any) -> None:
         asset_type: str,
         asset_name: str,
         force: bool = False,
-        clean_refs: bool = False,
         dry_run: bool = True,
         project_root: str = ".",
         ctx: Context | None = None,
@@ -39,12 +38,12 @@ def register(mcp: Any, ContextType: Any) -> None:
                 "Use dry_run=true, add gm_safe_delete to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
             )
 
+        project_directory = _resolve_project_directory(project_root)
         result = safe_delete_asset(
-            project_root=Path(project_root),
+            project_root=project_directory,
             asset_type=asset_type,
             asset_name=asset_name,
             force=force,
-            clean_refs=clean_refs,
             dry_run=dry_run,
         )
         if result.get("blocked"):
@@ -106,44 +105,6 @@ def register(mcp: Any, ContextType: Any) -> None:
 
         return await _run_with_fallback(
             direct_handler=handle_workflow_rename,
-            direct_args=args,
-            cli_args=cli_args,
-            project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
-        )
-
-    @mcp.tool()
-    async def gm_workflow_delete(
-        asset_path: str,
-        dry_run: bool = False,
-        project_root: str = ".",
-        prefer_cli: bool = False,
-        output_mode: str = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
-        ctx: Context | None = None,
-    ) -> Dict[str, Any]:
-        """Delete an asset by .yy path (supports dry-run)."""
-        repo_root = _resolve_repo_root(project_root)
-        _ensure_cli_on_sys_path(repo_root)
-        from gms_helpers.commands.workflow_commands import handle_workflow_delete
-
-        args = argparse.Namespace(asset_path=asset_path, dry_run=dry_run, project_root=project_root)
-        cli_args = ["workflow", "delete", asset_path]
-        if dry_run:
-            cli_args.append("--dry-run")
-        if not dry_run and _requires_dry_run_for_tool("gm_workflow_delete"):
-            return _dry_run_policy_blocked_result(
-                "gm_workflow_delete",
-                "Use dry_run=true, add gm_workflow_delete to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
-            )
-
-        return await _run_with_fallback(
-            direct_handler=handle_workflow_delete,
             direct_args=args,
             cli_args=cli_args,
             project_root=project_root,
@@ -337,7 +298,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         Args:
             name: Sprite name to create
             source: Path to source PNG strip/sheet
-            parent_path: Parent folder path (e.g., "folders/Sprites.yy")
+            parent_path: Existing parent folder path; omit to reuse or create the default Sprites folder
             layout: Strip layout - "horizontal", "vertical", or "grid"
             frame_width: Frame width in pixels (0 = auto-detect)
             frame_height: Frame height in pixels (0 = auto-detect)

@@ -12,7 +12,7 @@ Look up GML function documentation from manual.gamemaker.io with local caching.
 Look up documentation for a specific GML function.
 
 ```bash
-gms doc lookup <function_name> [--refresh]
+gms doc lookup draw_sprite --refresh
 ```
 - `--refresh` - Bypass cache and fetch fresh documentation
 
@@ -37,7 +37,7 @@ gms doc lookup ds_list_add --refresh
 Search for GML functions by name.
 
 ```bash
-gms doc search <query> [--category STRING] [--limit INT]
+gms doc search sprite --category Drawing --limit 20
 ```
 - `--category` - Filter by category (e.g., "Drawing", "Strings")
 - `--limit` - Maximum results (default: 20)
@@ -61,7 +61,7 @@ gms doc search string --limit 50
 List GML functions with filtering.
 
 ```bash
-gms doc list [--category STRING] [--pattern REGEX] [--limit INT]
+gms doc list --category Drawing --pattern "^draw_" --limit 100
 ```
 - `--category` - Filter by category name (partial match)
 - `--pattern` - Filter by regex pattern on function name
@@ -113,7 +113,7 @@ gms doc cache stats
 ### Clear Cache
 
 ```bash
-gms doc cache clear [--functions-only]
+gms doc cache clear --functions-only
 ```
 - `--functions-only` - Only clear cached function docs, keep the index
 

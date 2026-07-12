@@ -130,7 +130,9 @@ class TestCreateCommands(unittest.TestCase):
         args = _create_args("PlayerData", constructor=True)
         with ExitStack() as stack:
             validate_dir = stack.enter_context(
-                patch("gms_helpers.asset_cli.create.validate_asset_directory_structure", return_value=Path("/tmp/project"))
+                patch(
+                    "gms_helpers.asset_cli.create.validate_asset_directory_structure", return_value=Path("/tmp/project")
+                )
             )
             run_maintenance = stack.enter_context(
                 patch(
@@ -142,7 +144,9 @@ class TestCreateCommands(unittest.TestCase):
                 patch("gms_helpers.asset_creation_flow.validate_asset_creation_safe", return_value=True)
             )
             validate_name = stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_name"))
-            validate_parent = stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path"))
+            validate_parent = stack.enter_context(
+                patch("gms_helpers.asset_creation_flow.validate_parent_path_for_project")
+            )
             update_yyp = stack.enter_context(
                 patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=True)
             )
@@ -157,11 +161,14 @@ class TestCreateCommands(unittest.TestCase):
         validate_dir.assert_called_once()
         safe_check.assert_called_once()
         validate_name.assert_called_once_with("PlayerData", "script", allow_constructor=True)
-        validate_parent.assert_called_once_with("folders/Test.yy")
+        validate_parent.assert_called_once_with(Path.cwd(), "folders/Test.yy")
         script_instance.create_files.assert_called_once_with(
-            Path("."), "PlayerData", "folders/Test.yy", is_constructor=True
+            Path.cwd(), "PlayerData", "folders/Test.yy", is_constructor=True
         )
-        update_yyp.assert_called_once_with({"id": {"name": "PlayerData", "path": "scripts/PlayerData/PlayerData.yy"}})
+        update_yyp.assert_called_once_with(
+            {"id": {"name": "PlayerData", "path": "scripts/PlayerData/PlayerData.yy"}},
+            project_root=Path.cwd(),
+        )
         self.assertEqual(run_maintenance.call_count, 2)
 
     def test_create_asset_wrappers_success_paths(self):
@@ -346,7 +353,9 @@ class TestCreateCommands(unittest.TestCase):
                         patch("gms_helpers.asset_creation_flow.validate_asset_creation_safe", return_value=True)
                     )
                     validate_name = stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_name"))
-                    validate_parent = stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path"))
+                    validate_parent = stack.enter_context(
+                        patch("gms_helpers.asset_creation_flow.validate_parent_path_for_project")
+                    )
                     update_yyp = stack.enter_context(
                         patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=True)
                     )
@@ -360,11 +369,14 @@ class TestCreateCommands(unittest.TestCase):
                 self.assertIn(case["success_text"], output)
                 safe_check.assert_called_once()
                 validate_name.assert_called_once_with(case["name"], case["validate_type"])
-                validate_parent.assert_called_once_with("folders/Test.yy")
+                validate_parent.assert_called_once_with(Path.cwd(), "folders/Test.yy")
                 asset_instance.create_files.assert_called_once_with(
-                    Path("."), case["name"], "folders/Test.yy", **case["kwargs"]
+                    Path.cwd(), case["name"], "folders/Test.yy", **case["kwargs"]
                 )
-                update_yyp.assert_called_once_with({"id": {"name": case["name"], "path": case["path"]}})
+                update_yyp.assert_called_once_with(
+                    {"id": {"name": case["name"], "path": case["path"]}},
+                    project_root=Path.cwd(),
+                )
                 self.assertEqual(run_maintenance.call_count, 2)
 
     def test_create_folder_success(self):
@@ -400,7 +412,7 @@ class TestCreateCommands(unittest.TestCase):
             ),
             patch("gms_helpers.asset_creation_flow.validate_asset_creation_safe", return_value=True),
             patch("gms_helpers.asset_creation_flow.validate_name"),
-            patch("gms_helpers.asset_creation_flow.validate_parent_path"),
+            patch("gms_helpers.asset_creation_flow.validate_parent_path_for_project"),
             patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=False),
             patch("gms_helpers.asset_cli.create.SpriteAsset") as sprite_cls,
         ):
@@ -765,7 +777,8 @@ class TestMaintenanceCommands(unittest.TestCase):
         with (
             patch("gms_helpers.asset_cli.maintenance.resolve_project_directory", return_value=Path("/tmp/project")),
             patch(
-                "gms_helpers.asset_cli.maintenance.find_orphaned_assets", return_value=[("objects/o_ghost/o_ghost.yy", "object")]
+                "gms_helpers.asset_cli.maintenance.find_orphaned_assets",
+                return_value=[("objects/o_ghost/o_ghost.yy", "object")],
             ),
             patch("gms_helpers.asset_cli.maintenance.get_keep_patterns", return_value=[]),
             patch(
@@ -785,7 +798,9 @@ class TestMaintenanceCommands(unittest.TestCase):
         self.assertIn("Final deletion from trash folder not yet implemented", output)
         self.assertIn("[ERROR] warn", output)
 
-        with patch("gms_helpers.asset_cli.maintenance.remove_folder_from_yyp", return_value=(True, "Removed folder", [])):
+        with patch(
+            "gms_helpers.asset_cli.maintenance.remove_folder_from_yyp", return_value=(True, "Removed folder", [])
+        ):
             result, output = _capture_output(
                 asset_helper.remove_folder_command,
                 SimpleNamespace(folder_path="folders/Test.yy", force=False, dry_run=True),
@@ -794,7 +809,9 @@ class TestMaintenanceCommands(unittest.TestCase):
         self.assertIn("DRY RUN", output)
 
         folders = [{"name": "Audio", "path": "folders/Audio.yy"}, {"name": "Sprites", "path": "folders/Sprites.yy"}]
-        with patch("gms_helpers.asset_cli.maintenance.list_folders_in_yyp", return_value=(True, folders, "2 folders found")):
+        with patch(
+            "gms_helpers.asset_cli.maintenance.list_folders_in_yyp", return_value=(True, folders, "2 folders found")
+        ):
             result, output = _capture_output(
                 asset_helper.list_folders_command,
                 SimpleNamespace(show_paths=True),

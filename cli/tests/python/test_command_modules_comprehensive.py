@@ -31,7 +31,6 @@ from gms_helpers.commands.event_commands import (
 from gms_helpers.commands.workflow_commands import (
     handle_workflow_duplicate,
     handle_workflow_rename,
-    handle_workflow_delete,
     handle_workflow_swap_sprite,
     handle_workflow_safe_delete,
 )
@@ -122,8 +121,9 @@ class TestWorkflowCommands(unittest.TestCase):
         """Set up test fixtures."""
         self.test_args = Mock()
 
+    @patch("gms_helpers.commands.workflow_commands.transaction_is_active", return_value=True)
     @patch("gms_helpers.commands.workflow_commands.duplicate_asset")
-    def test_handle_workflow_duplicate(self, mock_dup):
+    def test_handle_workflow_duplicate(self, mock_dup, _transaction_active):
         """Test duplicating an asset."""
         mock_dup.return_value = MagicMock(success=True)
         self.test_args.project_root = "."
@@ -134,8 +134,9 @@ class TestWorkflowCommands(unittest.TestCase):
 
         self.assertTrue(result.success)
 
+    @patch("gms_helpers.commands.workflow_commands.transaction_is_active", return_value=True)
     @patch("gms_helpers.commands.workflow_commands.safe_delete_asset")
-    def test_handle_workflow_safe_delete(self, mock_safe_delete):
+    def test_handle_workflow_safe_delete(self, mock_safe_delete, _transaction_active):
         """Test dependency-aware safe delete command handler."""
         mock_safe_delete.return_value = {
             "ok": True,
@@ -146,7 +147,6 @@ class TestWorkflowCommands(unittest.TestCase):
         self.test_args.asset_type = "script"
         self.test_args.asset_name = "scr_test"
         self.test_args.force = True
-        self.test_args.clean_refs = True
         self.test_args.apply = True
 
         result = handle_workflow_safe_delete(self.test_args)

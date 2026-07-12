@@ -6,6 +6,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from .gamemaker_machine_lock import gamemaker_machine_operation
 from .run_session import RunSessionManager
 from .runtime_manager import RuntimeManager
 from .runner_support.artifacts import RunnerArtifactMixin
@@ -41,8 +42,21 @@ class GameMakerRunner(
         self.game_process = None
         self.last_action_label: Optional[str] = None
         self.last_failure_message: Optional[str] = None
+        self.last_failure_retryable = False
+        self.infrastructure_attempt_count = 0
+        self.retried_infrastructure_failure = False
         self._runtime_manager = RuntimeManager(self.project_root)
         self._session_manager = RunSessionManager(self.project_root)
+
+    def compile_project(self, platform_target: Optional[str] = None, runtime_type: str = "VM") -> bool:
+        """Compile while excluding overlapping Igor operations from other projects."""
+        with gamemaker_machine_operation("compile", self.project_root):
+            return super().compile_project(platform_target, runtime_type)
+
+    def stop_game(self) -> Dict[str, Any]:
+        """Serialize game termination against compile and launch operations."""
+        with gamemaker_machine_operation("run-stop", self.project_root):
+            return super().stop_game()
 
 
 # Convenience functions for command-line usage

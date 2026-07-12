@@ -4,16 +4,25 @@ GameMaker Studio Event Helper
 Provides CLI and library functions for managing object events.
 """
 
-import os
-import sys
 import argparse
+import sys
 from pathlib import Path
-from typing import Dict, List, Tuple, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from .utils import load_json_loose, save_json_loose, validate_working_directory
-from .exceptions import GMSError, ProjectNotFoundError, AssetNotFoundError, ValidationError
+from .event_model import (
+    build_event_entry,
+    event_filename,
+    event_filename_from_entry,
+    event_matches,
+    parse_event_filename,
+    parse_event_spec,
+    resolve_collision_object_reference,
+)
+from .exceptions import AssetNotFoundError, GMSError, ValidationError
 from .maintenance.event_sync import sync_object_events
 from .path_safety import project_child_path, validate_resource_name
+from .transactions import transactional_unlink
+from .utils import atomic_write_text, load_json_loose, save_json_loose, validate_working_directory
 
 # ------------------------------------------------------------------
 # Internal Helpers
@@ -22,66 +31,23 @@ from .path_safety import project_child_path, validate_resource_name
 
 def _filename_to_event(filename: str) -> Tuple[Optional[int], Optional[int]]:
     """Convert GML event filename to event type and number."""
-    if not filename.endswith(".gml"):
-        return None, None
-
-    parts = filename[:-4].split("_")
-    if len(parts) != 2:
-        return None, None
-
-    type_map = {
-        "Create": 0,
-        "Destroy": 1,
-        "Alarm": 2,
-        "Step": 3,
-        "Collision": 4,
-        "Keyboard": 5,
-        "Mouse": 6,
-        "Other": 7,
-        "Draw": 8,
-        "KeyPress": 9,
-        "KeyRelease": 10,
-        "Trigger": 11,
-        "CleanUp": 12,
-        "Gesture": 13,
-        "PreCreate": -1,
-    }
-
-    event_type = type_map.get(parts[0])
     try:
-        event_num = int(parts[1])
-        return event_type, event_num
-    except ValueError:
+        spec = parse_event_filename(filename)
+    except ValidationError:
         return None, None
+    return spec.event_type, spec.event_num
 
 
-def _event_to_filename(event_type: int, event_num: int) -> str:
+def _event_to_filename(event_type: int, event_num: int, collision_object_id: Any = None) -> str:
     """Convert event type and number to GML filename."""
-    type_map = {
-        0: "Create",
-        1: "Destroy",
-        2: "Alarm",
-        3: "Step",
-        4: "Collision",
-        5: "Keyboard",
-        6: "Mouse",
-        7: "Other",
-        8: "Draw",
-        9: "KeyPress",
-        10: "KeyRelease",
-        11: "Trigger",
-        12: "CleanUp",
-        13: "Gesture",
-        -1: "PreCreate",
-    }
-    type_name = type_map.get(event_type, "Other")
-    return f"{type_name}_{event_num}.gml"
+    return event_filename(event_type, event_num, collision_object_id)
 
 
-def _object_dir(object_name: str) -> tuple[str, Path]:
+def _object_dir(object_name: str, project_root: str | Path | None = None) -> tuple[str, Path]:
     """Return a validated object name and project-local object directory."""
     object_name = validate_resource_name(object_name, "object")
-    return object_name, project_child_path("objects", object_name, kind=f"object '{object_name}'")
+    root = Path(project_root).resolve() if project_root is not None else Path.cwd().resolve()
+    return object_name, project_child_path("objects", object_name, project_root=root, kind=f"object '{object_name}'")
 
 
 # ------------------------------------------------------------------
@@ -89,9 +55,9 @@ def _object_dir(object_name: str) -> tuple[str, Path]:
 # ------------------------------------------------------------------
 
 
-def list_events(object_name: str) -> List[Dict[str, str]]:
+def list_events(object_name: str, project_root: str | Path | None = None) -> List[Dict[str, Any]]:
     """List all events for an object."""
-    object_name, obj_dir = _object_dir(object_name)
+    object_name, obj_dir = _object_dir(object_name, project_root)
     obj_path = obj_dir / f"{object_name}.yy"
     if not obj_path.exists():
         raise AssetNotFoundError(f"Object '{object_name}' not found")
@@ -111,48 +77,23 @@ def list_events(object_name: str) -> List[Dict[str, str]]:
     for event in event_list:
         e_type = event.get("eventType")
         e_num = event.get("eventNum")
-        filename = _event_to_filename(e_type, e_num)
+        filename = event_filename_from_entry(event)
         print(f"  - {filename}")
-        events.append({"type": e_type, "num": e_num, "filename": filename})
+        item: Dict[str, Any] = {"type": e_type, "num": e_num, "filename": filename}
+        collision_reference = event.get("collisionObjectId")
+        if isinstance(collision_reference, dict):
+            item["collision_object"] = collision_reference.get("name")
+        events.append(item)
 
     return events
 
 
-def add_event(object_name: str, event_spec: str, template: str = "") -> bool:
+def add_event(object_name: str, event_spec: str, template: str = "", project_root: str | Path | None = None) -> bool:
     """Add a new event to an object."""
-    # Parse event spec (e.g. "create", "step:0", "alarm:0")
-    parts = event_spec.lower().split(":")
-    e_type_name = parts[0]
-    e_num = 0
-    if len(parts) > 1:
-        try:
-            e_num = int(parts[1])
-        except ValueError:
-            raise ValidationError(f"Invalid event number in spec: {event_spec}")
+    spec = parse_event_spec(event_spec)
 
-    type_map = {
-        "create": 0,
-        "destroy": 1,
-        "alarm": 2,
-        "step": 3,
-        "collision": 4,
-        "keyboard": 5,
-        "mouse": 6,
-        "other": 7,
-        "draw": 8,
-        "keypress": 9,
-        "keyrelease": 10,
-        "trigger": 11,
-        "cleanup": 12,
-        "gesture": 13,
-    }
-
-    if e_type_name not in type_map:
-        raise ValidationError(f"Unknown event type: {e_type_name}")
-
-    e_type = type_map[e_type_name]
-
-    object_name, obj_dir = _object_dir(object_name)
+    root = Path(project_root).resolve() if project_root is not None else Path.cwd().resolve()
+    object_name, obj_dir = _object_dir(object_name, root)
     obj_path = obj_dir / f"{object_name}.yy"
     if not obj_path.exists():
         raise AssetNotFoundError(f"Object '{object_name}' not found")
@@ -161,34 +102,25 @@ def add_event(object_name: str, event_spec: str, template: str = "") -> bool:
     if not data:
         raise GMSError(f"Failed to load object data for '{object_name}'")
 
+    collision_reference = None
+    if spec.collision_object is not None:
+        collision_reference = resolve_collision_object_reference(root, spec.collision_object)
+
     # Check if event already exists
     event_list = data.get("eventList", [])
     for event in event_list:
-        if event.get("eventType") == e_type and event.get("eventNum") == e_num:
+        if event_matches(event, spec):
             print(f"[WARN] Event {event_spec} already exists for {object_name}")
             return True
 
     # Create the GML file
-    filename = _event_to_filename(e_type, e_num)
+    new_event = build_event_entry(spec, collision_reference)
+    filename = event_filename_from_entry(new_event)
     gml_path = obj_dir / filename
     if not gml_path.exists():
         content = template if template else f"// {filename} event\n"
-        gml_path.write_text(content, encoding="utf-8")
+        atomic_write_text(gml_path, content)
         print(f"[OK] Created event file: {gml_path}")
-
-    # Add to .yy file
-    event_name = filename.replace(".gml", "")
-    new_event = {
-        "$GMEvent": "v1",
-        "%Name": event_name,
-        "collisionObjectId": None,
-        "eventNum": e_num,
-        "eventType": e_type,
-        "isDnD": False,
-        "name": event_name,
-        "resourceType": "GMEvent",
-        "resourceVersion": "2.0",
-    }
 
     if "eventList" not in data:
         data["eventList"] = []
@@ -199,38 +131,16 @@ def add_event(object_name: str, event_spec: str, template: str = "") -> bool:
     return True
 
 
-def remove_event(object_name: str, event_spec: str, keep_file: bool = False) -> bool:
+def remove_event(
+    object_name: str,
+    event_spec: str,
+    keep_file: bool = False,
+    project_root: str | Path | None = None,
+) -> bool:
     """Remove an event from an object."""
-    # Similar parsing to add_event
-    parts = event_spec.lower().split(":")
-    e_type_name = parts[0]
-    e_num = 0
-    if len(parts) > 1:
-        e_num = int(parts[1])
+    spec = parse_event_spec(event_spec)
 
-    type_map = {
-        "create": 0,
-        "destroy": 1,
-        "alarm": 2,
-        "step": 3,
-        "collision": 4,
-        "keyboard": 5,
-        "mouse": 6,
-        "other": 7,
-        "draw": 8,
-        "keypress": 9,
-        "keyrelease": 10,
-        "trigger": 11,
-        "cleanup": 12,
-        "gesture": 13,
-    }
-
-    if e_type_name not in type_map:
-        raise ValidationError(f"Unknown event type: {e_type_name}")
-
-    e_type = type_map[e_type_name]
-
-    object_name, obj_dir = _object_dir(object_name)
+    object_name, obj_dir = _object_dir(object_name, project_root)
     obj_path = obj_dir / f"{object_name}.yy"
     if not obj_path.exists():
         raise AssetNotFoundError(f"Object '{object_name}' not found")
@@ -240,7 +150,8 @@ def remove_event(object_name: str, event_spec: str, keep_file: bool = False) -> 
         raise GMSError(f"Failed to load object data for '{object_name}'")
 
     event_list = data.get("eventList", [])
-    new_event_list = [e for e in event_list if not (e.get("eventType") == e_type and e.get("eventNum") == e_num)]
+    matching_events = [event for event in event_list if event_matches(event, spec)]
+    new_event_list = [event for event in event_list if not event_matches(event, spec)]
 
     if len(new_event_list) == len(event_list):
         print(f"[WARN] Event {event_spec} not found for {object_name}")
@@ -250,56 +161,36 @@ def remove_event(object_name: str, event_spec: str, keep_file: bool = False) -> 
     save_json_loose(obj_path, data)
 
     if not keep_file:
-        filename = _event_to_filename(e_type, e_num)
+        filename = event_filename_from_entry(matching_events[0])
         gml_path = obj_dir / filename
         if gml_path.exists():
-            gml_path.unlink()
+            transactional_unlink(gml_path)
             print(f"[OK] Deleted event file: {gml_path}")
 
     print(f"[OK] Removed event {event_spec} from {object_name}")
     return True
 
 
-def duplicate_event(object_name: str, source_event_spec: str, target_num: int) -> bool:
+def duplicate_event(
+    object_name: str,
+    source_event_spec: str,
+    target_event_spec: str,
+    project_root: str | Path | None = None,
+) -> bool:
     """
     Duplicate an event within an object.
 
     Example:
-      duplicate_event("o_player", "step:0", 1) -> copies Step_0.gml -> Step_1.gml and adds event entry.
+      duplicate_event("o_player", "step:0", "step:1") copies Step_0.gml to Step_1.gml.
+      duplicate_event("o_player", "collision:o_enemy", "collision:o_wall") copies a collision event.
     """
-    # Parse source spec (e.g. "step", "step:0", "alarm:2")
-    parts = (source_event_spec or "").lower().split(":")
-    e_type_name = parts[0]
-    source_num = 0
-    if len(parts) > 1 and parts[1] != "":
-        try:
-            source_num = int(parts[1])
-        except ValueError:
-            raise ValidationError(f"Invalid source event number in spec: {source_event_spec}")
+    source_spec = parse_event_spec(source_event_spec)
+    target_spec = parse_event_spec(target_event_spec)
+    if target_spec.event_type != source_spec.event_type:
+        raise ValidationError("Source and target events must have the same event type")
 
-    type_map = {
-        "create": 0,
-        "destroy": 1,
-        "alarm": 2,
-        "step": 3,
-        "collision": 4,
-        "keyboard": 5,
-        "mouse": 6,
-        "other": 7,
-        "draw": 8,
-        "keypress": 9,
-        "keyrelease": 10,
-        "trigger": 11,
-        "cleanup": 12,
-        "gesture": 13,
-    }
-
-    if e_type_name not in type_map:
-        raise ValidationError(f"Unknown event type: {e_type_name}")
-
-    e_type = type_map[e_type_name]
-
-    object_name, obj_dir = _object_dir(object_name)
+    root = Path(project_root).resolve() if project_root is not None else Path.cwd().resolve()
+    object_name, obj_dir = _object_dir(object_name, root)
     obj_path = obj_dir / f"{object_name}.yy"
     if not obj_path.exists():
         raise AssetNotFoundError(f"Object '{object_name}' not found")
@@ -309,17 +200,26 @@ def duplicate_event(object_name: str, source_event_spec: str, target_num: int) -
         raise GMSError(f"Failed to load object data for '{object_name}'")
 
     # Ensure source exists in eventList (or at least on disk)
-    source_filename = _event_to_filename(e_type, source_num)
-    target_filename = _event_to_filename(e_type, int(target_num))
+    source_collision_reference = None
+    if source_spec.collision_object is not None:
+        source_collision_reference = resolve_collision_object_reference(root, source_spec.collision_object)
+    target_collision_reference = None
+    if target_spec.collision_object is not None:
+        target_collision_reference = resolve_collision_object_reference(root, target_spec.collision_object)
+
+    source_entry = build_event_entry(source_spec, source_collision_reference)
+    target_entry = build_event_entry(target_spec, target_collision_reference)
+    source_filename = event_filename_from_entry(source_entry)
+    target_filename = event_filename_from_entry(target_entry)
 
     event_list = data.get("eventList", []) or []
-    has_source_entry = any(e.get("eventType") == e_type and e.get("eventNum") == source_num for e in event_list)
+    has_source_entry = any(event_matches(event, source_spec) for event in event_list)
     if not has_source_entry and not (obj_dir / source_filename).exists():
         raise ValidationError(f"Source event '{source_event_spec}' not found for {object_name}")
 
     # If target already exists, treat as success
-    if any(e.get("eventType") == e_type and e.get("eventNum") == int(target_num) for e in event_list):
-        print(f"[WARN] Event {e_type_name}:{target_num} already exists for {object_name}")
+    if any(event_matches(event, target_spec) for event in event_list):
+        print(f"[WARN] Event {target_spec.canonical} already exists for {object_name}")
         return True
 
     # Copy or create the target GML file
@@ -327,49 +227,17 @@ def duplicate_event(object_name: str, source_event_spec: str, target_num: int) -
     dst_gml = obj_dir / target_filename
     if not dst_gml.exists():
         if src_gml.exists():
-            dst_gml.write_text(src_gml.read_text(encoding="utf-8"), encoding="utf-8")
+            atomic_write_text(dst_gml, src_gml.read_text(encoding="utf-8"))
         else:
-            dst_gml.write_text(f"// {target_filename} event\n", encoding="utf-8")
+            atomic_write_text(dst_gml, f"// {target_filename} event\n")
         print(f"[OK] Created event file: {dst_gml}")
-
-    # Add event entry to .yy (use modern GMEvent shape)
-    type_name_map = {
-        0: "Create",
-        1: "Destroy",
-        2: "Alarm",
-        3: "Step",
-        4: "Collision",
-        5: "Keyboard",
-        6: "Mouse",
-        7: "Other",
-        8: "Draw",
-        9: "KeyPress",
-        10: "KeyRelease",
-        11: "Trigger",
-        12: "CleanUp",
-        13: "Gesture",
-        -1: "PreCreate",
-    }
-    type_name = type_name_map.get(e_type, "Other")
-    new_event_name = f"{type_name}_{int(target_num)}"
-    new_event = {
-        "$GMEvent": "v1",
-        "%Name": new_event_name,
-        "collisionObjectId": None,
-        "eventNum": int(target_num),
-        "eventType": e_type,
-        "isDnD": False,
-        "name": new_event_name,
-        "resourceType": "GMEvent",
-        "resourceVersion": "2.0",
-    }
 
     if "eventList" not in data or data["eventList"] is None:
         data["eventList"] = []
-    data["eventList"].append(new_event)
+    data["eventList"].append(target_entry)
     save_json_loose(obj_path, data)
 
-    print(f"[OK] Duplicated event {source_event_spec} -> {e_type_name}:{target_num} for {object_name}")
+    print(f"[OK] Duplicated event {source_event_spec} -> {target_event_spec} for {object_name}")
     return True
 
 

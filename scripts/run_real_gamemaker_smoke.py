@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import fnmatch
+import hashlib
 import json
 import os
 import shutil
@@ -22,10 +23,12 @@ if str(SRC_ROOT) not in sys.path:
 
 from gms_helpers.runtime_manager import RuntimeManager
 from gms_helpers.transactions import validate_project_after_mutation
+from gms_helpers.utils import load_json_loose
 from gms_mcp.gamemaker_mcp_server import build_server
 
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
+_MIN_COMPILE_TIMEOUT_SECONDS = 120
 _COPY_IGNORE = {
     ".git",
     ".gms_mcp",
@@ -89,17 +92,29 @@ def _find_default_project() -> Path | None:
 
 def _validate_source_project(project_root: Path) -> str | None:
     if not project_root.exists() or not project_root.is_dir():
-        return f"GameMaker smoke project not found: {project_root}"
+        return "GameMaker smoke project not found."
     yyp_files = sorted(project_root.glob("*.yyp"))
     if not yyp_files:
-        return f"GameMaker smoke project has no .yyp file: {project_root}"
+        return "GameMaker smoke project has no .yyp file."
     if len(yyp_files) > 1:
-        return f"GameMaker smoke project must contain exactly one .yyp file: {project_root}"
+        return "GameMaker smoke project must contain exactly one .yyp file."
     validation = validate_project_after_mutation(project_root)
     if not validation.success:
-        first_error = validation.errors[0] if validation.errors else "unknown validation error"
-        return f"GameMaker smoke project failed preflight validation: {first_error}"
+        return "GameMaker smoke project failed preflight validation."
     return None
+
+
+def _source_project_provenance(project_root: Path) -> Dict[str, str]:
+    """Return privacy-safe identity fields for a validated, single-YYP fixture."""
+    yyp_path = next(project_root.glob("*.yyp")).resolve()
+    project = load_json_loose(yyp_path)
+    metadata = project.get("MetaData") if isinstance(project, dict) else None
+    ide_version = str(metadata.get("IDEVersion") or "") if isinstance(metadata, dict) else ""
+    return {
+        "source_yyp_name": yyp_path.name,
+        "source_yyp_sha256": hashlib.sha256(yyp_path.read_bytes()).hexdigest(),
+        "source_ide_version": ide_version,
+    }
 
 
 def _copy_ignore(_directory: str, names: list[str]) -> set[str]:
@@ -114,27 +129,67 @@ def _copy_project(source: Path, work_root: Path) -> Path:
     return destination
 
 
-def _runtime_report(project_root: Path) -> Dict[str, Any]:
-    runtime = RuntimeManager(project_root).select()
+def _runtime_report(project_root: Path, expected_version: str = "") -> Dict[str, Any]:
+    manager = RuntimeManager(project_root)
+    runtime = None
+    if expected_version:
+        runtime = next(
+            (
+                candidate
+                for candidate in manager.list_installed()
+                if candidate.is_valid and _runtime_version_matches(candidate.version, expected_version)
+            ),
+            None,
+        )
+        if runtime is None:
+            runtime = manager.select()
+    else:
+        runtime = manager.select()
     if not runtime:
         return {
             "ok": False,
-            "message": "No GameMaker runtime discovered.",
+            "message": (
+                f"No valid GameMaker runtime matches {expected_version!r}."
+                if expected_version
+                else "No GameMaker runtime discovered."
+            ),
         }
     return {
         "ok": bool(runtime.is_valid),
         "version": runtime.version,
         "channel": getattr(runtime, "release_channel", getattr(runtime, "channel", "unknown")),
-        "path": runtime.path,
-        "igor_path": runtime.igor_path,
-        "message": "GameMaker runtime discovered." if runtime.is_valid else "GameMaker runtime exists but Igor is missing.",
+        "message": "GameMaker runtime discovered."
+        if runtime.is_valid
+        else "GameMaker runtime exists but Igor is missing.",
     }
+
+
+def _certification_report(
+    result: Dict[str, Any], *, fixture: Dict[str, Any], runtime: Dict[str, Any]
+) -> Dict[str, Any]:
+    """Allowlist public certification fields so CI artifacts never expose host paths."""
+    report: Dict[str, Any] = {
+        "ok": bool(result.get("ok")),
+        "status": str(result.get("status") or ("passed" if result.get("ok") else "failed")),
+        "fixture": fixture,
+        "runtime": runtime,
+    }
+    for field in ("stage", "message"):
+        value = result.get(field)
+        if isinstance(value, str) and value:
+            report[field] = value
+    checks = result.get("checks")
+    if isinstance(checks, dict):
+        report["checks"] = checks
+    return report
 
 
 def _runtime_version_matches(version: str, expected: str) -> bool:
     if not expected:
         return True
-    return version == expected or version.startswith(expected) or fnmatch.fnmatch(version, expected)
+    if any(marker in expected for marker in ("*", "?", "[")):
+        return fnmatch.fnmatch(version, expected)
+    return version == expected
 
 
 async def _run_smoke(project_root: Path) -> Dict[str, Any]:
@@ -183,9 +238,187 @@ async def _run_smoke(project_root: Path) -> Dict[str, Any]:
     if not isinstance(pending, dict) or not pending.get("required"):
         return {"ok": False, "stage": "gm_sprite_add_frame_pending", "result": add_frame}
 
+    previous_verify_mode = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY")
+    os.environ["GMS_MCP_POST_MUTATION_VERIFY"] = "off"
+    try:
+        create_collision_source = await call_tool(
+            "gm_create_object",
+            {
+                "name": "o_real_smoke_collision_source",
+                "project_root": str(project_root),
+                "skip_maintenance": True,
+            },
+        )
+        create_collision_target = await call_tool(
+            "gm_create_object",
+            {
+                "name": "o_real_smoke_collision_target",
+                "project_root": str(project_root),
+                "skip_maintenance": True,
+            },
+        )
+        create_room_order_source = await call_tool(
+            "gm_create_room",
+            {
+                "name": "r_real_smoke_order_source",
+                "project_root": str(project_root),
+                "skip_maintenance": True,
+            },
+        )
+    finally:
+        if previous_verify_mode is None:
+            os.environ.pop("GMS_MCP_POST_MUTATION_VERIFY", None)
+        else:
+            os.environ["GMS_MCP_POST_MUTATION_VERIFY"] = previous_verify_mode
+
+    if not create_collision_source.get("ok"):
+        return {"ok": False, "stage": "gm_create_collision_source", "result": create_collision_source}
+    if not create_collision_target.get("ok"):
+        return {"ok": False, "stage": "gm_create_collision_target", "result": create_collision_target}
+    if not create_room_order_source.get("ok"):
+        return {"ok": False, "stage": "gm_create_room_order_source", "result": create_room_order_source}
+
+    collision_event = await call_tool(
+        "gm_event_add",
+        {
+            "object": "o_real_smoke_collision_source",
+            "event": "collision:o_real_smoke_collision_target",
+            "project_root": str(project_root),
+        },
+    )
+    if not collision_event.get("ok"):
+        return {"ok": False, "stage": "gm_event_add_collision", "result": collision_event}
+    collision_transaction = (
+        collision_event.get("transaction") if isinstance(collision_event.get("transaction"), dict) else {}
+    )
+    collision_policy = (
+        collision_transaction.get("verification_policy") if isinstance(collision_transaction, dict) else {}
+    )
+    if not isinstance(collision_policy, dict) or collision_policy.get("action") != "defer":
+        return {"ok": False, "stage": "gm_event_add_collision_policy", "result": collision_event}
+
+    source_object_path = project_root / "objects" / "o_real_smoke_collision_source" / "o_real_smoke_collision_source.yy"
+    source_object = load_json_loose(source_object_path)
+    if not isinstance(source_object, dict):
+        return {
+            "ok": False,
+            "stage": "gm_event_add_collision_schema",
+            "error": f"Could not parse GameMaker object metadata: {source_object_path}",
+        }
+    expected_collision_id = {
+        "name": "o_real_smoke_collision_target",
+        "path": "objects/o_real_smoke_collision_target/o_real_smoke_collision_target.yy",
+    }
+    raw_event_list = source_object.get("eventList")
+    event_list: list[Any] = raw_event_list if isinstance(raw_event_list, list) else []
+    collision_reference_emitted = any(
+        isinstance(event, dict) and event.get("collisionObjectId") == expected_collision_id for event in event_list
+    )
+    collision_gml = source_object_path.parent / "Collision_o_real_smoke_collision_target.gml"
+    if not collision_reference_emitted or not collision_gml.is_file():
+        return {
+            "ok": False,
+            "stage": "gm_event_add_collision_schema",
+            "result": collision_event,
+            "expected_collision_id": expected_collision_id,
+        }
+
     flush = await call_tool("gm_verification_flush", {"project_root": str(project_root)})
     if not flush.get("ok") or not flush.get("compiled"):
         return {"ok": False, "stage": "gm_verification_flush", "result": flush}
+
+    previous_verify_mode = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY")
+    os.environ["GMS_MCP_POST_MUTATION_VERIFY"] = "off"
+    try:
+        duplicate_room = await call_tool(
+            "gm_workflow_duplicate",
+            {
+                "asset_path": "rooms/r_real_smoke_order_source/r_real_smoke_order_source.yy",
+                "new_name": "r_real_smoke_order_copy",
+                "yes": True,
+                "project_root": str(project_root),
+            },
+        )
+        delete_room_source = await call_tool(
+            "gm_safe_delete",
+            {
+                "asset_type": "room",
+                "asset_name": "r_real_smoke_order_source",
+                "force": True,
+                "dry_run": False,
+                "project_root": str(project_root),
+            },
+        )
+    finally:
+        if previous_verify_mode is None:
+            os.environ.pop("GMS_MCP_POST_MUTATION_VERIFY", None)
+        else:
+            os.environ["GMS_MCP_POST_MUTATION_VERIFY"] = previous_verify_mode
+
+    if not duplicate_room.get("ok"):
+        return {"ok": False, "stage": "gm_workflow_duplicate_room", "result": duplicate_room}
+    if not delete_room_source.get("ok"):
+        return {"ok": False, "stage": "gm_safe_delete_room", "result": delete_room_source}
+    project_data = load_json_loose(next(project_root.glob("*.yyp")))
+    room_order = project_data.get("RoomOrderNodes", []) if isinstance(project_data, dict) else []
+    room_order_names = [
+        entry.get("roomId", {}).get("name")
+        for entry in room_order
+        if isinstance(entry, dict) and isinstance(entry.get("roomId"), dict)
+    ]
+    if "r_real_smoke_order_copy" not in room_order_names or "r_real_smoke_order_source" in room_order_names:
+        return {
+            "ok": False,
+            "stage": "room_order_duplicate_delete_schema",
+            "room_order_names": room_order_names,
+        }
+
+    rename_collision_target = await call_tool(
+        "gm_workflow_rename",
+        {
+            "asset_path": "objects/o_real_smoke_collision_target/o_real_smoke_collision_target.yy",
+            "new_name": "o_real_smoke_collision_renamed",
+            "project_root": str(project_root),
+        },
+    )
+    if not rename_collision_target.get("ok"):
+        return {"ok": False, "stage": "gm_workflow_rename_collision_target", "result": rename_collision_target}
+    rename_transaction = (
+        rename_collision_target.get("transaction")
+        if isinstance(rename_collision_target.get("transaction"), dict)
+        else {}
+    )
+    rename_compile = rename_transaction.get("compile_verification") if isinstance(rename_transaction, dict) else {}
+    if not isinstance(rename_compile, dict) or not rename_compile.get("ok"):
+        return {"ok": False, "stage": "gm_workflow_rename_collision_compile", "result": rename_collision_target}
+
+    renamed_source_object = load_json_loose(source_object_path)
+    renamed_collision_id = {
+        "name": "o_real_smoke_collision_renamed",
+        "path": "objects/o_real_smoke_collision_renamed/o_real_smoke_collision_renamed.yy",
+    }
+    renamed_events = renamed_source_object.get("eventList", []) if isinstance(renamed_source_object, dict) else []
+    renamed_event = next(
+        (
+            event
+            for event in renamed_events
+            if isinstance(event, dict) and event.get("collisionObjectId") == renamed_collision_id
+        ),
+        None,
+    )
+    renamed_collision_gml = source_object_path.parent / "Collision_o_real_smoke_collision_renamed.gml"
+    if (
+        not isinstance(renamed_event, dict)
+        or renamed_event.get("%Name") != "Collision_o_real_smoke_collision_renamed"
+        or renamed_event.get("name") != "Collision_o_real_smoke_collision_renamed"
+        or not renamed_collision_gml.is_file()
+        or collision_gml.exists()
+    ):
+        return {
+            "ok": False,
+            "stage": "collision_target_rename_schema",
+            "result": rename_collision_target,
+        }
 
     return {
         "ok": True,
@@ -195,11 +428,24 @@ async def _run_smoke(project_root: Path) -> Dict[str, Any]:
             "high_risk_mutation_compiled": True,
             "batchable_mutation_deferred": True,
             "deferred_batch_flushed": True,
+            "collision_reference_emitted": True,
+            "collision_event_compiled": True,
+            "collision_target_rename_schema": True,
+            "collision_target_rename_compiled": True,
+            "room_order_duplicate_delete_schema": True,
+            "room_order_changes_compiled": True,
         },
         "results": {
             "gm_create_sprite": create_sprite,
             "gm_sprite_add_frame": add_frame,
+            "gm_create_collision_source": create_collision_source,
+            "gm_create_collision_target": create_collision_target,
+            "gm_create_room_order_source": create_room_order_source,
+            "gm_event_add_collision": collision_event,
             "gm_verification_flush": flush,
+            "gm_workflow_duplicate_room": duplicate_room,
+            "gm_safe_delete_room": delete_room_source,
+            "gm_workflow_rename_collision_target": rename_collision_target,
         },
     }
 
@@ -225,7 +471,9 @@ def parse_args() -> argparse.Namespace:
         help="Directory for the mutable project copy. Defaults to a temporary directory.",
     )
     parser.add_argument("--keep-workdir", action="store_true", help="Keep the copied project after the smoke.")
-    parser.add_argument("--required", action="store_true", help="Fail instead of skipping when prerequisites are absent.")
+    parser.add_argument(
+        "--required", action="store_true", help="Fail instead of skipping when prerequisites are absent."
+    )
     parser.add_argument(
         "--fixture-name",
         default=os.environ.get("GMS_MCP_REAL_SMOKE_FIXTURE_NAME", "default"),
@@ -238,7 +486,12 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument("--platform", default="", help="Optional GameMaker platform override for compile verification.")
     parser.add_argument("--runtime", default="", help="Optional GameMaker runtime override for compile verification.")
-    parser.add_argument("--timeout-seconds", type=int, default=0, help="Optional compile timeout override.")
+    parser.add_argument(
+        "--timeout-seconds",
+        type=int,
+        default=0,
+        help="Optional compile timeout override; values below the platform's internal validation bound are rejected.",
+    )
     return parser.parse_args()
 
 
@@ -262,18 +515,26 @@ def main() -> int:
         )
 
     source_project = source_project.resolve()
-    fixture["source_project"] = str(source_project)
     validation_error = _validate_source_project(source_project)
     if validation_error:
         return _skip(validation_error, required=required, output_path=output_path, fixture=fixture)
+    fixture.update(_source_project_provenance(source_project))
 
-    runtime_report = _runtime_report(source_project)
+    runtime_report = _runtime_report(source_project, expected_runtime_version)
     if not runtime_report["ok"]:
         return _skip(str(runtime_report["message"]), required=required, output_path=output_path, fixture=fixture)
     runtime_version = str(runtime_report.get("version") or "")
     if expected_runtime_version and not _runtime_version_matches(runtime_version, expected_runtime_version):
         return _fail(
             f"GameMaker runtime version {runtime_version!r} does not match fixture expectation {expected_runtime_version!r}.",
+            output_path=output_path,
+            fixture=fixture,
+            runtime=runtime_report,
+        )
+    if 0 < args.timeout_seconds < _MIN_COMPILE_TIMEOUT_SECONDS:
+        return _fail(
+            f"Compile timeout must be 0 (default) or at least {_MIN_COMPILE_TIMEOUT_SECONDS} seconds "
+            "so platform validation can stop and clean up safely.",
             output_path=output_path,
             fixture=fixture,
             runtime=runtime_report,
@@ -291,14 +552,21 @@ def main() -> int:
     work_root.mkdir(parents=True, exist_ok=True)
     project_copy = _copy_project(source_project, work_root)
 
-    previous_env = {key: os.environ.get(key) for key in (
-        "GMS_MCP_POST_MUTATION_VERIFY",
-        "GMS_MCP_VERIFY_COMPILE_AFTER_MUTATION",
-        "GMS_MCP_POST_MUTATION_PLATFORM",
-        "GMS_MCP_POST_MUTATION_RUNTIME",
-        "GMS_MCP_POST_MUTATION_VERIFY_TIMEOUT_SECONDS",
-    )}
+    previous_env = {
+        key: os.environ.get(key)
+        for key in (
+            "GMS_MCP_POST_MUTATION_VERIFY",
+            "GMS_MCP_VERIFY_COMPILE_AFTER_MUTATION",
+            "GMS_MCP_POST_MUTATION_PLATFORM",
+            "GMS_MCP_POST_MUTATION_RUNTIME",
+            "GMS_MCP_POST_MUTATION_VERIFY_TIMEOUT_SECONDS",
+            "GMS_MCP_TOOLSETS",
+            "GMS_RUNTIME_VERSION",
+        )
+    }
     os.environ["GMS_MCP_POST_MUTATION_VERIFY"] = "smart"
+    os.environ["GMS_MCP_TOOLSETS"] = "all"
+    os.environ["GMS_RUNTIME_VERSION"] = runtime_version
     os.environ.pop("GMS_MCP_VERIFY_COMPILE_AFTER_MUTATION", None)
     if args.platform:
         os.environ["GMS_MCP_POST_MUTATION_PLATFORM"] = args.platform
@@ -318,13 +586,9 @@ def main() -> int:
         if temp_context and not args.keep_workdir:
             temp_context.cleanup()
 
-    result.setdefault("runtime", runtime_report)
-    result.setdefault("source_project", str(source_project))
-    result.setdefault("fixture", fixture)
-    if args.keep_workdir or args.work_root is not None:
-        result["work_project"] = str(project_copy)
-
-    _write_report(output_path, result)
+    result.setdefault("status", "passed" if result.get("ok") else "failed")
+    report = _certification_report(result, fixture=fixture, runtime=runtime_report)
+    _write_report(output_path, report)
 
     if result.get("ok"):
         print("[OK] Real GameMaker smart verification smoke passed.")

@@ -66,24 +66,6 @@ _DIAGNOSTIC_DEPTHS = frozenset({"quick", "deep"})
 _REFERENCE_SCOPES = frozenset({"all", "gml", "yy", "scripts", "objects", "extensions", "datafiles"})
 _RUNTIMES = frozenset({"VM", "YYC", "vm", "yyc"})
 _PLATFORMS = frozenset({"Windows", "macOS", "Linux", "HTML5", "Android", "iOS", "GX.games"})
-_EVENT_TYPES = frozenset(
-    {
-        "create",
-        "destroy",
-        "alarm",
-        "step",
-        "collision",
-        "keyboard",
-        "mouse",
-        "other",
-        "draw",
-        "keypress",
-        "keyrelease",
-        "trigger",
-        "cleanup",
-        "gesture",
-    }
-)
 _ANIMCURVE_TYPES = frozenset({"linear", "smooth", "ease_in", "ease_out"})
 _PATH_TYPES = frozenset({"straight", "smooth", "circle"})
 _SPRITE_STRIP_LAYOUTS = frozenset({"horizontal", "vertical", "grid"})
@@ -92,7 +74,6 @@ _BOOLEAN_FIELDS = frozenset(
         "auto",
         "background",
         "bold",
-        "clean_refs",
         "closed",
         "delete",
         "dry_run",
@@ -272,12 +253,6 @@ _OPERATION_MODELS: dict[str, OperationModel] = {
         float_ranges={"length": (0.0, None), "playback_speed": (0.0, None)},
     ),
     "gm_create_note": _create_model("note"),
-    "gm_asset_delete": _model(
-        writes=True,
-        required=("asset_type", "name"),
-        choices={"asset_type": _ASSET_TYPES},
-        dynamic_asset_names={"name": "asset_type"},
-    ),
     "gm_event_add": _model(
         writes=True,
         required=("object", "event"),
@@ -292,10 +267,9 @@ _OPERATION_MODELS: dict[str, OperationModel] = {
     ),
     "gm_event_duplicate": _model(
         writes=True,
-        required=("object", "source_event", "target_num"),
+        required=("object", "source_event", "target_event"),
         asset_names={"object": "object"},
-        event_specs=("source_event",),
-        int_ranges={"target_num": (0, None)},
+        event_specs=("source_event", "target_event"),
     ),
     "gm_event_fix": _model(writes=True, required=("object",), asset_names={"object": "object"}),
     "gm_room_ops_duplicate": _model(
@@ -354,7 +328,6 @@ _OPERATION_MODELS: dict[str, OperationModel] = {
         asset_paths={"asset_path": None},
         inferred_asset_names={"new_name": "asset_path"},
     ),
-    "gm_workflow_delete": _model(writes=True, required=("asset_path",), asset_paths={"asset_path": None}),
     "gm_workflow_swap_sprite": _model(
         writes=True,
         required=("asset_path", "png"),
@@ -537,20 +510,32 @@ def _validate_png_path(value: Any, label: str, errors: ValidationErrorList) -> N
         errors.append({"field": label, "message": "must point to a PNG file"})
 
 
-def _validate_parent_path(value: Any, label: str, errors: ValidationErrorList) -> None:
+def _validate_parent_path(value: Any, label: str, errors: ValidationErrorList, *, project_root: Any = None) -> None:
     candidate = str(value).strip() if value is not None else ""
     if not candidate:
         return
     normalized = candidate.replace("\\", "/")
     path = Path(normalized)
     windows_path = PureWindowsPath(candidate)
-    if path.is_absolute() or windows_path.is_absolute() or bool(windows_path.drive) or any(
-        part in {"", ".", ".."} for part in path.parts
+    if (
+        path.is_absolute()
+        or windows_path.is_absolute()
+        or bool(windows_path.drive)
+        or any(part in {"", ".", ".."} for part in path.parts)
     ):
         errors.append({"field": label, "message": "must be a safe project-relative folder path"})
         return
     if not (normalized.startswith("folders/") and normalized.endswith(".yy")):
         errors.append({"field": label, "message": "must be empty or a GameMaker folder path like folders/Foo.yy"})
+        return
+    if project_root not in (None, ""):
+        try:
+            from gms_helpers.exceptions import GMSError
+            from gms_helpers.utils import validate_parent_path_for_project
+
+            validate_parent_path_for_project(project_root, normalized)
+        except GMSError as exc:
+            errors.append({"field": label, "message": str(exc)})
 
 
 def _validate_folder_path(value: Any, label: str, errors: ValidationErrorList) -> None:
@@ -561,8 +546,11 @@ def _validate_folder_path(value: Any, label: str, errors: ValidationErrorList) -
     normalized = candidate.replace("\\", "/")
     path = Path(normalized)
     windows_path = PureWindowsPath(candidate)
-    if path.is_absolute() or windows_path.is_absolute() or bool(windows_path.drive) or any(
-        part in {"", ".", ".."} for part in path.parts
+    if (
+        path.is_absolute()
+        or windows_path.is_absolute()
+        or bool(windows_path.drive)
+        or any(part in {"", ".", ".."} for part in path.parts)
     ):
         errors.append({"field": label, "message": "must be a safe project-relative folder path"})
         return
@@ -571,24 +559,47 @@ def _validate_folder_path(value: Any, label: str, errors: ValidationErrorList) -
 
 
 def _validate_event_spec(value: Any, label: str, errors: ValidationErrorList) -> None:
-    candidate = str(value).strip().lower() if value is not None else ""
-    if not candidate:
-        errors.append({"field": label, "message": "must not be empty"})
-        return
-    parts = candidate.split(":")
-    if len(parts) > 2 or parts[0] not in _EVENT_TYPES:
-        errors.append({"field": label, "message": "must be an event type like create or step:0"})
-        return
-    if len(parts) == 2:
-        try:
-            int(parts[1])
-        except ValueError:
-            errors.append({"field": label, "message": "event number must be an integer"})
+    try:
+        from gms_helpers.event_model import parse_event_spec
+        from gms_helpers.exceptions import GMSError
+
+        parse_event_spec(value)
+    except GMSError as exc:
+        errors.append({"field": label, "message": str(exc)})
 
 
-def _validate_choices(
-    args: Mapping[str, Any], field: str, choices: Iterable[Any], errors: ValidationErrorList
-) -> None:
+def _validate_collision_target_exists(arguments: Mapping[str, Any], field: str, errors: ValidationErrorList) -> None:
+    project_root = arguments.get("project_root")
+    if project_root in (None, "") or field not in arguments:
+        return
+    try:
+        from gms_helpers.event_model import parse_event_spec, resolve_collision_object_reference
+        from gms_helpers.exceptions import GMSError
+
+        spec = parse_event_spec(arguments[field])
+        if spec.collision_object is not None:
+            resolve_collision_object_reference(project_root, spec.collision_object)
+    except GMSError as exc:
+        if not any(error["field"] == field for error in errors):
+            errors.append({"field": field, "message": str(exc)})
+
+
+def _validate_duplicate_event_pair(arguments: Mapping[str, Any], errors: ValidationErrorList) -> None:
+    if "source_event" not in arguments or "target_event" not in arguments:
+        return
+    try:
+        from gms_helpers.event_model import parse_event_spec
+        from gms_helpers.exceptions import GMSError
+
+        source = parse_event_spec(arguments["source_event"])
+        target = parse_event_spec(arguments["target_event"])
+        if source.event_type != target.event_type:
+            errors.append({"field": "target_event", "message": "must use the same event type as source_event"})
+    except GMSError:
+        return
+
+
+def _validate_choices(args: Mapping[str, Any], field: str, choices: Iterable[Any], errors: ValidationErrorList) -> None:
     if field not in args or args[field] in (None, ""):
         return
     value = args[field]
@@ -757,7 +768,7 @@ def _validate_operation_model(model: OperationModel, arguments: Mapping[str, Any
 
     for field_name in sorted(model.parent_paths):
         if field_name in arguments:
-            _validate_parent_path(arguments[field_name], field_name, errors)
+            _validate_parent_path(arguments[field_name], field_name, errors, project_root=project_root)
 
     for field_name in sorted(model.folder_paths):
         if field_name in arguments:
@@ -811,7 +822,7 @@ def _validate_legacy_generic(tool_name: str, arguments: Mapping[str, Any]) -> Va
 
     for field_name in ("parent_path",):
         if field_name in arguments:
-            _validate_parent_path(arguments[field_name], field_name, errors)
+            _validate_parent_path(arguments[field_name], field_name, errors, project_root=arguments.get("project_root"))
 
     for field_name in ("event", "source_event"):
         if field_name in arguments:
@@ -849,6 +860,12 @@ def validate_mcp_tool_arguments(tool_name: str, arguments: Mapping[str, Any]) ->
     _validate_int_range(arguments, "tail_lines", 0, None, errors)
     _validate_int_range(arguments, "timeout_seconds", 0, None, errors)
     _validate_asset_identifiers(arguments.get("asset_identifiers"), errors)
+    if tool_name == "gm_event_add":
+        _validate_collision_target_exists(arguments, "event", errors)
+    elif tool_name == "gm_event_duplicate":
+        _validate_duplicate_event_pair(arguments, errors)
+        _validate_collision_target_exists(arguments, "source_event", errors)
+        _validate_collision_target_exists(arguments, "target_event", errors)
     return errors
 
 

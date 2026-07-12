@@ -6,6 +6,8 @@ from pathlib import Path
 from typing import Any, Dict
 
 from ..base_asset import BaseAsset
+from ..transactions import mark_transaction_path_owned
+from ..utils import atomic_write_text
 from .naming import get_config
 
 
@@ -59,6 +61,7 @@ class SoundAsset(BaseAsset):
             wav_file.setsampwidth(2)  # 16-bit PCM
             wav_file.setframerate(safe_rate)
             wav_file.writeframes(b"\x00\x00" * frame_count)
+        mark_transaction_path_owned(path)
 
     def create_yy_data(self, name: str, parent_path: str, **kwargs) -> Dict[str, Any]:
         # Sound configuration parameters
@@ -338,7 +341,7 @@ class TimelineAsset(BaseAsset):
 // Add timeline actions here
 // This code runs at moment 0 of the timeline
 """
-            moment_path.write_text(moment_content, encoding="utf-8")
+            atomic_write_text(moment_path, moment_content)
             print(f"Created moment_0.gml")
 
     def validate_name(self, name: str) -> bool:

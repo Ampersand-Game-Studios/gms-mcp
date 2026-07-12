@@ -14,13 +14,19 @@ Safety principles:
 """
 
 import json
-import shutil
 import uuid
 from pathlib import Path
 from typing import Dict, Any, Optional, List, Tuple
 from datetime import datetime
 
-from .utils import load_json, save_json
+from .transactions import (
+    transaction_is_active,
+    transactional_copy2,
+    transactional_rmdir,
+    transactional_rmtree,
+    transactional_unlink,
+)
+from .utils import atomic_write_text, load_json, save_json
 
 
 def _find_yyp_in_dir(directory: Path) -> Optional[Path]:
@@ -185,21 +191,21 @@ class BridgeInstaller:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_name = f"{self.yyp_path.stem}.yyp.mcp_backup_{timestamp}"
         backup_path = self.yyp_path.parent / backup_name
-        shutil.copy2(self.yyp_path, backup_path)
+        transactional_copy2(self.yyp_path, backup_path)
         self.backup_path = backup_path
         return backup_path
 
     def _restore_yyp(self) -> None:
         """Restore .yyp from backup."""
         if self.backup_path and self.backup_path.exists():
-            shutil.copy2(self.backup_path, self.yyp_path)
-            self.backup_path.unlink()
+            transactional_copy2(self.backup_path, self.yyp_path)
+            transactional_unlink(self.backup_path)
             self.backup_path = None
 
     def _cleanup_backup(self) -> None:
         """Remove backup file on success."""
         if self.backup_path and self.backup_path.exists():
-            self.backup_path.unlink()
+            transactional_unlink(self.backup_path)
             self.backup_path = None
 
     def _iter_room_files(self, yyp_data: Dict[str, Any]) -> List[Path]:
@@ -313,7 +319,7 @@ class BridgeInstaller:
                     for instance_id in removed_instance_ids:
                         creation_code_file = room_file.parent / f"{instance_id}.gml"
                         if creation_code_file.exists():
-                            creation_code_file.unlink()
+                            transactional_unlink(creation_code_file)
                             summary["creation_code_deleted"] += 1
 
                 if changed:
@@ -740,7 +746,7 @@ global.__mcp_enabled = false;
             created_paths.append(script_yy_path)
 
             script_gml_path = script_yy_path.parent / f"{BRIDGE_SCRIPT_NAME}.gml"
-            script_gml_path.write_text(script_gml, encoding="utf-8")
+            atomic_write_text(script_gml_path, script_gml)
             created_paths.append(script_gml_path)
 
             # Step 4: Create object asset
@@ -752,7 +758,7 @@ global.__mcp_enabled = false;
 
             for event_name, event_code in events.items():
                 event_path = object_yy_path.parent / event_name
-                event_path.write_text(event_code, encoding="utf-8")
+                atomic_write_text(event_path, event_code)
                 created_paths.append(event_path)
 
             # Step 5: Verify all files exist
@@ -838,6 +844,9 @@ global.__mcp_enabled = false;
             print(f"[BRIDGE] Installation failed: {e}")
             print("[BRIDGE] Rolling back...")
 
+            if transaction_is_active():
+                raise
+
             # Rollback: restore .yyp
             self._restore_yyp()
 
@@ -845,7 +854,7 @@ global.__mcp_enabled = false;
             for path in reversed(created_paths):
                 try:
                     if path.exists():
-                        path.unlink()
+                        transactional_unlink(path)
                 except Exception:
                     pass
 
@@ -854,7 +863,7 @@ global.__mcp_enabled = false;
                 asset_dir = self.project_root / asset_type / BRIDGE_OBJECT_NAME
                 if asset_dir.exists() and not any(asset_dir.iterdir()):
                     try:
-                        asset_dir.rmdir()
+                        transactional_rmdir(asset_dir)
                     except Exception:
                         pass
 
@@ -910,19 +919,19 @@ global.__mcp_enabled = false;
             # Delete object directory
             object_dir = self.project_root / ASSET_TYPE_OBJECT / BRIDGE_OBJECT_NAME
             if object_dir.exists():
-                shutil.rmtree(object_dir)
+                transactional_rmtree(object_dir)
                 deleted_count += 1
 
             # Delete script directory
             script_dir = self.project_root / ASSET_TYPE_SCRIPT / BRIDGE_SCRIPT_NAME
             if script_dir.exists():
-                shutil.rmtree(script_dir)
+                transactional_rmtree(script_dir)
                 deleted_count += 1
 
             # Delete folder .yy
             folder_yy = self.project_root / ASSET_TYPE_FOLDER / f"{BRIDGE_FOLDER_NAME}.yy"
             if folder_yy.exists():
-                folder_yy.unlink()
+                transactional_unlink(folder_yy)
                 deleted_count += 1
 
             # Success - clean up backup
@@ -943,6 +952,9 @@ global.__mcp_enabled = false;
         except Exception as e:
             print(f"[BRIDGE] Uninstallation failed: {e}")
             print("[BRIDGE] Rolling back...")
+
+            if transaction_is_active():
+                raise
 
             # Rollback: restore .yyp
             self._restore_yyp()

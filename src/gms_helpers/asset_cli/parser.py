@@ -101,7 +101,7 @@ Maintenance Commands:
     # Script command
     script_parser = subparsers.add_parser("script", help="Create a script asset")
     script_parser.add_argument("name", help="Script name (snake_case or PascalCase with --constructor)")
-    script_parser.add_argument("--parent-path", required=True, help="Parent folder path")
+    script_parser.add_argument("--parent-path", default="", help="Optional parent folder path")
     script_parser.add_argument(
         "--constructor", action="store_true", help="Create a constructor script (allows PascalCase naming)"
     )
@@ -110,7 +110,7 @@ Maintenance Commands:
     # Object command
     object_parser = subparsers.add_parser("object", help="Create an object asset")
     object_parser.add_argument("name", help="Object name (o_ prefix)")
-    object_parser.add_argument("--parent-path", required=True, help="Parent folder path")
+    object_parser.add_argument("--parent-path", default="", help="Optional parent folder path")
     object_parser.add_argument("--sprite-id", help="Sprite resource ID")
     object_parser.add_argument("--parent-object", help="Parent object name (for inheritance)")
     object_parser.set_defaults(func=create_object)
@@ -118,13 +118,13 @@ Maintenance Commands:
     # Sprite command
     sprite_parser = subparsers.add_parser("sprite", help="Create a sprite asset")
     sprite_parser.add_argument("name", help="Sprite name (spr_ prefix)")
-    sprite_parser.add_argument("--parent-path", required=True, help="Parent folder path")
+    sprite_parser.add_argument("--parent-path", default="", help="Optional parent folder path")
     sprite_parser.set_defaults(func=create_sprite)
 
     # Room command
     room_parser = subparsers.add_parser("room", help="Create a room asset")
     room_parser.add_argument("name", help="Room name (r_ prefix)")
-    room_parser.add_argument("--parent-path", required=True, help="Parent folder path")
+    room_parser.add_argument("--parent-path", default="", help="Optional parent folder path")
     room_parser.add_argument("--width", type=int, default=1024, help="Room width (default: 1024)")
     room_parser.add_argument("--height", type=int, default=768, help="Room height (default: 768)")
     room_parser.set_defaults(func=create_room)
@@ -138,7 +138,7 @@ Maintenance Commands:
     # Font command
     font_parser = subparsers.add_parser("font", help="Create a font asset")
     font_parser.add_argument("name", help="Font name (fnt_ prefix)")
-    font_parser.add_argument("--parent-path", required=True, help="Parent folder path")
+    font_parser.add_argument("--parent-path", default="", help="Optional parent folder path")
     font_parser.add_argument("--font-name", default="Arial", help="Font family name (default: Arial)")
     font_parser.add_argument("--size", type=int, default=12, help="Font size (default: 12)")
     font_parser.add_argument("--bold", action="store_true", help="Make font bold")
@@ -152,7 +152,7 @@ Maintenance Commands:
     # Shader command
     shader_parser = subparsers.add_parser("shader", help="Create a shader asset")
     shader_parser.add_argument("name", help="Shader name (sh_ or shader_ prefix)")
-    shader_parser.add_argument("--parent-path", required=True, help="Parent folder path")
+    shader_parser.add_argument("--parent-path", default="", help="Optional parent folder path")
     shader_parser.add_argument(
         "--shader-type",
         type=int,
@@ -165,7 +165,7 @@ Maintenance Commands:
     # Animation curve command
     animcurve_parser = subparsers.add_parser("animcurve", help="Create an animation curve asset")
     animcurve_parser.add_argument("name", help="Animation curve name (curve_ or ac_ prefix)")
-    animcurve_parser.add_argument("--parent-path", required=True, help="Parent folder path")
+    animcurve_parser.add_argument("--parent-path", default="", help="Optional parent folder path")
     animcurve_parser.add_argument(
         "--curve-type",
         default="linear",
@@ -178,7 +178,7 @@ Maintenance Commands:
     # Sound command
     sound_parser = subparsers.add_parser("sound", help="Create a sound asset")
     sound_parser.add_argument("name", help="Sound name (snd_ or sfx_ prefix)")
-    sound_parser.add_argument("--parent-path", required=True, help="Parent folder path")
+    sound_parser.add_argument("--parent-path", default="", help="Optional parent folder path")
     sound_parser.add_argument("--volume", type=float, default=1.0, help="Volume (0.0-1.0, default: 1.0)")
     sound_parser.add_argument("--pitch", type=float, default=1.0, help="Pitch (default: 1.0)")
     sound_parser.add_argument(
@@ -198,7 +198,7 @@ Maintenance Commands:
     # Path command
     path_parser = subparsers.add_parser("path", help="Create a path asset")
     path_parser.add_argument("name", help="Path name (pth_ or path_ prefix)")
-    path_parser.add_argument("--parent-path", required=True, help="Parent folder path")
+    path_parser.add_argument("--parent-path", default="", help="Optional parent folder path")
     path_parser.add_argument("--closed", action="store_true", help="Make path closed (loops back to start)")
     path_parser.add_argument("--precision", type=int, default=4, help="Path precision (default: 4)")
     path_parser.add_argument(
@@ -212,7 +212,7 @@ Maintenance Commands:
     # Tileset command
     tileset_parser = subparsers.add_parser("tileset", help="Create a tileset asset")
     tileset_parser.add_argument("name", help="Tileset name (ts_ or tile_ prefix)")
-    tileset_parser.add_argument("--parent-path", required=True, help="Parent folder path")
+    tileset_parser.add_argument("--parent-path", default="", help="Optional parent folder path")
     tileset_parser.add_argument("--sprite-id", help="Sprite resource ID to use for tiles")
     tileset_parser.add_argument("--tile-width", type=int, default=32, help="Tile width (default: 32)")
     tileset_parser.add_argument("--tile-height", type=int, default=32, help="Tile height (default: 32)")
@@ -225,13 +225,13 @@ Maintenance Commands:
     # Timeline command
     timeline_parser = subparsers.add_parser("timeline", help="Create a timeline asset")
     timeline_parser.add_argument("name", help="Timeline name (tl_ or timeline_ prefix)")
-    timeline_parser.add_argument("--parent-path", required=True, help="Parent folder path")
+    timeline_parser.add_argument("--parent-path", default="", help="Optional parent folder path")
     timeline_parser.set_defaults(func=create_timeline)
 
     # Sequence command
     sequence_parser = subparsers.add_parser("sequence", help="Create a sequence asset")
     sequence_parser.add_argument("name", help="Sequence name (seq_ or sequence_ prefix)")
-    sequence_parser.add_argument("--parent-path", required=True, help="Parent folder path")
+    sequence_parser.add_argument("--parent-path", default="", help="Optional parent folder path")
     sequence_parser.add_argument("--length", type=float, default=60.0, help="Sequence length in frames (default: 60.0)")
     sequence_parser.add_argument(
         "--playback-speed", type=float, default=30.0, help="Playback speed in FPS (default: 30.0)"
@@ -241,7 +241,7 @@ Maintenance Commands:
     # Note command
     note_parser = subparsers.add_parser("note", help="Create a note asset")
     note_parser.add_argument("name", help="Note name (letters, numbers, underscores, hyphens, spaces)")
-    note_parser.add_argument("--parent-path", required=True, help="Parent folder path")
+    note_parser.add_argument("--parent-path", default="", help="Optional parent folder path")
     note_parser.add_argument("--content", help="Initial note content")
     note_parser.set_defaults(func=create_note)
 

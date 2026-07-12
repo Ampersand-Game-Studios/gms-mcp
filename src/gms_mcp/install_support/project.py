@@ -90,4 +90,3 @@ def _setup_project_config(
     except Exception as e:
         print(f"[WARN] Could not create config file: {e}")
         return None
-

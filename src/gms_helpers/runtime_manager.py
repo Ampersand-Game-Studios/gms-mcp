@@ -6,6 +6,7 @@ Discovery, selection, and pinning of runtime versions.
 import os
 import platform
 import json
+import re
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict, Any
@@ -45,6 +46,17 @@ def classify_runtime_channel(version: str) -> str:
     return "stable"
 
 
+def _runtime_sort_key(version: str) -> tuple[int, ...]:
+    """Sort dotted runtime versions numerically instead of lexicographically."""
+    return tuple(int(part) for part in re.findall(r"\d+", version))
+
+
+def _runtime_roots(parent: Path) -> List[Path]:
+    if not parent.exists():
+        return []
+    return sorted(path for path in parent.glob("GameMakerStudio2*/Cache/runtimes") if path.is_dir())
+
+
 class RuntimeManager:
     """Manages GameMaker runtime discovery, selection, and pinning."""
 
@@ -65,21 +77,22 @@ class RuntimeManager:
         possible_paths = []
 
         if system == "Windows":
-            possible_paths = [
-                Path("C:/ProgramData/GameMakerStudio2/Cache/runtimes"),
-                Path.home() / "AppData/Roaming/GameMakerStudio2/Cache/runtimes",
-                Path("C:/Users/Shared/GameMakerStudio2/Cache/runtimes"),
-            ]
+            program_data = Path(os.environ.get("PROGRAMDATA", "C:/ProgramData"))
+            app_data = Path(os.environ.get("APPDATA", str(Path.home() / "AppData/Roaming")))
+            possible_paths = [*_runtime_roots(program_data), *_runtime_roots(app_data)]
         elif system == "Darwin":  # macOS
             possible_paths = [
-                Path("/Users/Shared/GameMakerStudio2/Cache/runtimes"),
-                Path.home() / "Library/Application Support/GameMakerStudio2/Cache/runtimes",
+                *_runtime_roots(Path("/Users/Shared")),
+                *_runtime_roots(Path.home() / "Library/Application Support"),
             ]
         else:  # Linux
             possible_paths = [
-                Path.home() / ".local/share/GameMakerStudio2/Cache/runtimes",
-                Path("/opt/GameMakerStudio2/Cache/runtimes"),
+                *_runtime_roots(Path.home() / ".local/share"),
+                *_runtime_roots(Path("/var/opt")),
+                *_runtime_roots(Path("/opt")),
             ]
+
+        possible_paths = list(dict.fromkeys(path.resolve() for path in possible_paths))
 
         runtimes = []
         for base_path in possible_paths:
@@ -124,7 +137,7 @@ class RuntimeManager:
                 )
 
         # Sort newest first
-        runtimes.sort(key=lambda x: x.version, reverse=True)
+        runtimes.sort(key=lambda x: _runtime_sort_key(x.version), reverse=True)
         self._cached_runtimes = runtimes
         return runtimes
 
@@ -189,9 +202,31 @@ class RuntimeManager:
             # or handle it in the caller. Let's return None to signal missing specific version.
             return None
 
-        # Default: newest valid runtime
+        # Default: match the project's recorded IDE family, otherwise prefer
+        # the newest stable runtime over beta/LTS installations.
         valid = [r for r in installed if r.is_valid]
-        return valid[0] if valid else installed[0]
+        preferred_channel = self._project_release_channel()
+        if preferred_channel:
+            matching = [runtime for runtime in valid if runtime.release_channel == preferred_channel]
+            if matching:
+                return matching[0]
+        stable = [runtime for runtime in valid if runtime.release_channel == "stable"]
+        return stable[0] if stable else (valid[0] if valid else installed[0])
+
+    def _project_release_channel(self) -> Optional[str]:
+        """Infer the intended runtime family from the project's recorded IDE version."""
+        try:
+            yyp_files = sorted(self.project_root.glob("*.yyp"))
+            if len(yyp_files) != 1:
+                return None
+            text = yyp_files[0].read_text(encoding="utf-8", errors="ignore")
+            match = re.search(r'"IDEVersion"\s*:\s*"([^"]+)"', text)
+            if not match:
+                return None
+            channel = classify_runtime_channel(match.group(1))
+            return channel if channel in {"stable", "beta", "lts"} else None
+        except OSError:
+            return None
 
     def verify(self, version: Optional[str] = None) -> Dict[str, Any]:
         """Verify a runtime is valid and ready to use."""

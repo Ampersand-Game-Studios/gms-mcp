@@ -10,61 +10,39 @@ Fixes orphaned GML files and missing event references in GameMaker objects.
   Action: Remove that event entry from the object's events array
 """
 
-import os
-import json
-import re
 import sys
 from pathlib import Path
-from typing import Dict, List, Tuple, Set, Optional
+from typing import Dict, Optional, Set, Tuple
 
-from ..utils import load_json_loose, save_json_loose, find_yyp, resolve_project_directory
-from ..exceptions import ProjectNotFoundError, GMSError
+from ..event_model import (
+    EVENT_TYPE_NAMES,
+    build_event_entry,
+    event_filename_from_entry,
+    parse_event_filename,
+    resolve_collision_object_reference,
+)
+from ..exceptions import GMSError, ValidationError
 from ..path_safety import project_child_path, validate_resource_name
+from ..utils import atomic_write_text, load_json_loose, resolve_project_directory, save_json_loose
 
 
-def parse_gml_filename(filename: str) -> Tuple[Optional[str], Optional[int]]:
+def parse_gml_filename(filename: str) -> Tuple[Optional[str], Optional[int | str]]:
     """
     Parse GML event filename to extract event type and number.
     Examples: 'Create_0.gml' -> ('Create', 0), 'Step_0.gml' -> ('Step', 0)
     """
-    if not filename.endswith(".gml"):
-        return None, None
-
-    base = filename[:-4]  # Remove .gml
-    if "_" not in base:
-        return None, None
-
-    parts = base.rsplit("_", 1)
-    if len(parts) != 2:
-        return None, None
-
-    event_type, event_num_str = parts
     try:
-        event_num = int(event_num_str)
-        return event_type, event_num
-    except ValueError:
+        spec = parse_event_filename(filename)
+    except ValidationError:
         return None, None
+    if spec.collision_object is not None:
+        return EVENT_TYPE_NAMES[spec.event_type], spec.collision_object
+    return EVENT_TYPE_NAMES[spec.event_type], spec.event_num
 
 
 def get_event_type_id(event_type: str) -> int:
     """Map GameMaker event type names to their numeric IDs"""
-    event_map = {
-        "Create": 0,
-        "Destroy": 1,
-        "Alarm": 2,
-        "Step": 3,
-        "Collision": 4,
-        "Keyboard": 5,
-        "Mouse": 6,
-        "Other": 7,
-        "Draw": 8,
-        "KeyPress": 9,
-        "KeyRelease": 10,
-        "Trigger": 11,
-        "CleanUp": 12,
-        "Gesture": 13,
-        "PreCreate": -1,  # Special case
-    }
+    event_map = {name: event_id for event_id, name in EVENT_TYPE_NAMES.items()}
     return event_map.get(event_type, 7)  # Default to 'Other' if unknown
 
 
@@ -92,14 +70,10 @@ def scan_object_events(object_path: str) -> Tuple[Set[str], Set[str]]:
             if yy_data and "eventList" in yy_data:
                 for event in yy_data["eventList"]:
                     if "resourceVersion" in event and "resourceType" in event:
-                        # Extract filename from event data
-                        event_type = event.get("eventType", 0)
-                        event_num = event.get("eventNum", 0)
-                        # Map back to filename format
-                        type_name = get_event_type_name(event_type)
-                        if type_name:
-                            filename = f"{type_name}_{event_num}.gml"
-                            yy_events.add(filename)
+                        try:
+                            yy_events.add(event_filename_from_entry(event))
+                        except ValidationError as exc:
+                            print(f"Warning: Invalid event entry in {yy_file}: {exc}")
         except Exception as e:
             print(f"Warning: Could not parse {yy_file}: {e}")
 
@@ -108,25 +82,7 @@ def scan_object_events(object_path: str) -> Tuple[Set[str], Set[str]]:
 
 def get_event_type_name(event_type_id: int) -> str:
     """Map GameMaker event type IDs back to names"""
-    type_map = {
-        0: "Create",
-        1: "Destroy",
-        2: "Alarm",
-        3: "Step",
-        4: "Collision",
-        5: "Keyboard",
-        6: "Mouse",
-        7: "Other",
-        8: "Draw",
-        9: "KeyPress",
-        10: "KeyRelease",
-        11: "Trigger",
-        12: "CleanUp",
-        13: "Gesture",
-        14: "Gesture",  # Some versions use 14 for gesture too
-        -1: "PreCreate",
-    }
-    return type_map.get(event_type_id, "Other")
+    return EVENT_TYPE_NAMES.get(event_type_id, "Other")
 
 
 def fix_orphaned_gml_files(object_path: str, dry_run: bool = True) -> Tuple[int, int]:
@@ -158,26 +114,18 @@ def fix_orphaned_gml_files(object_path: str, dry_run: bool = True) -> Tuple[int,
                 yy_data["eventList"] = []
 
             for gml_file in orphaned:
-                event_type_name, event_num = parse_gml_filename(gml_file)
-                if event_type_name and event_num is not None:
-                    event_type_id = get_event_type_id(event_type_name)
-
-                    # Create new event entry
-                    new_event = {
-                        "$GMEvent": "v1",
-                        "%Name": f"{event_type_name}_{event_num}",
-                        "collisionObjectId": None,
-                        "eventNum": event_num,
-                        "eventType": event_type_id,
-                        "isDnD": False,
-                        "name": f"{event_type_name}_{event_num}",
-                        "resourceType": "GMEvent",
-                        "resourceVersion": "2.0",
-                    }
-
-                    yy_data["eventList"].append(new_event)
+                try:
+                    spec = parse_event_filename(gml_file)
+                    collision_reference = None
+                    if spec.collision_object is not None:
+                        collision_reference = resolve_collision_object_reference(
+                            object_dir.parent.parent, spec.collision_object
+                        )
+                    yy_data["eventList"].append(build_event_entry(spec, collision_reference))
                     fixed += 1
                     print(f"  [FIXED] Added event reference for {gml_file}")
+                except GMSError as exc:
+                    print(f"  [SKIPPED] Cannot add event reference for {gml_file}: {exc}")
 
             if fixed > 0:
                 save_json_loose(str(yy_file), yy_data)
@@ -216,8 +164,12 @@ def create_missing_gml_files(object_path: str, dry_run: bool = True) -> Tuple[in
                 gml_path = object_dir / missing_file
 
                 # Generate appropriate stub content based on event type
-                event_type_name, event_num = parse_gml_filename(missing_file)
-                if event_type_name and event_num is not None:
+                try:
+                    spec = parse_event_filename(missing_file)
+                except ValidationError:
+                    continue
+                event_type_name = EVENT_TYPE_NAMES[spec.event_type]
+                if event_type_name:
                     # Generate stub content based on event type
                     if event_type_name == "Create":
                         content = (
@@ -232,7 +184,7 @@ def create_missing_gml_files(object_path: str, dry_run: bool = True) -> Tuple[in
                     else:
                         content = f"// {event_type_name} event\n// TODO: Add event logic here\n"
 
-                    gml_path.write_text(content, encoding="utf-8")
+                    atomic_write_text(gml_path, content)
                     created += 1
                     print(f"  [CREATED] Generated missing {missing_file}")
 
@@ -268,15 +220,14 @@ def fix_missing_gml_files(object_path: str, dry_run: bool = True) -> Tuple[int, 
         try:
             yy_data = load_json_loose(yy_file)
             if yy_data and "eventList" in yy_data:
-                original_count = len(yy_data["eventList"])
-
                 # Filter out events for missing files
                 new_event_list = []
                 for event in yy_data["eventList"]:
-                    event_type_id = event.get("eventType", 0)
-                    event_num = event.get("eventNum", 0)
-                    type_name = get_event_type_name(event_type_id)
-                    expected_filename = f"{type_name}_{event_num}.gml"
+                    try:
+                        expected_filename = event_filename_from_entry(event)
+                    except ValidationError:
+                        new_event_list.append(event)
+                        continue
 
                     if expected_filename not in missing:
                         new_event_list.append(event)

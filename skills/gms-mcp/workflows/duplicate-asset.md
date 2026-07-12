@@ -21,10 +21,7 @@ When you need a new asset based on an existing one - faster than creating from s
 
 3. **Modify the duplicate** as needed
 
-4. **Verify**:
-   ```bash
-   gms maintenance auto
-   ```
+4. **Verify the returned asset path and scoped validation result.**
 
 ## Examples
 
@@ -62,6 +59,9 @@ gms workflow duplicate path/to/asset.yy new_name --yes
 - The .yy configuration file
 - All associated files (.gml, images, etc.)
 - Internal references updated to new name
+- Sprite frame, layer, and keyframe identities regenerated
+- Room instance identities and matching creation-code filenames regenerated
+- External parent and asset dependencies preserved
 
 ## Tips
 

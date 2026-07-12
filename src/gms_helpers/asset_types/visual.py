@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from ..base_asset import BaseAsset
-from ..utils import create_dummy_png, ensure_directory, generate_uuid
+from ..utils import atomic_write_text, create_dummy_png, ensure_directory, generate_uuid
 from .naming import get_config
 
 
@@ -366,7 +366,7 @@ void main()
     v_vTexcoord = in_TextureCoord;
 }
 """
-            vsh_path.write_text(vsh_content, encoding="utf-8")
+            atomic_write_text(vsh_path, vsh_content)
             print(f"Created {vsh_path.name} (vertex shader)")
 
         # Create fragment shader file
@@ -383,7 +383,7 @@ void main()
     gl_FragColor = v_vColour * texture2D( gm_BaseTexture, v_vTexcoord );
 }
 """
-            fsh_path.write_text(fsh_content, encoding="utf-8")
+            atomic_write_text(fsh_path, fsh_content)
             print(f"Created {fsh_path.name} (fragment shader)")
 
     def validate_name(self, name: str) -> bool:

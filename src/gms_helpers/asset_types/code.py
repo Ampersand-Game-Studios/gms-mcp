@@ -5,6 +5,8 @@ from pathlib import Path
 from typing import Any, Dict
 
 from ..base_asset import BaseAsset
+from ..event_model import build_event_entry, parse_event_spec
+from ..utils import atomic_write_text
 from .naming import get_config
 
 
@@ -52,7 +54,7 @@ function {name}() {{
     // TODO
 }}
 """
-            gml_path.write_text(gml_content, encoding="utf-8")
+            atomic_write_text(gml_path, gml_content)
             print(f"Created {gml_path.name}")
 
     def validate_name(self, name: str) -> bool:
@@ -99,10 +101,12 @@ class ObjectAsset(BaseAsset):
 
             parent_object_ref = {"name": parent_object, "path": f"objects/{parent_object.lower()}/{parent_object}.yy"}
 
+        event_list = [build_event_entry(parse_event_spec("create"))] if kwargs.get("create_event", True) else []
+
         return {
             "$GMObject": "",
             "%Name": name,
-            "eventList": [],
+            "eventList": event_list,
             "managed": True,
             "name": name,
             "overriddenProperties": [],
@@ -137,7 +141,7 @@ class ObjectAsset(BaseAsset):
                 create_content = f"""/// Create Event for {name}
 // Initialize variables here
 """
-                create_path.write_text(create_content, encoding="utf-8")
+                atomic_write_text(create_path, create_content)
                 print(f"Created {create_path.name}")
 
     def validate_name(self, name: str) -> bool:

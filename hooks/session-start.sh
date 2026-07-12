@@ -4,7 +4,7 @@
 # Checks for updates and reports bridge status
 
 # Only run if this looks like a GameMaker project
-if ! ls *.yyp 2>/dev/null && ! find . -maxdepth 2 -name "*.yyp" -print -quit 2>/dev/null | grep -q .; then
+if ! ls *.yyp >/dev/null 2>&1 && ! find . -maxdepth 2 -name "*.yyp" -print -quit 2>/dev/null | grep -q .; then
     exit 0
 fi
 
@@ -18,13 +18,5 @@ if command -v gms-mcp >/dev/null 2>&1; then
     fi
 fi
 
-# Check bridge status (only if gms is already installed locally)
-if command -v gms >/dev/null 2>&1; then
-    BRIDGE_STATUS=$(gms bridge status 2>/dev/null || echo "not installed")
-fi
-
-if echo "${BRIDGE_STATUS:-not installed}" | grep -q "installed"; then
-    echo "[gms-mcp] Bridge: installed"
-else
-    echo "[gms-mcp] Bridge: not installed (optional - for live debugging)"
-fi
+# Bridge state is exposed by the MCP-only gm_bridge_status tool. This shell
+# hook deliberately does not claim to inspect it through a nonexistent CLI.

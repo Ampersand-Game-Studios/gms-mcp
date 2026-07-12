@@ -362,7 +362,21 @@ class TestObjectAsset(TestAssetsComprehensive):
         self.assertFalse(yy_data["persistent"])
 
         # Verify default values
-        self.assertEqual(yy_data["eventList"], [])
+        self.assertEqual(len(yy_data["eventList"]), 1)
+        self.assertEqual(
+            yy_data["eventList"][0],
+            {
+                "$GMEvent": "v1",
+                "%Name": "Create_0",
+                "collisionObjectId": None,
+                "eventNum": 0,
+                "eventType": 0,
+                "isDnD": False,
+                "name": "Create_0",
+                "resourceType": "GMEvent",
+                "resourceVersion": "2.0",
+            },
+        )
         self.assertEqual(yy_data["overriddenProperties"], [])
         self.assertIsNone(yy_data["parentObjectId"])
 

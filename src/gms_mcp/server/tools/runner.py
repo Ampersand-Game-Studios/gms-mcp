@@ -3,37 +3,32 @@ from __future__ import annotations
 import argparse
 from typing import Any, Dict
 
-from ..direct import _capture_output, _pushd
+from ..direct import _run_direct, _run_direct_thread_shielded
 from ..dispatch import _run_with_fallback
 from ..mcp_types import Context
 from ..platform import _default_target_platform
 from ..project import _ensure_cli_on_sys_path, _resolve_project_directory, _resolve_repo_root
+from ..subprocess_runner import _default_timeout_seconds_for_cli_args
 
 
 def register(mcp: Any, ContextType: Any) -> None:
     globals()["Context"] = ContextType
 
     def _run_direct_preserve_result(
-        handler: Any, args: argparse.Namespace, project_root: str
+        handler: Any,
+        args: argparse.Namespace,
+        project_root: str,
+        timeout_seconds: int,
     ) -> tuple[bool, str, str, Any, str | None, int | None]:
-        """
-        Run a handler in-process while capturing stdout/stderr, but preserve the handler's return value.
-
-        This is required for runner subcommands like `run start --background` where the handler returns a dict
-        (pid/run_id/etc). Using the generic direct-execution path discards return values intentionally.
-        """
-        project_directory = _resolve_project_directory(project_root)
-
-        def _invoke() -> Any:
-            from gms_helpers.utils import validate_working_directory
-
-            with _pushd(project_directory):
-                validate_working_directory()
-                # Normalize project_root after chdir so downstream handlers behave consistently.
-                setattr(args, "project_root", ".")
-                return handler(args)
-
-        return _capture_output(_invoke)
+        """Run a typed runner handler in the same isolated worker used by other tools."""
+        result = _run_direct(
+            handler,
+            args,
+            project_root,
+            timeout_seconds=timeout_seconds,
+            normalize_result=False,
+        )
+        return result.ok, result.stdout, result.stderr, result.result, result.error, result.exit_code
 
     # -----------------------------
     # Runner tools
@@ -155,8 +150,19 @@ def register(mcp: Any, ContextType: Any) -> None:
         # The game will be launched and we'll return session info immediately
         if background:
             try:
-                ok, _stdout, _stderr, result_value, error_text, _exit_code = _run_direct_preserve_result(
-                    handle_runner_run, args, project_root
+                (
+                    ok,
+                    captured_stdout,
+                    captured_stderr,
+                    result_value,
+                    error_text,
+                    _exit_code,
+                ) = await _run_direct_thread_shielded(
+                    _run_direct_preserve_result,
+                    handle_runner_run,
+                    args,
+                    project_root,
+                    _default_timeout_seconds_for_cli_args(["run", "background-start"]),
                 )
             except Exception as e:
                 if bridge_server:
@@ -171,6 +177,8 @@ def register(mcp: Any, ContextType: Any) -> None:
                     "background": True,
                     "error": error_text,
                     "message": f"Failed to launch game: {error_text}",
+                    "stdout": captured_stdout,
+                    "stderr": captured_stderr,
                 }
 
             if isinstance(result_value, dict):
@@ -184,6 +192,9 @@ def register(mcp: Any, ContextType: Any) -> None:
                 # If the handler reported failure, stop the bridge server to avoid leaving it running.
                 if result.get("ok") is False and bridge_server:
                     bridge_server.stop()
+                if result.get("ok") is False:
+                    result.setdefault("stdout", captured_stdout)
+                    result.setdefault("stderr", captured_stderr)
                 return result
 
             # Fallback if somehow we got a bool or an unexpected return type
@@ -261,8 +272,12 @@ def register(mcp: Any, ContextType: Any) -> None:
 
         # Run directly for immediate response
         try:
-            ok, _stdout, _stderr, result_value, error_text, _exit_code = _run_direct_preserve_result(
-                handle_runner_stop, args, project_root
+            ok, _stdout, _stderr, result_value, error_text, _exit_code = await _run_direct_thread_shielded(
+                _run_direct_preserve_result,
+                handle_runner_stop,
+                args,
+                project_root,
+                _default_timeout_seconds_for_cli_args(["run", "stop"]),
             )
         except Exception as e:
             return {
@@ -324,8 +339,12 @@ def register(mcp: Any, ContextType: Any) -> None:
 
         # Run directly for immediate response
         try:
-            ok, _stdout, _stderr, result_value, error_text, _exit_code = _run_direct_preserve_result(
-                handle_runner_status, args, project_root
+            ok, _stdout, _stderr, result_value, error_text, _exit_code = await _run_direct_thread_shielded(
+                _run_direct_preserve_result,
+                handle_runner_status,
+                args,
+                project_root,
+                _default_timeout_seconds_for_cli_args(["run", "status"]),
             )
         except Exception as e:
             return {"ok": False, "error": str(e), "message": f"Error checking status: {e}"}

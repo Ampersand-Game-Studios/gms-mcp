@@ -23,6 +23,8 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
 
+from .utils import atomic_write_text
+
 
 @dataclass
 class RunSession:
@@ -123,8 +125,7 @@ class RunSessionManager:
 
         # Write session to disk
         session_path = self._current_session_path()
-        with open(session_path, "w", encoding="utf-8") as f:
-            json.dump(session.to_dict(), f, indent=2)
+        atomic_write_text(session_path, json.dumps(session.to_dict(), indent=2) + "\n")
 
         print(f"[SESSION] Created session {session.run_id} (PID: {pid})")
         return session

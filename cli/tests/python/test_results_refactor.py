@@ -19,10 +19,16 @@ from gms_helpers.results import (
     normalize_result,
 )
 from gms_helpers.workflow import duplicate_asset, rename_asset, delete_asset, lint_project
-from gms_mcp.server.direct import _capture_output
+from gms_mcp.server.direct_worker import _capture_output
+from gms_mcp.server.results import _jsonable_result
 
 
 class TestGMSResults(unittest.TestCase):
+    def test_jsonable_result_recursively_converts_nested_paths(self):
+        result = _jsonable_result({"path": Path("/tmp/x"), "nested": [Path("/tmp/y")]})
+
+        self.assertEqual(result, {"path": "/tmp/x", "nested": ["/tmp/y"]})
+
     def test_operation_result_to_dict(self):
         """Test conversion of OperationResult to dictionary."""
         res = OperationResult(success=True, message="Success", warnings=["Warn 1"])
@@ -146,13 +152,21 @@ class TestWorkflowResults(unittest.TestCase):
 
         from gms_helpers.workflow import load_json_loose
 
-        load_json_loose.return_value = {"name": "old_script"}
+        load_json_loose.side_effect = [
+            {"name": "old_script"},
+            {
+                "resources": [
+                    {"id": {"name": "old_script", "path": "scripts/old_script.yy"}},
+                ]
+            },
+        ]
 
         from gms_helpers.workflow import find_yyp
 
         find_yyp.return_value = Path("/fake/project.yyp")
 
-        res = duplicate_asset(Path("/fake"), "scripts/old_script.yy", "new_script")
+        with patch("gms_helpers.workflow._validate_registered_asset", return_value=[]):
+            res = duplicate_asset(Path("/fake"), "scripts/old_script.yy", "new_script")
 
         self.assertTrue(isinstance(res, AssetResult))
         self.assertTrue(res.success)

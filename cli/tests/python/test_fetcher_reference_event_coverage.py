@@ -261,7 +261,11 @@ class TestReferenceCollectorCoverage(unittest.TestCase):
                     "$GMObject": "",
                     "eventList": [
                         {"eventType": 0, "eventNum": 0, "collisionObjectId": None},
-                        {"eventType": 4, "eventNum": 0, "collisionObjectId": "o_wall"},
+                        {
+                            "eventType": 4,
+                            "eventNum": 0,
+                            "collisionObjectId": {"name": "o_wall", "path": "objects/o_wall/o_wall.yy"},
+                        },
                     ],
                 }
             ),
@@ -376,7 +380,10 @@ class TestReferenceCollectorCoverage(unittest.TestCase):
         self.assertEqual(collector._determine_asset_type({}, Path("misc/x.yy")), "unknown")
 
         self.assertEqual(collector._get_event_filename(0, 0), "Create_0.gml")
-        self.assertEqual(collector._get_event_filename(4, 0, "o_enemy"), "Collision_o_enemy.gml")
+        self.assertEqual(
+            collector._get_event_filename(4, 0, {"name": "o_enemy", "path": "objects/o_enemy/o_enemy.yy"}),
+            "Collision_o_enemy.gml",
+        )
         self.assertIsNone(collector._get_event_filename(99, 0))
 
     def test_reference_collector_queue_and_error_paths(self):
@@ -516,19 +523,19 @@ class TestEventHelperCoverage(unittest.TestCase):
         # Duplicate from a source file that exists only on disk creates the new event entry.
         create_path = self.project_root / "objects" / "o_test" / "Create_0.gml"
         create_path.write_text("// create\n", encoding="utf-8")
-        self.assertTrue(duplicate_event("o_test", "create", 1))
+        self.assertTrue(duplicate_event("o_test", "create", "create:1"))
         duplicated = self.project_root / "objects" / "o_test" / "Create_1.gml"
         self.assertTrue(duplicated.exists())
 
         # Existing target is treated as success.
-        self.assertTrue(duplicate_event("o_test", "create", 1))
+        self.assertTrue(duplicate_event("o_test", "create", "create:1"))
 
         # Missing source raises validation error.
         with self.assertRaises(ValidationError):
-            duplicate_event("o_test", "alarm:2", 3)
+            duplicate_event("o_test", "alarm:2", "alarm:3")
 
         with self.assertRaises(ValidationError):
-            duplicate_event("o_test", "step:not_a_number", 1)
+            duplicate_event("o_test", "step:not_a_number", "step:1")
 
     def test_handle_validate_and_fix(self):
         args = SimpleNamespace(object="o_test")

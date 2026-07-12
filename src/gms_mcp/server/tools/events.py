@@ -88,7 +88,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     async def gm_event_duplicate(
         object: str,
         source_event: str,
-        target_num: int,
+        target_event: str,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: str = "full",
@@ -96,15 +96,15 @@ def register(mcp: Any, ContextType: Any) -> None:
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Duplicate an event within an object."""
+        """Duplicate an event within an object using full source and target event specifications."""
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.event_commands import handle_event_duplicate
 
         args = argparse.Namespace(
-            object=object, source_event=source_event, target_num=target_num, project_root=project_root
+            object=object, source_event=source_event, target_event=target_event, project_root=project_root
         )
-        cli_args = ["event", "duplicate", object, source_event, str(target_num)]
+        cli_args = ["event", "duplicate", object, source_event, target_event]
 
         return await _run_with_fallback(
             direct_handler=handle_event_duplicate,

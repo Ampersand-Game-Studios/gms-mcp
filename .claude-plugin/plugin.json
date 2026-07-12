@@ -1,0 +1,17 @@
+{
+  "name": "gms-mcp",
+  "description": "GameMaker Studio MCP tools for asset management, code intelligence, and project maintenance",
+  "author": {
+    "name": "Ampersand Game Studios",
+    "url": "https://github.com/Ampersand-Game-Studios/gms-mcp"
+  },
+  "repository": "https://github.com/Ampersand-Game-Studios/gms-mcp",
+  "license": "MIT",
+  "keywords": [
+    "gamemaker",
+    "game-development",
+    "mcp",
+    "assets",
+    "code-intelligence"
+  ]
+}

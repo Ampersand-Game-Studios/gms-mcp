@@ -450,7 +450,7 @@ class TestPruneMaintenanceBehavior(unittest.TestCase):
                 "gms_helpers.maintenance.prune.os.path.exists",
                 side_effect=lambda path: path == "scripts/existing/existing.yy",
             ),
-            patch("gms_helpers.maintenance.prune.shutil.copy2") as mock_copy,
+            patch("gms_helpers.maintenance.prune.transactional_copy2") as mock_copy,
             patch("gms_helpers.maintenance.prune.save_json") as mock_save,
         ):
             removed = prune_missing_assets(dry_run=True)
@@ -482,7 +482,7 @@ class TestPruneMaintenanceBehavior(unittest.TestCase):
                 "gms_helpers.maintenance.prune.os.path.exists",
                 return_value=False,
             ),
-            patch("gms_helpers.maintenance.prune.shutil.copy2") as mock_copy,
+            patch("gms_helpers.maintenance.prune.transactional_copy2") as mock_copy,
             patch(
                 "gms_helpers.maintenance.prune.save_json",
                 side_effect=_save_json,

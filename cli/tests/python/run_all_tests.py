@@ -54,7 +54,7 @@ if to_add:
     )
 os.environ.setdefault("GMS_MCP_POST_MUTATION_VERIFY", "off")
 
-MCP_REQUIRED_MODULES = ("mcp", "fastmcp")
+MCP_REQUIRED_MODULES = ("mcp",)
 MCP_DEPENDENT_TESTS = {
     "test_bridge_one_shot_enable.py",
     "test_mcp_integration_tools.py",
@@ -213,7 +213,7 @@ def run_test_file(test_file_path, *, mcp_test_mode: str):
         test_name = test_file_path.name
         if test_name in MCP_DEPENDENT_TESTS:
             if mcp_test_mode == "skip":
-                print("[SKIP] Missing MCP dependencies (mcp, fastmcp) and uv is unavailable.")
+                print("[SKIP] Missing MCP dependency (mcp) and uv is unavailable.")
                 return "skip", 0
             if mcp_test_mode == "uv":
                 command = [
@@ -221,8 +221,6 @@ def run_test_file(test_file_path, *, mcp_test_mode: str):
                     "run",
                     "--with",
                     "mcp",
-                    "--with",
-                    "fastmcp",
                     "--with",
                     "pytest",
                     "python",

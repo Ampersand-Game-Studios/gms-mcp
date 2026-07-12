@@ -119,6 +119,7 @@ class TestMCPStdioTransportRegression(unittest.TestCase):
                     sys.path.insert(0, str(src_root))
 
                 from gms_helpers.bridge_server import BridgeServer
+                from gms_mcp.server.results import ToolRunResult
 
                 _servers = {{}}
 
@@ -139,16 +140,21 @@ class TestMCPStdioTransportRegression(unittest.TestCase):
                     patch("gms_helpers.bridge_installer.get_bridge_status", return_value={{"installed": True}}),
                     patch("gms_helpers.bridge_server.get_bridge_server", side_effect=_get_bridge_server),
                     patch("gms_helpers.bridge_server.stop_bridge_server", side_effect=_stop_bridge_server),
-                    patch("gms_helpers.utils.validate_working_directory", return_value=None),
                     patch(
-                        "gms_helpers.commands.runner_commands.handle_runner_run",
-                        return_value={{
-                            "ok": True,
-                            "background": True,
-                            "pid": 1234,
-                            "run_id": "run-test",
-                            "message": "Game started in background",
-                        }},
+                        "gms_mcp.server.tools.runner._run_direct",
+                        return_value=ToolRunResult(
+                            ok=True,
+                            stdout="",
+                            stderr="",
+                            direct_used=True,
+                            result={{
+                                "ok": True,
+                                "background": True,
+                                "pid": 1234,
+                                "run_id": "run-test",
+                                "message": "Game started in background",
+                            }},
+                        ),
                     ),
                 ]
                 for active_patch in patches:
@@ -165,7 +171,7 @@ class TestMCPStdioTransportRegression(unittest.TestCase):
                     command=sys.executable,
                     args=["-c", server_script],
                     cwd=str(PROJECT_ROOT),
-                    env={"PYTHONPATH": str(SRC_ROOT)},
+                    env={"PYTHONPATH": str(SRC_ROOT), "GMS_MCP_TOOLSETS": "bridge"},
                 )
 
                 async with stdio_client(params) as (read, write):

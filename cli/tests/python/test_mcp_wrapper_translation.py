@@ -16,6 +16,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from gms_mcp.server.tools import asset_creation, maintenance, rooms, runner, texture_groups, workflow
+from gms_mcp.server.results import ToolRunResult
 
 
 class FakeMCP:
@@ -154,33 +155,6 @@ class TestAssetCreationWrappers(MCPToolTestCase):
                 call_kwargs = mock_fallback.await_args_list[-1].kwargs
                 self.assertEqual(call_kwargs["direct_args"].asset_type, asset_type)
                 self.assertEqual(call_kwargs["project_root"], "/tmp/project")
-
-    def test_asset_delete_supports_dry_run_and_policy_block(self):
-        with patch(
-            "gms_mcp.server.tools.asset_creation._run_with_fallback",
-            new=AsyncMock(return_value={"ok": True}),
-        ) as mock_fallback:
-            result = self.call_tool(
-                "gm_asset_delete",
-                asset_type="script",
-                name="scr_test",
-                dry_run=True,
-                project_root="/tmp/project",
-            )
-        self.assertTrue(result["ok"])
-        fallback_kwargs = mock_fallback.await_args.kwargs
-        self.assertIn("--dry-run", fallback_kwargs["cli_args"])
-
-        with patch("gms_mcp.server.tools.asset_creation._requires_dry_run_for_tool", return_value=True):
-            blocked = self.call_tool(
-                "gm_asset_delete",
-                asset_type="script",
-                name="scr_test",
-                dry_run=False,
-                project_root="/tmp/project",
-            )
-        self.assertFalse(blocked["ok"])
-        self.assertTrue(blocked["blocked_by_policy"])
 
 
 class TestMaintenanceWrappers(MCPToolTestCase):
@@ -517,11 +491,6 @@ class TestWorkflowWrappers(MCPToolTestCase):
                     ["workflow", "rename", "scripts/scr_old/scr_old.yy", "scr_new"],
                 ),
                 (
-                    "gm_workflow_delete",
-                    {"asset_path": "scripts/scr_old/scr_old.yy", "dry_run": True, "project_root": "/tmp/project"},
-                    ["workflow", "delete", "scripts/scr_old/scr_old.yy", "--dry-run"],
-                ),
-                (
                     "gm_workflow_swap_sprite",
                     {
                         "asset_path": "sprites/spr_test/spr_test.yy",
@@ -605,16 +574,6 @@ class TestWorkflowWrappers(MCPToolTestCase):
                 self.assertTrue(result["ok"])
                 self.assertEqual(mock_fallback.await_args_list[-1].kwargs["cli_args"], expected_cli)
 
-        with patch("gms_mcp.server.tools.workflow._requires_dry_run_for_tool", return_value=True):
-            blocked = self.call_tool(
-                "gm_workflow_delete",
-                asset_path="scripts/scr_old/scr_old.yy",
-                dry_run=False,
-                project_root="/tmp/project",
-            )
-        self.assertFalse(blocked["ok"])
-        self.assertTrue(blocked["blocked_by_policy"])
-
     def test_safe_delete_uses_policy_and_helper_result(self):
         with patch("gms_mcp.server.tools.workflow._requires_dry_run_for_tool", return_value=True):
             blocked = self.call_tool(
@@ -627,15 +586,17 @@ class TestWorkflowWrappers(MCPToolTestCase):
         self.assertFalse(blocked["ok"])
         self.assertTrue(blocked["blocked_by_policy"])
 
-        with patch(
-            "gms_helpers.workflow.safe_delete_asset",
-            return_value={"ok": True, "deleted": True, "dry_run": True},
+        with (
+            patch(
+                "gms_helpers.workflow.safe_delete_asset",
+                return_value={"ok": True, "deleted": True, "dry_run": True},
+            ),
+            patch("gms_mcp.server.tools.workflow._resolve_project_directory", return_value=Path("/tmp/project")),
         ):
             result = self.call_tool(
                 "gm_safe_delete",
                 asset_type="script",
                 asset_name="scr_old",
-                clean_refs=True,
                 dry_run=True,
                 project_root="/tmp/project",
             )
@@ -685,11 +646,17 @@ class TestRunnerWrappers(MCPToolTestCase):
 
         with (
             patch(
-                "gms_mcp.server.tools.runner._capture_output",
-                return_value=(True, "", "", {"ok": True, "message": "Game launched"}, None, None),
-            ),
+                "gms_mcp.server.tools.runner._run_direct",
+                return_value=ToolRunResult(
+                    ok=True,
+                    stdout="",
+                    stderr="",
+                    direct_used=True,
+                    result={"ok": True, "message": "Game launched"},
+                ),
+            ) as background_direct,
             patch(
-                "gms_mcp.server.tools.runner._resolve_project_directory",
+                "gms_mcp.server.tools.runner._resolve_repo_root",
                 return_value=Path("/tmp/project"),
             ),
             patch("gms_helpers.bridge_installer.is_bridge_installed", return_value=True),
@@ -708,16 +675,23 @@ class TestRunnerWrappers(MCPToolTestCase):
         self.assertTrue(result["ok"])
         self.assertTrue(result["bridge_enabled"])
         self.assertEqual(result["bridge_port"], 6502)
+        self.assertGreater(background_direct.call_args.kwargs["timeout_seconds"], 0)
 
         fake_bridge_server.reset_mock()
         fake_bridge_server.start.return_value = True
         with (
             patch(
-                "gms_mcp.server.tools.runner._capture_output",
-                return_value=(True, "", "", None, "launch failed", None),
+                "gms_mcp.server.tools.runner._run_direct",
+                return_value=ToolRunResult(
+                    ok=False,
+                    stdout="launch out",
+                    stderr="launch err",
+                    direct_used=True,
+                    error="launch failed",
+                ),
             ),
             patch(
-                "gms_mcp.server.tools.runner._resolve_project_directory",
+                "gms_mcp.server.tools.runner._resolve_repo_root",
                 return_value=Path("/tmp/project"),
             ),
             patch("gms_helpers.bridge_installer.is_bridge_installed", return_value=True),
@@ -734,16 +708,50 @@ class TestRunnerWrappers(MCPToolTestCase):
                 project_root="/tmp/project",
             )
         self.assertFalse(error_result["ok"])
+        self.assertEqual(error_result["stdout"], "launch out")
+        self.assertEqual(error_result["stderr"], "launch err")
         fake_bridge_server.stop.assert_called_once()
+
+        with (
+            patch(
+                "gms_mcp.server.tools.runner._run_direct",
+                return_value=ToolRunResult(
+                    ok=False,
+                    stdout="igor out",
+                    stderr="igor err",
+                    direct_used=True,
+                    exit_code=-6,
+                    result={"ok": False, "message": "launch failed"},
+                ),
+            ),
+            patch("gms_mcp.server.tools.runner._resolve_repo_root", return_value=Path("/tmp/project")),
+            patch("gms_helpers.bridge_installer.is_bridge_installed", return_value=False),
+        ):
+            structured_error_result = self.call_tool(
+                "gm_run",
+                platform="macOS",
+                runtime="VM",
+                background=True,
+                project_root="/tmp/project",
+            )
+        self.assertFalse(structured_error_result["ok"])
+        self.assertEqual(structured_error_result["stdout"], "igor out")
+        self.assertEqual(structured_error_result["stderr"], "igor err")
 
         with (
             patch("gms_helpers.bridge_server.stop_bridge_server") as mock_stop_bridge,
             patch(
-                "gms_mcp.server.tools.runner._capture_output",
-                return_value=(True, "", "", {"ok": True, "message": "Stopped"}, None, None),
-            ),
+                "gms_mcp.server.tools.runner._run_direct",
+                return_value=ToolRunResult(
+                    ok=True,
+                    stdout="",
+                    stderr="",
+                    direct_used=True,
+                    result={"ok": True, "message": "Stopped"},
+                ),
+            ) as stop_direct,
             patch(
-                "gms_mcp.server.tools.runner._resolve_project_directory",
+                "gms_mcp.server.tools.runner._resolve_repo_root",
                 return_value=Path("/tmp/project"),
             ),
         ):
@@ -751,24 +759,42 @@ class TestRunnerWrappers(MCPToolTestCase):
         self.assertTrue(stop_result["ok"])
         self.assertTrue(stop_result["bridge_stopped"])
         mock_stop_bridge.assert_called_once()
+        self.assertGreater(stop_direct.call_args.kwargs["timeout_seconds"], 0)
 
         with (
             patch(
-                "gms_mcp.server.tools.runner._capture_output", return_value=(True, "", "", None, "status failed", None)
-            ),
+                "gms_mcp.server.tools.runner._run_direct",
+                return_value=ToolRunResult(
+                    ok=False,
+                    stdout="",
+                    stderr="",
+                    direct_used=True,
+                    error="status failed",
+                ),
+            ) as status_direct,
             patch(
-                "gms_mcp.server.tools.runner._resolve_project_directory",
+                "gms_mcp.server.tools.runner._resolve_repo_root",
                 return_value=Path("/tmp/project"),
             ),
         ):
             status_error = self.call_tool("gm_run_status", project_root="/tmp/project")
         self.assertFalse(status_error["ok"])
         self.assertIn("status failed", status_error["message"])
+        self.assertGreater(status_direct.call_args.kwargs["timeout_seconds"], 0)
 
         with (
-            patch("gms_mcp.server.tools.runner._capture_output", return_value=(True, "", "", True, None, None)),
             patch(
-                "gms_mcp.server.tools.runner._resolve_project_directory",
+                "gms_mcp.server.tools.runner._run_direct",
+                return_value=ToolRunResult(
+                    ok=True,
+                    stdout="",
+                    stderr="",
+                    direct_used=True,
+                    result=True,
+                ),
+            ),
+            patch(
+                "gms_mcp.server.tools.runner._resolve_repo_root",
                 return_value=Path("/tmp/project"),
             ),
         ):

@@ -27,9 +27,15 @@ sys.path.insert(0, str(SRC_ROOT))
 
 # Import from the correct locations
 from gms_helpers.workflow import duplicate_asset, rename_asset, delete_asset
-from gms_helpers.reference_scanner import comprehensive_rename_asset, ReferenceScanner
+from gms_helpers.reference_scanner import (
+    ReferenceScanner,
+    comprehensive_rename_asset,
+    find_gml_ambiguous_asset_bindings,
+)
 from gms_helpers.utils import save_pretty_json_gm, load_json_loose
-from gms_helpers.assets import ScriptAsset, SpriteAsset, ObjectAsset
+from gms_helpers.assets import ObjectAsset, ScriptAsset, ShaderAsset, SpriteAsset
+from gms_helpers.event_helper import add_event
+from gms_helpers.exceptions import ValidationError
 
 # Reference scanner should now work via the fallback import in workflow.py
 
@@ -254,17 +260,9 @@ class TestWorkflowEnhanced(unittest.TestCase):
                 old_object_name, updated_script_content, "Script still contains old object reference - stale reference!"
             )
 
-            # UIGroup enum should be updated (test_old -> test_new)
-            self.assertIn(
-                "TestEnum.test_new",
-                updated_script_content,
-                "Script TestEnum enum was not updated - reference scanner failed!",
-            )
-            self.assertNotIn(
-                "TestEnum.test_old",
-                updated_script_content,
-                "Script still contains old TestEnum enum - stale reference!",
-            )
+            # Unrelated identifiers that merely resemble the asset suffix stay unchanged.
+            self.assertIn("TestEnum.test_old", updated_script_content)
+            self.assertNotIn("TestEnum.test_new", updated_script_content)
 
     def test_script_rename_updates_object_event_callers(self):
         """Script renames must update GML callers in object event files."""
@@ -285,6 +283,70 @@ class TestWorkflowEnhanced(unittest.TestCase):
             updated_event = event_gml.read_text(encoding="utf-8")
             self.assertIn(f"{new_script_name}()", updated_event)
             self.assertNotIn(f"{old_script_name}()", updated_event)
+
+    def test_asset_rename_blocks_ambiguous_gml_bindings_before_mutation(self):
+        with TempProject() as proj:
+            old_name = "o_shadowed_asset"
+            new_name = "o_renamed_asset"
+            ObjectAsset().create_files(proj.dir, old_name, "")
+            proj.add_resource_to_project(old_name, f"objects/{old_name}/{old_name}.yy")
+            _script_yy, script_gml = proj.create_script_with_asset_references("scr_shadow_probe", [])
+            original = f"var {old_name} = 3;\n{old_name} += 1;\nfunction probe({old_name}) {{ return {old_name}; }}\n"
+            script_gml.write_text(original, encoding="utf-8")
+
+            with self.assertRaisesRegex(ValidationError, "Rename blocked.*ambiguous"):
+                rename_asset(proj.dir, f"objects/{old_name}/{old_name}.yy", new_name)
+
+            self.assertTrue((proj.dir / "objects" / old_name / f"{old_name}.yy").is_file())
+            self.assertFalse((proj.dir / "objects" / new_name).exists())
+            self.assertEqual(script_gml.read_text(encoding="utf-8"), original)
+
+    def test_collision_target_rename_updates_all_event_metadata_and_files(self):
+        with TempProject() as proj:
+            old_name = "o_collision_target"
+            new_name = "o_collision_renamed"
+            owners = [old_name, "o_collision_owner_a", "o_collision_owner_b"]
+            for owner in owners:
+                ObjectAsset().create_files(proj.dir, owner, "")
+                proj.add_resource_to_project(owner, f"objects/{owner}/{owner}.yy")
+            for owner in owners:
+                add_event(owner, f"collision:{old_name}", f"hit = {old_name};\n", proj.dir)
+
+            rename_asset(proj.dir, f"objects/{old_name}/{old_name}.yy", new_name)
+
+            for original_owner in owners:
+                owner = new_name if original_owner == old_name else original_owner
+                owner_dir = proj.dir / "objects" / owner
+                self.assertFalse((owner_dir / f"Collision_{old_name}.gml").exists())
+                self.assertTrue((owner_dir / f"Collision_{new_name}.gml").is_file())
+                owner_data = load_json_loose(owner_dir / f"{owner}.yy")
+                collision = next(event for event in owner_data["eventList"] if event["eventType"] == 4)
+                self.assertEqual(collision["eventNum"], 0)
+                self.assertEqual(collision["%Name"], f"Collision_{new_name}")
+                self.assertEqual(collision["name"], f"Collision_{new_name}")
+                self.assertEqual(
+                    collision["collisionObjectId"],
+                    {"name": new_name, "path": f"objects/{new_name}/{new_name}.yy"},
+                )
+
+    def test_collision_target_rename_preflights_destination_conflict_before_mutation(self):
+        with TempProject() as proj:
+            old_name = "o_collision_target"
+            new_name = "o_collision_renamed"
+            for name in (old_name, "o_collision_owner"):
+                ObjectAsset().create_files(proj.dir, name, "")
+                proj.add_resource_to_project(name, f"objects/{name}/{name}.yy")
+            add_event("o_collision_owner", f"collision:{old_name}", "hit = true;\n", proj.dir)
+            owner_dir = proj.dir / "objects" / "o_collision_owner"
+            (owner_dir / f"Collision_{new_name}.gml").write_text("conflict\n", encoding="utf-8")
+            project_before = (proj.dir / "test.yyp").read_bytes()
+
+            with self.assertRaises(ValidationError):
+                rename_asset(proj.dir, f"objects/{old_name}/{old_name}.yy", new_name)
+
+            self.assertTrue((proj.dir / "objects" / old_name / f"{old_name}.yy").is_file())
+            self.assertFalse((proj.dir / "objects" / new_name).exists())
+            self.assertEqual((proj.dir / "test.yyp").read_bytes(), project_before)
 
     def test_asset_rename_updates_resource_order(self):
         """
@@ -406,6 +468,417 @@ class TestWorkflowEnhanced(unittest.TestCase):
             self.assertEqual(
                 len(stale_refs), 0, f"Found {len(stale_refs)} stale references after comprehensive rename: {stale_refs}"
             )
+
+    def test_rename_changes_only_executable_gml_identifiers(self):
+        with TempProject() as proj:
+            old_name = "o_semantic_old"
+            new_name = "o_semantic_new"
+            object_asset = ObjectAsset()
+            object_asset.create_files(proj.dir, old_name, "")
+            proj.add_resource_to_project(old_name, f"objects/{old_name}/{old_name}.yy")
+            _script_yy, script_gml = proj.create_script_with_asset_references("scr_semantic_probe", [])
+            script_gml.write_text(
+                f"var target = {old_name};\n"
+                f"// keep comment {old_name}\n"
+                f"/* keep block {old_name} */\n"
+                f'var label = "keep string {old_name}";\n'
+                f'var verbatim = @"keep verbatim {old_name}";\n'
+                f"var longer = {old_name}_variant;\n",
+                encoding="utf-8",
+            )
+
+            rename_asset(proj.dir, f"objects/{old_name}/{old_name}.yy", new_name)
+
+            updated = script_gml.read_text(encoding="utf-8")
+            self.assertIn(f"var target = {new_name};", updated)
+            self.assertIn(f"// keep comment {old_name}", updated)
+            self.assertIn(f"/* keep block {old_name} */", updated)
+            self.assertIn(f'"keep string {old_name}"', updated)
+            self.assertIn(f'@"keep verbatim {old_name}"', updated)
+            self.assertIn(f"{old_name}_variant", updated)
+
+    def test_rename_preserves_scoped_fields_and_struct_keys_named_like_asset(self):
+        with TempProject() as proj:
+            old_name = "o_scoped_old"
+            new_name = "o_scoped_new"
+            object_asset = ObjectAsset()
+            object_asset.create_files(proj.dir, old_name, "")
+            proj.add_resource_to_project(old_name, f"objects/{old_name}/{old_name}.yy")
+            _script_yy, script_gml = proj.create_script_with_asset_references("scr_scoped_probe", [])
+            script_gml.write_text(
+                f"self.{old_name} = 1;\n"
+                f"global.{old_name} += 1;\n"
+                f"config /* keep */ . {old_name} = 2;\n"
+                f"var values = {{ {old_name}: {old_name} }};\n"
+                f"switch (target) {{ case {old_name}: break; }}\n"
+                f"var choice = flag ? {old_name} : noone;\n"
+                f"enum Kind {{ {old_name} = 7, other = {old_name} }}\n"
+                f"#region {old_name}\n"
+                f"var enum_value = {old_name};\n"
+                f"#endregion {old_name}\n"
+                f'var dynamic_asset = asset_get_index("{old_name}");\n'
+                f'var verbatim_asset = asset_get_index(@"{old_name}");\n'
+                f'var scoped_lookup = resolver.asset_get_index("{old_name}");\n'
+                f'var ordinary_label = "{old_name}";\n'
+                f"var target = {old_name};\n",
+                encoding="utf-8",
+            )
+
+            rename_asset(proj.dir, f"objects/{old_name}/{old_name}.yy", new_name)
+
+            updated = script_gml.read_text(encoding="utf-8")
+            self.assertIn(f"self.{old_name} = 1;", updated)
+            self.assertIn(f"global.{old_name} += 1;", updated)
+            self.assertIn(f"config /* keep */ . {old_name} = 2;", updated)
+            self.assertIn(f"{{ {old_name}: {new_name} }}", updated)
+            self.assertIn(f"case {new_name}:", updated)
+            self.assertIn(f"flag ? {new_name} : noone", updated)
+            self.assertIn(f"enum Kind {{ {old_name} = 7, other = {new_name} }}", updated)
+            self.assertIn(f"#region {old_name}", updated)
+            self.assertIn(f"#endregion {old_name}", updated)
+            self.assertIn(f"var enum_value = {new_name};", updated)
+            self.assertIn(f'asset_get_index("{new_name}")', updated)
+            self.assertIn(f'asset_get_index(@"{new_name}")', updated)
+            self.assertIn(f'resolver.asset_get_index("{old_name}")', updated)
+            self.assertIn(f'var ordinary_label = "{old_name}";', updated)
+            self.assertIn(f"var target = {new_name};", updated)
+
+    def test_rename_updates_exact_structured_paths_without_touching_unrelated_names(self):
+        with TempProject() as proj:
+            old_name = "o_structured_old"
+            new_name = "o_structured_new"
+            old_path = f"objects/{old_name}/{old_name}.yy"
+            new_path = f"objects/{new_name}/{new_name}.yy"
+            object_asset = ObjectAsset()
+            object_asset.create_files(proj.dir, old_name, "")
+            proj.add_resource_to_project(old_name, old_path)
+            target_yy = proj.dir / old_path
+            target_data = load_json_loose(target_yy)
+            target_data["properties"] = [
+                {
+                    "$GMObjectProperty": "v2",
+                    "%Name": old_name,
+                    "name": old_name,
+                    "resourceType": "GMObjectProperty",
+                    "value": old_name,
+                }
+            ]
+            save_pretty_json_gm(target_yy, target_data)
+
+            holder_name = "o_structured_holder"
+            holder_dir = proj.dir / "objects" / holder_name
+            holder_dir.mkdir(parents=True)
+            save_pretty_json_gm(
+                holder_dir / f"{holder_name}.yy",
+                {
+                    "$GMObject": "",
+                    "%Name": holder_name,
+                    "name": holder_name,
+                    "parentObjectId": {"name": old_name, "path": old_path},
+                    "properties": [
+                        {
+                            "$GMObjectProperty": "v2",
+                            "resourceType": "GMObjectProperty",
+                            "value": old_name,
+                        }
+                    ],
+                    "overriddenProperties": [
+                        {
+                            "$GMOverriddenProperty": "v1",
+                            "resourceType": "GMOverriddenProperty",
+                            "objectId": {"name": old_name, "path": old_path},
+                            "propertyId": {"name": old_name, "path": old_path},
+                            "value": "0",
+                        }
+                    ],
+                    "unrelated": {"name": old_name, "path": "objects/o_other/o_other.yy"},
+                },
+            )
+            proj.add_resource_to_project(holder_name, f"objects/{holder_name}/{holder_name}.yy")
+            proj.yyp_data["resourceOrder"] = [old_path]
+            save_pretty_json_gm(proj.dir / "test.yyp", proj.yyp_data)
+
+            rename_asset(proj.dir, old_path, new_name)
+
+            holder = load_json_loose(holder_dir / f"{holder_name}.yy")
+            self.assertEqual(holder["parentObjectId"], {"name": new_name, "path": new_path})
+            self.assertEqual(holder["properties"][0]["value"], new_name)
+            self.assertEqual(holder["overriddenProperties"][0]["objectId"], {"name": new_name, "path": new_path})
+            self.assertEqual(holder["overriddenProperties"][0]["propertyId"], {"name": old_name, "path": new_path})
+            self.assertEqual(holder["unrelated"], {"name": old_name, "path": "objects/o_other/o_other.yy"})
+            renamed_target = load_json_loose(proj.dir / new_path)
+            self.assertEqual(renamed_target["properties"][0]["%Name"], old_name)
+            self.assertEqual(renamed_target["properties"][0]["name"], old_name)
+            self.assertEqual(renamed_target["properties"][0]["value"], new_name)
+            project_data = load_json_loose(proj.dir / "test.yyp")
+            self.assertEqual(project_data["resourceOrder"], [new_path])
+
+    def test_room_rename_does_not_rename_nested_layer_with_same_name(self):
+        with TempProject() as proj:
+            old_name = "r_scoped_old"
+            new_name = "r_scoped_new"
+            old_path = f"rooms/{old_name}/{old_name}.yy"
+            room_dir = proj.dir / "rooms" / old_name
+            room_dir.mkdir(parents=True)
+            save_pretty_json_gm(
+                room_dir / f"{old_name}.yy",
+                {
+                    "$GMRoom": "",
+                    "%Name": old_name,
+                    "name": old_name,
+                    "layers": [
+                        {
+                            "$GMRInstanceLayer": "",
+                            "%Name": old_name,
+                            "name": old_name,
+                            "resourceType": "GMRInstanceLayer",
+                        }
+                    ],
+                },
+            )
+            proj.add_resource_to_project(old_name, old_path)
+
+            rename_asset(proj.dir, old_path, new_name)
+
+            renamed = load_json_loose(proj.dir / "rooms" / new_name / f"{new_name}.yy")
+            self.assertEqual(renamed["name"], new_name)
+            self.assertEqual(renamed["%Name"], new_name)
+            self.assertEqual(renamed["layers"][0]["name"], old_name)
+            self.assertEqual(renamed["layers"][0]["%Name"], old_name)
+
+    def test_room_duplicate_and_delete_keep_room_order_nodes_consistent(self):
+        with TempProject() as proj:
+            source_name = "r_order_source"
+            copy_name = "r_order_copy"
+            source_path = f"rooms/{source_name}/{source_name}.yy"
+            source_dir = proj.dir / "rooms" / source_name
+            source_dir.mkdir(parents=True)
+            save_pretty_json_gm(
+                source_dir / f"{source_name}.yy",
+                {"$GMRoom": "", "%Name": source_name, "name": source_name},
+            )
+            proj.add_resource_to_project(source_name, source_path)
+            project = load_json_loose(proj.dir / "test.yyp")
+            project["RoomOrderNodes"] = [{"roomId": {"name": source_name, "path": source_path}}]
+            save_pretty_json_gm(proj.dir / "test.yyp", project)
+
+            duplicate_asset(proj.dir, source_path, copy_name)
+            duplicated_project = load_json_loose(proj.dir / "test.yyp")
+            self.assertEqual(
+                [entry["roomId"]["name"] for entry in duplicated_project["RoomOrderNodes"]],
+                [source_name, copy_name],
+            )
+
+            delete_asset(proj.dir, source_path, force=True)
+            deleted_project = load_json_loose(proj.dir / "test.yyp")
+            self.assertEqual(
+                [entry["roomId"]["name"] for entry in deleted_project["RoomOrderNodes"]],
+                [copy_name],
+            )
+
+    def test_duplicate_sprite_regenerates_local_identities_and_paths(self):
+        with TempProject() as proj:
+            old_name = "spr_identity_source"
+            new_name = "spr_identity_copy"
+            frame_id = "1" * 32
+            layer_id = "2" * 32
+            keyframe_id = "3" * 32
+            sprite_dir = proj.dir / "sprites" / old_name
+            (sprite_dir / "layers" / frame_id).mkdir(parents=True)
+            (sprite_dir / f"{frame_id}.png").write_bytes(b"frame")
+            (sprite_dir / "layers" / frame_id / f"{layer_id}.png").write_bytes(b"layer")
+            save_pretty_json_gm(
+                sprite_dir / f"{old_name}.yy",
+                {
+                    "$GMSprite": "",
+                    "%Name": old_name,
+                    "name": old_name,
+                    "frames": [{"%Name": frame_id, "name": frame_id}],
+                    "layers": [{"%Name": layer_id, "name": layer_id}],
+                    "parent": {"name": "Sprites", "path": "folders/Sprites.yy"},
+                    "sequence": {
+                        "%Name": old_name,
+                        "name": old_name,
+                        "tracks": [
+                            {
+                                "keyframes": {
+                                    "Keyframes": [
+                                        {
+                                            "id": keyframe_id,
+                                            "Channels": {
+                                                "0": {
+                                                    "Id": {
+                                                        "name": frame_id,
+                                                        "path": f"sprites/{old_name}/{old_name}.yy",
+                                                    }
+                                                }
+                                            },
+                                        }
+                                    ]
+                                }
+                            }
+                        ],
+                    },
+                },
+            )
+            proj.add_resource_to_project(old_name, f"sprites/{old_name}/{old_name}.yy")
+            proj.yyp_data["resourceOrder"] = [f"sprites/{old_name}/{old_name}.yy"]
+            save_pretty_json_gm(proj.dir / "test.yyp", proj.yyp_data)
+
+            duplicate_asset(proj.dir, f"sprites/{old_name}/{old_name}.yy", new_name)
+
+            copied_dir = proj.dir / "sprites" / new_name
+            copied = load_json_loose(copied_dir / f"{new_name}.yy")
+            copied_frame = copied["frames"][0]["name"]
+            copied_layer = copied["layers"][0]["name"]
+            copied_keyframe = copied["sequence"]["tracks"][0]["keyframes"]["Keyframes"][0]
+            self.assertNotEqual(copied_frame, frame_id)
+            self.assertNotEqual(copied_layer, layer_id)
+            self.assertNotEqual(copied_keyframe["id"], keyframe_id)
+            self.assertEqual(copied_keyframe["Channels"]["0"]["Id"]["name"], copied_frame)
+            self.assertEqual(
+                copied_keyframe["Channels"]["0"]["Id"]["path"],
+                f"sprites/{new_name}/{new_name}.yy",
+            )
+            self.assertTrue((copied_dir / f"{copied_frame}.png").exists())
+            self.assertTrue((copied_dir / "layers" / copied_frame / f"{copied_layer}.png").exists())
+            self.assertEqual(copied["parent"]["path"], "folders/Sprites.yy")
+            order_data = load_json_loose(proj.dir / "test.resource_order")
+            order_entries = order_data["ResourceOrderSettings"]
+            self.assertEqual([entry["name"] for entry in order_entries], [old_name, new_name])
+            self.assertEqual([entry["order"] for entry in order_entries], [0, 1])
+            project_data = load_json_loose(proj.dir / "test.yyp")
+            self.assertEqual(
+                project_data["resourceOrder"],
+                [
+                    f"sprites/{old_name}/{old_name}.yy",
+                    f"sprites/{new_name}/{new_name}.yy",
+                ],
+            )
+
+    def test_duplicate_room_regenerates_instance_identity_and_preserves_object_reference(self):
+        with TempProject() as proj:
+            old_name = "r_identity_source"
+            new_name = "r_identity_copy"
+            instance_id = f"inst_{'4' * 32}"
+            room_dir = proj.dir / "rooms" / old_name
+            room_dir.mkdir(parents=True)
+            creation_file = f"InstanceCreationCode_{instance_id}.gml"
+            (room_dir / creation_file).write_text("hp = 10;\n", encoding="utf-8")
+            save_pretty_json_gm(
+                room_dir / f"{old_name}.yy",
+                {
+                    "$GMRoom": "",
+                    "%Name": old_name,
+                    "name": old_name,
+                    "parent": {"name": "Rooms", "path": "folders/Rooms.yy"},
+                    "instanceCreationOrder": [{"name": instance_id, "path": f"rooms/{old_name}/{old_name}.yy"}],
+                    "layers": [
+                        {
+                            "$GMRInstanceLayer": "",
+                            "name": "Instances",
+                            "instances": [
+                                {
+                                    "$GMRInstance": "",
+                                    "resourceType": "GMRInstance",
+                                    "name": instance_id,
+                                    "creationCodeFile": creation_file,
+                                    "objectId": {
+                                        "name": "o_enemy",
+                                        "path": "objects/o_enemy/o_enemy.yy",
+                                    },
+                                }
+                            ],
+                        }
+                    ],
+                },
+            )
+            proj.add_resource_to_project(old_name, f"rooms/{old_name}/{old_name}.yy")
+
+            duplicate_asset(proj.dir, f"rooms/{old_name}/{old_name}.yy", new_name)
+
+            copied_dir = proj.dir / "rooms" / new_name
+            copied = load_json_loose(copied_dir / f"{new_name}.yy")
+            copied_instance = copied["layers"][0]["instances"][0]
+            self.assertNotEqual(copied_instance["name"], instance_id)
+            self.assertEqual(copied_instance["objectId"]["path"], "objects/o_enemy/o_enemy.yy")
+            self.assertEqual(
+                copied["instanceCreationOrder"][0]["path"],
+                f"rooms/{new_name}/{new_name}.yy",
+            )
+            self.assertTrue((copied_dir / copied_instance["creationCodeFile"]).exists())
+
+    def test_duplicate_script_preserves_parent_and_only_renames_executable_stub(self):
+        with TempProject() as proj:
+            old_name = "scr_copy_source"
+            new_name = "scr_copy_target"
+            script_dir = proj.dir / "scripts" / old_name
+            script_dir.mkdir(parents=True)
+            save_pretty_json_gm(
+                script_dir / f"{old_name}.yy",
+                {
+                    "$GMScript": "",
+                    "%Name": old_name,
+                    "name": old_name,
+                    "parent": {"name": "Scripts", "path": "folders/Scripts.yy"},
+                },
+            )
+            (script_dir / f"{old_name}.gml").write_text(
+                f"function {old_name}(value) {{\n"
+                f"    // {old_name} stays in docs\n"
+                f'    return value + string("{old_name}");\n'
+                "}\n",
+                encoding="utf-8",
+            )
+            proj.add_resource_to_project(old_name, f"scripts/{old_name}/{old_name}.yy")
+
+            duplicate_asset(proj.dir, f"scripts/{old_name}/{old_name}.yy", new_name)
+
+            copied_dir = proj.dir / "scripts" / new_name
+            copied = load_json_loose(copied_dir / f"{new_name}.yy")
+            copied_gml = (copied_dir / f"{new_name}.gml").read_text(encoding="utf-8")
+            self.assertEqual(copied["parent"]["path"], "folders/Scripts.yy")
+            self.assertIn(f"function {new_name}(value)", copied_gml)
+            self.assertIn(f"// {old_name} stays in docs", copied_gml)
+            self.assertIn(f'"{old_name}"', copied_gml)
+
+    def test_duplicate_and_rename_shader_keep_source_filenames_aligned(self):
+        with TempProject() as proj:
+            old_name = "shd_source"
+            copy_name = "shd_copy"
+            renamed_name = "shd_renamed"
+            shader = ShaderAsset()
+            shader.create_files(proj.dir, old_name, "")
+            old_path = f"shaders/{old_name}/{old_name}.yy"
+            proj.add_resource_to_project(old_name, old_path)
+
+            duplicate_asset(proj.dir, old_path, copy_name)
+            copied_dir = proj.dir / "shaders" / copy_name
+            self.assertTrue((copied_dir / f"{copy_name}.vsh").exists())
+            self.assertTrue((copied_dir / f"{copy_name}.fsh").exists())
+            self.assertFalse((copied_dir / f"{old_name}.vsh").exists())
+
+            rename_asset(proj.dir, old_path, renamed_name)
+            renamed_dir = proj.dir / "shaders" / renamed_name
+            self.assertTrue((renamed_dir / f"{renamed_name}.vsh").exists())
+            self.assertTrue((renamed_dir / f"{renamed_name}.fsh").exists())
+            self.assertFalse((renamed_dir / f"{old_name}.fsh").exists())
+
+    def test_delete_removes_structured_resource_order_entries(self):
+        with TempProject() as proj:
+            name = "scr_delete_ordered"
+            path = f"scripts/{name}/{name}.yy"
+            proj.create_script_with_asset_references(name, [])
+            proj.yyp_data["resourceOrder"] = [path]
+            save_pretty_json_gm(proj.dir / "test.yyp", proj.yyp_data)
+
+            result = delete_asset(proj.dir, path, dry_run=False)
+
+            self.assertTrue(result.success)
+            project_data = load_json_loose(proj.dir / "test.yyp")
+            self.assertEqual(project_data["resourceOrder"], [])
+            order_data = load_json_loose(proj.dir / "test.resource_order")
+            self.assertEqual(order_data["ResourceOrderSettings"], [])
 
     def test_sprite_creation_json_format(self):
         """Test that sprite creation generates valid JSON without extra fields"""
@@ -601,6 +1074,11 @@ class TestReferenceScanner(unittest.TestCase):
             stale_refs = scanner.validate_no_stale_references("scr_agent_proof")
 
             self.assertEqual(stale_refs, [])
+
+    def test_default_argument_asset_reference_is_not_a_parameter_binding(self):
+        source = "function probe(chosen = o_target) { return chosen; }"
+
+        self.assertEqual(find_gml_ambiguous_asset_bindings(source, "o_target"), [])
 
 
 if __name__ == "__main__":

@@ -10,6 +10,7 @@ and is intended to be used by CI to publish artifacts.
 from __future__ import annotations
 
 import argparse
+import asyncio
 import ast
 import datetime
 import fnmatch
@@ -212,7 +213,10 @@ def write_coverage_xml(paths: Mapping[str, Path], env: Mapping[str, str]) -> int
 
 def run_quality_suite(paths: Mapping[str, Path], skip_final_verification: bool) -> int:
     env = os.environ.copy()
-    env["PYTHONPATH"] = str(paths["root"] / "src")
+    pythonpath_entries = [str(paths["root"]), str(paths["root"] / "src")]
+    if env.get("PYTHONPATH"):
+        pythonpath_entries.append(env["PYTHONPATH"])
+    env["PYTHONPATH"] = os.pathsep.join(pythonpath_entries)
     env["GMS_TEST_SUITE"] = "1"
     env["COVERAGE_FILE"] = str(paths["root"] / ".coverage")
     if sys.platform == "win32":
@@ -429,11 +433,10 @@ def categorize_tool(name: str) -> str:
     if name in {
         "gm_project_info",
         "gm_mcp_health",
-        "gm_cli",
         "gm_diagnostics",
     }:
         return "Project & Health"
-    if name.startswith("gm_create_") or name == "gm_asset_delete":
+    if name.startswith("gm_create_"):
         return "Asset Creation"
     if name.startswith("gm_maintenance_"):
         return "Maintenance"
@@ -485,6 +488,46 @@ def scan_tool_references(tests_dir: Path, tools: List[str]) -> List[str]:
         if re.search(rf"\b{re.escape(tool)}\b", full_text):
             referenced.append(tool)
     return referenced
+
+
+def discover_registered_mcp_tools(profile: str) -> List[object]:
+    from gms_mcp.gamemaker_mcp_server import build_server
+
+    previous = os.environ.get("GMS_MCP_TOOLSETS")
+    os.environ["GMS_MCP_TOOLSETS"] = profile
+    try:
+        return list(asyncio.run(build_server().list_tools()))
+    finally:
+        if previous is None:
+            os.environ.pop("GMS_MCP_TOOLSETS", None)
+        else:
+            os.environ["GMS_MCP_TOOLSETS"] = previous
+
+
+def parse_mcp_smoke(path: Path) -> Dict[str, object]:
+    if not path.exists():
+        return {"status": "not_run", "selected": 0, "executed": 0, "passed": 0, "failed": 0, "tools": []}
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return {"status": "invalid", "selected": 0, "executed": 0, "passed": 0, "failed": 0, "tools": []}
+
+    records = payload.get("records") or payload.get("results") or []
+    if not isinstance(records, list):
+        records = []
+    selected = payload.get("selected_tools") or []
+    selected_count = len(selected) if isinstance(selected, list) else 0
+    passed = sum(1 for record in records if isinstance(record, dict) and bool(record.get("ok")))
+    failed = sum(1 for record in records if isinstance(record, dict) and not bool(record.get("ok")))
+    tools = [str(record.get("tool")) for record in records if isinstance(record, dict) and record.get("tool")]
+    return {
+        "status": "passed" if records and failed == 0 else "failed" if failed else "empty",
+        "selected": selected_count,
+        "executed": len(records),
+        "passed": passed,
+        "failed": failed,
+        "tools": tools,
+    }
 
 
 def write_coverage_report(
@@ -552,9 +595,7 @@ def write_coverage_report(
                 lines.append(f"- Overall coverage {coverage_value:.1f}% is below {minimum_value:.1f}%.")
             else:
                 module_name = str(failure.get("module", "unknown"))
-                lines.append(
-                    f"- `{module_name}` coverage {coverage_value:.1f}% is below {minimum_value:.1f}%."
-                )
+                lines.append(f"- `{module_name}` coverage {coverage_value:.1f}% is below {minimum_value:.1f}%.")
     else:
         lines.append("Coverage gates passed.")
 
@@ -564,25 +605,31 @@ def write_coverage_report(
 def write_tool_report(
     tools: List[str],
     referenced: List[str],
+    core_tools: List[str],
+    registered_tools: List[str],
+    smoke: Dict[str, object],
     junit: Dict[str, object],
     out_path: Path,
 ) -> None:
-    tested = {name: name in referenced for name in tools}
+    referenced_map = {name: name in referenced for name in tools}
     total = len(tools)
-    tested_count = sum(1 for value in tested.values() if value)
-    expected_failures = max(0, total - tested_count)
+    referenced_count = sum(1 for value in referenced_map.values() if value)
 
     lines = [
         "# MCP Tool Validation Report",
         "",
-        "Generated from test-source references in the repository.",
+        "Generated from runtime tool registration, dedicated MCP smoke execution, and a static test-source scan.",
         "",
         "## Summary",
         "| Metric | Value |",
         "| --- | --- |",
-        f"| Total MCP Tools | {total} |",
-        f"| Tools with Direct Test References | {tested_count} |",
-        f"| Untested Tools (by repo scan) | {expected_failures} |",
+        f"| Curated Core Tools Registered | {len(core_tools)} |",
+        f"| All-Profile Tools Registered | {len(registered_tools)} |",
+        f"| MCP Tools Found in Source | {total} |",
+        f"| MCP Tools Executed by Dedicated Smoke | {smoke['executed']} |",
+        f"| Dedicated Smoke Calls Passing | {smoke['passed']} |",
+        f"| Dedicated Smoke Calls Failing | {smoke['failed']} |",
+        f"| Tool Names Referenced in Test Source | {referenced_count} |",
         f"| Python Tests Run | {junit['tests']} |",
         f"| Tests Passing | {junit['passed']} |",
         f"| Skipped | {junit['skipped']} |",
@@ -593,28 +640,31 @@ def write_tool_report(
     by_category: Dict[str, Dict[str, int]] = {}
     for tool in tools:
         category = categorize_tool(tool)
-        bucket = by_category.setdefault(category, {"total": 0, "tested": 0})
+        bucket = by_category.setdefault(category, {"total": 0, "referenced": 0})
         bucket["total"] += 1
-        if tested[tool]:
-            bucket["tested"] += 1
+        if referenced_map[tool]:
+            bucket["referenced"] += 1
 
     for category in sorted(by_category):
         bucket = by_category[category]
-        lines.append(f"### {category} ({bucket['tested']}/{bucket['total']} TESTED)")
-        if bucket["tested"] == 0:
-            lines.append("No direct test references found in the repository for this category.")
+        lines.append(f"### {category} ({bucket['referenced']}/{bucket['total']} REFERENCED)")
+        if bucket["referenced"] == 0:
+            lines.append("No test-source references found in the repository for this category.")
         for tool in sorted(tools):
             if categorize_tool(tool) != category:
                 continue
-            status = "PASS" if tested[tool] else "PENDING"
+            status = "REFERENCED" if referenced_map[tool] else "NO REFERENCE"
             lines.append(f"- `{tool}`: {status}")
         lines.append("")
 
     lines.append("## Notes")
     lines.append(
-        "- Coverage is computed from static test-source references and executed pytest results, not from a dedicated MCP test framework."
+        "- Dedicated smoke counts are executed MCP calls; static references are never labelled as passing tests."
     )
-    lines.append("- Keep this report as an implementation-time signal; update when coverage tooling changes.")
+    lines.append("- Pytest totals show suite breadth but do not imply every MCP tool received a behavioral call.")
+    lines.append(
+        "- Source and all-profile registration counts must match; CI fails if a decorated tool is not registered."
+    )
 
     out_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -638,24 +688,38 @@ def main() -> int:
     )
     tools = discover_mcp_tools(paths["server_sources_dir"])
     referenced = scan_tool_references(paths["root"] / "cli/tests/python", tools)
+    core_specs = discover_registered_mcp_tools("core")
+    all_specs = discover_registered_mcp_tools("all")
+    core_tools = sorted(str(getattr(spec, "name", "")) for spec in core_specs if getattr(spec, "name", ""))
+    registered_tools = sorted(str(getattr(spec, "name", "")) for spec in all_specs if getattr(spec, "name", ""))
+    smoke = parse_mcp_smoke(paths["output_dir"] / "mcp_tool_smoke_report.json")
 
     paths["output_dir"].mkdir(parents=True, exist_ok=True)
     write_coverage_report(coverage, junit, gate, paths["coverage_report_md"])
-    write_tool_report(tools, referenced, junit, paths["tool_report_md"])
+    write_tool_report(tools, referenced, core_tools, registered_tools, smoke, junit, paths["tool_report_md"])
 
     summary = {
-        "generated_at": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "generated_at": datetime.datetime.now(datetime.timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z"),
         "project": "gms-mcp",
         "coverage": coverage,
         "coverage_gate": gate,
         "tests": junit,
         "mcp_tools": {
-            "total": len(tools),
-            "tested_by_reference": len(referenced),
-            "untested": len(tools) - len(referenced),
+            "source_total": len(tools),
+            "core_registered": len(core_tools),
+            "all_registered": len(registered_tools),
+            "referenced_in_test_source": len(referenced),
+            "dedicated_smoke": smoke,
         },
     }
     paths["summary_json"].write_text(json.dumps(summary, indent=2) + "\n", encoding="utf-8")
+    if tools != registered_tools:
+        print("[ERROR] Runtime all-profile registration does not match decorated MCP tool source.")
+        print(f"[ERROR] Source-only: {sorted(set(tools) - set(registered_tools))}")
+        print(f"[ERROR] Registration-only: {sorted(set(registered_tools) - set(tools))}")
+        return 1
     if not bool(gate.get("ok")):
         print("[ERROR] Coverage gate failed.")
         gate_failures = gate.get("failures", [])

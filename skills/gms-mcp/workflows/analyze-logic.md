@@ -14,12 +14,12 @@ description: Summarize and understand script/object logic
 
 1. **Find the asset's location**:
    ```bash
-   gms symbol find-definition <script_or_object_name>
+   gms symbol find-definition scr_inventory_add
    ```
 
 2. **List symbols defined in the file**:
    ```bash
-   gms symbol list --file-filter <asset_name>
+   gms symbol list --file-filter inventory
    ```
 
 3. **Find what it depends on**:
@@ -28,7 +28,7 @@ description: Summarize and understand script/object logic
 
 4. **Find what depends on it**:
    ```bash
-   gms symbol find-references <asset_name>
+   gms symbol find-references scr_inventory_add
    ```
 
 5. **Create a summary** including:

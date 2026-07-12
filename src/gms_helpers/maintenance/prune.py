@@ -3,9 +3,9 @@ Asset Pruning - Remove missing asset references from project file
 """
 
 import os
-import shutil
 from typing import List, Tuple, Dict, Any
 
+from ..transactions import transactional_copy2
 from ..utils import load_json, save_json, find_yyp_file
 
 
@@ -96,7 +96,7 @@ def prune_missing_assets(project_root: str = ".", dry_run: bool = False) -> List
         if not dry_run and removed_entries:
             # Create backup
             backup_path = yyp_path + ".bak"
-            shutil.copy2(yyp_path, backup_path)
+            transactional_copy2(yyp_path, backup_path)
 
             # Update the data
             yyp_data["resources"] = valid_resources
