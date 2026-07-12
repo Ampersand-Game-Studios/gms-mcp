@@ -14,7 +14,6 @@ from unittest.mock import Mock, patch
 
 from gms_helpers import gms as gms_module
 from gms_helpers.commands import telemetry_commands
-from gms_mcp.server.direct import _run_gms_inprocess
 from gms_mcp.server.subprocess_runner import _run_cli_async
 from gms_mcp import telemetry_runtime
 from gms_mcp.telemetry import (
@@ -334,25 +333,6 @@ class TestTelemetry(unittest.TestCase):
         self.assertTrue(result)
         self.assertFalse((self.home_dir / ".gms-mcp" / "telemetry.json").exists())
 
-    def test_run_gms_inprocess_suppresses_cli_telemetry(self):
-        project_root = self.work_dir / "project"
-        _create_basic_gamemaker_project(project_root)
-
-        with (
-            temporary_home(self.home_dir),
-            patch.dict(
-                os.environ,
-                {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
-                clear=False,
-            ),
-        ):
-            enable_telemetry(include_install_hash=False)
-            result = _run_gms_inprocess(["telemetry", "status"], str(project_root))
-            queued_events = count_spool_events()
-
-        self.assertTrue(result.ok)
-        self.assertEqual(queued_events, 0)
-
     def test_run_cli_async_suppresses_cli_telemetry(self):
         project_root = self.work_dir / "project"
         _create_basic_gamemaker_project(project_root)
@@ -371,7 +351,7 @@ class TestTelemetry(unittest.TestCase):
                     ["telemetry", "status"],
                     str(project_root),
                     timeout_seconds=10,
-                    tool_name="gm_cli",
+                    tool_name="gm_project_info",
                 )
             )
             queued_events = count_spool_events()
