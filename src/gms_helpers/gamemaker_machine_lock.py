@@ -37,6 +37,11 @@ def _lock_path() -> Path:
     return Path(tempfile.gettempdir()).resolve() / "gms-mcp" / "locks" / "gamemaker-runtime.lock"
 
 
+def _delegation_path(lock_path: Path) -> Path:
+    """Return metadata path kept outside the byte-range-locked file."""
+    return lock_path.with_name(f"{lock_path.name}.delegation")
+
+
 class GameMakerMachineLock:
     """Serialize Igor start/compile/stop sections across threads and processes."""
 
@@ -45,6 +50,7 @@ class GameMakerMachineLock:
         self.project_root = Path(project_root).resolve()
         self.timeout_seconds = _lock_timeout_seconds() if timeout_seconds is None else max(0.0, timeout_seconds)
         self.path = _lock_path()
+        self._delegation_path = _delegation_path(self.path)
         self._file: BinaryIO | None = None
         self._thread_acquired = False
         self._os_acquired = False
@@ -72,6 +78,7 @@ class GameMakerMachineLock:
                     raise TimeoutError(self._timeout_message())
                 time.sleep(min(_POLL_SECONDS, remaining))
             self._os_acquired = True
+            self._remove_delegation_metadata()
             self._write_owner_metadata(lock_file)
         except Exception:
             self.release()
@@ -97,7 +104,14 @@ class GameMakerMachineLock:
             return False
 
     def _write_owner_metadata(self, lock_file: BinaryIO, *, delegate_operation: str | None = None) -> None:
-        payload = json.dumps(
+        payload = self._owner_metadata(delegate_operation)
+        lock_file.seek(1)
+        lock_file.truncate()
+        lock_file.write(payload)
+        lock_file.flush()
+
+    def _owner_metadata(self, delegate_operation: str | None) -> bytes:
+        return json.dumps(
             {
                 "pid": os.getpid(),
                 "operation": self.operation,
@@ -112,16 +126,36 @@ class GameMakerMachineLock:
             },
             sort_keys=True,
         ).encode("utf-8")
-        lock_file.seek(1)
-        lock_file.truncate()
-        lock_file.write(payload)
-        lock_file.flush()
+
+    def _write_delegation_metadata(self, delegate_operation: str) -> None:
+        """Publish a child lease without asking Windows to read a locked file."""
+        temporary_path = self._delegation_path.with_name(
+            f".{self._delegation_path.name}.{os.getpid()}.{secrets.token_hex(8)}.tmp"
+        )
+        try:
+            with temporary_path.open("xb") as metadata_file:
+                metadata_file.write(self._owner_metadata(delegate_operation))
+                metadata_file.flush()
+                os.fsync(metadata_file.fileno())
+            os.replace(temporary_path, self._delegation_path)
+        finally:
+            try:
+                temporary_path.unlink()
+            except FileNotFoundError:
+                pass
+
+    def _remove_delegation_metadata(self) -> None:
+        try:
+            self._delegation_path.unlink()
+        except OSError:
+            pass
 
     def delegation_environment(self, delegate_operation: str) -> dict[str, str]:
         """Issue one child process a project- and parent-bound lease delegation."""
         if not self._os_acquired or self._file is None:
             raise RuntimeError("GameMaker machine lock must be acquired before delegating it")
         self._write_owner_metadata(self._file, delegate_operation=delegate_operation)
+        self._write_delegation_metadata(delegate_operation)
         return {_DELEGATION_TOKEN_ENV: self._delegation_token}
 
     def _timeout_message(self) -> str:
@@ -135,6 +169,7 @@ class GameMakerMachineLock:
         if lock_file is not None:
             try:
                 if self._os_acquired:
+                    self._remove_delegation_metadata()
                     lock_file.seek(0)
                     if os.name == "nt":
                         import msvcrt
@@ -175,10 +210,9 @@ def _consume_valid_delegation(operation: str, project_root: Path) -> bool:
     token = os.environ.pop(_DELEGATION_TOKEN_ENV, "").strip()
     if not token:
         return False
+    delegation_path = _delegation_path(_lock_path())
     try:
-        with _lock_path().open("rb") as lock_file:
-            lock_file.seek(1)
-            metadata = json.loads(lock_file.read().decode("utf-8"))
+        metadata = json.loads(delegation_path.read_text(encoding="utf-8"))
     except (OSError, UnicodeDecodeError, json.JSONDecodeError):
         return False
     if not isinstance(metadata, dict):
@@ -189,10 +223,25 @@ def _consume_valid_delegation(operation: str, project_root: Path) -> bool:
     owner_pid = metadata.get("pid")
     metadata_project = os.path.normcase(str(metadata.get("project_root") or ""))
     expected_project = os.path.normcase(str(project_root))
-    return (
+    valid = (
         secrets.compare_digest(actual_hash, expected_hash)
         and metadata.get("delegate_operation") == operation
         and metadata_project == expected_project
         and isinstance(owner_pid, int)
         and owner_pid == os.getppid()
     )
+    if not valid:
+        return False
+
+    claimed_path = delegation_path.with_name(f".{delegation_path.name}.claimed.{os.getpid()}.{secrets.token_hex(8)}")
+    try:
+        os.replace(delegation_path, claimed_path)
+    except OSError:
+        return False
+    try:
+        return True
+    finally:
+        try:
+            claimed_path.unlink()
+        except FileNotFoundError:
+            pass

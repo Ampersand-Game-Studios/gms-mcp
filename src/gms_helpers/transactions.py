@@ -912,7 +912,9 @@ def _compile_verification_process_pids(project_root: Path) -> set[int]:
             ),
         ]
         if windows
-        else ["ps", "-axo", "pid=,command="]
+        # ``-ww`` prevents hosted runners from truncating long command lines
+        # before the project path or helper marker appears.
+        else ["ps", "-ww", "-axo", "pid=,command="]
     )
     try:
         process = subprocess.Popen(

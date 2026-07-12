@@ -221,22 +221,25 @@ def test_bounded_log_writer_and_marker_failures_are_best_effort(tmp_path: Path) 
 
 
 def test_process_group_helpers_cover_exit_permission_and_fallbacks() -> None:
-    with patch.object(subprocess_runner.os, "killpg", side_effect=ProcessLookupError):
+    with patch.object(subprocess_runner.os, "killpg", side_effect=ProcessLookupError, create=True):
         assert not subprocess_runner._posix_process_group_exists(123)
-    with patch.object(subprocess_runner.os, "killpg", side_effect=PermissionError):
+    with patch.object(subprocess_runner.os, "killpg", side_effect=PermissionError, create=True):
         assert subprocess_runner._posix_process_group_exists(123)
 
     process = Mock(pid=321)
     process.poll.return_value = 0
-    with patch.object(subprocess_runner.os, "getpgid", side_effect=ProcessLookupError):
+    with (
+        patch.object(subprocess_runner.os, "name", "posix"),
+        patch.object(subprocess_runner.os, "getpgid", side_effect=ProcessLookupError, create=True),
+    ):
         assert subprocess_runner._terminate_process_tree(process)
 
     process = Mock(pid=321)
     process.poll.return_value = 0
     process.wait.side_effect = [subprocess.TimeoutExpired("wait", 1), None]
     with (
-        patch.object(subprocess_runner.os, "getpgid", return_value=999),
         patch.object(subprocess_runner.os, "name", "posix"),
+        patch.object(subprocess_runner.os, "getpgid", return_value=999, create=True),
     ):
         assert subprocess_runner._terminate_process_tree(process)
     process.terminate.assert_called_once()
@@ -245,7 +248,10 @@ def test_process_group_helpers_cover_exit_permission_and_fallbacks() -> None:
     process = Mock(pid=321)
     process.poll.return_value = None
     process.kill.side_effect = OSError("denied")
-    with patch.object(subprocess_runner.os, "getpgid", side_effect=OSError("denied")):
+    with (
+        patch.object(subprocess_runner.os, "name", "posix"),
+        patch.object(subprocess_runner.os, "getpgid", side_effect=OSError("denied"), create=True),
+    ):
         assert not subprocess_runner._terminate_process_tree(process)
 
 

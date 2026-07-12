@@ -240,7 +240,7 @@ class TestRunnerGapCoverage(unittest.TestCase):
         self.assertIs(kwargs["stdin"], subprocess.DEVNULL)
         self.assertIs(kwargs["stdout"], subprocess.DEVNULL)
         self.assertIs(kwargs["stderr"], subprocess.DEVNULL)
-        self.assertEqual(kwargs["cwd"], "/fake")
+        self.assertEqual(kwargs["cwd"], str(Path("/fake/game").parent))
 
         with patch("gms_helpers.runner_process.subprocess.Popen", return_value=SimpleNamespace(pid=2)) as mock_popen:
             runner._run_igor_command(["/fake/Igor"])

@@ -699,7 +699,9 @@ def main() -> int:
     write_tool_report(tools, referenced, core_tools, registered_tools, smoke, junit, paths["tool_report_md"])
 
     summary = {
-        "generated_at": datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds").replace("+00:00", "Z"),
+        "generated_at": datetime.datetime.now(datetime.timezone.utc)
+        .isoformat(timespec="seconds")
+        .replace("+00:00", "Z"),
         "project": "gms-mcp",
         "coverage": coverage,
         "coverage_gate": gate,

@@ -11,7 +11,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
-from gms_helpers.gamemaker_machine_lock import GameMakerMachineLock
+from gms_helpers.gamemaker_machine_lock import GameMakerMachineLock, _consume_valid_delegation
 from gms_helpers.runner import GameMakerRunner
 from gms_helpers.runner_support.execution import RunnerExecutionMixin
 from gms_helpers.runner_support import execution as execution_module
@@ -133,6 +133,36 @@ class TestGameMakerMachineLock(unittest.TestCase):
 
             self.assertEqual(child.returncode, 0, child.stdout + child.stderr)
             self.assertEqual(child.stdout.strip(), "delegated")
+
+    def test_delegation_metadata_is_separate_validated_and_single_use(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir).resolve()
+            lock_path = root / "runtime.lock"
+            delegation_path = root / "runtime.lock.delegation"
+            with patch.dict(os.environ, {"GMS_MCP_MACHINE_LOCK_PATH": str(lock_path)}):
+                with GameMakerMachineLock("compile-verify", root, timeout_seconds=5) as parent_lock:
+                    child_env = parent_lock.delegation_environment("compile")
+                    self.assertTrue(delegation_path.is_file())
+
+                    with (
+                        patch.dict(os.environ, child_env),
+                        patch("gms_helpers.gamemaker_machine_lock.os.getppid", return_value=os.getpid()),
+                    ):
+                        self.assertFalse(_consume_valid_delegation("run", root))
+                    self.assertTrue(delegation_path.is_file())
+
+                    with (
+                        patch.dict(os.environ, child_env),
+                        patch("gms_helpers.gamemaker_machine_lock.os.getppid", return_value=os.getpid()),
+                    ):
+                        self.assertTrue(_consume_valid_delegation("compile", root))
+                    self.assertFalse(delegation_path.exists())
+
+                    with (
+                        patch.dict(os.environ, child_env),
+                        patch("gms_helpers.gamemaker_machine_lock.os.getppid", return_value=os.getpid()),
+                    ):
+                        self.assertFalse(_consume_valid_delegation("compile", root))
 
     def test_public_compile_and_stop_operations_use_the_machine_lock(self):
         operations: list[str] = []

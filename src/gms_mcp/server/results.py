@@ -15,7 +15,9 @@ def _jsonable_result(value: Any) -> Any:
     if is_dataclass(value) and not isinstance(value, type):
         return _jsonable_result(asdict(value))
     if isinstance(value, Path):
-        return str(value)
+        # MCP payloads are platform-neutral JSON. Keep path separators stable
+        # for clients regardless of the server host operating system.
+        return value.as_posix()
     if isinstance(value, Enum):
         return _jsonable_result(value.value)
     if isinstance(value, (dt.datetime, dt.date, dt.time)):

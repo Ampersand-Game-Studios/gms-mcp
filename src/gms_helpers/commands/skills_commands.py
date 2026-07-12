@@ -130,7 +130,7 @@ def handle_skills_list(args) -> Dict[str, Any]:
         legacy_project_installed = bool(legacy_project_dir and (legacy_project_dir / relative_path).exists())
 
         skill_info = {
-            "name": str(relative_path),
+            "name": relative_path.as_posix(),
             "user_installed": user_installed,
             "project_installed": project_installed,
             "legacy_project_installed": legacy_project_installed,
