@@ -3,9 +3,13 @@ name: CI
 on:
   pull_request:
     branches:
+      - "dev"
+      - "pre-release"
       - "main"
   push:
     branches:
+      - "dev"
+      - "pre-release"
       - "main"
 
 permissions:
@@ -23,7 +27,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest]
-        python-version: ["3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -31,26 +35,27 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
-          cache-dependency-path: pyproject.toml
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
-          python -m pip install -U build
+        run: uv sync --frozen --all-extras --python ${{ matrix.python-version }}
 
       - name: Build package
-        run: python -m build
-
-      - name: Generate quality reports
-        run: |
-          python scripts/generate_quality_reports.py
+        run: uv run --frozen python -m build
 
       - name: Run MCP tool smoke
         env:
           GMS_MCP_POST_MUTATION_VERIFY: "off"
-        run: python scripts/run_mcp_tool_smoke.py --init-minimal-base --base-project build/mcp-smoke/base-project --work-root build/mcp-smoke/work --output build/reports/mcp_tool_smoke_report.json --tools gm_asset_delete gm_create_object gm_event_add gm_maintenance_validate_json gm_room_instance_add gm_room_layer_add gm_verification_status gm_list_assets gm_project_info gm_search_references gm_workflow_duplicate gm_sprite_frame_count
+          GMS_MCP_TOOLSETS: "all"
+        run: uv run --frozen python scripts/run_mcp_tool_smoke.py --init-minimal-base --base-project build/mcp-smoke/base-project --work-root build/mcp-smoke/work --output build/reports/mcp_tool_smoke_report.json --tools gm_safe_delete gm_create_object gm_event_add gm_maintenance_validate_json gm_room_instance_add gm_room_layer_add gm_verification_status gm_list_assets gm_project_info gm_search_references gm_workflow_duplicate gm_sprite_frame_count
+
+      - name: Generate quality reports
+        run: |
+          uv run --frozen python scripts/generate_quality_reports.py
 
       - name: Upload quality reports
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -76,20 +81,22 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Install dependencies
-        run: |
-          python -m venv .venv
-          .venv/bin/python -m pip install --upgrade pip
-          .venv/bin/python -m pip install -e ".[dev]"
+        run: uv sync --frozen --all-extras --python 3.12
 
       - name: Ruff
-        run: .venv/bin/python -m ruff check .
+        run: |
+          uv run --frozen ruff check .
+          uv run --frozen ruff format --check .
 
       - name: Pyright
-        run: .venv/bin/pyright
+        run: uv run --frozen pyright
 
   mac_runner_session:
     name: macOS Runner/Session (Py${{ matrix.python-version }})
@@ -105,40 +112,41 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: ${{ matrix.python-version }}
-          cache: pip
-          cache-dependency-path: pyproject.toml
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+        run: uv sync --frozen --all-extras --python ${{ matrix.python-version }}
 
       - name: Run runner/session tests
         run: |
-          python -m pytest -q \
+          uv run --frozen python -m pytest -q \
             cli/tests/python/test_run_session.py \
             cli/tests/python/test_runner_session_integration.py \
             cli/tests/python/test_runtime_manager.py
 
       - name: Run install parity tests
         run: |
-          python -m pytest -q \
+          uv run --frozen python -m pytest -q \
             cli/tests/python/test_install_polish.py \
             cli/tests/python/test_install_parity.py
 
   real_gamemaker_smoke:
     name: Real GameMaker Smoke (${{ matrix.fixture_name }})
-    runs-on: macos-latest
+    runs-on: ${{ fromJSON(vars.GMS_MCP_REAL_SMOKE_RUNNER_LABELS || '["self-hosted","macOS","ARM64","gms-mcp-x"]') }}
     strategy:
       fail-fast: false
       matrix:
         include:
           - fixture_name: gm-2024
-            project_var: GMS_MCP_REAL_SMOKE_PROJECT_2024
-            runtime_var: GMS_MCP_REAL_SMOKE_RUNTIME_2024
+            project_env: GMS_MCP_REAL_SMOKE_PROJECT_2024
+            expected_runtime: 2024.14.4.268
           - fixture_name: gm-2026-lts
-            project_var: GMS_MCP_REAL_SMOKE_PROJECT_2026
-            runtime_var: GMS_MCP_REAL_SMOKE_RUNTIME_2026
+            project_env: GMS_MCP_REAL_SMOKE_PROJECT_2026
+            expected_runtime: 2026.0.0.23
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 
@@ -146,21 +154,22 @@ jobs:
         uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
         with:
           python-version: "3.12"
-          cache: pip
-          cache-dependency-path: pyproject.toml
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
 
       - name: Install dependencies
-        run: |
-          python -m pip install --upgrade pip
-          python -m pip install -e ".[dev]"
+        run: uv sync --frozen --all-extras --python 3.12
 
       - name: Run real GameMaker fixture smoke
-        env:
-          GMS_MCP_REAL_SMOKE_PROJECT: ${{ vars[matrix.project_var] }}
-          GMS_MCP_REAL_SMOKE_EXPECTED_RUNTIME: ${{ vars[matrix.runtime_var] }}
-          GMS_MCP_REQUIRE_REAL_GAMEMAKER_SMOKE: ${{ vars.GMS_MCP_REQUIRE_REAL_GAMEMAKER_SMOKE }}
         run: |
-          python scripts/run_real_gamemaker_smoke.py \
+          GMS_MCP_REAL_SMOKE_PROJECT="$(printenv '${{ matrix.project_env }}' || true)"
+          export GMS_MCP_REAL_SMOKE_PROJECT
+          export GMS_MCP_REAL_SMOKE_EXPECTED_RUNTIME='${{ matrix.expected_runtime }}'
+          export GMS_MCP_REQUIRE_REAL_GAMEMAKER_SMOKE=1
+          uv run --frozen python scripts/run_real_gamemaker_smoke.py \
             --fixture-name "${{ matrix.fixture_name }}" \
             --output "build/reports/real_gamemaker_smoke-${{ matrix.fixture_name }}.json"
 
