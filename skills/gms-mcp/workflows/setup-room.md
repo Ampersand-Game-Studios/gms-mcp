@@ -95,6 +95,8 @@ gms room instance list r_test_level
 
 ## Tips
 
+- Omitted room parent paths reuse an appropriate existing room folder or create `folders/Rooms.yy`
+- Explicit `--parent-path` values must name an existing logical folder
 - Use room duplication for level variants
 - Create a "template" room with common layers
 - Keep instance counts reasonable for editor performance

@@ -5,18 +5,18 @@ description: Check dependencies before deleting GameMaker assets
 
 ## When to use
 
-Before deleting ANY GameMaker asset (script, object, sprite, room, etc.), use this workflow to prevent broken references.
+Before deleting any GameMaker asset, use this dependency-aware workflow. It is a dry-run unless `--apply` is supplied.
 
 ## Workflow
 
-1. **Check for references** to the asset you want to delete:
+1. **Run the dependency-aware dry-run**:
    ```bash
-   gms symbol find-references <asset_name>
+   gms workflow safe-delete --asset-type script --asset-name scr_old_collision
    ```
 
 2. **Analyze the results**:
-   - If no references found: Safe to delete
-   - If references exist: Must update or remove references first
+   - If no references are found, apply the deletion
+   - If references exist, update or remove them first
 
 3. **If references exist**, either:
    - Update calling code to use alternative
@@ -24,31 +24,28 @@ Before deleting ANY GameMaker asset (script, object, sprite, room, etc.), use th
 
 4. **Delete the asset**:
    ```bash
-   gms asset delete <asset_type> <asset_name>
+   gms workflow safe-delete --asset-type script --asset-name scr_old_collision --apply
    ```
 
-5. **Run maintenance** to verify project integrity:
-   ```bash
-   gms maintenance auto
-   ```
+`--force --apply` permits deletion with dependencies but leaves those references unchanged and reports them as unresolved. It never rewrites code to `undefined`.
 
 ## Example
 
 User wants to delete `scr_old_collision`:
 
 ```bash
-# Step 1: Check references
-gms symbol find-references scr_old_collision
+# Step 1: Inspect the dependency-aware dry-run
+gms workflow safe-delete --asset-type script --asset-name scr_old_collision
 
 # Output shows o_player and o_enemy use it
 # Step 2: Update those objects first, then:
 
-gms asset delete script scr_old_collision
-gms maintenance auto
+gms workflow safe-delete --asset-type script --asset-name scr_old_collision
+gms workflow safe-delete --asset-type script --asset-name scr_old_collision --apply
 ```
 
 ## Never Do
 
-- Delete assets without checking references first
-- Ignore "symbol not found" warnings (may indicate stale index)
-- Skip the maintenance check after deletion
+- Use a lower-level delete command to bypass dependency checks
+- Treat `--force` as automatic reference cleanup
+- Assume comments or ordinary string literals are executable dependencies; an exact first string argument to `asset_get_index(...)` is the deliberate exception

@@ -14,6 +14,8 @@ When creating a new game object that needs a sprite and event handlers.
    gms asset create sprite spr_player --parent-path "folders/Sprites.yy"
    ```
 
+   If `--parent-path` is omitted, GMS reuses the project's appropriate sprite folder or creates `folders/Sprites.yy`.
+
 2. **Create the object** with sprite reference:
    ```bash
    gms asset create object o_player --parent-path "folders/Objects.yy" --sprite-id spr_player
@@ -76,7 +78,8 @@ gms event add o_enemy_boss alarm:1   # Special attack
 
 ## Tips
 
-- Always put assets in folders, not project root
+- Omitted parent paths are resolved to a logical asset-type folder; assets are never placed at project root
+- Explicit `--parent-path` values must name an existing logical folder
 - Set sprite before creating object when possible
 - Use parent objects for shared behavior
 - Add only the events you need (don't create empty ones)

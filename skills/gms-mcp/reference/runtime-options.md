@@ -9,7 +9,7 @@ description: Complete runtime and compilation options reference
 
 ### Start Game
 ```bash
-gms run start [options]
+gms run start --platform macOS --runtime VM --output-location temp
 ```
 
 ### Stop Game
@@ -24,7 +24,7 @@ gms run status
 
 ### Compile Only
 ```bash
-gms run compile [options]
+gms run compile --platform macOS --runtime VM
 ```
 
 ## Platform Options

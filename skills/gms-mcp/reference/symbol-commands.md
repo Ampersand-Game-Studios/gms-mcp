@@ -10,7 +10,7 @@ The symbol index enables code navigation and understanding.
 ## Building the Index
 
 ```bash
-gms symbol build [--force]
+gms symbol build --force
 ```
 - `--force` - Rebuild from scratch, ignore cache
 
@@ -24,7 +24,7 @@ gms symbol build [--force]
 Find where a symbol is defined.
 
 ```bash
-gms symbol find-definition <symbol_name>
+gms symbol find-definition player_move
 ```
 
 **Output includes:**
@@ -45,7 +45,7 @@ gms symbol find-definition MAX_SPEED        # Macro
 Find all usages of a symbol.
 
 ```bash
-gms symbol find-references <symbol_name> [--max-results INT]
+gms symbol find-references player_move --max-results 20
 ```
 - `--max-results` - Limit results (default: 50)
 
@@ -60,7 +60,7 @@ gms symbol find-references player_move --max-results 20
 List symbols in the project with filtering.
 
 ```bash
-gms symbol list [options]
+gms symbol list --kind function --name-filter player --max-results 100
 ```
 
 ### Filter by Kind
@@ -118,7 +118,7 @@ gms symbol list --kind function --name-filter init --max-results 20
 Quick project analysis (not part of symbol commands but related).
 
 ```bash
-gms diagnostics [--depth quick|deep] [--include-info]
+gms diagnostics --depth deep --include-info
 ```
 - `--depth quick` - Fast scan (default)
 - `--depth deep` - Comprehensive analysis

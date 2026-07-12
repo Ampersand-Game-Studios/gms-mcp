@@ -4,11 +4,11 @@ This document covers the unified `gms` command-line tool that provides all GameM
 
 ## MCP integration (Cursor, Codex, etc.)
 
-This repo includes an MCP server (`gms-mcp`) that mirrors the `gms` CLI as tools (direct import first, CLI fallback):
+This repo includes an MCP server (`gms-mcp`) with a curated core and opt-in domain toolsets:
 
-- **Assets**: create all supported asset types + delete
+- **Assets**: create all supported asset types; MCP deletion is dependency-aware through `gm_safe_delete`
 - **Events**: add/remove/duplicate/list/validate/fix
-- **Workflow**: duplicate/rename/delete/swap-sprite
+- **Workflow**: duplicate/rename/safe-delete/swap-sprite
 - **Rooms**: ops/layers/instances
 - **Code Intelligence** (GML symbol analysis):
   - `gm_build_index`: Build/rebuild the GML symbol index (cached for performance)
@@ -23,7 +23,7 @@ This repo includes an MCP server (`gms-mcp`) that mirrors the `gms` CLI as tools
   - `gm_get_project_stats`: Quick project-wide statistics.
 - **Maintenance**: auto + all subcommands
 - **Runner**: compile/run + stop/status
-- **Read-only helper CLI compatibility**: `gm_cli` permits help/version and an explicit read-only allowlist from this project's `gms` helper CLI. It is separate from GameMaker's official `gm-cli`; use named MCP tools for writes, runner actions, documentation-cache operations, telemetry, and skills.
+- **Profiles**: set `GMS_MCP_TOOLSETS=all` for the complete surface, or enable specific optional domains; `gm_capabilities` reports the active profile.
 
 MCP setup/notes: `README.md` (Cursor config: `gms-mcp-init --cursor`; other client examples: `gms-mcp-init --vscode --windsurf --antigravity --openclaw`; Antigravity global setup/check: `--antigravity-setup` / `--antigravity-check` / `--antigravity-check-json` and one-shot `--antigravity-app-setup`; Codex: `gms-mcp-init --codex` / `--codex-global`, plus `--codex-check` and `--codex-dry-run-only`).
 
@@ -938,7 +938,7 @@ python -m gms_helpers.room_helper list --verbose
 ### Room Operations
 Room operations now follow the standard asset workflow pattern:
 - **Duplication** preserves all room content while generating new instance UUIDs
-- **Renaming** updates all references and file paths correctly
+- **Renaming** updates token-aware GML asset references, exact `asset_get_index(...)` lookups, structured GameMaker resource references, and owned asset paths; declarations or assignments that shadow the asset name block the rename before mutation
 - **Deletion** removes room files and `.yyp` entries safely
 - **Listing** provides overview of all rooms with size and layer information
 

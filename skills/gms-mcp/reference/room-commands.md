@@ -9,22 +9,22 @@ description: Complete room, layer, and instance command reference
 
 ### List Rooms
 ```bash
-gms room ops list [--verbose]
+gms room ops list --verbose
 ```
 
 ### Duplicate Room
 ```bash
-gms room ops duplicate <source_room> <new_name>
+gms room ops duplicate r_level_01 r_level_02
 ```
 
 ### Rename Room
 ```bash
-gms room ops rename <room_name> <new_name>
+gms room ops rename r_old r_new
 ```
 
 ### Delete Room
 ```bash
-gms room ops delete <room_name> [--dry-run]
+gms room ops delete r_obsolete --dry-run
 ```
 
 ## Layer Management
@@ -41,7 +41,7 @@ gms room ops delete <room_name> [--dry-run]
 
 ### Add Layer
 ```bash
-gms room layer add <room_name> <layer_type> <layer_name> [--depth INT]
+gms room layer add r_level instance Instances --depth 0
 ```
 - `--depth` - Layer depth (default: 0). Lower = drawn on top.
 
@@ -52,12 +52,12 @@ gms room layer add <room_name> <layer_type> <layer_name> [--depth INT]
 
 ### Remove Layer
 ```bash
-gms room layer remove <room_name> <layer_name>
+gms room layer remove r_level UI
 ```
 
 ### List Layers
 ```bash
-gms room layer list <room_name>
+gms room layer list r_level
 ```
 
 ### Examples
@@ -79,18 +79,18 @@ gms room layer list r_level
 
 ### Add Instance
 ```bash
-gms room instance add <room_name> <object_name> <x> <y> [--layer NAME]
+gms room instance add r_level o_player 64 64 --layer Instances
 ```
 - `--layer` - Layer to place instance on
 
 ### Remove Instance
 ```bash
-gms room instance remove <room_name> <instance_id>
+gms room instance remove r_level inst_12345678
 ```
 
 ### List Instances
 ```bash
-gms room instance list <room_name>
+gms room instance list r_level
 ```
 
 ### Examples
@@ -109,7 +109,7 @@ gms room instance list r_level
 ## Room Creation
 
 ```bash
-gms asset create room <name> [--width INT] [--height INT] [--parent-path PATH]
+gms asset create room r_level --width 1280 --height 720 --parent-path folders/Rooms.yy
 ```
 - `--width` - Room width (default: 1024)
 - `--height` - Room height (default: 768)

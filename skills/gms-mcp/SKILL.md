@@ -105,8 +105,8 @@ gms diagnostics --depth quick
 gms maintenance auto --fix
 
 # Delete safely
-gms symbol find-references name  # Check first!
-gms asset delete type name
+gms workflow safe-delete --asset-type type --asset-name name          # Dry-run
+gms workflow safe-delete --asset-type type --asset-name name --apply  # Apply
 ```
 
 ---

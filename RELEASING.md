@@ -1,92 +1,80 @@
 # Releasing `gms-mcp`
 
-This project uses `setuptools-scm` + CI to control versions.
+`setuptools-scm` owns package versions. Branch promotion and PyPI publication are automated, but publication is fail-closed behind both portable CI and real GameMaker certification.
 
-Policy:
-- `main` publishes a **normal release** and bumps **patch** automatically (`X.Y.Z`).
-- `dev` publishes **dev releases** (`X.Y.(Z+1).devN`).
-- `pre-release` publishes **release candidates** (`X.Y.(Z+1)rcN`).
-- **Post releases** (`X.Y.Z.postN`) are **manual only** and intended for packaging/deployment fixes (not code changes).
+## Release channels
 
-## Promotion flow
+- `dev` publishes `X.Y.(Z+1).devN`.
+- `pre-release` publishes `X.Y.(Z+1)rcN`.
+- `main` publishes the next final patch, `X.Y.(Z+1)`.
 
-This repo promotes code in order:
+Promote in this order: `dev` → `pre-release` → `main`. Do not push ad-hoc release commits directly to `main`.
 
-1. `dev`
-2. `pre-release`
-3. `main`
+## Automated release gate
 
-Do not push ad-hoc release commits directly to `main`.
+The `Publish to PyPI` workflow does not run directly on a branch push. It runs only after a successful push-triggered `CI` workflow for the same commit, downloads that CI run's immutable artifacts, and requires both real GameMaker fixtures to report `status: passed`:
 
-## Required validation before promotion
+- `gm-2024`
+- `gm-2026-lts`
 
-Run these from the repo root:
+A missing, skipped, malformed, or failed real-smoke report blocks publication. Pull-request CI runs never publish.
 
-```bash
-PYTHONPATH=src python cli/tests/python/run_all_tests.py
-PYTHONPATH=src python -m pytest cli/tests/python/test_final_verification.py
-python scripts/generate_quality_reports.py
-GMS_MCP_REAL_SMOKE_PROJECT=/path/to/project python scripts/run_real_gamemaker_smoke.py --required
-```
+Configure the GameMaker-ready self-hosted runner before enabling release automation:
 
-The quality report script regenerates `build/reports/coverage.xml`, `TEST_COVERAGE_REPORT.md`,
-`MCP_TOOL_VALIDATION_REPORT.md`, and `quality_summary.json`, and it merges subprocess coverage
-data before writing the final report. It fails below the default coverage gates: 85% overall
-statement coverage and 50% per-module statement coverage.
+- `GMS_MCP_REAL_SMOKE_RUNNER_LABELS`: JSON labels for a GameMaker-ready runner, for example `["self-hosted","macOS","ARM64","gamemaker"]`.
+- `GMS_MCP_REAL_SMOKE_PROJECT_2024`: set only in the runner's local `.env` to the absolute path of a valid 2024 fixture.
+- `GMS_MCP_REAL_SMOKE_PROJECT_2026`: set only in the runner's local `.env` to the absolute path of a valid 2026 LTS fixture.
 
-The real GameMaker smoke copies `GMS_MCP_REAL_SMOKE_PROJECT`, then verifies that smart
-post-mutation verification compiles high-risk mutations immediately and flushes deferred
-batchable edits with one real compile.
+Fixture paths are deliberately runner-local: do not store them in repository variables or committed workflow files. CI pins the certified runtimes and fails closed when either fixture, runtime, or runner is unavailable.
 
-Before merging `pre-release` into `main`:
+## Local validation before promotion
 
-1. Draft release post text using `.github/x-personality.md`.
-2. Merge `pre-release` into `main`.
-3. Confirm GitHub Actions `CI` passes on `main`.
-4. If posting is wanted, use Codex with Chrome logged into `@gms_mcp` to publish through the X web UI.
-5. Verify the post appears on the `@gms_mcp` profile and record the URL in the release closeout.
-
-GitHub Actions does not post to X and the X API is not part of the release flow.
-
-## One-time: install tooling
+Run from the repository root:
 
 ```bash
-python -m pip install -U build twine
+uv sync --frozen --all-extras
+uv run pytest -q
+GMS_MCP_TOOLSETS=all uv run python3 scripts/run_mcp_tool_smoke.py \
+  --init-minimal-base \
+  --base-project build/mcp-smoke/base-project \
+  --work-root build/mcp-smoke/work \
+  --output build/reports/mcp_tool_smoke_report.json
+uv run python3 scripts/generate_quality_reports.py
 ```
 
-## Local build
+Run each supported real fixture with its intended runtime:
 
 ```bash
-python -m build
+GMS_MCP_REAL_SMOKE_PROJECT=/path/to/gm-2024 \
+GMS_MCP_REAL_SMOKE_EXPECTED_RUNTIME='2024.*' \
+uv run python3 scripts/run_real_gamemaker_smoke.py --fixture-name gm-2024 --required
+
+GMS_MCP_REAL_SMOKE_PROJECT=/path/to/gm-2026-lts \
+GMS_MCP_REAL_SMOKE_EXPECTED_RUNTIME='2026.*' \
+uv run python3 scripts/run_real_gamemaker_smoke.py --fixture-name gm-2026-lts --required
 ```
 
-Artifacts are created in `dist/`.
+The quality generator enforces 85% overall statement coverage, 50% per-module coverage, runtime/source MCP registration parity, and reports dedicated MCP smoke calls separately from static test-source references.
 
-## First publish (manual)
+## Promotion
 
-PyPI Trusted Publishing cannot create a brand-new project: the project must exist first.
+1. Confirm local validation and both real fixtures pass.
+2. Promote the same commit through `dev`, `pre-release`, and `main` as appropriate.
+3. Confirm the branch's `CI` run passes.
+4. Confirm `Publish to PyPI` consumed that CI run and published the expected channel version.
+5. If a release post is wanted, draft it using `.github/x-personality.md`, publish through the X web UI while logged into `@gms_mcp`, and verify it appears on the profile.
+
+GitHub Actions does not post to X.
+
+## First PyPI publish
+
+Trusted Publishing cannot create a new PyPI project. For the first upload only:
 
 - Windows: `scripts/first_pypi_upload.ps1`
 - macOS/Linux: `scripts/first_pypi_upload.sh`
 
-These scripts build, validate, and upload from `dist/` using a PyPI API token.
+After the project exists, configure PyPI Trusted Publishing for:
 
-## Ongoing publishes (automated): GitHub Trusted Publishing
-
-Once the project exists on PyPI (name is `gms-mcp`, shown as `GMS-MCP` on PyPI), configure a Trusted Publisher:
-
-1. On PyPI, open the project settings for `GMS-MCP`.
-2. Add a Trusted Publisher for:
-   - Owner: `Ampersand-Game-Studios`
-   - Repository: `gms-mcp`
-   - Workflow: `.github/workflows/publish.yml`
-   - Environment: (leave blank unless you use one)
-3. Push to `main` to publish a post-release automatically, or push a version tag like `v0.1.0` to set a new base version.
-
-Notes:
-- The GitHub Actions workflow publishes on every push to `main` (as requested). This will create many versions on PyPI.
-- If you want fewer releases, change the workflow trigger to tags-only.
-
-## Manual post-release (packaging fix only)
-
-Use GitHub Actions `workflow_dispatch` for `Publish to PyPI` and provide an explicit version like `0.1.0.post1`.
+- Owner: `Ampersand-Game-Studios`
+- Repository: `gms-mcp`
+- Workflow: `.github/workflows/publish.yml`

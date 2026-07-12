@@ -5,14 +5,14 @@ description: Complete maintenance command reference
 
 # Maintenance Commands Reference
 
-All commands: `gms maintenance <command> [options]`
+Representative command: `gms maintenance auto --fix --verbose`
 
 ## Core Commands
 
 ### auto
 Comprehensive auto-maintenance.
 ```bash
-gms maintenance auto [--fix] [--verbose]
+gms maintenance auto --fix --verbose
 ```
 - `--fix` - Apply fixes automatically
 - `--verbose` - Show detailed output
@@ -20,7 +20,7 @@ gms maintenance auto [--fix] [--verbose]
 ### lint
 Check for JSON errors and naming issues.
 ```bash
-gms maintenance lint [--fix]
+gms maintenance lint --fix
 ```
 
 ### health
@@ -32,7 +32,7 @@ gms maintenance health
 ### fix-issues
 Run comprehensive auto-maintenance with fixes enabled.
 ```bash
-gms maintenance fix-issues [--verbose]
+gms maintenance fix-issues --verbose
 ```
 
 ## Validation Commands
@@ -46,7 +46,7 @@ gms maintenance validate-json
 ### validate-paths
 Check that folder paths referenced in assets exist.
 ```bash
-gms maintenance validate-paths [--strict-disk-check] [--include-parent-folders]
+gms maintenance validate-paths --strict-disk-check --include-parent-folders
 ```
 - `--strict-disk-check` - Also check .yy files exist on disk
 - `--include-parent-folders` - Show parent folders as orphaned
@@ -62,14 +62,14 @@ gms maintenance list-orphans
 ### prune-missing
 Remove references to missing assets from project file.
 ```bash
-gms maintenance prune-missing [--dry-run]
+gms maintenance prune-missing --dry-run
 ```
 - `--dry-run` - Preview without making changes
 
 ### clean-orphans
 Delete orphaned files from disk.
 ```bash
-gms maintenance clean-orphans [--delete] [--skip-types TYPE...]
+gms maintenance clean-orphans --delete --skip-types folder
 ```
 - Default is dry-run (preview only)
 - `--delete` - Actually delete files
@@ -80,7 +80,7 @@ gms maintenance clean-orphans [--delete] [--skip-types TYPE...]
 ### clean-old-files
 Remove .old.yy backup files from project.
 ```bash
-gms maintenance clean-old-files [--delete]
+gms maintenance clean-old-files --delete
 ```
 - Default is dry-run (preview only)
 - `--delete` - Actually delete files
@@ -88,7 +88,7 @@ gms maintenance clean-old-files [--delete]
 ### dedupe-resources
 Remove duplicate resource entries from project file.
 ```bash
-gms maintenance dedupe-resources [--auto] [--dry-run]
+gms maintenance dedupe-resources --auto --dry-run
 ```
 - `--auto` - Keep first occurrence automatically
 - `--dry-run` - Preview without making changes
@@ -98,7 +98,7 @@ gms maintenance dedupe-resources [--auto] [--dry-run]
 ### sync-events
 Synchronize object event .yy and .gml files.
 ```bash
-gms maintenance sync-events [--fix] [--object NAME]
+gms maintenance sync-events --fix --object o_player
 ```
 - Default is dry-run
 - `--fix` - Apply fixes

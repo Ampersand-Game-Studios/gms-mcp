@@ -7,9 +7,9 @@ description: Complete asset type reference with naming conventions
 
 ## Asset Creation Commands
 
-All assets are created with:
+Representative asset creation:
 ```bash
-gms asset create <type> <name> [options]
+gms asset create object o_player
 ```
 
 ## Asset Types
@@ -42,31 +42,33 @@ All asset types support:
 --maintenance-verbose   # Show verbose maintenance output
 ```
 
+`--parent-path` is optional. When omitted, GMS deterministically reuses a folder already used by comparable assets, reuses the canonical asset-type folder, or creates that canonical logical folder in the `.yyp`. It never assigns the project `.yyp` itself as the default parent.
+
 ## Type-Specific Options
 
 ### Script
 ```bash
-gms asset create script <name> [--constructor] [--parent-path PATH]
+gms asset create script Player --constructor --parent-path folders/Scripts.yy
 ```
 - `--constructor` - Create constructor (allows PascalCase)
 
 ### Object
 ```bash
-gms asset create object <name> [--sprite-id ID] [--parent-object NAME] [--parent-path PATH]
+gms asset create object o_player --sprite-id spr_player --parent-path folders/Objects.yy
 ```
 - `--sprite-id` - Assign sprite to object
 - `--parent-object` - Set parent for inheritance
 
 ### Room
 ```bash
-gms asset create room <name> [--width INT] [--height INT] [--parent-path PATH]
+gms asset create room r_level --width 1280 --height 720 --parent-path folders/Rooms.yy
 ```
 - `--width` - Room width (default: 1024)
 - `--height` - Room height (default: 768)
 
 ### Font
 ```bash
-gms asset create font <name> [--font-name STR] [--size INT] [--bold] [--italic] [--aa-level 0-3] [--uses-sdf]
+gms asset create font fnt_main --font-name Arial --size 16 --bold --aa-level 1
 ```
 - `--font-name` - Font family (default: Arial)
 - `--size` - Font size (default: 12)
@@ -76,13 +78,13 @@ gms asset create font <name> [--font-name STR] [--size INT] [--bold] [--italic] 
 
 ### Shader
 ```bash
-gms asset create shader <name> [--shader-type 1-4]
+gms asset create shader sh_blur --shader-type 1
 ```
 - Shader types: 1=GLSL ES, 2=GLSL, 3=HLSL 9, 4=HLSL 11
 
 ### Sound
 ```bash
-gms asset create sound <name> [--volume FLOAT] [--pitch FLOAT] [--sound-type 0-2] [--bitrate INT] [--sample-rate INT] [--format 0-2]
+gms asset create sound snd_jump --volume 0.8 --pitch 1.0 --sound-type 0 --format 2
 ```
 - `--volume` - 0.0-1.0 (default: 1.0)
 - `--sound-type` - 0=Normal, 1=Background, 2=3D
@@ -90,36 +92,38 @@ gms asset create sound <name> [--volume FLOAT] [--pitch FLOAT] [--sound-type 0-2
 
 ### Path
 ```bash
-gms asset create path <name> [--closed] [--precision INT] [--path-type straight|smooth|circle]
+gms asset create path pth_patrol --closed --precision 4 --path-type smooth
 ```
 
 ### Tileset
 ```bash
-gms asset create tileset <name> [--sprite-id ID] [--tile-width INT] [--tile-height INT] [--tile-xsep INT] [--tile-ysep INT]
+gms asset create tileset ts_dungeon --sprite-id spr_tiles --tile-width 32 --tile-height 32
 ```
 
 ### Sequence
 ```bash
-gms asset create sequence <name> [--length FLOAT] [--playback-speed FLOAT]
+gms asset create sequence seq_intro --length 120 --playback-speed 60
 ```
 - `--length` - Length in frames (default: 60.0)
 - `--playback-speed` - FPS (default: 30.0)
 
 ### AnimCurve
 ```bash
-gms asset create animcurve <name> [--curve-type linear|smooth|ease_in|ease_out] [--channel-name STR]
+gms asset create animcurve ac_bounce --curve-type smooth --channel-name value
 ```
 
 ### Folder
 ```bash
-gms asset create folder <name> --path PATH
+gms asset create folder Scripts --path folders/Scripts.yy
 ```
 - `--path` - Required. Full folder path (e.g., "folders/Scripts/Utils.yy")
 
-## Asset Deletion
+## Safe Asset Deletion
 
 ```bash
-gms asset delete <type> <name> [--dry-run]
+gms workflow safe-delete --asset-type script --asset-name scr_obsolete
 ```
+
+The default is a dependency-aware dry-run. Add `--apply` only after the result reports that deletion is safe.
 
 Types: script, object, sprite, room, folder, font, shader, animcurve, sound, path, tileset, timeline, sequence, note

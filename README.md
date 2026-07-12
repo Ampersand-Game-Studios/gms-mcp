@@ -10,7 +10,7 @@
 - **Reliability-First Architecture**: Custom exception hierarchy, typed result objects, and an execution policy manager replace monolithic exit calls and raw dictionaries. Legacy helper results are normalized into structured `success`/`ok`/`message`/`error` payloads for consistent tool integration and optimized performance (Fast assets, Resilient runner).
 - **Health & Diagnostics**: `gm_mcp_health` provides a one-click diagnostic tool to verify the local GameMaker environment. `gm_diagnostics` provides structured, machine-readable project diagnostics (JSON, naming, orphans, references) compatible with IDE problem panels.
 - **Imported Template Cleanup**: `gms maintenance normalize-names` / `gm_maintenance_normalize_names` plans naming-convention renames, and applies them only when explicitly requested.
-- **Runtime Management**: `gm_runtime_list`, `gm_runtime_pin`, and `gm_runtime_verify` allow precise control over which GameMaker runtime version is used for builds and execution. Runtime discovery now identifies LTS2026 installs as LTS.
+- **Runtime Management**: `gm_runtime_list`, `gm_runtime_pin`, and `gm_runtime_verify` allow precise control over builds and execution. Unpinned projects prefer the runtime family recorded by their IDE version, then the newest stable runtime; LTS2026 installs are identified as LTS.
 - **Cross-Platform Runner Defaults**: `gm_run` / `gm_compile` now default to the host OS target platform (`macOS`, `Linux`, or `Windows`) when not explicitly provided.
 - **macOS Local Runner Behavior**: local `gm_run` / `gm_compile` use Igor's run-based path for IDE-equivalent validation without Developer ID packaging, and macOS background run sessions now track and stop the real `Mac_Runner` process cleanly. Packaged temp-output runs still resolve `.app` bundles via `Contents/MacOS/` when `PackageZip` is used.
 - **GML Symbol Indexing & Code Intelligence**: `gm_build_index`, `gm_find_definition`, `gm_find_references`, and `gm_list_symbols` provide deep, fast, and filtered code analysis (definitions and cross-file references).
@@ -18,6 +18,8 @@
 - **MCP Resources**: addressable project index and asset graph for high-performance agent context loading.
 - `gms-mcp-init`: generates shareable MCP config files for a workspace. Now auto-detects environment variables like `GMS_MCP_GMS_PATH` to include in the generated config.
 - **Privacy-Safe Telemetry (opt-in)**: `gms`, `gms-mcp-init`, and MCP usage can send anonymous usage metadata only after explicit consent.
+
+The MCP server starts with a curated core toolset. Enable optional domains with `GMS_MCP_TOOLSETS=assets,events,rooms` or use `GMS_MCP_TOOLSETS=all`; `gm_capabilities` reports the active profile and available domains.
 
 ## Install (recommended: pipx)
 
@@ -136,15 +138,13 @@ If you are working on the `gms-mcp` codebase itself, follow these steps to set u
 1.  **Clone and install in editable mode**:
     ```bash
     git checkout dev
-    python3.12 -m venv .venv
-    source .venv/bin/activate
-    python3.12 -m pip install -e ".[dev]"
+    uv sync --frozen --all-extras --python 3.12
     ```
     `gms-mcp` requires Python `3.10+`; we recommend Python `3.12` for local development.
 
 2.  **Run the full local test suite**:
     ```bash
-    PYTHONPATH=src python3.12 cli/tests/python/run_all_tests.py
+    uv run --frozen pytest -q
     ```
 
 3.  **Initialize local and global MCP servers for testing**:
@@ -177,12 +177,13 @@ If you are working on the `gms-mcp` codebase itself, follow these steps to set u
 
 ## Publishing (maintainers)
 
-Publishing is automated via GitHub Actions (PyPI Trusted Publishing) on every push to `main` and on tags `v*`.
-See `RELEASING.md` for the one-time PyPI setup and the first manual upload helper scripts.
+Publishing is chained to successful push-triggered CI on `dev`, `pre-release`, or `main`. It also requires passing real GameMaker 2024 and 2026 LTS certification artifacts from that exact CI run; skipped or missing certification blocks PyPI publication.
+
+See `RELEASING.md` for release channels, runner-local fixture configuration, local gates, and first-publish setup.
 
 ## CI Coverage
 
-- Core CI runs on Ubuntu and Windows across Python `3.11`-`3.13`.
+- Core CI runs on Ubuntu and Windows across Python `3.10`-`3.13` from the committed `uv.lock`.
 - Runner/session regression tests also run on macOS across Python `3.11`-`3.13`, including a mockless smoke test that builds a real `.app` bundle structure and validates executable path resolution.
 - Core CI also runs a deterministic MCP tool smoke subset against a generated minimal GameMaker project fixture.
 
@@ -204,59 +205,23 @@ dropping out of `coverage.xml`.
 You can regenerate these locally with:
 
 ```bash
-python scripts/generate_quality_reports.py
+uv sync --frozen --all-extras
+GMS_MCP_TOOLSETS=all uv run --frozen python scripts/run_mcp_tool_smoke.py \
+  --init-minimal-base \
+  --base-project build/mcp-smoke/base-project \
+  --work-root build/mcp-smoke/work \
+  --output build/reports/mcp_tool_smoke_report.json
+uv run --frozen python scripts/generate_quality_reports.py
 ```
 
-This command:
-- runs the Python test suite with coverage enabled
-- combines any parallel / subprocess coverage data
-- rewrites `build/reports/coverage.xml`
-- regenerates the markdown and JSON quality summaries
-- runs `cli/tests/python/test_final_verification.py`
-- enforces coverage gates: 85% overall statement coverage and 50% per-module statement coverage by default
+The MCP smoke uses a generated portable fixture and does not claim real compile/run coverage. The separate version-authored GameMaker fixtures provide that evidence. The generator enforces 85% overall coverage, 50% per-module coverage, runtime/source MCP registration parity, and reports executed MCP smoke calls separately from static test-source references.
 
-Use `--skip-test-run` to regenerate from existing CI artifacts:
-
-```bash
-python scripts/generate_quality_reports.py --skip-test-run --junit-xml build/reports/pytest_results.xml --coverage-xml build/reports/coverage.xml
-```
-
-Coverage gates can be raised or temporarily narrowed with `--min-overall-coverage`,
-`--min-module-coverage`, and `--coverage-gate-exclude`. The matching environment
-variables are `GMS_MCP_MIN_OVERALL_COVERAGE`, `GMS_MCP_MIN_MODULE_COVERAGE`, and
-`GMS_MCP_COVERAGE_GATE_EXCLUDE`.
-
-For real GameMaker verification on a machine with GameMaker installed, run:
+Run both supported real GameMaker fixtures before promotion, for example:
 
 ```bash
 GMS_MCP_REAL_SMOKE_PROJECT=/path/to/project \
 GMS_MCP_REAL_SMOKE_EXPECTED_RUNTIME='2026.*' \
-python scripts/run_real_gamemaker_smoke.py --fixture-name gm-2026-lts --required
-```
-
-The smoke copies the project to a temporary directory, uses smart post-mutation
-verification, compiles after a high-risk mutation, defers a batchable sprite-frame
-mutation, then flushes the pending compile once.
-
-CI runs this as a macOS fixture matrix. Configure repository variables
-`GMS_MCP_REAL_SMOKE_PROJECT_2024` / `GMS_MCP_REAL_SMOKE_RUNTIME_2024` and
-`GMS_MCP_REAL_SMOKE_PROJECT_2026` / `GMS_MCP_REAL_SMOKE_RUNTIME_2026` to exercise
-real projects against their expected GameMaker runtime versions. Set
-`GMS_MCP_REQUIRE_REAL_GAMEMAKER_SMOKE=1` to fail when a fixture path is absent.
-
-For CI-safe MCP tool smoke coverage without a real GameMaker install, run:
-
-```bash
-GMS_MCP_POST_MUTATION_VERIFY=off python scripts/run_mcp_tool_smoke.py --init-minimal-base --base-project build/mcp-smoke/base-project --work-root build/mcp-smoke/work --output build/reports/mcp_tool_smoke_report.json --tools gm_asset_delete gm_create_object gm_event_add gm_maintenance_validate_json gm_room_instance_add gm_room_layer_add gm_verification_status gm_list_assets gm_project_info gm_search_references gm_workflow_duplicate gm_sprite_frame_count
-```
-
-For release-bound promotions, maintainers should run these locally from the repo root:
-
-```bash
-PYTHONPATH=src python cli/tests/python/run_all_tests.py
-PYTHONPATH=src python -m pytest cli/tests/python/test_final_verification.py
-python scripts/generate_quality_reports.py
-GMS_MCP_REAL_SMOKE_PROJECT=/path/to/project GMS_MCP_REAL_SMOKE_EXPECTED_RUNTIME='2026.*' python scripts/run_real_gamemaker_smoke.py --fixture-name gm-2026-lts --required
+uv run --frozen python scripts/run_real_gamemaker_smoke.py --fixture-name gm-2026-lts --required
 ```
 
 ## X posting during release
@@ -303,6 +268,10 @@ Generate a Codex config from the current workspace:
 gms-mcp-init --codex
 ```
 
+Workspace Codex config stores `GM_PROJECT_ROOT` relative to the repository (`.` or a subdirectory such as
+`gamemaker`) so `.codex/mcp.toml` can be committed without publishing a username or machine-specific path.
+Project roots outside the workspace are rejected instead of being written as absolute paths.
+
 Generate a global Codex entry in `~/.codex/config.toml`:
 
 ```bash
@@ -310,6 +279,7 @@ gms-mcp-init --codex-global
 ```
 
 Global mode merges with existing entries so it is safe to keep multiple MCP servers in the same file.
+It deliberately omits `GM_PROJECT_ROOT`, allowing each workspace to resolve its own GameMaker project.
 
 Inspect current Codex config resolution:
 
@@ -432,7 +402,7 @@ gms-mcp-init --antigravity --safe-profile
 When `GMS_MCP_REQUIRE_DRY_RUN=1` is set, you can allow specific destructive tools with:
 
 ```bash
-export GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST=gm_asset_delete,gm_workflow_delete
+export GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST=gm_safe_delete
 ```
 
 Or generate everything at once:
@@ -549,6 +519,8 @@ Runner runtime labels:
 - `VM` and `GMS2 VM` map to Igor VM builds.
 - `YYC` and `GMS2 YYC` map to Igor YYC builds.
 - `GMRT` and `GMRT VM` are recognized and rejected with a clear error until GameMaker documents the Igor command-line syntax for GMRT targets.
+
+Igor cache/temp paths are isolated by project and runtime. Confirmed pre-compile `System.AccessViolationException` runtime aborts clear that disposable state and retry up to three times; source compiler failures and post-compile exits are never retried. Igor child processes default to one reported .NET processor to avoid the 2026 LTS serializer/compiler race reproduced on macOS; set `GMS_MCP_IGOR_PROCESSOR_COUNT` to an integer from 1 to 256 to opt into more compiler parallelism.
 
 ## CLI usage
 

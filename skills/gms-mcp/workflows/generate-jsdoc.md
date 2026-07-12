@@ -11,12 +11,19 @@ description: Auto-generate JSDoc documentation for GML scripts
 
 ## Workflow
 
-1. **Analyze the function** to understand:
+1. **Locate the function and its callers**:
+
+   ```bash
+   gms symbol find-definition player_take_damage
+   gms symbol find-references player_take_damage
+   ```
+
+2. **Analyze the function** to understand:
    - Parameters and their types
    - Return value and type
    - Purpose and behavior
 
-2. **Generate JSDoc header** in GameMaker format:
+3. **Generate JSDoc header** in GameMaker format:
    ```gml
    /// @function function_name(param1, param2)
    /// @description Brief description of what this function does
@@ -25,7 +32,7 @@ description: Auto-generate JSDoc documentation for GML scripts
    /// @returns {type} Description of return value
    ```
 
-3. **Add to the script** at the top of the function
+4. **Add to the script** at the top of the function
 
 ## GML Type Reference
 
