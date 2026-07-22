@@ -1,0 +1,45 @@
+__pycache__/
+*.py[cod]
+*.pyo
+.coverage
+.coverage.*
+.venv/
+venv/
+.gms-mcp/
+.gms_mcp/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+build/
+dist/
+/output/
+*.egg-info/
+
+gamemaker/
+.vscode/settings.json
+.cursor/mcp.json
+.cursor/debug.log
+.codex/
+.DS_Store
+
+# Local MCP client config (machine-specific)
+# Canonical Claude plugin metadata is versioned; ignore only local plugin state.
+.claude-plugin/*
+!.claude-plugin/plugin.json
+!.claude-plugin/marketplace.json
+mcp-configs/
+
+# Private local planning, reviews, reports, and service operations
+docs/reviews/
+docs/plans/
+docs/codex-goals/
+documentation/planned_features/
+cli/reports/
+ops/
+RELEASING.md
+
+# Local environment (API keys, secrets)
+.env
+.claude/settings.local.json

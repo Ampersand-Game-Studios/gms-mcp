@@ -1,0 +1,8 @@
+## Branch flow (required)
+- Contributors work on `dev`.
+- Maintainers merge `dev` -> `pre-release` via PR.
+- Maintainers merge `pre-release` -> `main` via PR.
+
+## Output style (required)
+- Do not use emojis or other non-ASCII glyphs in code, CLI output, test output, logs, or docs.
+- Use ASCII-only status markers (e.g., `[OK]`, `[ERROR]`, `PASS/FAIL`) to avoid Windows console encoding issues.

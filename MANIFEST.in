@@ -1,0 +1,12 @@
+global-exclude *
+
+include LICENSE
+include README.md
+include pyproject.toml
+include setup.py
+include MANIFEST.in
+
+recursive-include src/gms_helpers *.py
+recursive-include src/gms_mcp *.py
+recursive-include skills/gms-mcp *.md
+recursive-include hooks *.json *.sh

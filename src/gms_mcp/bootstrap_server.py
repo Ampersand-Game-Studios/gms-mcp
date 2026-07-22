@@ -1,0 +1,84 @@
+#!/usr/bin/env python3
+"""
+Bootstrap runner for the GameMaker MCP server.
+
+This script is intended to be referenced from an MCP client's config.
+
+In the packaged (pip) install flow, dependencies should already be installed.
+So this script intentionally does not attempt to run pip automatically.
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+
+from .server.debug import _dbg
+from .server.results import expose_host_diagnostics_from_environment
+from .telemetry import maybe_start_background_flush, queue_event, resolve_state
+
+
+def main() -> int:
+    # region agent log
+    _dbg(
+        "H1",
+        "src/gms_mcp/bootstrap_server.py:main:entry",
+        "bootstrap main entry",
+        {
+            "pid": os.getpid(),
+            "exe": sys.executable,
+            "argv": sys.argv,
+            "cwd": os.getcwd(),
+            "stdin_isatty": bool(getattr(sys.stdin, "isatty", lambda: False)()),
+            "stdout_isatty": bool(getattr(sys.stdout, "isatty", lambda: False)()),
+            "env_GM_PROJECT_ROOT": os.environ.get("GM_PROJECT_ROOT"),
+            "env_PYTHONPATH": os.environ.get("PYTHONPATH"),
+            "py_path_head": sys.path[:5],
+        },
+    )
+    # endregion
+    try:
+        from .gamemaker_mcp_server import main as server_main
+
+        state = resolve_state()
+        if queue_event(
+            state=state,
+            surface="mcp",
+            event_type="mcp.server_start",
+            action="bootstrap.start",
+            tool_name="bootstrap.start",
+            tool_family="server",
+            result="ok",
+            duration_ms=0,
+            execution_mode="bootstrap",
+        ):
+            maybe_start_background_flush()
+        # region agent log
+        _dbg(
+            "H1",
+            "src/gms_mcp/bootstrap_server.py:main:imported",
+            "imported gamemaker_mcp_server.main",
+            {"module": getattr(server_main, "__module__", None)},
+        )
+        # endregion
+        return int(server_main() or 0)
+    except ModuleNotFoundError as e:
+        # region agent log
+        _dbg(
+            "H1",
+            "src/gms_mcp/bootstrap_server.py:main:module_not_found",
+            "ModuleNotFoundError starting server",
+            {"error": str(e), "pid": os.getpid()},
+        )
+        # endregion
+        sys.stderr.write(
+            "Missing dependency while starting the GameMaker MCP server.\n"
+            "Reinstall or upgrade the gms-mcp package with your configured package manager.\n"
+        )
+        if expose_host_diagnostics_from_environment():
+            sys.stderr.write(f"Details: {e}\n")
+        return 1
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

@@ -1,0 +1,15 @@
+{
+  "include": [
+    "src",
+    "scripts/ci_version.py",
+    "scripts/run_real_gamemaker_smoke.py",
+    "scripts/verify_release_certification.py"
+  ],
+  "exclude": [".venv", "build", "dist"],
+  "pythonVersion": "3.10",
+  "typeCheckingMode": "basic",
+  "venvPath": ".",
+  "venv": ".venv",
+  "reportMissingImports": "error",
+  "reportMissingTypeStubs": "none"
+}

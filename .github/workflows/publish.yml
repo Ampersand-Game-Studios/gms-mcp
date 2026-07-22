@@ -1,0 +1,134 @@
+name: Publish to PyPI
+
+on:
+  workflow_run:
+    workflows:
+      - "CI"
+    types:
+      - completed
+    branches:
+      - "dev"
+      - "pre-release"
+      - "main"
+permissions:
+  actions: read
+  contents: read
+
+concurrency:
+  group: pypi-publish
+  cancel-in-progress: false
+
+jobs:
+  compute:
+    if: >-
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      vars.GMS_MCP_REAL_SMOKE_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.ver.outputs.version }}
+      should_publish: ${{ steps.ver.outputs.should_publish }}
+      reason: ${{ steps.ver.outputs.reason }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install version tooling
+        run: uv sync --frozen --extra dev --python 3.12
+      - name: Download real GameMaker certification
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: real-gamemaker-smoke-*
+          path: build/release-certification
+          merge-multiple: true
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+      - name: Require passing real GameMaker certification
+        run: >-
+          uv run --frozen python scripts/verify_release_certification.py build/release-certification
+          --expected
+          linux-gm-2024 linux-gm-2026-lts
+          windows-gm-2024 windows-gm-2026-lts
+          macos-gm-2024 macos-gm-2026-lts
+      - name: Compute version
+        id: ver
+        env:
+          RELEASE_REF_NAME: ${{ github.event.workflow_run.head_branch }}
+        run: uv run --frozen python scripts/ci_version.py
+      - name: Summary
+        run: |
+          echo "version=${{ steps.ver.outputs.version }}"
+          echo "should_publish=${{ steps.ver.outputs.should_publish }}"
+          echo "reason=${{ steps.ver.outputs.reason }}"
+
+  build:
+    needs: [compute]
+    if: needs.compute.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: "3.12"
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+      - name: Install build tooling
+        run: uv sync --frozen --extra dev --python 3.12
+      - name: Build
+        env:
+          SETUPTOOLS_SCM_PRETEND_VERSION: ${{ needs.compute.outputs.version }}
+        run: uv run --frozen python -m build
+      - name: Verify package privacy boundary
+        run: uv run --frozen python scripts/verify_package_artifacts.py dist
+      - name: Upload build artifacts
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dist
+          path: dist/*
+
+  publish:
+    needs: [compute, build]
+    if: needs.compute.outputs.should_publish == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: dist
+          path: dist
+      - name: Re-verify downloaded package privacy boundary
+        run: python3 scripts/verify_package_artifacts.py dist
+      - name: Verify PyPI project exists
+        shell: bash
+        run: |
+          set -euo pipefail
+          PROJECT="$(python3 -c 'import tomllib, pathlib; print(tomllib.load(pathlib.Path("pyproject.toml").open("rb"))["project"]["name"])')"
+          CODE="$(curl -sS -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/${PROJECT}/json" || true)"
+          if [ "${CODE}" != "200" ]; then
+            echo "::error::PyPI project '${PROJECT}' does not exist yet (HTTP ${CODE})."
+            echo "::error::You must do the first upload manually (user identity) before Trusted Publishing can work."
+            echo "::error::Run scripts/first_pypi_upload.ps1 (Windows) or scripts/first_pypi_upload.sh (macOS/Linux)."
+            exit 1
+          fi
+      - name: Publish to PyPI (Trusted Publishing)
+        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1

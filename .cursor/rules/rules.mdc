@@ -1,0 +1,8 @@
+---
+alwaysApply: true
+---
+## Branch flow (required)
+- Contributors work on `dev`.
+- Maintainers merge `dev` -> `pre-release` via PR.
+- Maintainers merge `pre-release` -> `main` via PR.
+

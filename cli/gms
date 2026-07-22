@@ -1,0 +1,14 @@
+#!/usr/bin/env sh
+# Project-local wrapper for GMS Tools
+# Usage from repo root: ./cli/gms --help
+REPO_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+PYTHONPATH="$REPO_ROOT/src:${PYTHONPATH}" python3 -m gms_helpers.gms "$@"
+
+
+
+
+
+
+
+
+
