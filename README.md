@@ -179,6 +179,8 @@ If you are working on the `gms-mcp` codebase itself, follow these steps to set u
 
 Publishing is chained to successful push-triggered CI on `dev`, `pre-release`, or `main`. It also requires passing real GameMaker 2024 and 2026 LTS certification artifacts from that exact CI run; skipped or missing certification blocks PyPI publication.
 
+The `GAMEMAKER_ACCESS_KEY` secret belongs in the branch-restricted `gamemaker-ci` environment, not at repository scope. Maintainers can safely validate it with the CI workflow's `run_real_gamemaker_smoke` manual input: manually dispatched CI can run the licensed smoke matrix but cannot trigger publication.
+
 Built package archives are checked against a public-file allowlist before publication. Development tests, plans, service operations, CI configuration, and local reports are excluded from PyPI artifacts.
 
 ## CI Coverage
