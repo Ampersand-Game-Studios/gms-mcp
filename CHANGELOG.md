@@ -52,6 +52,7 @@ All notable changes to this project will be documented in this file.
 - **Mutation Journal**: Project writes now use cross-thread/process locking, selective journal rollback, ownership conflict detection, and cancellation-safe cleanup.
 
 ### Fixed
+- **Licensed CI Project Boundary**: Real GameMaker certification now pins the MCP server to its generated fixture before startup, so repository toolchain symlinks cannot be mistaken for unsafe links inside the GameMaker project.
 - **Project-Confined MCP Access**: MCP servers now pin one GameMaker project at startup, reject traversal and symlink escapes for reads and writes, emit project-relative paths, and withhold host commands, process IDs, runtime/licence locations, and other machine diagnostics unless a trusted local server explicitly opts in.
 - **Spurious `.gms_mcp` Folder Creation**: Fixed an issue where the MCP server would create a `.gms_mcp/logs/` folder in the current working directory even when no GameMaker project was present. Debug logging now only activates when a valid project is detected.
 - **Object Creation Schema**: Fixed a critical bug where newly created objects were missing required `$GMObject: "v1"` markers, which prevented project compilation.
