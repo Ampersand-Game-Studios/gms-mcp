@@ -645,6 +645,7 @@ def _run(args: argparse.Namespace) -> int:
         previous_env = {
             key: os.environ.get(key)
             for key in (
+                "GM_PROJECT_ROOT",
                 "GMS_MCP_POST_MUTATION_VERIFY",
                 "GMS_MCP_VERIFY_COMPILE_AFTER_MUTATION",
                 "GMS_MCP_POST_MUTATION_PLATFORM",
@@ -654,6 +655,7 @@ def _run(args: argparse.Namespace) -> int:
                 "GMS_RUNTIME_VERSION",
             )
         }
+        os.environ["GM_PROJECT_ROOT"] = str(project_copy)
         os.environ["GMS_MCP_POST_MUTATION_VERIFY"] = "smart"
         os.environ["GMS_MCP_TOOLSETS"] = "all"
         os.environ["GMS_RUNTIME_VERSION"] = runtime_version
