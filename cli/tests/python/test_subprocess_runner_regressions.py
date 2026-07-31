@@ -128,7 +128,7 @@ class TestSubprocessRunnerRegressions(unittest.TestCase):
             self._assert_process_exited(descendant_pid)
 
     def test_cancellation_terminates_process_and_does_not_hang(self):
-        from gms_mcp.server.subprocess_runner import _run_subprocess_async
+        from gms_mcp.server.subprocess_runner import _ensure_log_dir, _run_subprocess_async
 
         async def _cancel_flow(tmp: Path) -> None:
             cmd = [
@@ -154,20 +154,26 @@ class TestSubprocessRunnerRegressions(unittest.TestCase):
             await asyncio.wait_for(task, timeout=8)
 
         with tempfile.TemporaryDirectory() as td:
-            cwd = Path(td)
-            with self.assertRaises(asyncio.CancelledError):
-                asyncio.run(_cancel_flow(cwd))
+            root = Path(td)
+            cwd = root / "project"
+            home = root / "home"
+            cwd.mkdir()
+            home.mkdir()
+            with patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home)}):
+                with self.assertRaises(asyncio.CancelledError):
+                    asyncio.run(_cancel_flow(cwd))
 
-            log_dir = cwd / ".gms_mcp" / "logs"
-            self.assertTrue(log_dir.exists())
-            log_files = sorted(log_dir.glob("pytest-cancel-*.log"), key=lambda p: p.stat().st_mtime)
-            self.assertTrue(log_files, msg=f"No log files found in {log_dir}")
-            log_text = log_files[-1].read_text(encoding="utf-8", errors="replace")
-            self.assertIn("CANCELLED", log_text)
+                log_dir = _ensure_log_dir(cwd)
+                self.assertTrue(log_dir.exists())
+                log_files = sorted(log_dir.glob("pytest-cancel-*.log"), key=lambda p: p.stat().st_mtime)
+                self.assertTrue(log_files, msg=f"No log files found in {log_dir}")
+                log_text = log_files[-1].read_text(encoding="utf-8", errors="replace")
+                self.assertIn("CANCELLED", log_text)
+                self.assertFalse((cwd / ".gms_mcp").exists())
 
     @unittest.skipIf(os.name == "nt", "POSIX process-group regression")
     def test_cancellation_terminates_spawned_descendants(self):
-        from gms_mcp.server.subprocess_runner import _run_subprocess_async
+        from gms_mcp.server.subprocess_runner import _ensure_log_dir, _run_subprocess_async
 
         async def _cancel_flow(tmp: Path) -> int:
             child_code = (
@@ -186,7 +192,7 @@ class TestSubprocessRunnerRegressions(unittest.TestCase):
                     execution_mode="test",
                 )
             )
-            log_dir = tmp / ".gms_mcp" / "logs"
+            log_dir = _ensure_log_dir(tmp)
             descendant_pid = None
             deadline = time.monotonic() + 5
             while descendant_pid is None and time.monotonic() < deadline:
@@ -203,18 +209,36 @@ class TestSubprocessRunnerRegressions(unittest.TestCase):
             return int(descendant_pid)
 
         with tempfile.TemporaryDirectory() as td:
-            descendant_pid = asyncio.run(_cancel_flow(Path(td)))
-            self._assert_process_exited(descendant_pid)
+            root = Path(td)
+            project = root / "project"
+            home = root / "home"
+            project.mkdir()
+            home.mkdir()
+            with patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home)}):
+                descendant_pid = asyncio.run(_cancel_flow(project))
+                self._assert_process_exited(descendant_pid)
 
     def test_log_filename_is_sanitized_and_unique(self):
-        from gms_mcp.server.subprocess_runner import _new_log_path
+        from gms_mcp.server.subprocess_runner import _ensure_log_dir, _new_log_path
 
         with tempfile.TemporaryDirectory() as td:
-            cwd = Path(td)
-            first = _new_log_path(cwd, "../../unsafe tool 🔥")
-            second = _new_log_path(cwd, "../../unsafe tool 🔥")
+            root = Path(td)
+            cwd = root / "project"
+            other_project = root / "other-project"
+            home = root / "home"
+            cwd.mkdir()
+            other_project.mkdir()
+            home.mkdir()
+            with patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home)}):
+                first = _new_log_path(cwd, "../../unsafe tool 🔥")
+                second = _new_log_path(cwd, "../../unsafe tool 🔥")
+                other = _new_log_path(other_project, "other")
+                self.assertEqual(first.parent, _ensure_log_dir(cwd))
 
-            self.assertEqual(first.parent, cwd / ".gms_mcp" / "logs")
+            self.assertTrue(first.parent.is_relative_to(home / ".gms-mcp" / "logs"))
+            self.assertNotEqual(first.parent, other.parent)
+            self.assertEqual(len(first.parent.name), 16)
+            self.assertFalse((cwd / ".gms_mcp").exists())
             self.assertNotIn("..", first.name)
             self.assertNotIn("/", first.name)
             self.assertNotEqual(first, second)
@@ -277,9 +301,13 @@ class TestSubprocessRunnerRegressions(unittest.TestCase):
         from gms_mcp.server import subprocess_runner
 
         with tempfile.TemporaryDirectory() as td:
-            cwd = Path(td)
-            log_dir = cwd / ".gms_mcp" / "logs"
-            log_dir.mkdir(parents=True)
+            root = Path(td)
+            cwd = root / "project"
+            home = root / "home"
+            cwd.mkdir()
+            home.mkdir()
+            with patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home)}):
+                log_dir = subprocess_runner._ensure_log_dir(cwd)
             old = log_dir / "old.log"
             old.write_text("old", encoding="utf-8")
             os.utime(old, (1, 1))
@@ -288,15 +316,16 @@ class TestSubprocessRunnerRegressions(unittest.TestCase):
                 patch.object(subprocess_runner, "LOG_MAX_COMPLETED_FILES", 1),
                 patch.object(subprocess_runner, "LOG_MAX_COMPLETED_BYTES", 1),
             ):
-                result = asyncio.run(
-                    subprocess_runner._run_subprocess_async(
-                        [sys.executable, "-u", "-c", "print('complete-log')"],
-                        cwd=cwd,
-                        timeout_seconds=5,
-                        tool_name="latest-log",
-                        execution_mode="test",
+                with patch.dict(os.environ, {"HOME": str(home), "USERPROFILE": str(home)}):
+                    result = asyncio.run(
+                        subprocess_runner._run_subprocess_async(
+                            [sys.executable, "-u", "-c", "print('complete-log')"],
+                            cwd=cwd,
+                            timeout_seconds=5,
+                            tool_name="latest-log",
+                            execution_mode="test",
+                        )
                     )
-                )
 
             self.assertTrue(result.ok)
             latest = Path(result.log_file)

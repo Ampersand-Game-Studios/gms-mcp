@@ -7,6 +7,7 @@ All notable changes to this project will be documented in this file.
 ### Security
 - **Public Artifact Boundary**: Removed repository-only project, planning, service-operation, and release material from the public tree; package builds now use an explicit runtime allowlist and fail CI or publication if generated archives contain development files, personal author contact metadata, or SCM repository inventories.
 - **GitHub Actions Hardening**: Restricted workflow tokens and third-party actions, removed self-hosted runner access, and confined licensed GameMaker smoke jobs to a branch-restricted environment with a non-publishing manual verification path.
+- **Privacy-Safe Local Diagnostics**: Codex previews now omit unrelated configuration and redact secret values and host paths. Automatic diagnostic logs now use private, opaque per-project directories under `~/.gms-mcp/logs/` instead of writing inside GameMaker projects.
 
 ### Added
 - **GML Documentation Lookup**: Built-in documentation for GameMaker functions fetched on-demand from manual.gamemaker.io:
