@@ -253,17 +253,13 @@ def _redact_host_paths(value: object) -> object:
         return value
 
     stripped = value.strip()
-    if (
-        stripped.startswith(("/", "\\\\", "~/", "~\\"))
-        or re.match(r"^[A-Za-z]:[\\/]", stripped)
-    ):
+    if stripped.startswith(("/", "\\\\", "~/", "~\\")) or re.match(r"^[A-Za-z]:[\\/]", stripped):
         return "<host-path>"
 
     option, separator, option_value = value.partition("=")
     option_value = option_value.strip()
     if separator and (
-        option_value.startswith(("/", "\\\\", "~/", "~\\"))
-        or re.match(r"^[A-Za-z]:[\\/]", option_value)
+        option_value.startswith(("/", "\\\\", "~/", "~\\")) or re.match(r"^[A-Za-z]:[\\/]", option_value)
     ):
         return f"{option}=<host-path>"
     return value
