@@ -969,12 +969,13 @@ class TestClaudeCodeSupport(unittest.TestCase):
             home_dir = Path(tmpdir) / "home"
             with temporary_home(home_dir):
                 global_path = home_dir / ".codex" / "config.toml"
+                private_command = (home_dir / "private" / "existing-cmd").as_posix()
                 global_path.parent.mkdir(parents=True, exist_ok=True)
                 global_path.write_text(
                     "\n".join(
                         [
                             "[mcp_servers.existing]",
-                            f'command = "{home_dir}/private/existing-cmd"',
+                            f'command = "{private_command}"',
                             "",
                             "[mcp_servers.existing.env]",
                             'EXAMPLE_API_SECRET = "existing-private-secret"',
