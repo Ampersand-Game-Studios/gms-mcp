@@ -284,7 +284,8 @@ gms-mcp-init --codex-check
 
 Human and JSON check output redact secret-like env, header, and credential argument values before printing.
 
-Preview final merged Codex payloads for local + global without writing:
+Preview the redacted target Codex entries for local + global without writing. Existing unrelated
+configuration is omitted, secret values are redacted, and machine-specific paths are replaced:
 
 ```bash
 gms-mcp-init --codex-dry-run-only
@@ -500,6 +501,10 @@ Common doctor entry points:
 - `gms-mcp doctor --project-root /path/to/project`: targets an explicit GameMaker project directory.
 - `gms-mcp doctor --client codex --server-name gms-app`: validates a non-default MCP server entry name.
 - `gms-mcp doctor --json`: emits a stable JSON report with `overall_status`, `exit_code`, and `checks`.
+
+Automatic MCP diagnostic logs are stored outside GameMaker projects under
+`~/.gms-mcp/logs/<opaque-project-id>/`. The directory name is a one-way hash of the project path,
+and private directory/file permissions are applied where the operating system supports them.
 
 ### Runtime Management
 Runtime list/pin/verify operations are exposed as MCP tools:

@@ -249,6 +249,9 @@ class TestBridgeServerGlobal(unittest.TestCase):
 
         with tempfile.TemporaryDirectory() as temp_dir:
             server = get_bridge_server(temp_dir, create=True)
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
+                probe.bind(("127.0.0.1", 0))
+                server.port = probe.getsockname()[1]
             server.start()
 
             self.assertTrue(server.is_running)

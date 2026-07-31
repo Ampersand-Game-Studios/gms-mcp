@@ -17,6 +17,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from ..telemetry import SUPPRESS_CLI_TELEMETRY_ENV_VAR
 from .debug import _dbg
+from .log_paths import diagnostic_log_dir, secure_private_file
 from .project import _resolve_project_directory, _with_cli_pythonpath
 from .results import ToolRunResult
 
@@ -88,6 +89,7 @@ class _BoundedLogWriter:
         self._truncated = False
         self._lock = threading.Lock()
         try:
+            secure_private_file(path)
             path.write_bytes(b"")
         except OSError:
             pass
@@ -215,15 +217,7 @@ def _default_timeout_seconds_for_cli_args(cli_args: List[str]) -> int:
 
 
 def _ensure_log_dir(project_directory: Path) -> Path:
-    # Keep logs in-project so users can attach them to bug reports.
-    log_dir = project_directory / ".gms_mcp" / "logs"
-    try:
-        log_dir.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        # Best effort: fallback to CWD
-        log_dir = Path.cwd() / ".gms_mcp" / "logs"
-        log_dir.mkdir(parents=True, exist_ok=True)
-    return log_dir
+    return diagnostic_log_dir(project_directory)
 
 
 def _sanitize_tool_name(tool_name: str | None) -> str:
@@ -291,7 +285,9 @@ def _new_log_path(project_directory: Path, tool_name: str | None) -> Path:
 
 def _mark_log_active(log_path: Path) -> None:
     try:
-        _active_marker_path(log_path).write_text(str(os.getpid()), encoding="utf-8")
+        marker_path = _active_marker_path(log_path)
+        marker_path.write_text(str(os.getpid()), encoding="utf-8")
+        secure_private_file(marker_path)
     except OSError:
         pass
 
