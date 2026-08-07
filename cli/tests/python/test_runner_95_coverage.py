@@ -20,6 +20,7 @@ SRC_ROOT = PROJECT_ROOT / "src"
 sys.path.insert(0, str(SRC_ROOT))
 
 from gms_helpers.runner import GameMakerRunner
+from gms_helpers.runner_support.macos import MacOSProcess
 
 
 class TestRunner95Coverage(unittest.TestCase):
@@ -28,6 +29,9 @@ class TestRunner95Coverage(unittest.TestCase):
         self.project_root = Path(self.temp_dir.name)
         (self.project_root / "TestGame.yyp").write_text('{"resources": []}', encoding="utf-8")
         self.runner = GameMakerRunner(self.project_root)
+        self._igor_idle_patch = patch.object(GameMakerRunner, "_wait_for_igor_idle")
+        self._igor_idle_patch.start()
+        self.addCleanup(self._igor_idle_patch.stop)
 
     def tearDown(self):
         self.temp_dir.cleanup()
@@ -103,8 +107,9 @@ class TestRunner95Coverage(unittest.TestCase):
                     self.assertFalse(self.runner._wait_for_macos_main_loop(process, bad_log, 0, timeout_seconds=1.0))
 
         process = MagicMock()
+        process.pid = 99
         process.poll.return_value = 1
-        with patch.object(self.runner, "_find_macos_validation_helper_pids", return_value=({1}, {2})):
+        with patch.object(self.runner, "_find_macos_owned_helper_pids", return_value=(set(), set(), {})):
             with patch("gms_helpers.runner_support.macos.time.monotonic", side_effect=[0.0, 2.0]):
                 with patch("gms_helpers.runner_support.macos.time.sleep"):
                     pid, runner_pids, tail_pids = self.runner._wait_for_macos_runner_start(
@@ -122,10 +127,12 @@ class TestRunner95Coverage(unittest.TestCase):
         game_path = Path("/tmp/game.ios")
         debug_log = Path("/tmp/debug.log")
         ps_output = f"\ninvalid\nnot_a_pid command\n101 /tmp/Game.app/Contents/MacOS/Mac_Runner {game_path}\n"
-        with patch("gms_helpers.runner_support.macos.subprocess.run", return_value=SimpleNamespace(stdout=ps_output)):
-            runner_pids, tail_pids = self.runner._find_macos_validation_helper_pids(game_path, debug_log)
-        self.assertEqual(runner_pids, {101})
-        self.assertEqual(tail_pids, set())
+        with (
+            patch("gms_helpers.runner_support.macos.platform.system", return_value="Darwin"),
+            patch("gms_helpers.runner_support.macos.subprocess.run", return_value=SimpleNamespace(stdout=ps_output)),
+        ):
+            processes = self.runner._snapshot_macos_processes()
+        self.assertIn(str(game_path), processes[101].command)
 
         with patch("gms_helpers.runner_support.macos.os.kill", side_effect=RuntimeError("blocked")):
             self.runner._terminate_pid(10, "runner")
@@ -147,16 +154,36 @@ class TestRunner95Coverage(unittest.TestCase):
         self.assertIn(expected_signal, kill_calls)
 
     def test_stop_macos_session_remaining_paths(self):
-        session = SimpleNamespace(pid=99, exe_path="/tmp/game.ios", log_file="/tmp/debug.log", runtime_type="VM")
-        with patch.object(self.runner, "_find_macos_validation_helper_pids", return_value=({10}, {20})):
+        runner_command = "/tmp/YoYo Runner.app/Contents/MacOS/Mac_Runner -game /tmp/game.ios"
+        tail_command = "tail -F /tmp/debug.log"
+        session = SimpleNamespace(
+            pid=10,
+            exe_path="/tmp/game.ios",
+            log_file="/tmp/debug.log",
+            runtime_type="VM",
+            macos_runner_commands={"10": runner_command},
+            macos_tail_commands={"20": tail_command},
+            macos_runner_starts={"10": "start-10"},
+            macos_tail_starts={"20": "start-20"},
+        )
+        processes = {
+            10: MacOSProcess(10, 1, runner_command, "start-10"),
+            20: MacOSProcess(20, 1, tail_command, "start-20"),
+        }
+        with patch.object(self.runner, "_snapshot_macos_processes", side_effect=[processes, {}, {}]):
             with patch.object(self.runner, "_stop_platform_process", return_value=True):
                 with patch.object(self.runner._session_manager, "is_process_alive", return_value=False):
                     with patch.object(self.runner._session_manager, "clear_session") as mock_clear:
-                        result = self.runner._stop_macos_run_session(session)
+                        with patch(
+                            "gms_helpers.runner_support.macos.time.monotonic",
+                            side_effect=[0.0, 0.0, 0.0, 2.0, 2.0],
+                        ):
+                            with patch("gms_helpers.runner_support.macos.time.sleep"):
+                                result = self.runner._stop_macos_run_session(session)
         self.assertTrue(result["ok"])
         mock_clear.assert_called_once()
 
-        with patch.object(self.runner, "_find_macos_validation_helper_pids", return_value=({10}, {20})):
+        with patch.object(self.runner, "_snapshot_macos_processes", return_value=processes):
             with patch.object(self.runner, "_stop_platform_process", return_value=False):
                 with patch.object(
                     self.runner._session_manager,
@@ -176,7 +203,7 @@ class TestRunner95Coverage(unittest.TestCase):
             call_counter["count"] += 1
             return call_counter["count"] <= 3
 
-        with patch.object(self.runner, "_find_macos_validation_helper_pids", return_value=({10}, {20})):
+        with patch.object(self.runner, "_snapshot_macos_processes", side_effect=[processes, {}, {}]):
             with patch.object(self.runner, "_stop_platform_process", return_value=False):
                 with patch.object(
                     self.runner._session_manager,
@@ -197,18 +224,21 @@ class TestRunner95Coverage(unittest.TestCase):
         process.returncode = 1
         thread = SimpleNamespace(join=lambda timeout=0: None)
 
-        with patch.object(self.runner, "_build_macos_compile_validation_command", return_value=["igor", "Run"]):
-            with patch.object(self.runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"):
-                with patch.object(self.runner, "_macos_debug_log_path", return_value=self.project_root / "debug.log"):
-                    with patch.object(self.runner, "_find_macos_validation_helper_pids", return_value=(set(), set())):
-                        with patch.object(self.runner, "_run_igor_command", return_value=process):
-                            with patch.object(
-                                self.runner, "_collect_igor_output_async", return_value=(["bad"], thread)
-                            ):
-                                with patch.object(self.runner, "_wait_for_macos_main_loop", return_value=False):
-                                    with patch.object(self.runner, "_stop_platform_process", return_value=False):
-                                        with patch.object(self.runner, "_cleanup_macos_validation_helpers"):
-                                            self.assertFalse(self.runner.compile_project(platform_target="macOS"))
+        with (
+            patch.object(self.runner, "_build_macos_compile_validation_command", return_value=["igor", "Run"]),
+            patch.object(self.runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"),
+            patch.object(self.runner, "_macos_debug_log_path", return_value=self.project_root / "debug.log"),
+            patch.object(self.runner, "_snapshot_macos_processes", return_value={}),
+            patch.object(self.runner, "_wait_for_igor_idle"),
+            patch.object(self.runner, "_run_igor_command", return_value=process),
+            patch.object(self.runner, "_reject_foreign_igor_after_launch"),
+            patch.object(self.runner, "_collect_igor_output_async", return_value=(["bad"], thread)),
+            patch.object(self.runner, "_wait_for_macos_main_loop", return_value=False),
+            patch.object(self.runner, "_wait_for_macos_runner_start", return_value=(None, set(), set())),
+            patch.object(self.runner, "_stop_platform_process", return_value=False),
+            patch.object(self.runner, "_cleanup_macos_validation_helpers"),
+        ):
+            self.assertFalse(self.runner.compile_project(platform_target="macOS"))
         process.terminate.assert_called_once()
         process.kill.assert_called_once()
         self.assertIn("timed out", self.runner.last_failure_message)
@@ -220,29 +250,42 @@ class TestRunner95Coverage(unittest.TestCase):
         with patch.object(self.runner, "_build_macos_compile_validation_command", return_value=["igor", "Run"]):
             with patch.object(self.runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"):
                 with patch.object(self.runner, "_macos_debug_log_path", return_value=self.project_root / "debug.log"):
-                    with patch.object(self.runner, "_find_macos_validation_helper_pids", return_value=(set(), set())):
-                        with patch.object(self.runner, "_run_igor_command", return_value=process):
-                            with patch.object(self.runner, "_collect_igor_output_async", return_value=([], thread)):
-                                with patch.object(self.runner, "_wait_for_macos_main_loop", return_value=False):
-                                    with patch.object(self.runner, "_cleanup_macos_validation_helpers"):
-                                        self.assertFalse(self.runner.compile_project(platform_target="macOS"))
+                    with patch.object(self.runner, "_snapshot_macos_processes", return_value={}):
+                        with patch.object(self.runner, "_wait_for_igor_idle"):
+                            with patch.object(self.runner, "_run_igor_command", return_value=process):
+                                with patch.object(self.runner, "_reject_foreign_igor_after_launch"):
+                                    with patch.object(
+                                        self.runner, "_collect_igor_output_async", return_value=([], thread)
+                                    ):
+                                        with patch.object(
+                                            self.runner,
+                                            "_wait_for_macos_runner_start",
+                                            return_value=(None, set(), set()),
+                                        ):
+                                            with patch.object(self.runner, "_cleanup_macos_validation_helpers"):
+                                                self.assertFalse(
+                                                    self.runner.compile_project(platform_target="macOS")
+                                                )
         self.assertIn("exited before the game reached the main loop", self.runner.last_failure_message)
 
         process = MagicMock()
         process.poll.side_effect = [2, 2]
         process.returncode = 2
         thread = SimpleNamespace(join=lambda timeout=0: None)
-        with patch.object(self.runner, "_build_macos_compile_validation_command", return_value=["igor", "Run"]):
-            with patch.object(self.runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"):
-                with patch.object(self.runner, "_macos_debug_log_path", return_value=self.project_root / "debug.log"):
-                    with patch.object(self.runner, "_find_macos_validation_helper_pids", return_value=(set(), set())):
-                        with patch.object(self.runner, "_run_igor_command", return_value=process):
-                            with patch.object(
-                                self.runner, "_collect_igor_output_async", return_value=(["compile failed"], thread)
-                            ):
-                                with patch.object(self.runner, "_wait_for_macos_main_loop", return_value=False):
-                                    with patch.object(self.runner, "_cleanup_macos_validation_helpers"):
-                                        self.assertFalse(self.runner.compile_project(platform_target="macOS"))
+        with (
+            patch.object(self.runner, "_build_macos_compile_validation_command", return_value=["igor", "Run"]),
+            patch.object(self.runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"),
+            patch.object(self.runner, "_macos_debug_log_path", return_value=self.project_root / "debug.log"),
+            patch.object(self.runner, "_snapshot_macos_processes", return_value={}),
+            patch.object(self.runner, "_wait_for_igor_idle"),
+            patch.object(self.runner, "_run_igor_command", return_value=process),
+            patch.object(self.runner, "_reject_foreign_igor_after_launch"),
+            patch.object(self.runner, "_collect_igor_output_async", return_value=(["compile failed"], thread)),
+            patch.object(self.runner, "_wait_for_macos_main_loop", return_value=False),
+            patch.object(self.runner, "_wait_for_macos_runner_start", return_value=(None, set(), set())),
+            patch.object(self.runner, "_cleanup_macos_validation_helpers"),
+        ):
+            self.assertFalse(self.runner.compile_project(platform_target="macOS"))
         self.assertIn("Local compile validation failed", self.runner.last_failure_message)
 
         with patch.object(self.runner, "_build_platform_action_command", side_effect=RuntimeError("boom")):
@@ -336,24 +379,21 @@ class TestRunner95Coverage(unittest.TestCase):
         process.poll.return_value = None
         process.wait.side_effect = [subprocess.TimeoutExpired(cmd="igor", timeout=5), None]
 
-        with patch.object(self.runner, "_build_platform_action_command", return_value=["igor", "Run"]):
-            with patch.object(self.runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"):
-                with patch.object(self.runner, "_macos_debug_log_path", return_value=self.project_root / "debug.log"):
-                    with patch.object(self.runner, "_run_igor_command", return_value=process):
-                        with patch.object(
-                            self.runner, "_find_macos_validation_helper_pids", return_value=(set(), set())
-                        ):
-                            with patch.object(
-                                self.runner,
-                                "_collect_igor_output_async",
-                                return_value=([], SimpleNamespace(join=lambda timeout=0: None)),
-                            ):
-                                with patch.object(
-                                    self.runner, "_wait_for_macos_runner_start", return_value=(None, set(), set())
-                                ):
-                                    result = self.runner._run_project_classic_approach(
-                                        platform_target="macOS", background=True
-                                    )
+        with (
+            patch.object(self.runner, "_build_platform_action_command", return_value=["igor", "Run"]),
+            patch.object(self.runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"),
+            patch.object(self.runner, "_macos_debug_log_path", return_value=self.project_root / "debug.log"),
+            patch.object(self.runner, "_run_igor_command", return_value=process),
+            patch.object(self.runner, "_reject_foreign_igor_after_launch"),
+            patch.object(self.runner, "_snapshot_macos_processes", return_value={}),
+            patch.object(
+                self.runner,
+                "_collect_igor_output_async",
+                return_value=([], SimpleNamespace(join=lambda timeout=0: None)),
+            ),
+            patch.object(self.runner, "_wait_for_macos_runner_start", return_value=(None, set(), set())),
+        ):
+            result = self.runner._run_project_classic_approach(platform_target="macOS", background=True)
         self.assertFalse(result["ok"])
         self.assertIn("timed out", result["message"])
 
@@ -361,24 +401,21 @@ class TestRunner95Coverage(unittest.TestCase):
         process.pid = 333
         process.poll.return_value = 3
         process.returncode = 3
-        with patch.object(self.runner, "_build_platform_action_command", return_value=["igor", "Run"]):
-            with patch.object(self.runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"):
-                with patch.object(self.runner, "_macos_debug_log_path", return_value=self.project_root / "debug.log"):
-                    with patch.object(self.runner, "_run_igor_command", return_value=process):
-                        with patch.object(
-                            self.runner, "_find_macos_validation_helper_pids", return_value=(set(), set())
-                        ):
-                            with patch.object(
-                                self.runner,
-                                "_collect_igor_output_async",
-                                return_value=(["bad"], SimpleNamespace(join=lambda timeout=0: None)),
-                            ):
-                                with patch.object(
-                                    self.runner, "_wait_for_macos_runner_start", return_value=(None, set(), set())
-                                ):
-                                    result = self.runner._run_project_classic_approach(
-                                        platform_target="macOS", background=True
-                                    )
+        with (
+            patch.object(self.runner, "_build_platform_action_command", return_value=["igor", "Run"]),
+            patch.object(self.runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"),
+            patch.object(self.runner, "_macos_debug_log_path", return_value=self.project_root / "debug.log"),
+            patch.object(self.runner, "_run_igor_command", return_value=process),
+            patch.object(self.runner, "_reject_foreign_igor_after_launch"),
+            patch.object(self.runner, "_snapshot_macos_processes", return_value={}),
+            patch.object(
+                self.runner,
+                "_collect_igor_output_async",
+                return_value=(["bad"], SimpleNamespace(join=lambda timeout=0: None)),
+            ),
+            patch.object(self.runner, "_wait_for_macos_runner_start", return_value=(None, set(), set())),
+        ):
+            result = self.runner._run_project_classic_approach(platform_target="macOS", background=True)
         self.assertFalse(result["ok"])
         self.assertIn("Local run failed", result["message"])
 

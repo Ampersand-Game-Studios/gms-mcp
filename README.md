@@ -12,7 +12,7 @@
 - **Imported Template Cleanup**: `gms maintenance normalize-names` / `gm_maintenance_normalize_names` plans naming-convention renames, and applies them only when explicitly requested.
 - **Runtime Management**: `gm_runtime_list`, `gm_runtime_pin`, and `gm_runtime_verify` allow precise control over builds and execution. Unpinned projects prefer the runtime family recorded by their IDE version, then the newest stable runtime; LTS2026 installs are identified as LTS.
 - **Cross-Platform Runner Defaults**: `gm_run` / `gm_compile` now default to the host OS target platform (`macOS`, `Linux`, or `Windows`) when not explicitly provided.
-- **macOS Local Runner Behavior**: local `gm_run` / `gm_compile` use Igor's run-based path for IDE-equivalent validation without Developer ID packaging, and macOS background run sessions now track and stop the real `Mac_Runner` process cleanly. Packaged temp-output runs still resolve `.app` bundles via `Contents/MacOS/` when `PackageZip` is used.
+- **macOS Local Runner Behavior**: local `gm_run` / `gm_compile` use Igor's run-based path for IDE-equivalent validation without Developer ID packaging. Launches wait for existing IDE or MCP Igor activity, snapshot all runner PIDs, and attach a unique inherited ownership marker so cleanup can distinguish owned path-bearing and bare Download runners from user processes. Packaged temp-output runs still resolve `.app` bundles via `Contents/MacOS/` when `PackageZip` is used.
 - **GML Symbol Indexing & Code Intelligence**: `gm_build_index`, `gm_find_definition`, `gm_find_references`, and `gm_list_symbols` provide deep, fast, and filtered code analysis (definitions and cross-file references).
 - **Introspection**: complete project inspection with support for all asset types (including extensions and datafiles).
 - **MCP Resources**: addressable project index and asset graph for high-performance agent context loading.
@@ -521,6 +521,8 @@ Runner runtime labels:
 - `GMRT` and `GMRT VM` are recognized and rejected with a clear error until GameMaker documents the Igor command-line syntax for GMRT targets.
 
 Igor cache/temp paths are isolated by project and runtime. Confirmed pre-compile `System.AccessViolationException` runtime aborts clear that disposable state and retry up to three times; source compiler failures and post-compile exits are never retried. Igor child processes default to one reported .NET processor to avoid the 2026 LTS serializer/compiler race reproduced on macOS; set `GMS_MCP_IGOR_PROCESSOR_COUNT` to an integer from 1 to 256 to opt into more compiler parallelism.
+
+On macOS, runner commands wait up to 30 seconds for any existing Igor build/run—including GameMaker IDE activity—to finish, then fail clearly instead of overlapping it. Set `GMS_MCP_IGOR_IDLE_WAIT_SECONDS` to a non-negative number of seconds; `0` enables immediate fail-fast behavior. Owned launches snapshot all existing `Mac_Runner` processes, recheck for a concurrent IDE Igor immediately after launch, and persist exact process identities plus an unguessable environment marker inherited through LaunchServices. Normal cleanup plus hard MCP/direct-CLI timeout cleanup can therefore remove newly spawned owned project-temp, bare Download, and log-tail helpers without touching pre-existing, concurrent user, or unrelated runners.
 
 ## CLI usage
 

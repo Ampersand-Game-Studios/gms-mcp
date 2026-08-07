@@ -34,6 +34,7 @@ from gms_helpers.runner import (
     run_project as run_project_wrapper,
     stop_project,
 )
+from gms_helpers.runner_support.macos import MacOSProcess
 
 
 class TestRunnerGapCoverage(unittest.TestCase):
@@ -41,6 +42,9 @@ class TestRunnerGapCoverage(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.project_root = Path(self.temp_dir.name)
         (self.project_root / "TestGame.yyp").write_text('{"resources": []}', encoding="utf-8")
+        self._igor_idle_patch = patch.object(GameMakerRunner, "_wait_for_igor_idle")
+        self._igor_idle_patch.start()
+        self.addCleanup(self._igor_idle_patch.stop)
 
     def tearDown(self):
         self.temp_dir.cleanup()
@@ -323,10 +327,13 @@ class TestRunnerGapCoverage(unittest.TestCase):
         game_path = Path("/tmp/game.ios")
         debug_log_path = Path("/tmp/debug.log")
         ps_output = f"101 /tmp/Game.app/Contents/MacOS/Mac_Runner {game_path}\n102 tail -F {debug_log_path}\n"
-        with patch("gms_helpers.runner_support.macos.subprocess.run", return_value=SimpleNamespace(stdout=ps_output)):
-            runner_pids, tail_pids = runner._find_macos_validation_helper_pids(game_path, debug_log_path)
-        self.assertEqual(runner_pids, {101})
-        self.assertEqual(tail_pids, {102})
+        with (
+            patch("gms_helpers.runner_support.macos.platform.system", return_value="Darwin"),
+            patch("gms_helpers.runner_support.macos.subprocess.run", return_value=SimpleNamespace(stdout=ps_output)),
+        ):
+            processes = runner._snapshot_macos_processes()
+        self.assertIn(str(game_path), processes[101].command)
+        self.assertIn(str(debug_log_path), processes[102].command)
 
         debug_log = self.project_root / "debug.log"
         debug_log.write_text("prefix\nEntering main loop.\n", encoding="utf-8")
@@ -335,20 +342,22 @@ class TestRunnerGapCoverage(unittest.TestCase):
         self.assertTrue(runner._wait_for_macos_main_loop(proc, debug_log, 0, timeout_seconds=0.1))
 
         proc = MagicMock()
+        proc.pid = 99
         proc.poll.side_effect = [None, None]
         with patch.object(
             runner,
-            "_find_macos_validation_helper_pids",
-            side_effect=[({1}, set()), ({1, 2}, {3})],
+            "_find_macos_owned_helper_pids",
+            return_value=({2}, {3}, {2: MacOSProcess(2, 99, "/tmp/Mac_Runner -game /tmp/game.ios")}),
         ):
-            pid, runner_pids, tail_pids = runner._wait_for_macos_runner_start(
-                proc,
-                Path("/tmp/game.ios"),
-                Path("/tmp/debug.log"),
-                {1},
-                set(),
-                timeout_seconds=0.1,
-            )
+            with patch("gms_helpers.runner_support.macos.time.monotonic", side_effect=[0.0, 0.0, 0.0, 2.0]):
+                pid, runner_pids, tail_pids = runner._wait_for_macos_runner_start(
+                    proc,
+                    Path("/tmp/game.ios"),
+                    Path("/tmp/debug.log"),
+                    {1},
+                    set(),
+                    timeout_seconds=0.1,
+                )
         self.assertEqual(pid, 2)
         self.assertEqual(runner_pids, {2})
         self.assertEqual(tail_pids, {3})
@@ -371,9 +380,22 @@ class TestRunnerGapCoverage(unittest.TestCase):
         self.assertEqual(kill_calls[0][1], __import__("signal").SIGTERM)
 
         terminated = []
-        with patch.object(runner, "_find_macos_validation_helper_pids", return_value=({1, 2}, {3})):
-            with patch.object(runner, "_terminate_pid", side_effect=lambda pid, _label: terminated.append(pid)):
-                runner._cleanup_macos_validation_helpers(Path("/tmp/game.ios"), Path("/tmp/debug.log"), {1}, set())
+        owned_helpers = {
+            2: MacOSProcess(2, 99, "/tmp/Mac_Runner -game /tmp/game.ios"),
+            3: MacOSProcess(3, 99, "tail -F /tmp/debug.log"),
+        }
+        with patch.object(
+            runner,
+            "_find_macos_owned_helper_pids",
+            return_value=({2}, {3}, owned_helpers),
+        ):
+            with patch.object(runner, "_snapshot_macos_processes", return_value=owned_helpers):
+                with patch.object(
+                    runner,
+                    "_terminate_pid",
+                    side_effect=lambda pid, _label, _expected=None: terminated.append(pid),
+                ):
+                    runner._cleanup_macos_validation_helpers(Path("/tmp/game.ios"), Path("/tmp/debug.log"), {1}, set())
         self.assertEqual(sorted(terminated), [2, 3])
 
     def test_macos_compile_resets_stale_debug_log_before_waiting(self):
@@ -395,9 +417,12 @@ class TestRunnerGapCoverage(unittest.TestCase):
 
         with (
             patch.object(runner, "_build_macos_compile_validation_command", return_value=["igor", "Run"]),
-            patch.object(runner, "_find_macos_validation_helper_pids", return_value=(set(), set())),
+            patch.object(runner, "_wait_for_igor_idle"),
+            patch.object(runner, "_snapshot_macos_processes", return_value={}),
             patch.object(runner, "_run_igor_command", return_value=fake_process),
+            patch.object(runner, "_reject_foreign_igor_after_launch"),
             patch.object(runner, "_collect_igor_output_async", return_value=([], output_thread)),
+            patch.object(runner, "_wait_for_macos_runner_start", return_value=(20, {20}, set())),
             patch.object(runner, "_wait_for_macos_main_loop", side_effect=verify_fresh_log),
             patch.object(runner, "_cleanup_macos_validation_helpers"),
         ):
@@ -480,19 +505,23 @@ class TestRunnerGapCoverage(unittest.TestCase):
         fake_process.returncode = 0
         fake_process.poll.side_effect = [None, None, None]
 
-        with patch.object(runner, "_build_macos_compile_validation_command", return_value=["igor", "Run"]):
-            with patch.object(runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"):
-                with patch.object(runner, "_macos_debug_log_path", return_value=self.project_root / "debug.log"):
-                    with patch.object(runner, "_run_igor_command", return_value=fake_process):
-                        with patch.object(
-                            runner,
-                            "_collect_igor_output_async",
-                            return_value=([], MagicMock(join=lambda timeout=0: None)),
-                        ):
-                            with patch.object(runner, "_wait_for_macos_main_loop", return_value=False):
-                                with patch.object(runner, "_stop_platform_process", return_value=True):
-                                    with patch.object(runner, "_cleanup_macos_validation_helpers"):
-                                        self.assertFalse(runner.compile_project(platform_target="macOS"))
+        with (
+            patch.object(runner, "_build_macos_compile_validation_command", return_value=["igor", "Run"]),
+            patch.object(runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"),
+            patch.object(runner, "_macos_debug_log_path", return_value=self.project_root / "debug.log"),
+            patch.object(runner, "_run_igor_command", return_value=fake_process),
+            patch.object(runner, "_reject_foreign_igor_after_launch"),
+            patch.object(
+                runner,
+                "_collect_igor_output_async",
+                return_value=([], MagicMock(join=lambda timeout=0: None)),
+            ),
+            patch.object(runner, "_wait_for_macos_main_loop", return_value=False),
+            patch.object(runner, "_wait_for_macos_runner_start", return_value=(None, set(), set())),
+            patch.object(runner, "_stop_platform_process", return_value=True),
+            patch.object(runner, "_cleanup_macos_validation_helpers"),
+        ):
+            self.assertFalse(runner.compile_project(platform_target="macOS"))
         self.assertIn("main loop", runner.last_failure_message)
 
         failing_process = MagicMock()

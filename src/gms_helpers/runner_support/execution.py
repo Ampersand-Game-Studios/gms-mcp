@@ -104,6 +104,7 @@ class RunnerExecutionMixin:
             print(f"[CMD] Package command: {' '.join(cmd)}")
 
             # Run packaging
+            self._wait_for_igor_idle()
             process = self._run_igor_command(cmd)
 
             # Stream compilation output
@@ -213,11 +214,25 @@ class RunnerExecutionMixin:
         """
         platform_target = normalize_platform_target(platform_target)
         machine_lock = GameMakerMachineLock("run-start", self.project_root)
+        track_macos_runner = platform_target == "macOS"
+        macos_debug_log: Optional[Path] = None
+        macos_game_path: Optional[Path] = None
+        baseline_runner_pids: dict[int, Any] = {}
+        baseline_tail_pids: dict[int, Any] = {}
+        owned_runner_pids: set[int] = set()
+        owned_tail_pids: set[int] = set()
+        owned_igor_pid: Optional[int] = None
+        owned_igor_command: Optional[str] = None
+        owned_igor_started: Optional[str] = None
+        macos_launch_token: Optional[str] = None
+        keep_macos_helpers = False
 
         try:
             machine_lock.acquire()
             print("[RUN] Starting game using classic approach...")
             self._clear_last_result("local run")
+
+            self._wait_for_igor_idle()
 
             cmd = self._build_platform_action_command("Run", platform_target, runtime_type)
 
@@ -225,23 +240,43 @@ class RunnerExecutionMixin:
 
             project_file = self.find_project_file()
             project_name = project_file.stem
-            macos_debug_log: Optional[Path] = None
-            macos_game_path: Optional[Path] = None
-            baseline_runner_pids: set[int] = set()
-            baseline_tail_pids: set[int] = set()
             output_lines: List[str] = []
             output_thread: Optional[threading.Thread] = None
-            track_macos_runner = platform_target == "macOS"
             if track_macos_runner:
+                macos_launch_token = self._new_macos_launch_token()
                 macos_debug_log = self._macos_debug_log_path()
                 macos_game_path = self.project_root / "output" / project_name / "game.ios"
-                baseline_runner_pids, baseline_tail_pids = self._find_macos_validation_helper_pids(
+                self._wait_for_igor_idle(timeout_seconds=0)
+                baseline_processes = self._snapshot_macos_processes()
+                baseline_runner_pids = {
+                    pid: process for pid, process in baseline_processes.items() if "/Mac_Runner" in process.command
+                }
+                baseline_tail_pids = {
+                    pid: process for pid, process in baseline_processes.items() if "tail -F" in process.command
+                }
+                self._write_macos_ownership_manifest(
+                    baseline_processes,
                     macos_game_path,
                     macos_debug_log,
+                    macos_launch_token,
                 )
 
             # Run the game using Igor Run command
-            self.game_process = self._run_igor_command(cmd)
+            self.game_process = self._run_igor_command(
+                cmd,
+                environment_overrides=(
+                    {self._MACOS_LAUNCH_TOKEN_ENV: macos_launch_token}
+                    if track_macos_runner and macos_launch_token is not None
+                    else None
+                ),
+            )
+            owned_igor_pid = self.game_process.pid
+            if track_macos_runner:
+                launched_processes = self._snapshot_macos_processes()
+                if owned_igor_pid in launched_processes:
+                    owned_igor_command = launched_processes[owned_igor_pid].command
+                    owned_igor_started = launched_processes[owned_igor_pid].started
+                self._reject_foreign_igor_after_launch(owned_igor_pid)
             session_kwargs = {
                 "pid": self.game_process.pid,
                 "exe_path": str(project_file),
@@ -255,12 +290,13 @@ class RunnerExecutionMixin:
                     "local run",
                     emit_output=not background,
                 )
-                runner_pid, _runner_pids, _tail_pids = self._wait_for_macos_runner_start(
+                runner_pid, owned_runner_pids, owned_tail_pids = self._wait_for_macos_runner_start(
                     self.game_process,
                     macos_game_path,
                     macos_debug_log,
                     baseline_runner_pids,
                     baseline_tail_pids,
+                    macos_launch_token,
                 )
                 if self.game_process.poll() is not None and output_thread is not None:
                     output_thread.join(timeout=5)
@@ -287,6 +323,8 @@ class RunnerExecutionMixin:
                             output_lines,
                         ),
                     )
+                    if output_thread is not None:
+                        output_thread.join(timeout=5)
                     print(f"[ERROR] {failure_message}")
                     if background:
                         return {
@@ -296,11 +334,42 @@ class RunnerExecutionMixin:
                         }
                     return False
 
+                owned_processes = self._snapshot_macos_processes()
+                primary_runner = owned_processes.get(runner_pid)
+                if primary_runner is not None:
+                    macos_game_path = self._macos_runner_game_path(primary_runner.command) or macos_game_path
+                    macos_debug_log = self._macos_runner_debug_path(primary_runner.command) or (
+                        macos_game_path.parent / "debug.log"
+                    )
                 session_kwargs.update(
                     {
                         "pid": runner_pid,
                         "exe_path": str(macos_game_path),
                         "log_file": str(macos_debug_log),
+                        "macos_igor_pid": owned_igor_pid,
+                        "macos_igor_command": owned_igor_command,
+                        "macos_igor_started": owned_igor_started,
+                        "macos_launch_token": macos_launch_token,
+                        "macos_runner_commands": {
+                            str(pid): owned_processes[pid].command
+                            for pid in owned_runner_pids
+                            if pid in owned_processes
+                        },
+                        "macos_tail_commands": {
+                            str(pid): owned_processes[pid].command
+                            for pid in owned_tail_pids
+                            if pid in owned_processes
+                        },
+                        "macos_runner_starts": {
+                            str(pid): owned_processes[pid].started
+                            for pid in owned_runner_pids
+                            if pid in owned_processes
+                        },
+                        "macos_tail_starts": {
+                            str(pid): owned_processes[pid].started
+                            for pid in owned_tail_pids
+                            if pid in owned_processes
+                        },
                     }
                 )
 
@@ -308,6 +377,7 @@ class RunnerExecutionMixin:
             machine_lock.release()
 
             if background:
+                keep_macos_helpers = True
                 print(f"[OK] Game started in background mode (PID: {session_kwargs['pid']})")
                 print(f"   Session ID: {session.run_id}")
                 print("   Use gm_run_status to check if game is running.")
@@ -355,7 +425,26 @@ class RunnerExecutionMixin:
             print(f"[ERROR] Error running project: {e}")
             return False
         finally:
-            machine_lock.release()
+            try:
+                if (
+                    track_macos_runner
+                    and macos_game_path is not None
+                    and macos_debug_log is not None
+                    and not keep_macos_helpers
+                ):
+                    self._cleanup_macos_validation_helpers(
+                        macos_game_path,
+                        macos_debug_log,
+                        baseline_runner_pids,
+                        baseline_tail_pids,
+                        owned_igor_pid,
+                        owned_igor_command,
+                        owned_igor_started,
+                        macos_launch_token,
+                        sweep_seconds=3.0,
+                    )
+            finally:
+                machine_lock.release()
 
     def stop_game(self) -> Dict[str, Any]:
         """

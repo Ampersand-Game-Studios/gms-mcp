@@ -28,6 +28,7 @@ from gms_helpers.runner import (
     normalize_platform_target,
 )
 from gms_helpers.run_session import RunSessionManager
+from gms_helpers.runner_support.macos import MacOSProcess
 
 
 class TestRunnerSessionIntegration(unittest.TestCase):
@@ -144,6 +145,17 @@ class TestRunnerStopGame(unittest.TestCase):
             platform_target="macOS",
             runtime_type="VM",
             log_file=str(self.project_root / "output" / "test_project" / "debug.log"),
+            macos_runner_commands={
+                "222": (
+                    "/tmp/YoYo Runner.app/Contents/MacOS/Mac_Runner "
+                    f"-game {self.project_root / 'output' / 'test_project' / 'game.ios'}"
+                )
+            },
+            macos_tail_commands={
+                "333": f"tail -F {self.project_root / 'output' / 'test_project' / 'debug.log'}"
+            },
+            macos_runner_starts={"222": "start-222"},
+            macos_tail_starts={"333": "start-333"},
         )
 
         with patch.object(
@@ -165,20 +177,47 @@ class TestRunnerStopGame(unittest.TestCase):
             platform_target="macOS",
             runtime_type="VM",
             log_file=str(self.project_root / "output" / "test_project" / "debug.log"),
+            macos_runner_commands={
+                "222": (
+                    "/tmp/YoYo Runner.app/Contents/MacOS/Mac_Runner "
+                    f"-game {self.project_root / 'output' / 'test_project' / 'game.ios'}"
+                )
+            },
+            macos_tail_commands={
+                "333": f"tail -F {self.project_root / 'output' / 'test_project' / 'debug.log'}"
+            },
+            macos_runner_starts={"222": "start-222"},
+            macos_tail_starts={"333": "start-333"},
         )
 
         killed_pids = set()
 
-        def fake_is_alive(pid):
-            return pid not in killed_pids
+        processes = {
+            int(pid): MacOSProcess(
+                int(pid),
+                1,
+                command,
+                {**session.macos_runner_starts, **session.macos_tail_starts}[pid],
+            )
+            for pid, command in {
+                **session.macos_runner_commands,
+                **session.macos_tail_commands,
+            }.items()
+        }
 
-        with patch.object(runner, "_find_macos_validation_helper_pids", return_value=({222}, {333})):
+        def snapshot_processes():
+            return {pid: process for pid, process in processes.items() if pid not in killed_pids}
+
+        with patch.object(runner, "_snapshot_macos_processes", side_effect=snapshot_processes):
             with patch.object(runner, "_stop_platform_process", return_value=False):
-                with patch.object(runner, "_terminate_pid", side_effect=lambda pid, _label: killed_pids.add(pid)):
-                    with patch.object(runner._session_manager, "is_process_alive", side_effect=fake_is_alive):
-                        with patch("gms_helpers.runner_support.macos.time.monotonic", side_effect=[0.0, 0.0, 6.0]):
-                            with patch("gms_helpers.runner_support.macos.time.sleep", return_value=None):
-                                result = runner._stop_macos_run_session(session)
+                with patch.object(
+                    runner,
+                    "_terminate_pid",
+                    side_effect=lambda pid, _label, _expected=None: killed_pids.add(pid),
+                ):
+                    with patch("gms_helpers.runner_support.macos.time.monotonic", side_effect=[0.0, 0.0, 6.0]):
+                        with patch("gms_helpers.runner_support.macos.time.sleep", return_value=None):
+                            result = runner._stop_macos_run_session(session)
 
         self.assertTrue(result["ok"])
         self.assertEqual(killed_pids, {222, 333})
@@ -196,6 +235,9 @@ class TestRunnerIsGameRunning(unittest.TestCase):
         # Create a minimal .yyp file
         yyp_path = self.project_root / "test_project.yyp"
         yyp_path.write_text('{"name": "test_project", "resources": []}')
+        self._igor_idle_patch = patch.object(GameMakerRunner, "_wait_for_igor_idle")
+        self._igor_idle_patch.start()
+        self.addCleanup(self._igor_idle_patch.stop)
 
     def tearDown(self):
         """Clean up temporary directory."""
@@ -356,6 +398,9 @@ class TestRunnerBackgroundMode(unittest.TestCase):
         # Create a minimal .yyp file
         yyp_path = self.project_root / "test_project.yyp"
         yyp_path.write_text('{"name": "test_project", "resources": []}')
+        self._igor_idle_patch = patch.object(GameMakerRunner, "_wait_for_igor_idle")
+        self._igor_idle_patch.start()
+        self.addCleanup(self._igor_idle_patch.stop)
 
     def tearDown(self):
         """Clean up temporary directory."""
@@ -423,18 +468,29 @@ class TestRunnerBackgroundMode(unittest.TestCase):
         fake_process = MagicMock()
         fake_process.pid = 12345
         fake_process.poll.return_value = None
+        runner_command = (
+            "/runtime/Mac_Runner "
+            f"-game {self.project_root / 'output' / 'test_project' / 'game.ios'}"
+        )
+        tail_command = f"tail -F {self.project_root / 'output' / 'test_project' / 'debug.log'}"
+        owned_processes = {
+            12345: MacOSProcess(12345, 1, "/runtime/Igor -- Mac Run"),
+            222: MacOSProcess(222, 12345, runner_command),
+            333: MacOSProcess(333, 12345, tail_command),
+        }
 
         with patch.object(runner, "_build_platform_action_command", return_value=["igor", "--", "Mac", "Run"]):
-            with patch.object(runner, "_find_macos_validation_helper_pids", return_value=(set(), set())):
-                with patch.object(runner, "_run_igor_command", return_value=fake_process):
-                    with patch.object(runner, "_collect_igor_output_async", return_value=([], MagicMock())):
-                        with patch.object(runner, "_wait_for_macos_runner_start", return_value=(222, {222}, {333})):
-                            result = runner.run_project_direct(
-                                platform_target="macOS",
-                                runtime_type="VM",
-                                background=True,
-                                output_location="temp",
-                            )
+            with patch.object(runner, "_reject_foreign_igor_after_launch"):
+                with patch.object(runner, "_snapshot_macos_processes", side_effect=[{}, owned_processes, owned_processes]):
+                    with patch.object(runner, "_run_igor_command", return_value=fake_process):
+                        with patch.object(runner, "_collect_igor_output_async", return_value=([], MagicMock())):
+                            with patch.object(runner, "_wait_for_macos_runner_start", return_value=(222, {222}, {333})):
+                                result = runner.run_project_direct(
+                                    platform_target="macOS",
+                                    runtime_type="VM",
+                                    background=True,
+                                    output_location="temp",
+                                )
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["pid"], 222)
@@ -449,6 +505,10 @@ class TestRunnerBackgroundMode(unittest.TestCase):
         self.assertEqual(
             Path(session.log_file).resolve(), (self.project_root / "output" / "test_project" / "debug.log").resolve()
         )
+        self.assertEqual(session.macos_runner_commands, {"222": runner_command})
+        self.assertEqual(session.macos_tail_commands, {"333": tail_command})
+        self.assertEqual(session.macos_igor_pid, 12345)
+        self.assertEqual(session.macos_igor_command, "/runtime/Igor -- Mac Run")
 
     def test_macos_foreground_run_tracks_runner_pid_before_releasing_start_lock(self):
         """macOS foreground runs should cross the same durable runner/session barrier as background runs."""
@@ -459,21 +519,22 @@ class TestRunnerBackgroundMode(unittest.TestCase):
         output_thread = MagicMock()
 
         with patch.object(runner, "_build_platform_action_command", return_value=["igor", "--", "Mac", "Run"]):
-            with patch.object(runner, "_find_macos_validation_helper_pids", return_value=(set(), set())):
-                with patch.object(runner, "_run_igor_command", return_value=fake_process):
-                    with patch.object(runner, "_collect_igor_output_async", return_value=([], output_thread)):
-                        with patch.object(runner, "_wait_for_macos_runner_start", return_value=(222, {222}, {333})):
-                            with patch.object(
-                                runner._session_manager,
-                                "create_session",
-                                wraps=runner._session_manager.create_session,
-                            ) as create_session:
-                                result = runner.run_project_direct(
-                                    platform_target="macOS",
-                                    runtime_type="VM",
-                                    background=False,
-                                    output_location="temp",
-                                )
+            with patch.object(runner, "_reject_foreign_igor_after_launch"):
+                with patch.object(runner, "_snapshot_macos_processes", return_value={}):
+                    with patch.object(runner, "_run_igor_command", return_value=fake_process):
+                        with patch.object(runner, "_collect_igor_output_async", return_value=([], output_thread)):
+                            with patch.object(runner, "_wait_for_macos_runner_start", return_value=(222, {222}, {333})):
+                                with patch.object(
+                                    runner._session_manager,
+                                    "create_session",
+                                    wraps=runner._session_manager.create_session,
+                                ) as create_session:
+                                    result = runner.run_project_direct(
+                                        platform_target="macOS",
+                                        runtime_type="VM",
+                                        background=False,
+                                        output_location="temp",
+                                    )
 
         self.assertTrue(result)
         self.assertEqual(create_session.call_args.kwargs["pid"], 222)
