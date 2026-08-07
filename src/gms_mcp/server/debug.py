@@ -7,6 +7,8 @@ import time
 from pathlib import Path
 from typing import List, Optional
 
+from .log_paths import diagnostic_log_dir, secure_private_file
+
 
 _MAX_LOG_BYTES = 2 * 1024 * 1024
 _MAX_BACKUPS = 3
@@ -39,9 +41,7 @@ def _get_debug_log_path() -> Optional[Path]:
 
                 # Check for .yyp or gamemaker/ folder
                 if list(p.glob("*.yyp")) or (p / "gamemaker").is_dir():
-                    log_dir = p / ".gms_mcp" / "logs"
-                    log_dir.mkdir(parents=True, exist_ok=True)
-                    return log_dir / "debug.log"
+                    return diagnostic_log_dir(p) / "debug.log"
             except Exception:
                 continue
 
@@ -52,7 +52,7 @@ def _get_debug_log_path() -> Optional[Path]:
 
 
 def _dbg(hypothesis_id: str, location: str, message: str, data: dict) -> None:
-    """Append one bounded, redacted NDJSON line to the rotating project debug log."""
+    """Append one bounded, redacted NDJSON line to the private rotating debug log."""
     try:
         log_path = _get_debug_log_path()
         if not log_path:
@@ -70,6 +70,7 @@ def _dbg(hypothesis_id: str, location: str, message: str, data: dict) -> None:
         line = json.dumps(payload, ensure_ascii=False) + "\n"
         with _WRITE_LOCK:
             _rotate_if_needed(log_path, len(line.encode("utf-8")))
+            secure_private_file(log_path)
             with log_path.open("a", encoding="utf-8") as f:
                 f.write(line)
     except Exception:

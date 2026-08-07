@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 import subprocess
 from pathlib import Path
-from typing import List, Optional
+from typing import List, Mapping, Optional
 
 from ..runner_process import (
     build_macos_launch_guidance,
@@ -29,9 +29,14 @@ class RunnerArtifactMixin:
         """Start a game process without inheriting the caller's stdio handles."""
         return start_game_process(launch_path, cwd=launch_path.parent)
 
-    def _run_igor_command(self, cmd: List[str]) -> subprocess.Popen:
+    def _run_igor_command(
+        self,
+        cmd: List[str],
+        *,
+        environment_overrides: Mapping[str, str] | None = None,
+    ) -> subprocess.Popen:
         """Start an Igor command with shared process settings."""
-        return run_igor_command(cmd, cwd=self.project_root)
+        return run_igor_command(cmd, cwd=self.project_root, environment_overrides=environment_overrides)
 
     def _find_macos_app_binary(self, app_bundle: Path) -> Optional[Path]:
         """Return the first executable inside a macOS .app bundle."""

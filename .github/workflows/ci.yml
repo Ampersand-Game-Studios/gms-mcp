@@ -1,6 +1,13 @@
 name: CI
 
 on:
+  workflow_dispatch:
+    inputs:
+      run_real_gamemaker_smoke:
+        description: Run the licensed GameMaker smoke matrix without publishing
+        required: false
+        default: false
+        type: boolean
   pull_request:
     branches:
       - "dev"
@@ -171,9 +178,12 @@ jobs:
 
   real_gamemaker_smoke:
     name: Real GameMaker Smoke (${{ matrix.host_platform }}, ${{ matrix.fixture_name }})
-    # Secrets are unavailable to pull requests. Trusted pushes run only on a
-    # disposable GitHub-hosted VM, never on personal or studio infrastructure.
-    if: github.event_name == 'push' && vars.GMS_MCP_REAL_SMOKE_ENABLED == 'true'
+    # The gamemaker-ci environment admits only dev, pre-release, and main.
+    # Licensed jobs run on disposable GitHub-hosted VMs, never studio machines.
+    if: >-
+      (github.event_name == 'push' && vars.GMS_MCP_REAL_SMOKE_ENABLED == 'true') ||
+      (github.event_name == 'workflow_dispatch' && inputs.run_real_gamemaker_smoke)
+    environment: gamemaker-ci
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     strategy:
@@ -261,6 +271,7 @@ jobs:
       - name: Check test results
         env:
           EVENT_NAME: ${{ github.event_name }}
+          MANUAL_REAL_GAMEMAKER_SMOKE_REQUESTED: ${{ inputs.run_real_gamemaker_smoke }}
           REAL_GAMEMAKER_SMOKE_ENABLED: ${{ vars.GMS_MCP_REAL_SMOKE_ENABLED }}
           REAL_GAMEMAKER_SMOKE_RESULT: ${{ needs.real_gamemaker_smoke.result }}
         run: |
@@ -280,13 +291,14 @@ jobs:
             echo "macOS runner/session tests failed or were cancelled"
             exit 1
           fi
-          if [ "$EVENT_NAME" = "push" ] && [ "$REAL_GAMEMAKER_SMOKE_ENABLED" = "true" ]; then
+          if { [ "$EVENT_NAME" = "push" ] && [ "$REAL_GAMEMAKER_SMOKE_ENABLED" = "true" ]; } ||
+             { [ "$EVENT_NAME" = "workflow_dispatch" ] && [ "$MANUAL_REAL_GAMEMAKER_SMOKE_REQUESTED" = "true" ]; }; then
             if [ "$REAL_GAMEMAKER_SMOKE_RESULT" != "success" ]; then
-              echo "Real GameMaker smoke matrix failed, was skipped, or was cancelled for a trusted push"
+              echo "Requested real GameMaker smoke matrix failed, was skipped, or was cancelled"
               exit 1
             fi
           elif [ "$REAL_GAMEMAKER_SMOKE_RESULT" != "skipped" ]; then
-            echo "Real GameMaker smoke executed while its trusted-push gate was closed"
+            echo "Real GameMaker smoke executed without an authorized push or manual request"
             exit 1
           fi
           echo "All tests passed!"

@@ -184,7 +184,10 @@ class TestReleaseCertification(unittest.TestCase):
 
         for branch in ("dev", "pre-release", "main"):
             self.assertGreaterEqual(ci.count(f'- "{branch}"'), 2)
-        self.assertIn("if: github.event_name == 'push' && vars.GMS_MCP_REAL_SMOKE_ENABLED == 'true'", ci)
+        self.assertIn("workflow_dispatch:", ci)
+        self.assertIn("run_real_gamemaker_smoke:", ci)
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.run_real_gamemaker_smoke", ci)
+        self.assertIn("environment: gamemaker-ci", ci)
         self.assertIn("runner: macos-15", ci)
         self.assertIn("runner: windows-2025", ci)
         self.assertIn("runner: ubuntu-24.04", ci)
@@ -194,8 +197,12 @@ class TestReleaseCertification(unittest.TestCase):
         self.assertNotIn("self-hosted", ci)
         self.assertNotIn("GMS_MCP_REAL_SMOKE_RUNNER_LABELS", ci)
         self.assertIn("REAL_GAMEMAKER_SMOKE_ENABLED: ${{ vars.GMS_MCP_REAL_SMOKE_ENABLED }}", ci)
+        self.assertIn(
+            "MANUAL_REAL_GAMEMAKER_SMOKE_REQUESTED: ${{ inputs.run_real_gamemaker_smoke }}",
+            ci,
+        )
         self.assertIn("REAL_GAMEMAKER_SMOKE_RESULT: ${{ needs.real_gamemaker_smoke.result }}", ci)
-        self.assertIn('if [ "$EVENT_NAME" = "push" ] && [ "$REAL_GAMEMAKER_SMOKE_ENABLED" = "true" ]; then', ci)
+        self.assertIn('[ "$EVENT_NAME" = "workflow_dispatch" ]', ci)
         self.assertIn('elif [ "$REAL_GAMEMAKER_SMOKE_RESULT" != "skipped" ]; then', ci)
         self.assertIn("ruff format --check .", ci)
         self.assertNotIn("vars[matrix.project_var]", ci)

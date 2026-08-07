@@ -147,6 +147,7 @@ def _run_direct(
     with tempfile.TemporaryDirectory(prefix="gms-mcp-direct-") as temp_dir:
         request_path = Path(temp_dir) / "request.json"
         response_path = Path(temp_dir) / "response.json"
+        ownership_manifest_path = Path(temp_dir) / "macos-runner-ownership.json"
         request_path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
         command = [
             sys.executable,
@@ -156,10 +157,15 @@ def _run_direct(
             str(request_path),
             str(response_path),
         ]
+        worker_environment = _worker_environment(module_root)
+        if getattr(handler, "__name__", "") in {"handle_runner_compile", "handle_runner_run"}:
+            from .macos_runner_timeout import MACOS_OWNERSHIP_MANIFEST_ENV
+
+            worker_environment[MACOS_OWNERSHIP_MANIFEST_ENV] = str(ownership_manifest_path)
         process = subprocess.Popen(
             command,
             cwd=project_directory,
-            env=_worker_environment(module_root),
+            env=worker_environment,
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
@@ -170,8 +176,10 @@ def _run_direct(
             process.wait(timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None)
         except subprocess.TimeoutExpired:
             from .subprocess_runner import _terminate_process_tree
+            from .macos_runner_timeout import cleanup_macos_ownership_manifest
 
             terminated = _terminate_process_tree(process)
+            cleanup_macos_ownership_manifest(ownership_manifest_path)
             elapsed = time.monotonic() - started
             return ToolRunResult(
                 ok=False,
@@ -191,6 +199,9 @@ def _run_direct(
 
         elapsed = time.monotonic() - started
         if not response_path.exists():
+            from .macos_runner_timeout import cleanup_macos_ownership_manifest
+
+            cleanup_macos_ownership_manifest(ownership_manifest_path)
             return ToolRunResult(
                 ok=False,
                 stdout="",
@@ -208,6 +219,9 @@ def _run_direct(
         try:
             payload = json.loads(response_path.read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError) as exc:
+            from .macos_runner_timeout import cleanup_macos_ownership_manifest
+
+            cleanup_macos_ownership_manifest(ownership_manifest_path)
             return ToolRunResult(
                 ok=False,
                 stdout="",
@@ -221,6 +235,11 @@ def _run_direct(
                 cwd=str(project_directory),
                 execution_mode="direct:isolated",
             )
+
+        if not bool(payload.get("ok")):
+            from .macos_runner_timeout import cleanup_macos_ownership_manifest
+
+            cleanup_macos_ownership_manifest(ownership_manifest_path)
 
     raw_result = payload.get("result")
     result_value = (

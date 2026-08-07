@@ -22,6 +22,7 @@ from gms_mcp.install import (
     _build_codex_env_args,
     _make_codex_mcp_config,
     _parse_toml_or_raise,
+    _render_codex_privacy_safe_preview,
     _validate_codex_sections,
     _collect_codex_check_state,
     _collect_antigravity_check_state,
@@ -777,8 +778,9 @@ class TestClaudeCodeSupport(unittest.TestCase):
             output = buffer.getvalue()
             self.assertEqual(ret, 0)
             self.assertIn("[DRY-RUN] Codex config would be written to:", output)
-            self.assertIn('GM_PROJECT_ROOT = "."', output)
+            self.assertIn('"GM_PROJECT_ROOT": "."', output)
             self.assertNotIn(f'GM_PROJECT_ROOT = "{workspace}"', output)
+            self.assertNotIn(str(workspace), output)
             self.assertFalse((workspace / ".codex" / "mcp.toml").exists())
 
     def test_main_openclaw_dry_run(self):
@@ -959,7 +961,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
                 self.assertIn("[INFO] Ready for Antigravity: yes", output)
 
     def test_main_codex_dry_run_only_prints_final_payloads(self):
-        """--codex-dry-run-only should print final merged payloads for local + global targets."""
+        """--codex-dry-run-only should print only redacted target entries."""
         self._require_toml_parser()
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
@@ -967,12 +969,16 @@ class TestClaudeCodeSupport(unittest.TestCase):
             home_dir = Path(tmpdir) / "home"
             with temporary_home(home_dir):
                 global_path = home_dir / ".codex" / "config.toml"
+                private_command = (home_dir / "private" / "existing-cmd").as_posix()
                 global_path.parent.mkdir(parents=True, exist_ok=True)
                 global_path.write_text(
                     "\n".join(
                         [
                             "[mcp_servers.existing]",
-                            'command = "existing-cmd"',
+                            f'command = "{private_command}"',
+                            "",
+                            "[mcp_servers.existing.env]",
+                            'EXAMPLE_API_SECRET = "existing-private-secret"',
                         ]
                     )
                     + "\n",
@@ -992,10 +998,44 @@ class TestClaudeCodeSupport(unittest.TestCase):
                     )
                 output = buffer.getvalue()
                 self.assertEqual(ret, 0)
-                self.assertIn("[DRY-RUN] Codex final merged payload:", output)
-                self.assertIn("[DRY-RUN] Codex global final merged payload:", output)
+                self.assertIn("[DRY-RUN] Codex redacted target entry", output)
+                self.assertIn("[DRY-RUN] Codex global redacted target entry", output)
+                self.assertIn('"gms-preview"', output)
+                self.assertNotIn("existing-private-secret", output)
+                self.assertNotIn("existing-cmd", output)
+                self.assertNotIn(str(home_dir), output)
                 self.assertIn("[DRY-RUN] Codex dry-run-only mode complete.", output)
                 self.assertFalse((workspace / ".codex" / "mcp.toml").exists())
+
+    def test_codex_privacy_safe_preview_redacts_secrets_paths_and_unrelated_entries(self):
+        merged = "\n".join(
+            [
+                "[mcp_servers.unrelated]",
+                'command = "/Users/example/private-tool"',
+                "",
+                "[mcp_servers.gms-preview]",
+                'command = "/Users/example/bin/gms-mcp"',
+                'args = ["--token=private-token", "--project=/Users/example/private/game.yyp"]',
+                "",
+                "[mcp_servers.gms-preview.env]",
+                'EXAMPLE_API_SECRET = "private-secret"',
+                'PYTHONUNBUFFERED = "1"',
+            ]
+        )
+
+        preview = _render_codex_privacy_safe_preview(
+            merged_text=merged,
+            server_name="gms-preview",
+            source_label="test config",
+        )
+        parsed = json.loads(preview)
+
+        self.assertEqual(set(parsed["mcp_servers"]), {"gms-preview"})
+        entry = parsed["mcp_servers"]["gms-preview"]
+        self.assertEqual(entry["command"], "<host-path>")
+        self.assertEqual(entry["args"], ["--token=***REDACTED***", "--project=<host-path>"])
+        self.assertEqual(entry["env"]["EXAMPLE_API_SECRET"], "***REDACTED***")
+        self.assertEqual(entry["env"]["PYTHONUNBUFFERED"], "1")
 
     def test_main_codex_global_merges_into_home(self):
         """--codex-global writes (and merges) the shared ~/.codex/config.toml entry."""

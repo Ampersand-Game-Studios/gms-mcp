@@ -16,6 +16,7 @@ class _FakeServer:
     async def call_tool(self, tool_name, arguments):
         if tool_name == "gm_create_sprite":
             assert os.environ["GMS_MCP_POST_MUTATION_VERIFY"] == "smart"
+            assert Path(os.environ["GM_PROJECT_ROOT"]).resolve() == Path(arguments["project_root"]).resolve()
             return {
                 "ok": True,
                 "transaction": {
@@ -253,12 +254,14 @@ class TestRealGameMakerSmoke(unittest.TestCase):
             ]
 
             with (
+                patch.dict(os.environ, {"GM_PROJECT_ROOT": "previous-project"}, clear=False),
                 patch.object(sys, "argv", argv),
                 patch.object(real_smoke.platform, "system", return_value="Linux"),
                 patch.object(real_smoke.RuntimeManager, "select", return_value=runtime),
                 patch.object(real_smoke, "build_server", return_value=_FakeServer()),
             ):
                 exit_code = real_smoke.main()
+                self.assertEqual(os.environ["GM_PROJECT_ROOT"], "previous-project")
 
             report = json.loads(output.read_text(encoding="utf-8"))
 

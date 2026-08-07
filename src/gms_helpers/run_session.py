@@ -18,7 +18,7 @@ import threading
 import time
 import subprocess
 import platform
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass, asdict, field
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Dict, Any, List
@@ -39,6 +39,14 @@ class RunSession:
     runtime_type: str = "VM"
     log_file: Optional[str] = None
     bridge_port: Optional[int] = None
+    macos_igor_pid: Optional[int] = None
+    macos_igor_command: Optional[str] = None
+    macos_igor_started: Optional[str] = None
+    macos_launch_token: Optional[str] = None
+    macos_runner_commands: Dict[str, str] = field(default_factory=dict)
+    macos_tail_commands: Dict[str, str] = field(default_factory=dict)
+    macos_runner_starts: Dict[str, str] = field(default_factory=dict)
+    macos_tail_starts: Dict[str, str] = field(default_factory=dict)
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
@@ -94,6 +102,14 @@ class RunSessionManager:
         runtime_type: str = "VM",
         log_file: Optional[str] = None,
         bridge_port: Optional[int] = None,
+        macos_igor_pid: Optional[int] = None,
+        macos_igor_command: Optional[str] = None,
+        macos_igor_started: Optional[str] = None,
+        macos_launch_token: Optional[str] = None,
+        macos_runner_commands: Optional[Dict[str, str]] = None,
+        macos_tail_commands: Optional[Dict[str, str]] = None,
+        macos_runner_starts: Optional[Dict[str, str]] = None,
+        macos_tail_starts: Optional[Dict[str, str]] = None,
     ) -> RunSession:
         """
         Create and persist a new run session.
@@ -121,6 +137,14 @@ class RunSessionManager:
             runtime_type=runtime_type,
             log_file=log_file,
             bridge_port=bridge_port,
+            macos_igor_pid=macos_igor_pid,
+            macos_igor_command=macos_igor_command,
+            macos_igor_started=macos_igor_started,
+            macos_launch_token=macos_launch_token,
+            macos_runner_commands=dict(macos_runner_commands or {}),
+            macos_tail_commands=dict(macos_tail_commands or {}),
+            macos_runner_starts=dict(macos_runner_starts or {}),
+            macos_tail_starts=dict(macos_tail_starts or {}),
         )
 
         # Write session to disk

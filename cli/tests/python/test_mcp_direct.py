@@ -2,13 +2,14 @@
 import argparse
 import asyncio
 import os
+import subprocess
 import sys
 import tempfile
 import threading
 import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
@@ -39,6 +40,10 @@ def _direct_isolation_probe(args):
             time.sleep(0.01)
         if not Path(args.release_path).exists():
             raise TimeoutError("isolation probe was not released")
+    return True
+
+
+def handle_runner_run(_args):
     return True
 
 
@@ -146,6 +151,26 @@ class TestDirectResultNormalization(unittest.TestCase):
         self.assertEqual(result["error"], "bad input")
         self.assertFalse(result["result"]["ok"])
         self.assertEqual(result["result"]["error"]["code"], "legacy_dict_error")
+
+    def test_timed_out_macos_runner_invokes_parent_owned_cleanup(self):
+        project_root = self._project_root()
+        process = MagicMock(pid=77, returncode=-15)
+        process.wait.side_effect = subprocess.TimeoutExpired(["worker"], 1)
+        with (
+            patch("gms_mcp.server.direct.subprocess.Popen", return_value=process),
+            patch("gms_mcp.server.subprocess_runner._terminate_process_tree", return_value=True),
+            patch("gms_mcp.server.macos_runner_timeout.cleanup_macos_ownership_manifest") as cleanup,
+        ):
+            result = _run_direct(
+                handle_runner_run,
+                argparse.Namespace(platform="macOS"),
+                str(project_root),
+                timeout_seconds=1,
+            )
+
+        self.assertTrue(result.timed_out)
+        self.assertEqual(cleanup.call_count, 1)
+        self.assertEqual(cleanup.call_args.args[0].name, "macos-runner-ownership.json")
 
     def test_concurrent_projects_cannot_cross_cwd_or_captured_output(self):
         original_cwd = Path.cwd()

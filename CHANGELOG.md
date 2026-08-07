@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 ### Security
 - **Public Artifact Boundary**: Removed repository-only project, planning, service-operation, and release material from the public tree; package builds now use an explicit runtime allowlist and fail CI or publication if generated archives contain development files, personal author contact metadata, or SCM repository inventories.
+- **GitHub Actions Hardening**: Restricted workflow tokens and third-party actions, removed self-hosted runner access, and confined licensed GameMaker smoke jobs to a branch-restricted environment with a non-publishing manual verification path.
+- **Privacy-Safe Local Diagnostics**: Codex previews now omit unrelated configuration and redact secret values and host paths. Automatic diagnostic logs now use private, opaque per-project directories under `~/.gms-mcp/logs/` instead of writing inside GameMaker projects.
 
 ### Added
 - **GML Documentation Lookup**: Built-in documentation for GameMaker functions fetched on-demand from manual.gamemaker.io:
@@ -51,6 +53,8 @@ All notable changes to this project will be documented in this file.
 - **Mutation Journal**: Project writes now use cross-thread/process locking, selective journal rollback, ownership conflict detection, and cancellation-safe cleanup.
 
 ### Fixed
+- **macOS Orphan Download Runner Cleanup**: Runner launches now wait briefly for IDE- or MCP-originated Igor activity to finish, reject a concurrent post-check Igor, snapshot every existing `Mac_Runner`, and attach a per-launch marker inherited through LaunchServices. Failure, timeout, validation, foreground-exit, and stop cleanup can terminate exact owned path-bearing or bare Download runners and log tails without killing pre-existing, concurrent user, or unrelated GameMaker processes; parent-side cleanup also catches worker-detached helpers.
+- **Licensed CI Project Boundary**: Real GameMaker certification now pins the MCP server to its generated fixture before startup, so repository toolchain symlinks cannot be mistaken for unsafe links inside the GameMaker project.
 - **Project-Confined MCP Access**: MCP servers now pin one GameMaker project at startup, reject traversal and symlink escapes for reads and writes, emit project-relative paths, and withhold host commands, process IDs, runtime/licence locations, and other machine diagnostics unless a trusted local server explicitly opts in.
 - **Spurious `.gms_mcp` Folder Creation**: Fixed an issue where the MCP server would create a `.gms_mcp/logs/` folder in the current working directory even when no GameMaker project was present. Debug logging now only activates when a valid project is detected.
 - **Object Creation Schema**: Fixed a critical bug where newly created objects were missing required `$GMObject: "v1"` markers, which prevented project compilation.
