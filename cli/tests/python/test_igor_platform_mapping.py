@@ -35,6 +35,9 @@ class TestPrefabsAutoDetection(unittest.TestCase):
         self.tmp_dir = tempfile.mkdtemp()
         self.project_root = Path(self.tmp_dir)
         (self.project_root / "test_project.yyp").write_text('{"name": "test_project", "resources": []}')
+        self._igor_idle_patch = patch.object(GameMakerRunner, "_wait_for_igor_idle")
+        self._igor_idle_patch.start()
+        self.addCleanup(self._igor_idle_patch.stop)
 
     def tearDown(self):
         import shutil
@@ -66,6 +69,9 @@ class TestRunnerCommandSelection(unittest.TestCase):
         self.tmp_dir = tempfile.mkdtemp()
         self.project_root = Path(self.tmp_dir)
         (self.project_root / "test_project.yyp").write_text('{"name": "test_project", "resources": []}')
+        self._igor_idle_patch = patch.object(GameMakerRunner, "_wait_for_igor_idle")
+        self._igor_idle_patch.start()
+        self.addCleanup(self._igor_idle_patch.stop)
 
     def tearDown(self):
         import shutil
@@ -85,12 +91,13 @@ class TestRunnerCommandSelection(unittest.TestCase):
         return proc
 
     @patch.object(GameMakerRunner, "_wait_for_macos_main_loop", return_value=True)
+    @patch.object(GameMakerRunner, "_wait_for_macos_runner_start", return_value=(20, {20}, set()))
     @patch.object(GameMakerRunner, "_stop_platform_process", return_value=True)
-    def test_compile_project_uses_local_run_validation_on_macos(self, _mock_stop, _mock_wait):
+    def test_compile_project_uses_local_run_validation_on_macos(self, _mock_stop, _mock_runner, _mock_wait):
         runner = GameMakerRunner(self.project_root)
         captured_cmd = []
 
-        def fake_run_igor(cmd):
+        def fake_run_igor(cmd, **_kwargs):
             captured_cmd[:] = cmd
             return self._fake_process()
 
@@ -98,7 +105,8 @@ class TestRunnerCommandSelection(unittest.TestCase):
             with patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")):
                 with patch.object(runner, "get_prefabs_path", return_value=None):
                     with patch.object(runner, "_run_igor_command", side_effect=fake_run_igor):
-                        ok = runner.compile_project(platform_target="macOS", runtime_type="VM")
+                        with patch.object(runner, "_reject_foreign_igor_after_launch"):
+                            ok = runner.compile_project(platform_target="macOS", runtime_type="VM")
 
         self.assertTrue(ok)
         self.assertIn("Run", captured_cmd)
@@ -110,7 +118,7 @@ class TestRunnerCommandSelection(unittest.TestCase):
         runner = GameMakerRunner(self.project_root)
         captured_cmd = []
 
-        def fake_run_igor(cmd):
+        def fake_run_igor(cmd, **_kwargs):
             captured_cmd[:] = cmd
             return self._fake_process()
 
@@ -128,7 +136,7 @@ class TestRunnerCommandSelection(unittest.TestCase):
         runner = GameMakerRunner(self.project_root)
         captured_cmd = []
 
-        def fake_run_igor(cmd):
+        def fake_run_igor(cmd, **_kwargs):
             captured_cmd[:] = cmd
             return self._fake_process()
 
@@ -149,7 +157,7 @@ class TestRunnerCommandSelection(unittest.TestCase):
         runner = GameMakerRunner(self.project_root)
         captured_cmd = []
 
-        def fake_run_igor(cmd):
+        def fake_run_igor(cmd, **_kwargs):
             captured_cmd[:] = cmd
             return self._fake_process()
 
@@ -157,14 +165,19 @@ class TestRunnerCommandSelection(unittest.TestCase):
             with patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")):
                 with patch.object(runner, "get_prefabs_path", return_value=None):
                     with patch.object(runner, "_run_igor_command", side_effect=fake_run_igor):
-                        with patch.object(runner, "_collect_igor_output_async", return_value=([], MagicMock())):
-                            with patch.object(runner, "_wait_for_macos_runner_start", return_value=(222, {222}, {333})):
-                                result = runner.run_project_direct(
-                                    platform_target="macOS",
-                                    runtime_type="VM",
-                                    background=True,
-                                    output_location="temp",
-                                )
+                        with patch.object(runner, "_reject_foreign_igor_after_launch"):
+                            with patch.object(runner, "_collect_igor_output_async", return_value=([], MagicMock())):
+                                with patch.object(
+                                    runner,
+                                    "_wait_for_macos_runner_start",
+                                    return_value=(222, {222}, {333}),
+                                ):
+                                    result = runner.run_project_direct(
+                                        platform_target="macOS",
+                                        runtime_type="VM",
+                                        background=True,
+                                        output_location="temp",
+                                    )
 
         self.assertTrue(result["ok"])
         self.assertTrue(result["background"])

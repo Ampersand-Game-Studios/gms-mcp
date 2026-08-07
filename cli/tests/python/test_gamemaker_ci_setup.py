@@ -38,6 +38,11 @@ class TestGameMakerCISetup(unittest.TestCase):
         with self.assertRaisesRegex(setup_ci.SetupError, "unapproved GameMaker runtime"):
             setup_ci.install_runtime("2099.1.2.3")
 
+    def test_missing_environment_secret_fails_before_installation(self):
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaisesRegex(setup_ci.SetupError, "GAMEMAKER_ACCESS_KEY secret is unavailable"):
+                setup_ci.install_runtime("2024.14.4.268")
+
     def test_zip_extraction_rejects_parent_traversal(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)

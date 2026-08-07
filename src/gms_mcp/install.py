@@ -39,6 +39,7 @@ from .install_support.client_configs import (
     _read_codex_server_entry,
     _render_antigravity_merged_config,
     _render_codex_merged_config,
+    _render_codex_privacy_safe_preview,
     _toml_parser,
     _upsert_codex_server_config,
     _validate_antigravity_sections,
@@ -100,6 +101,19 @@ from .telemetry import (
     queue_event,
     resolve_state,
 )
+
+
+def _privacy_safe_path_label(path: Path, *, workspace_root: Path) -> str:
+    """Display a useful config target without exposing an absolute host path."""
+    resolved = path.expanduser().resolve(strict=False)
+    for base, prefix in ((workspace_root, "."), (Path.home(), "~")):
+        try:
+            relative = resolved.relative_to(base.expanduser().resolve(strict=False))
+        except ValueError:
+            continue
+        relative_label = relative.as_posix()
+        return prefix if not relative_label else f"{prefix}/{relative_label}"
+    return "<host-path>"
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -548,7 +562,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.codex:
         try:
-            codex_path, codex_payload, codex_merged = _generate_codex_config(
+            codex_path, _codex_payload, codex_merged = _generate_codex_config(
                 workspace_root=workspace_root,
                 output_path=workspace_root / ".codex" / "mcp.toml",
                 server_name=args.server_name,
@@ -565,12 +579,14 @@ def main(argv: list[str] | None = None) -> int:
         written.append(codex_path)
 
         if dry_run:
-            print(f"[DRY-RUN] Codex config would be written to: {codex_path}")
-            print("[DRY-RUN] Codex config payload:")
-            print(codex_payload)
-            if args.codex_dry_run_only:
-                print("[DRY-RUN] Codex final merged payload:")
-                print(codex_merged.rstrip())
+            codex_preview = _render_codex_privacy_safe_preview(
+                merged_text=codex_merged,
+                server_name=args.server_name,
+                source_label=str(codex_path),
+            )
+            print("[DRY-RUN] Codex config would be written to: .codex/mcp.toml")
+            print("[DRY-RUN] Codex redacted target entry (unrelated configuration omitted):")
+            print(codex_preview)
         else:
             print(f"[INFO] Codex config written to: {codex_path}")
             print("       This is a workspace-scoped config file.")
@@ -596,7 +612,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.codex_global:
         codex_global_path = Path.home() / ".codex" / "config.toml"
         try:
-            codex_global_path, codex_global_payload, codex_global_merged = _generate_codex_config(
+            codex_global_path, _codex_global_payload, codex_global_merged = _generate_codex_config(
                 workspace_root=workspace_root,
                 output_path=codex_global_path,
                 server_name=args.server_name,
@@ -613,12 +629,14 @@ def main(argv: list[str] | None = None) -> int:
         written.append(codex_global_path)
 
         if dry_run:
-            print(f"[DRY-RUN] Codex global config would be merged into: {codex_global_path}")
-            print("[DRY-RUN] Codex global payload:")
-            print(codex_global_payload)
-            if args.codex_dry_run_only:
-                print("[DRY-RUN] Codex global final merged payload:")
-                print(codex_global_merged.rstrip())
+            codex_global_preview = _render_codex_privacy_safe_preview(
+                merged_text=codex_global_merged,
+                server_name=args.server_name,
+                source_label=str(codex_global_path),
+            )
+            print("[DRY-RUN] Codex global config would be merged into: ~/.codex/config.toml")
+            print("[DRY-RUN] Codex global redacted target entry (unrelated configuration omitted):")
+            print(codex_global_preview)
         else:
             print(f"[INFO] Codex global config updated: {codex_global_path}")
             print("       Server entry is merged into [mcp_servers] without a fixed GM_PROJECT_ROOT.")
@@ -641,9 +659,14 @@ def main(argv: list[str] | None = None) -> int:
         except (RuntimeError, ValueError) as exc:
             print(f"[ERROR] Could not preview Codex global config merge: {exc}")
             return _finish(2, error_family=classify_error_family(exc))
-        print(f"[INFO] Codex app setup global preview target: {codex_global_path}")
-        print("[INFO] Codex app setup global final merged payload (preview):")
-        print(codex_global_preview.rstrip())
+        codex_global_safe_preview = _render_codex_privacy_safe_preview(
+            merged_text=codex_global_preview,
+            server_name=args.server_name,
+            source_label=str(codex_global_path),
+        )
+        print("[INFO] Codex app setup global preview target: ~/.codex/config.toml")
+        print("[INFO] Codex app setup redacted target entry (unrelated configuration omitted):")
+        print(codex_global_safe_preview)
 
     if args.antigravity_setup:
         try:
@@ -706,7 +729,7 @@ def main(argv: list[str] | None = None) -> int:
         print("[DRY-RUN] No files were written.")
         print("[DRY-RUN] Target paths:")
         for p in written:
-            print(f"  - {p}")
+            print(f"  - {_privacy_safe_path_label(p, workspace_root=workspace_root)}")
         if args.cursor:
             cursor_path = workspace_root / ".cursor" / "mcp.json"
             gm_rel_posix = _relpath_posix_or_none(gm_project_root, workspace_root)

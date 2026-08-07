@@ -63,6 +63,10 @@ class TestRunSession(unittest.TestCase):
         self.assertEqual(session.runtime_type, "VM")
         self.assertIsNone(session.log_file)
         self.assertIsNone(session.bridge_port)
+        self.assertIsNone(session.macos_igor_pid)
+        self.assertIsNone(session.macos_igor_command)
+        self.assertEqual(session.macos_runner_commands, {})
+        self.assertEqual(session.macos_tail_commands, {})
 
     def test_run_session_custom_values(self):
         """Test RunSession with custom optional values."""

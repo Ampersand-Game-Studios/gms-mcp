@@ -258,13 +258,28 @@ class RunnerIgorMixin:
 
             if platform_target == "macOS":
                 self._clear_last_result("local compile validation")
+                self._wait_for_igor_idle()
                 cmd = self._build_macos_compile_validation_command(runtime_type)
                 print("[BUILD] Using bounded Igor local run validation on macOS to avoid package signing.")
                 print(f"[CMD] Validation command: {' '.join(cmd)}")
                 project_name = self.find_project_file().stem
                 debug_log = self._macos_debug_log_path()
                 game_path = self.project_root / "output" / project_name / "game.ios"
-                baseline_runner_pids, baseline_tail_pids = self._find_macos_validation_helper_pids(game_path, debug_log)
+                self._wait_for_igor_idle(timeout_seconds=0)
+                baseline_processes = self._snapshot_macos_processes()
+                baseline_runner_pids = {
+                    pid: process for pid, process in baseline_processes.items() if "/Mac_Runner" in process.command
+                }
+                baseline_tail_pids = {
+                    pid: process for pid, process in baseline_processes.items() if "tail -F" in process.command
+                }
+                macos_launch_token = self._new_macos_launch_token()
+                self._write_macos_ownership_manifest(
+                    baseline_processes,
+                    game_path,
+                    debug_log,
+                    macos_launch_token,
+                )
                 if not baseline_runner_pids and not baseline_tail_pids:
                     # GameMaker may truncate and then quickly regrow the same log
                     # beyond its prior size. Starting from a clean transient log
@@ -277,14 +292,41 @@ class RunnerIgorMixin:
                 output_lines: List[str] = []
                 output_thread: Optional[threading.Thread] = None
                 process = None
+                owned_igor_command: Optional[str] = None
+                owned_igor_started: Optional[str] = None
                 reached_main_loop = False
                 timed_out = False
                 try:
-                    process = self._run_igor_command(cmd)
-                    output_lines, output_thread = self._collect_igor_output_async(process, "local compile validation")
-                    reached_main_loop = self._wait_for_macos_main_loop(
-                        process, debug_log, start_offset, timeout_seconds=90.0
+                    process = self._run_igor_command(
+                        cmd,
+                        environment_overrides={self._MACOS_LAUNCH_TOKEN_ENV: macos_launch_token},
                     )
+                    launched_processes = self._snapshot_macos_processes()
+                    if process.pid in launched_processes:
+                        owned_igor_command = launched_processes[process.pid].command
+                        owned_igor_started = launched_processes[process.pid].started
+                    self._reject_foreign_igor_after_launch(process.pid)
+                    output_lines, output_thread = self._collect_igor_output_async(process, "local compile validation")
+                    runner_pid, _runner_pids, _tail_pids = self._wait_for_macos_runner_start(
+                        process,
+                        game_path,
+                        debug_log,
+                        baseline_runner_pids,
+                        baseline_tail_pids,
+                        macos_launch_token,
+                        timeout_seconds=90.0,
+                    )
+                    if runner_pid is not None:
+                        runner_process = self._snapshot_macos_processes().get(runner_pid)
+                        if runner_process is not None:
+                            game_path = self._macos_runner_game_path(runner_process.command) or game_path
+                            debug_log = self._macos_runner_debug_path(runner_process.command) or (
+                                game_path.parent / "debug.log"
+                            )
+                            start_offset = 0
+                        reached_main_loop = self._wait_for_macos_main_loop(
+                            process, debug_log, start_offset, timeout_seconds=90.0
+                        )
                     timed_out = (not reached_main_loop) and process.poll() is None
                 finally:
                     if process is not None and process.poll() is None:
@@ -309,6 +351,11 @@ class RunnerIgorMixin:
                         debug_log,
                         baseline_runner_pids,
                         baseline_tail_pids,
+                        process.pid if process is not None else None,
+                        owned_igor_command,
+                        owned_igor_started,
+                        macos_launch_token,
+                        sweep_seconds=3.0,
                     )
 
                 if reached_main_loop:
@@ -352,6 +399,7 @@ class RunnerIgorMixin:
             )
             print(f"[CMD] {stage_label.capitalize()} command: {' '.join(cmd)}")
 
+            self._wait_for_igor_idle()
             process = self._run_igor_command(cmd)
             output_lines = self._stream_igor_output(process, stage_label)
             process.wait()

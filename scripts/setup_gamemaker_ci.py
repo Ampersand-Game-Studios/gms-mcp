@@ -193,7 +193,7 @@ def install_runtime(runtime_version: str) -> str:
 
     access_key = os.environ.get("GAMEMAKER_ACCESS_KEY")
     if not access_key:
-        raise SetupError("GAMEMAKER_ACCESS_KEY repository secret is unavailable")
+        raise SetupError("GAMEMAKER_ACCESS_KEY secret is unavailable")
 
     host = detect_host_config()
     runner_temp, github_env = _github_paths()

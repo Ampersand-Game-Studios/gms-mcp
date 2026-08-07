@@ -243,6 +243,45 @@ def _render_codex_merged_config(
     )
 
 
+def _redact_host_paths(value: object) -> object:
+    """Replace machine-specific paths in a configuration preview."""
+    if isinstance(value, dict):
+        return {key: _redact_host_paths(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_host_paths(item) for item in value]
+    if not isinstance(value, str):
+        return value
+
+    stripped = value.strip()
+    if stripped.startswith(("/", "\\\\", "~/", "~\\")) or re.match(r"^[A-Za-z]:[\\/]", stripped):
+        return "<host-path>"
+
+    option, separator, option_value = value.partition("=")
+    option_value = option_value.strip()
+    if separator and (
+        option_value.startswith(("/", "\\\\", "~/", "~\\")) or re.match(r"^[A-Za-z]:[\\/]", option_value)
+    ):
+        return f"{option}=<host-path>"
+    return value
+
+
+def _render_codex_privacy_safe_preview(
+    *,
+    merged_text: str,
+    server_name: str,
+    source_label: str,
+) -> str:
+    """Render only the redacted target entry from a final Codex TOML merge."""
+    parsed = _parse_toml_or_raise(text=merged_text, source_label=source_label)
+    _validate_codex_sections(parsed=parsed, source_label=source_label, server_name=server_name)
+    mcp_servers = parsed.get("mcp_servers")
+    if not isinstance(mcp_servers, dict) or server_name not in mcp_servers:
+        raise ValueError(f"Malformed TOML in {source_label}: target MCP server entry is missing.")
+
+    target_entry = _redact_host_paths(_redact_config_value(mcp_servers[server_name]))
+    return json.dumps({"mcp_servers": {server_name: target_entry}}, indent=2, sort_keys=True)
+
+
 def _upsert_codex_server_config(
     existing_text: str,
     *,

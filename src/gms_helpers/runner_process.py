@@ -7,7 +7,7 @@ import os
 import platform
 import subprocess
 from pathlib import Path
-from typing import List
+from typing import List, Mapping
 
 
 def normalize_path_for_popen() -> dict:
@@ -91,17 +91,24 @@ def start_game_process(launch_path: Path, *, cwd: Path | None = None) -> subproc
         raise
 
 
-def run_igor_command(cmd: List[str], *, cwd: Path | None = None) -> subprocess.Popen:
-    """Start an Igor command with shared process settings."""
+def run_igor_command(
+    cmd: List[str],
+    *,
+    cwd: Path | None = None,
+    environment_overrides: Mapping[str, str] | None = None,
+) -> subprocess.Popen:
+    """Start Igor inside the caller's process group so outer timeouts can terminate it."""
+    environment = build_igor_environment()
+    if environment_overrides:
+        environment.update(environment_overrides)
     process_kwargs = {
         "stdout": subprocess.PIPE,
         "stderr": subprocess.STDOUT,
         "text": True,
         "bufsize": 1,
         "universal_newlines": True,
-        "env": build_igor_environment(),
+        "env": environment,
     }
-    process_kwargs.update(normalize_path_for_popen())
     try:
         return subprocess.Popen(cmd, cwd=str(cwd) if cwd is not None else None, **process_kwargs)
     except OSError as exc:
