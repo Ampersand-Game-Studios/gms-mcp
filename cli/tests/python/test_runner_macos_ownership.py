@@ -64,6 +64,14 @@ class TestMacOSRunnerOwnership(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, r"PID\(s\): \[88\].*Aborting"):
                 self.runner._reject_foreign_igor_after_launch(77)
 
+    def test_runner_option_parser_preserves_windows_path_backslashes(self) -> None:
+        command = r'/runtime/Mac_Runner -game "C:\Users\runner admin\output\game.ios"'
+
+        game_path = self.runner._macos_runner_game_path(command)
+
+        self.assertIsNotNone(game_path)
+        self.assertEqual(str(game_path), r"C:\Users\runner admin\output\game.ios")
+
     def test_process_launch_token_requires_exact_environment_marker(self) -> None:
         completed = SimpleNamespace(
             returncode=0,

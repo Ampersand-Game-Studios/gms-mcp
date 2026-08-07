@@ -160,14 +160,17 @@ class RunnerMacOSMixin:
     @staticmethod
     def _macos_runner_option_path(command: str, option: str) -> Optional[Path]:
         try:
-            tokens = shlex.split(command)
+            # The macOS helpers normally expose POSIX paths. Keep backslashes
+            # intact when tests or persisted session data contain a Windows
+            # path instead of treating them as shell escapes.
+            tokens = shlex.split(command, posix="\\" not in command)
         except ValueError:
             tokens = command.split()
         for index, token in enumerate(tokens):
             if token == option and index + 1 < len(tokens):
-                return Path(tokens[index + 1])
+                return Path(tokens[index + 1].strip("\"'"))
             if token.startswith(f"{option}="):
-                return Path(token.split("=", 1)[1])
+                return Path(token.split("=", 1)[1].strip("\"'"))
         return None
 
     def _macos_runner_game_path(self, command: str) -> Optional[Path]:
