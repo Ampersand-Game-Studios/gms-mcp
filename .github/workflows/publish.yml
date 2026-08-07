@@ -118,17 +118,5 @@ jobs:
           path: dist
       - name: Re-verify downloaded package privacy boundary
         run: python3 scripts/verify_package_artifacts.py dist
-      - name: Verify PyPI project exists
-        shell: bash
-        run: |
-          set -euo pipefail
-          PROJECT="$(python3 -c 'import tomllib, pathlib; print(tomllib.load(pathlib.Path("pyproject.toml").open("rb"))["project"]["name"])')"
-          CODE="$(curl -sS -o /dev/null -w "%{http_code}" "https://pypi.org/pypi/${PROJECT}/json" || true)"
-          if [ "${CODE}" != "200" ]; then
-            echo "::error::PyPI project '${PROJECT}' does not exist yet (HTTP ${CODE})."
-            echo "::error::You must do the first upload manually (user identity) before Trusted Publishing can work."
-            echo "::error::Run scripts/first_pypi_upload.ps1 (Windows) or scripts/first_pypi_upload.sh (macOS/Linux)."
-            exit 1
-          fi
       - name: Publish to PyPI (Trusted Publishing)
         uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1
