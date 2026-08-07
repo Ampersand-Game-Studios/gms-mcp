@@ -356,9 +356,7 @@ class RunnerExecutionMixin:
                             if pid in owned_processes
                         },
                         "macos_tail_commands": {
-                            str(pid): owned_processes[pid].command
-                            for pid in owned_tail_pids
-                            if pid in owned_processes
+                            str(pid): owned_processes[pid].command for pid in owned_tail_pids if pid in owned_processes
                         },
                         "macos_runner_starts": {
                             str(pid): owned_processes[pid].started
@@ -366,9 +364,7 @@ class RunnerExecutionMixin:
                             if pid in owned_processes
                         },
                         "macos_tail_starts": {
-                            str(pid): owned_processes[pid].started
-                            for pid in owned_tail_pids
-                            if pid in owned_processes
+                            str(pid): owned_processes[pid].started for pid in owned_tail_pids if pid in owned_processes
                         },
                     }
                 )

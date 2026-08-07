@@ -151,9 +151,7 @@ class TestRunnerStopGame(unittest.TestCase):
                     f"-game {self.project_root / 'output' / 'test_project' / 'game.ios'}"
                 )
             },
-            macos_tail_commands={
-                "333": f"tail -F {self.project_root / 'output' / 'test_project' / 'debug.log'}"
-            },
+            macos_tail_commands={"333": f"tail -F {self.project_root / 'output' / 'test_project' / 'debug.log'}"},
             macos_runner_starts={"222": "start-222"},
             macos_tail_starts={"333": "start-333"},
         )
@@ -183,9 +181,7 @@ class TestRunnerStopGame(unittest.TestCase):
                     f"-game {self.project_root / 'output' / 'test_project' / 'game.ios'}"
                 )
             },
-            macos_tail_commands={
-                "333": f"tail -F {self.project_root / 'output' / 'test_project' / 'debug.log'}"
-            },
+            macos_tail_commands={"333": f"tail -F {self.project_root / 'output' / 'test_project' / 'debug.log'}"},
             macos_runner_starts={"222": "start-222"},
             macos_tail_starts={"333": "start-333"},
         )
@@ -468,10 +464,7 @@ class TestRunnerBackgroundMode(unittest.TestCase):
         fake_process = MagicMock()
         fake_process.pid = 12345
         fake_process.poll.return_value = None
-        runner_command = (
-            "/runtime/Mac_Runner "
-            f"-game {self.project_root / 'output' / 'test_project' / 'game.ios'}"
-        )
+        runner_command = f"/runtime/Mac_Runner -game {self.project_root / 'output' / 'test_project' / 'game.ios'}"
         tail_command = f"tail -F {self.project_root / 'output' / 'test_project' / 'debug.log'}"
         owned_processes = {
             12345: MacOSProcess(12345, 1, "/runtime/Igor -- Mac Run"),
@@ -481,7 +474,9 @@ class TestRunnerBackgroundMode(unittest.TestCase):
 
         with patch.object(runner, "_build_platform_action_command", return_value=["igor", "--", "Mac", "Run"]):
             with patch.object(runner, "_reject_foreign_igor_after_launch"):
-                with patch.object(runner, "_snapshot_macos_processes", side_effect=[{}, owned_processes, owned_processes]):
+                with patch.object(
+                    runner, "_snapshot_macos_processes", side_effect=[{}, owned_processes, owned_processes]
+                ):
                     with patch.object(runner, "_run_igor_command", return_value=fake_process):
                         with patch.object(runner, "_collect_igor_output_async", return_value=([], MagicMock())):
                             with patch.object(runner, "_wait_for_macos_runner_start", return_value=(222, {222}, {333})):

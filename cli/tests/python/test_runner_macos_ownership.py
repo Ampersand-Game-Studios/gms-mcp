@@ -99,10 +99,8 @@ class TestMacOSRunnerOwnership(unittest.TestCase):
         source = contents / "marker.c"
         source.write_text(
             "#include <stdio.h>\n#include <stdlib.h>\n#include <unistd.h>\n"
-            "int main(void) { FILE *f = fopen(\""
-            + str(result_path)
-            + "\", \"w\"); fprintf(f, \"%d %s\\n\", getpid(), "
-            "getenv(\"GMS_MCP_MACOS_LAUNCH_TOKEN\")); fclose(f); sleep(2); return 0; }\n",
+            'int main(void) { FILE *f = fopen("' + str(result_path) + '", "w"); fprintf(f, "%d %s\\n", getpid(), '
+            'getenv("GMS_MCP_MACOS_LAUNCH_TOKEN")); fclose(f); sleep(2); return 0; }\n',
             encoding="utf-8",
         )
         subprocess.run(["/usr/bin/clang", str(source), "-o", str(executable)], check=True)
@@ -129,12 +127,8 @@ class TestMacOSRunnerOwnership(unittest.TestCase):
     def test_only_token_marked_bare_and_owned_temp_runners_are_owned(self) -> None:
         expected = f"/runtime/Mac_Runner -game {self.game_path}"
         scoped_temp_game = Path("/tmp/gms-mcp/abc/temp/TestGame_A1B2_VM/game.ios")
-        bare = (
-            f"{Path.home()}/GameMakerStudio2/GM_MAC/TestGame/YoYo Runner.app/Contents/MacOS/Mac_Runner"
-        )
-        unrelated = (
-            f"{Path.home()}/GameMakerStudio2/GM_MAC/OtherGame/YoYo Runner.app/Contents/MacOS/Mac_Runner"
-        )
+        bare = f"{Path.home()}/GameMakerStudio2/GM_MAC/TestGame/YoYo Runner.app/Contents/MacOS/Mac_Runner"
+        unrelated = f"{Path.home()}/GameMakerStudio2/GM_MAC/OtherGame/YoYo Runner.app/Contents/MacOS/Mac_Runner"
         preexisting = f"/runtime/Mac_Runner -game {self.game_path}"
         processes = {
             10: MacOSProcess(10, 1, preexisting),
@@ -487,7 +481,9 @@ class TestMacOSRunnerOwnership(unittest.TestCase):
             patch.object(self.runner, "_stop_platform_process", return_value=False),
             patch.object(self.runner._session_manager, "is_process_alive", return_value=True),
             patch.object(self.runner._session_manager, "clear_session"),
-            patch.object(self.runner, "_terminate_pid", side_effect=lambda pid, _label, _expected=None: terminated.add(pid)),
+            patch.object(
+                self.runner, "_terminate_pid", side_effect=lambda pid, _label, _expected=None: terminated.add(pid)
+            ),
             patch("gms_helpers.runner_support.macos.time.monotonic", side_effect=[0.0, 6.0]),
         ):
             result = self.runner._stop_macos_run_session(session)

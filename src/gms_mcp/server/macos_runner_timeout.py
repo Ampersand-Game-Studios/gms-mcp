@@ -65,8 +65,7 @@ def cleanup_macos_ownership_manifest(manifest_path: Path | None) -> None:
             (
                 process
                 for process in processes.values()
-                if process.pid in active_igor_pids
-                and runner._macos_process_has_launch_token(process.pid, launch_token)
+                if process.pid in active_igor_pids and runner._macos_process_has_launch_token(process.pid, launch_token)
             ),
             None,
         )

@@ -263,9 +263,7 @@ class TestRunner95Coverage(unittest.TestCase):
                                             return_value=(None, set(), set()),
                                         ):
                                             with patch.object(self.runner, "_cleanup_macos_validation_helpers"):
-                                                self.assertFalse(
-                                                    self.runner.compile_project(platform_target="macOS")
-                                                )
+                                                self.assertFalse(self.runner.compile_project(platform_target="macOS"))
         self.assertIn("exited before the game reached the main loop", self.runner.last_failure_message)
 
         process = MagicMock()

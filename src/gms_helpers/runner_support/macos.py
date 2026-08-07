@@ -227,7 +227,10 @@ class RunnerMacOSMixin:
         runner_pids: set[int] = set()
         tail_pids: set[int] = set()
         for pid, process in processes.items():
-            if not self._matches_macos_baseline(pid, process, baseline_runner_pids) and "/Mac_Runner" in process.command:
+            if (
+                not self._matches_macos_baseline(pid, process, baseline_runner_pids)
+                and "/Mac_Runner" in process.command
+            ):
                 if self._macos_process_has_launch_token(pid, launch_token) or (
                     owned_igor_pid is not None and self._is_descendant_of(pid, owned_igor_pid, processes)
                 ):
@@ -515,11 +518,7 @@ class RunnerMacOSMixin:
             expected_started = runner_starts.get(str(raw_pid), "")
             if not isinstance(expected_started, str) or not expected_started:
                 continue
-            if (
-                pid in processes
-                and processes[pid].command == command
-                and processes[pid].started == expected_started
-            ):
+            if pid in processes and processes[pid].command == command and processes[pid].started == expected_started:
                 runner_pids.add(pid)
         for raw_pid, command in tail_commands.items():
             try:
@@ -529,11 +528,7 @@ class RunnerMacOSMixin:
             expected_started = tail_starts.get(str(raw_pid), "")
             if not isinstance(expected_started, str) or not expected_started:
                 continue
-            if (
-                pid in processes
-                and processes[pid].command == command
-                and processes[pid].started == expected_started
-            ):
+            if pid in processes and processes[pid].command == command and processes[pid].started == expected_started:
                 tail_pids.add(pid)
         if isinstance(launch_token, str) and launch_token:
             for pid, process in processes.items():
