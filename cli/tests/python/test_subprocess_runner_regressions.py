@@ -82,16 +82,21 @@ class TestSubprocessRunnerRegressions(unittest.TestCase):
                 "-c",
                 "import time; print('start', flush=True); time.sleep(60)",
             ]
-            result = asyncio.run(
-                _run_subprocess_async(
-                    cmd,
-                    cwd=cwd,
-                    timeout_seconds=1,
-                    heartbeat_seconds=0.1,
-                    tool_name="pytest-timeout",
-                    execution_mode="test",
+            ownership_manifest = cwd / "ownership.json"
+            with patch("gms_mcp.server.macos_runner_timeout.cleanup_macos_ownership_manifest") as cleanup:
+                result = asyncio.run(
+                    _run_subprocess_async(
+                        cmd,
+                        cwd=cwd,
+                        timeout_seconds=1,
+                        heartbeat_seconds=0.1,
+                        tool_name="pytest-timeout",
+                        execution_mode="test",
+                        ownership_manifest_path=ownership_manifest,
+                    )
                 )
-            )
+            self.assertGreaterEqual(cleanup.call_count, 1)
+            cleanup.assert_called_with(ownership_manifest)
 
             self.assertFalse(result.ok)
             self.assertTrue(result.timed_out)
@@ -100,6 +105,25 @@ class TestSubprocessRunnerRegressions(unittest.TestCase):
             self.assertTrue(log_path.exists())
             log_text = log_path.read_text(encoding="utf-8", errors="replace")
             self.assertIn("TIMEOUT", log_text)
+
+    def test_natural_nonzero_exit_invokes_parent_owned_cleanup(self):
+        from gms_mcp.server.subprocess_runner import _run_subprocess_async
+
+        with tempfile.TemporaryDirectory() as td:
+            cwd = Path(td)
+            ownership_manifest = cwd / "ownership.json"
+            with patch("gms_mcp.server.macos_runner_timeout.cleanup_macos_ownership_manifest") as cleanup:
+                result = asyncio.run(
+                    _run_subprocess_async(
+                        [sys.executable, "-c", "raise SystemExit(3)"],
+                        cwd=cwd,
+                        timeout_seconds=5,
+                        tool_name="pytest-natural-failure",
+                        ownership_manifest_path=ownership_manifest,
+                    )
+                )
+        self.assertFalse(result.ok)
+        cleanup.assert_called_once_with(ownership_manifest)
 
     @unittest.skipIf(os.name == "nt", "POSIX process-group regression")
     def test_timeout_terminates_spawned_descendants(self):

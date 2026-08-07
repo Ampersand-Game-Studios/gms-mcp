@@ -215,6 +215,7 @@ class TestGameMakerMachineLock(unittest.TestCase):
             with (
                 patch.object(execution_module, "GameMakerMachineLock", RecordingLock),
                 patch.object(runner, "_build_platform_action_command", return_value=["igor"]),
+                patch.object(runner, "_wait_for_igor_idle"),
                 patch.object(runner, "find_project_file", return_value=project_file),
                 patch.object(runner, "_run_igor_command", return_value=process),
                 patch.object(runner._session_manager, "create_session"),
