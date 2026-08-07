@@ -178,6 +178,9 @@ class TestReleaseCertification(unittest.TestCase):
         self.assertIn("run-id: ${{ github.event.workflow_run.id }}", publish)
         self.assertNotIn("workflow_dispatch", publish)
         self.assertNotIn("github.sha", publish)
+        self.assertIn("pypa/gh-action-pypi-publish@", publish)
+        self.assertNotIn("Verify PyPI project exists", publish)
+        self.assertNotIn("first upload manually", publish)
 
     def test_ci_covers_every_promotion_branch(self):
         ci = (REPO_ROOT / ".github" / "workflows" / "ci.yml").read_text(encoding="utf-8")
