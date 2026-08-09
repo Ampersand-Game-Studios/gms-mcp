@@ -6,7 +6,7 @@ Exposes common GameMaker project actions as MCP tools by reusing the existing
 Python helper modules in `gms_helpers`.
 
 Public entrypoints:
-- build_server(): constructs and returns the FastMCP instance
+- build_server(): constructs and returns the MCPServer instance
 - main(): stdio server entrypoint (used by `gms-mcp` and bootstrap runners)
 
 Implementation details live under `gms_mcp.server.*`.
@@ -577,11 +577,11 @@ def _wrap_tool_registration(
 
                 is_read_only = tool_name in _READ_ONLY_TOOL_NAMES
                 registration_kwargs["annotations"] = ToolAnnotations(
-                    readOnlyHint=is_read_only,
-                    destructiveHint=(
+                    read_only_hint=is_read_only,
+                    destructive_hint=(
                         not is_read_only and any(marker in tool_name for marker in _DESTRUCTIVE_TOOL_MARKERS)
                     ),
-                    idempotentHint=is_read_only,
+                    idempotent_hint=is_read_only,
                 )
             decorator = original_tool(*tool_args, **registration_kwargs)
             return decorator(wrapped)
@@ -597,7 +597,7 @@ def build_server():
 
     Kept in a function so importing this module doesn't require MCP installed.
     """
-    from mcp.server.fastmcp import Context, FastMCP
+    from mcp.server.mcpserver import Context, MCPServer
 
     # region agent log
     _dbg(
@@ -608,13 +608,13 @@ def build_server():
     )
     # endregion
 
-    # Some MCP clients/FastMCP paths evaluate annotation strings at runtime. Keep Context available
+    # MCPServer evaluates annotation strings at runtime. Keep Context available
     # in this module's globals for compatibility.
     globals()["Context"] = Context
 
     project_access_policy = ProjectAccessPolicy.from_server_environment()
     expose_host_diagnostics = expose_host_diagnostics_from_environment()
-    mcp = FastMCP("GameMaker MCP")
+    mcp = MCPServer("GameMaker MCP")
     _wrap_tool_registration(
         mcp,
         project_access_policy=project_access_policy,
@@ -631,7 +631,7 @@ def build_server():
     _dbg(
         "H2",
         "src/gms_mcp/gamemaker_mcp_server.py:build_server:exit",
-        "build_server returning FastMCP instance",
+        "build_server returning MCPServer instance",
         {"pid": os.getpid()},
     )
     # endregion

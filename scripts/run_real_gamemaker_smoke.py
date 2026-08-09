@@ -29,6 +29,7 @@ from gms_helpers.synthetic_project import create_synthetic_project
 from gms_helpers.transactions import validate_project_after_mutation
 from gms_helpers.utils import load_json_loose
 from gms_mcp.gamemaker_mcp_server import build_server
+from gms_mcp.server.results import unwrap_call_tool_result
 
 
 _TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -61,14 +62,6 @@ _COPY_IGNORE = {
 
 def _truthy(value: str | None) -> bool:
     return (value or "").strip().lower() in _TRUE_VALUES
-
-
-def _unwrap_call_tool(value: Any) -> Any:
-    if isinstance(value, tuple) and len(value) == 2 and isinstance(value[1], dict):
-        payload = value[1]
-        if "result" in payload:
-            return payload["result"]
-    return value
 
 
 def _write_report(output_path: Path, payload: Dict[str, Any]) -> None:
@@ -281,7 +274,7 @@ async def _run_smoke(project_root: Path) -> Dict[str, Any]:
     mcp = build_server()
 
     async def call_tool(tool_name: str, arguments: Dict[str, Any]) -> Dict[str, Any]:
-        result = _unwrap_call_tool(await mcp.call_tool(tool_name, arguments))
+        result = unwrap_call_tool_result(await mcp.call_tool(tool_name, arguments))
         if not isinstance(result, dict):
             return {"ok": False, "error": f"Unexpected result from {tool_name}: {result!r}"}
         return result

@@ -8,6 +8,7 @@ from ..dispatch import _run_with_fallback
 from ..dry_run_policy import _dry_run_policy_blocked_result, _requires_dry_run_for_tool
 from ..mcp_types import Context
 from ..project import _ensure_cli_on_sys_path, _resolve_project_directory, _resolve_repo_root
+from ..tool_types import OutputMode
 
 
 def register(mcp: Any, ContextType: Any) -> None:
@@ -57,7 +58,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         yes: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -90,7 +91,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         new_name: str,
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -122,7 +123,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         frame: int = 0,
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -163,7 +164,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         source_png: str = "",
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -207,7 +208,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         position: int,
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -244,7 +245,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         target_position: int = -1,
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -288,7 +289,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         columns: int = 0,
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -343,7 +344,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         sprite_path: str,
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
