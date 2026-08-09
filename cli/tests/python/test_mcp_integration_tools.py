@@ -10,20 +10,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-
-def _unwrap_call_tool(result):
-    """
-    FastMCP.call_tool returns a tuple in our runtime:
-      ([ContentBlock...], {"result": <tool_return_value>})
-    Keep tests tolerant to either (tuple or direct dict) return forms.
-    """
-    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], dict):
-        payload = result[1]
-        if "result" in payload:
-            return payload["result"]
-    if isinstance(result, dict):
-        return result
-    raise AssertionError(f"Unexpected call_tool return type: {type(result)} ({result!r})")
+from gms_mcp.server.results import unwrap_call_tool_result
 
 
 def _create_basic_gamemaker_project(project_root: Path, *, name: str = "TestProject") -> Path:
@@ -108,7 +95,7 @@ class TestMCPIntegrationTools(unittest.TestCase):
 
     def _call_tool(self, tool_name: str, arguments: dict):
         out = asyncio.run(self.mcp.call_tool(tool_name, arguments))
-        return _unwrap_call_tool(out)
+        return unwrap_call_tool_result(out)
 
     def test_list_tools_includes_core_entries(self):
         tools = asyncio.run(self.mcp.list_tools())
@@ -132,7 +119,7 @@ class TestMCPIntegrationTools(unittest.TestCase):
                     {"project_root": str(self.project_root)},
                 )
             )
-        result = _unwrap_call_tool(out)
+        result = unwrap_call_tool_result(out)
 
         self.assertEqual(result.get("yyp"), "TestProject.yyp")
         self.assertEqual(result["project_directory"], ".")
@@ -144,7 +131,7 @@ class TestMCPIntegrationTools(unittest.TestCase):
                 {"name": "scr_utils", "project_root": str(self.project_root)},
             )
         )
-        result = _unwrap_call_tool(out)
+        result = unwrap_call_tool_result(out)
         self.assertTrue(result.get("ok"), msg=result.get("error") or result.get("stderr") or result.get("stdout"))
 
         # Confirm files were actually created in the project.
@@ -169,7 +156,7 @@ class TestMCPIntegrationTools(unittest.TestCase):
                 {"asset_type": "script", "project_root": str(self.project_root)},
             )
         )
-        assets_result = _unwrap_call_tool(out)
+        assets_result = unwrap_call_tool_result(out)
         self.assertGreaterEqual(int(assets_result.get("count", 0)), 1)
         scripts = (assets_result.get("assets") or {}).get("script") or []
         self.assertTrue(any(a.get("name") == "scr_utils" for a in scripts), msg=str(scripts))

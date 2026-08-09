@@ -6,6 +6,7 @@ from typing import Any, Dict
 from ..dispatch import _run_with_fallback
 from ..mcp_types import Context
 from ..project import _ensure_cli_on_sys_path, _resolve_project_directory, _resolve_repo_root
+from ..tool_types import OutputMode
 
 
 def register(mcp: Any, ContextType: Any) -> None:
@@ -19,7 +20,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         project_root: str = ".",
         force: bool = False,
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -61,7 +62,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         symbol_name: str,
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -102,7 +103,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         project_root: str = ".",
         max_results: int = 50,
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -147,7 +148,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         file_filter: str | None = None,
         max_results: int = 100,
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,

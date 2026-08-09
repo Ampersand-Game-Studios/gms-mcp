@@ -170,23 +170,23 @@ class TestEntrypoints(unittest.TestCase):
         self.assertNotIn("/Users/private", stderr.getvalue())
 
     def test_gamemaker_mcp_server_build_and_main(self):
-        fake_fastmcp_mod = types.ModuleType("mcp.server.fastmcp")
+        fake_mcpserver_mod = types.ModuleType("mcp.server.mcpserver")
 
         class FakeContext:
             pass
 
-        class FakeFastMCP:
+        class FakeMCPServer:
             def __init__(self, name):
                 self.name = name
 
             def run(self):
                 self.ran = True
 
-        fake_fastmcp_mod.Context = FakeContext
-        fake_fastmcp_mod.FastMCP = FakeFastMCP
+        fake_mcpserver_mod.Context = FakeContext
+        fake_mcpserver_mod.MCPServer = FakeMCPServer
 
         with (
-            patch.dict(sys.modules, {"mcp.server.fastmcp": fake_fastmcp_mod}),
+            patch.dict(sys.modules, {"mcp.server.mcpserver": fake_mcpserver_mod}),
             patch("gms_mcp.gamemaker_mcp_server.register_all") as register_all,
             patch("gms_mcp.gamemaker_mcp_server._dbg"),
         ):

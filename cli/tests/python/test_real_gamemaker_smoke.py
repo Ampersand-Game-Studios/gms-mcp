@@ -9,11 +9,21 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from mcp.types import CallToolResult, TextContent
+
 import scripts.run_real_gamemaker_smoke as real_smoke
 
 
 class _FakeServer:
     async def call_tool(self, tool_name, arguments):
+        payload = await self._call_tool_value(tool_name, arguments)
+        return CallToolResult(
+            content=[TextContent(type="text", text=json.dumps(payload))],
+            structured_content={"result": payload},
+            is_error=payload.get("ok") is False,
+        )
+
+    async def _call_tool_value(self, tool_name, arguments):
         if tool_name == "gm_create_sprite":
             assert os.environ["GMS_MCP_POST_MUTATION_VERIFY"] == "smart"
             assert Path(os.environ["GM_PROJECT_ROOT"]).resolve() == Path(arguments["project_root"]).resolve()

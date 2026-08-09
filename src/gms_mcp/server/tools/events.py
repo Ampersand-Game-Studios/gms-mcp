@@ -6,6 +6,7 @@ from typing import Any, Dict
 from ..dispatch import _run_with_fallback
 from ..mcp_types import Context
 from ..project import _ensure_cli_on_sys_path, _resolve_repo_root
+from ..tool_types import OutputMode
 
 
 def register(mcp: Any, ContextType: Any) -> None:
@@ -21,7 +22,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         template: str = "",
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -57,7 +58,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         keep_file: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -91,7 +92,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         target_event: str,
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -123,7 +124,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         object: str,
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -153,7 +154,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         object: str,
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -184,7 +185,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         safe_mode: bool = True,
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,

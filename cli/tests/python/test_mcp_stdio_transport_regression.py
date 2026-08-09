@@ -14,20 +14,15 @@ import unittest
 from pathlib import Path
 
 import anyio
-from mcp import ClientSession
+from mcp import Client
 from mcp.client.stdio import StdioServerParameters, stdio_client
+
+from gms_mcp.server.results import unwrap_call_tool_result
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
 SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
-
-
-def _unwrap_call_tool(result):
-    content = getattr(result, "structuredContent", None)
-    if isinstance(content, dict) and "result" in content:
-        return content["result"]
-    raise AssertionError(f"Unexpected call_tool return type: {type(result)} ({result!r})")
 
 
 class _BridgePeer:
@@ -178,65 +173,62 @@ class TestMCPStdioTransportRegression(unittest.TestCase):
                     },
                 )
 
-                async with stdio_client(params) as (read, write):
-                    async with ClientSession(read, write, read_timeout_seconds=None) as session:
-                        await session.initialize()
+                async with Client(stdio_client(params), read_timeout_seconds=None) as client:
+                    run_result = unwrap_call_tool_result(
+                        await client.call_tool(
+                            "gm_run",
+                            {
+                                "project_root": str(project_root),
+                                "background": True,
+                                "enable_bridge": True,
+                                "platform": "macOS",
+                                "runtime": "VM",
+                                "output_location": "project",
+                            },
+                        )
+                    )
 
-                        run_result = _unwrap_call_tool(
-                            await session.call_tool(
-                                "gm_run",
-                                {
-                                    "project_root": str(project_root),
-                                    "background": True,
-                                    "enable_bridge": True,
-                                    "platform": "macOS",
-                                    "runtime": "VM",
-                                    "output_location": "project",
-                                },
+                    self.assertTrue(run_result["ok"])
+                    self.assertTrue(run_result["bridge_enabled"])
+                    self.assertEqual(run_result["bridge_port"], bridge_port)
+
+                    peer = _BridgePeer(bridge_port)
+                    peer.connect()
+                    try:
+                        latest_status = None
+                        for _ in range(20):
+                            latest_status = unwrap_call_tool_result(
+                                await client.call_tool("gm_bridge_status", {"project_root": str(project_root)})
+                            )
+                            if latest_status["game_connected"]:
+                                break
+                            await asyncio.sleep(0.1)
+
+                        self.assertIsNotNone(latest_status)
+                        self.assertTrue(latest_status["server_running"])
+                        self.assertTrue(latest_status["game_connected"])
+
+                        logs_result = unwrap_call_tool_result(
+                            await client.call_tool("gm_run_logs", {"project_root": str(project_root), "lines": 5})
+                        )
+                        self.assertTrue(logs_result["ok"])
+                        self.assertEqual(logs_result["logs"][0]["message"], "hello from test")
+
+                        command_result = unwrap_call_tool_result(
+                            await client.call_tool(
+                                "gm_run_command",
+                                {"project_root": str(project_root), "command": "ping", "timeout": 1.0},
                             )
                         )
+                        self.assertTrue(command_result["ok"])
+                        self.assertEqual(command_result["result"], "pong")
+                    finally:
+                        peer.close()
 
-                        self.assertTrue(run_result["ok"])
-                        self.assertTrue(run_result["bridge_enabled"])
-                        self.assertEqual(run_result["bridge_port"], bridge_port)
-
-                        peer = _BridgePeer(bridge_port)
-                        peer.connect()
-                        try:
-                            latest_status = None
-                            for _ in range(20):
-                                latest_status = _unwrap_call_tool(
-                                    await session.call_tool("gm_bridge_status", {"project_root": str(project_root)})
-                                )
-                                if latest_status["game_connected"]:
-                                    break
-                                await asyncio.sleep(0.1)
-
-                            self.assertIsNotNone(latest_status)
-                            self.assertTrue(latest_status["server_running"])
-                            self.assertTrue(latest_status["game_connected"])
-
-                            logs_result = _unwrap_call_tool(
-                                await session.call_tool("gm_run_logs", {"project_root": str(project_root), "lines": 5})
-                            )
-                            self.assertTrue(logs_result["ok"])
-                            self.assertEqual(logs_result["logs"][0]["message"], "hello from test")
-
-                            command_result = _unwrap_call_tool(
-                                await session.call_tool(
-                                    "gm_run_command",
-                                    {"project_root": str(project_root), "command": "ping", "timeout": 1.0},
-                                )
-                            )
-                            self.assertTrue(command_result["ok"])
-                            self.assertEqual(command_result["result"], "pong")
-                        finally:
-                            peer.close()
-
-                        post_disconnect_status = _unwrap_call_tool(
-                            await session.call_tool("gm_bridge_status", {"project_root": str(project_root)})
-                        )
-                        self.assertTrue(post_disconnect_status["ok"])
+                    post_disconnect_status = unwrap_call_tool_result(
+                        await client.call_tool("gm_bridge_status", {"project_root": str(project_root)})
+                    )
+                    self.assertTrue(post_disconnect_status["ok"])
 
             anyio.run(_exercise)
 
