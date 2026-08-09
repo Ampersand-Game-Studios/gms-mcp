@@ -12,10 +12,11 @@ from ..project import (
     _resolve_project_directory_no_deps,
     _resolve_repo_root,
 )
+from ..tool_types import OutputMode
 
 
 def register(mcp: Any, ContextType: Any) -> None:
-    # FastMCP evaluates type annotations at runtime (inspect.signature(..., eval_str=True)).
+    # MCPServer evaluates type annotations at runtime (inspect.signature(..., eval_str=True)).
     # Because we use `from __future__ import annotations`, annotations are strings and must be
     # resolvable from the function's *globals* dict. Ensure `Context` is available there.
     globals()["Context"] = ContextType
@@ -59,7 +60,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         include_info: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,

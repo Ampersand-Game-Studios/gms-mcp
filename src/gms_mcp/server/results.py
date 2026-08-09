@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import datetime as dt
 import re
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, is_dataclass
 from enum import Enum
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -25,6 +26,21 @@ _HOST_ONLY_RESULT_KEYS = {
 }
 _PROJECT_ROOT_RESULT_KEYS = {"project_directory", "project_path", "project_root"}
 _TRUTHY_VALUES = {"1", "true", "yes", "on"}
+
+
+def unwrap_call_tool_result(result: Any) -> Any:
+    """Return the structured tool value from an MCP SDK v2 ``CallToolResult``.
+
+    ``MCPServer.call_tool()`` exposes tool output through the result model's
+    ``structured_content`` field. Typed dict outputs are exposed there directly;
+    GMS MCP's generic ``Dict[str, Any]`` tools use a sole ``result`` envelope.
+    """
+    structured_content = getattr(result, "structured_content", None)
+    if not isinstance(structured_content, Mapping):
+        raise AssertionError(f"Unexpected MCP SDK v2 CallToolResult: {result!r}")
+    if set(structured_content) == {"result"}:
+        return structured_content["result"]
+    return structured_content
 
 
 def _jsonable_result(value: Any) -> Any:
