@@ -9,6 +9,7 @@ from ..mcp_types import Context
 from ..platform import _default_target_platform
 from ..project import _ensure_cli_on_sys_path, _resolve_project_directory, _resolve_repo_root
 from ..subprocess_runner import _default_timeout_seconds_for_cli_args
+from ..tool_types import OutputMode, RunnerPlatform
 
 
 def register(mcp: Any, ContextType: Any) -> None:
@@ -35,12 +36,12 @@ def register(mcp: Any, ContextType: Any) -> None:
     # -----------------------------
     @mcp.tool()
     async def gm_compile(
-        platform: str | None = None,
+        platform: RunnerPlatform | None = None,
         runtime: str = "VM",
         runtime_version: str | None = None,
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -75,14 +76,14 @@ def register(mcp: Any, ContextType: Any) -> None:
 
     @mcp.tool()
     async def gm_run(
-        platform: str | None = None,
+        platform: RunnerPlatform | None = None,
         runtime: str = "VM",
         runtime_version: str | None = None,
         background: bool = False,
         output_location: str = "temp",
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         enable_bridge: bool | None = None,
@@ -239,7 +240,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     async def gm_run_stop(
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,
@@ -311,7 +312,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     async def gm_run_status(
         project_root: str = ".",
         prefer_cli: bool = False,
-        output_mode: str = "full",
+        output_mode: OutputMode = "full",
         tail_lines: int = 120,
         quiet: bool = False,
         ctx: Context | None = None,

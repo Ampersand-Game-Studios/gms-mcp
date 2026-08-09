@@ -6,17 +6,12 @@ import unittest
 from unittest.mock import patch
 
 from gms_mcp.gamemaker_mcp_server import build_server
+from gms_mcp.server.results import unwrap_call_tool_result
 
 
 def _tools(profile: str):
     with patch.dict(os.environ, {"GMS_MCP_TOOLSETS": profile}, clear=False):
         return asyncio.run(build_server().list_tools())
-
-
-def _unwrap_call_tool(result):
-    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], dict):
-        return result[1].get("result", result[1])
-    return result
 
 
 class TestMCPProfiles(unittest.TestCase):
@@ -43,7 +38,7 @@ class TestMCPProfiles(unittest.TestCase):
     def test_capabilities_reports_restart_time_configuration(self):
         with patch.dict(os.environ, {"GMS_MCP_TOOLSETS": "events,rooms"}, clear=False):
             server = build_server()
-            result = _unwrap_call_tool(asyncio.run(server.call_tool("gm_capabilities", {})))
+            result = unwrap_call_tool_result(asyncio.run(server.call_tool("gm_capabilities", {})))
 
         self.assertTrue(result["ok"])
         self.assertEqual(result["enabled_toolsets"], ["core", "events", "rooms"])
@@ -53,11 +48,11 @@ class TestMCPProfiles(unittest.TestCase):
     def test_tool_annotations_describe_read_and_destructive_intent(self):
         specs = {tool.name: tool for tool in _tools("all")}
 
-        self.assertTrue(specs["gm_project_info"].annotations.readOnlyHint)
-        self.assertTrue(specs["gm_project_info"].annotations.idempotentHint)
-        self.assertTrue(specs["gm_safe_delete"].annotations.destructiveHint)
-        self.assertFalse(specs["gm_create_script"].annotations.readOnlyHint)
-        self.assertFalse(specs["gm_create_script"].annotations.destructiveHint)
+        self.assertTrue(specs["gm_project_info"].annotations.read_only_hint)
+        self.assertTrue(specs["gm_project_info"].annotations.idempotent_hint)
+        self.assertTrue(specs["gm_safe_delete"].annotations.destructive_hint)
+        self.assertFalse(specs["gm_create_script"].annotations.read_only_hint)
+        self.assertFalse(specs["gm_create_script"].annotations.destructive_hint)
 
     def test_unknown_toolset_fails_at_server_startup(self):
         with patch.dict(os.environ, {"GMS_MCP_TOOLSETS": "made-up-domain"}, clear=False):

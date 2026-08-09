@@ -6,13 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-
-def _unwrap_call_tool(result):
-    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[1], dict) and "result" in result[1]:
-        return result[1]["result"]
-    if isinstance(result, dict):
-        return result
-    raise AssertionError(f"Unexpected call_tool return type: {type(result)} ({result!r})")
+from gms_mcp.server.results import unwrap_call_tool_result
 
 
 class TestBridgeOneShotEnable(unittest.TestCase):
@@ -80,7 +74,7 @@ class TestBridgeOneShotEnable(unittest.TestCase):
                 {"project_root": str(self.project_root)},
             )
         )
-        result = _unwrap_call_tool(out)
+        result = unwrap_call_tool_result(out)
         self.assertTrue(result.get("ok"), msg=result.get("error") or result)
         instance_id = result.get("instance_id")
         self.assertTrue(instance_id)
@@ -126,7 +120,7 @@ class TestBridgeOneShotEnable(unittest.TestCase):
                 {"project_root": str(self.project_root)},
             )
         )
-        result2 = _unwrap_call_tool(out2)
+        result2 = unwrap_call_tool_result(out2)
         self.assertTrue(result2.get("ok"), msg=result2.get("error") or result2)
         self.assertEqual(result2.get("instance_id"), instance_id)
 

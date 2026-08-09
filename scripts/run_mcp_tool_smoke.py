@@ -2,7 +2,7 @@
 """Deterministic MCP smoke runner for all registered gm_* tools.
 
 This runner:
-- discovers tools from FastMCP `list_tools()`
+- discovers tools from MCPServer `list_tools()`
 - executes each tool in an isolated copy of a generated minimal fixture
 - applies per-tool preconditions for tools with required args/state
 - writes a deterministic JSON report
@@ -39,14 +39,7 @@ from gms_helpers.bridge_server import get_bridge_server, stop_bridge_server
 from gms_helpers.synthetic_project import create_synthetic_project
 from gms_helpers.utils import load_json_loose, update_yyp_file
 from gms_mcp.gamemaker_mcp_server import build_server
-
-
-def _unwrap_call_tool(value: Any) -> Any:
-    if isinstance(value, tuple) and len(value) == 2 and isinstance(value[1], dict):
-        payload = value[1]
-        if "result" in payload:
-            return payload["result"]
-    return value
+from gms_mcp.server.results import unwrap_call_tool_result
 
 
 def _sanitize_tool_name(name: str) -> str:
@@ -315,7 +308,7 @@ class MCPToolSmokeRunner:
         self.mcp = build_server()
         tool_specs = await self.mcp.list_tools()
         self.tools = sorted(t.name for t in tool_specs)
-        self.tool_schemas = {t.name: (t.inputSchema or {}) for t in tool_specs}
+        self.tool_schemas = {t.name: (t.input_schema or {}) for t in tool_specs}
 
         selected_tools = self._select_tools(self.tools)
         self._validate_required_tool_coverage(selected_tools)
@@ -456,7 +449,7 @@ class MCPToolSmokeRunner:
 
     async def _call_tool(self, tool_name: str, args: Dict[str, Any]) -> Any:
         raw = await self.mcp.call_tool(tool_name, args)
-        return _unwrap_call_tool(raw)
+        return unwrap_call_tool_result(raw)
 
     async def _ensure_ok(self, tool_name: str, args: Dict[str, Any], *, label: str = "") -> Any:
         result = await self._call_tool(tool_name, args)

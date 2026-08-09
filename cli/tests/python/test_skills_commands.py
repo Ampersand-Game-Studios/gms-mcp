@@ -550,7 +550,7 @@ class TestSkillsSourceFiles(unittest.TestCase):
                 if tool is None:
                     failures.append(f"{skill_doc.name}:{line_number}: unknown MCP tool {tool_name!r}")
                     continue
-                schema = tool.inputSchema
+                schema = tool.input_schema
                 for error in jsonschema.Draft202012Validator(schema).iter_errors(arguments):
                     failures.append(f"{skill_doc.name}:{line_number}: {tool_name}: {error.message}")
 
