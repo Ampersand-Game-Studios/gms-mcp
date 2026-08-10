@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import sys
 import unittest
 from pathlib import Path
@@ -36,10 +37,32 @@ class MCPToolTestCase(unittest.TestCase):
 
     def setUp(self):
         self.mcp = FakeMCP()
-        self.module.register(self.mcp, object)
+        if self.module in {asset_creation, rooms, texture_groups, workflow}:
+            self.module.register(self.mcp, object, MagicMock())
+        else:
+            self.module.register(self.mcp, object)
 
     def call_tool(self, tool_name: str, **kwargs):
-        return asyncio.run(self.mcp.tools[tool_name](**kwargs))
+        if tool_name == "gm_safe_delete":
+            from gms_mcp.server.resolution import SafeDeleteDecision
+
+            kwargs.setdefault("resolution", SafeDeleteDecision(action="force" if kwargs.get("force") else "delete"))
+        elif tool_name == "gm_room_ops_delete":
+            from gms_mcp.server.resolution import RoomDeleteDecision
+
+            kwargs.setdefault("resolution", RoomDeleteDecision(action="delete"))
+        elif tool_name == "gm_texture_group_delete":
+            from gms_mcp.server.resolution import TextureGroupDecision
+
+            target = kwargs.get("reassign_to")
+            kwargs.setdefault(
+                "resolution",
+                TextureGroupDecision(action="reassign", reassign_to=target)
+                if target
+                else TextureGroupDecision(action="delete"),
+            )
+        result = self.mcp.tools[tool_name](**kwargs)
+        return asyncio.run(result) if inspect.isawaitable(result) else result
 
 
 class TestAssetCreationWrappers(MCPToolTestCase):

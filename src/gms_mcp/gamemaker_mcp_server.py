@@ -14,18 +14,22 @@ Implementation details live under `gms_mcp.server.*`.
 
 from __future__ import annotations
 
+import argparse
 import functools
 import inspect
+import ipaddress
 import os
 import sys
 import time
+from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
 from .server.debug import _dbg
+from .server.mcp_v2 import MCP_CACHE_HINTS, MCPV2Runtime, MutationSerializationMiddleware
 from .server.project import ProjectAccessError, ProjectAccessPolicy
 from .server.register_all import register_all
-from .server.results import expose_host_diagnostics_from_environment, public_mcp_result
+from .server.results import expose_host_diagnostics_from_environment, mcp_tool_result
 from .server.validation import invalid_arguments_result, validate_mcp_tool_arguments
 from .server.verification_policy import (
     MutationVerificationDecision,
@@ -105,6 +109,7 @@ _READ_ONLY_TOOL_NAMES = {
     "gm_maintenance_validate_paths",
     "gm_mcp_health",
     "gm_project_info",
+    "gm_project_dashboard",
     "gm_read_asset",
     "gm_room_instance_list",
     "gm_room_layer_list",
@@ -190,6 +195,18 @@ def _result_from_value(value) -> str:
     if isinstance(value, dict) and value.get("ok") is False:
         return "error"
     return "ok"
+
+
+def _is_committed_mutation_result(value: Any) -> bool:
+    structured_content = (
+        value.get("structuredContent") if isinstance(value, dict) else getattr(value, "structured_content", None)
+    )
+    if isinstance(structured_content, dict):
+        value = structured_content.get("result", structured_content)
+    if not isinstance(value, dict) or value.get("ok") is False:
+        return False
+    transaction = value.get("transaction")
+    return isinstance(transaction, dict) and transaction.get("committed") is True
 
 
 def _bind_tool_call(
@@ -366,6 +383,7 @@ def _wrap_tool_registration(
     *,
     project_access_policy: ProjectAccessPolicy,
     expose_host_diagnostics: bool,
+    runtime: MCPV2Runtime,
 ) -> None:
     if not hasattr(mcp, "tool"):
         return
@@ -408,7 +426,7 @@ def _wrap_tool_registration(
                         duration_ms=duration_ms,
                         execution_mode=execution.get("execution_mode") or "inline",
                     )
-                    return public_mcp_result(
+                    return mcp_tool_result(
                         result,
                         project_root=project_access_policy.project_root,
                         expose_host_diagnostics=expose_host_diagnostics,
@@ -427,7 +445,11 @@ def _wrap_tool_registration(
                             duration_ms=duration_ms,
                             execution_mode="inline",
                         )
-                        return result
+                        return mcp_tool_result(
+                            result,
+                            project_root=project_access_policy.project_root,
+                            expose_host_diagnostics=expose_host_diagnostics,
+                        )
                     if type(exc).__name__ == "TransactionValidationError":
                         result = _transaction_error_result(tool_name, exc)
                         duration_ms = int((time.monotonic() - start) * 1000)
@@ -441,7 +463,7 @@ def _wrap_tool_registration(
                             duration_ms=duration_ms,
                             execution_mode="inline",
                         )
-                        return public_mcp_result(
+                        return mcp_tool_result(
                             result,
                             project_root=project_access_policy.project_root,
                             expose_host_diagnostics=expose_host_diagnostics,
@@ -459,12 +481,16 @@ def _wrap_tool_registration(
                     )
                     if expose_host_diagnostics:
                         raise
-                    return {
-                        "ok": False,
-                        "tool": tool_name,
-                        "error": "Internal tool error; host details were withheld.",
-                        "error_type": "InternalToolError",
-                    }
+                    return mcp_tool_result(
+                        {
+                            "ok": False,
+                            "tool": tool_name,
+                            "error": "Internal tool error; host details were withheld.",
+                            "error_type": "InternalToolError",
+                        },
+                        project_root=project_access_policy.project_root,
+                        expose_host_diagnostics=False,
+                    )
                 finally:
                     reset_tool_execution_context()
 
@@ -504,7 +530,7 @@ def _wrap_tool_registration(
                     duration_ms=duration_ms,
                     execution_mode=execution.get("execution_mode") or "inline",
                 )
-                return public_mcp_result(
+                return mcp_tool_result(
                     result,
                     project_root=project_access_policy.project_root,
                     expose_host_diagnostics=expose_host_diagnostics,
@@ -523,7 +549,11 @@ def _wrap_tool_registration(
                         duration_ms=duration_ms,
                         execution_mode="inline",
                     )
-                    return result
+                    return mcp_tool_result(
+                        result,
+                        project_root=project_access_policy.project_root,
+                        expose_host_diagnostics=expose_host_diagnostics,
+                    )
                 if type(exc).__name__ == "TransactionValidationError":
                     result = _transaction_error_result(tool_name, exc)
                     duration_ms = int((time.monotonic() - start) * 1000)
@@ -537,7 +567,7 @@ def _wrap_tool_registration(
                         duration_ms=duration_ms,
                         execution_mode="inline",
                     )
-                    return public_mcp_result(
+                    return mcp_tool_result(
                         result,
                         project_root=project_access_policy.project_root,
                         expose_host_diagnostics=expose_host_diagnostics,
@@ -555,12 +585,16 @@ def _wrap_tool_registration(
                 )
                 if expose_host_diagnostics:
                     raise
-                return {
-                    "ok": False,
-                    "tool": tool_name,
-                    "error": "Internal tool error; host details were withheld.",
-                    "error_type": "InternalToolError",
-                }
+                return mcp_tool_result(
+                    {
+                        "ok": False,
+                        "tool": tool_name,
+                        "error": "Internal tool error; host details were withheld.",
+                        "error_type": "InternalToolError",
+                    },
+                    project_root=project_access_policy.project_root,
+                    expose_host_diagnostics=False,
+                )
             finally:
                 reset_tool_execution_context()
 
@@ -614,17 +648,39 @@ def build_server():
 
     project_access_policy = ProjectAccessPolicy.from_server_environment()
     expose_host_diagnostics = expose_host_diagnostics_from_environment()
-    mcp = MCPServer("GameMaker MCP")
+    runtime = MCPV2Runtime(project_access_policy)
+    from .server.mcp_apps import create_project_dashboard_app
+
+    dashboard_app = create_project_dashboard_app(project_access_policy, expose_host_diagnostics)
+    mcp = MCPServer(
+        "GameMaker MCP",
+        title="GameMaker MCP",
+        description="Safe, structured GameMaker project tooling.",
+        version=version("gms-mcp"),
+        cache_hints=MCP_CACHE_HINTS,
+        subscriptions=runtime.subscriptions,
+        lifespan=runtime.lifespan,
+        extensions=[dashboard_app],
+        middleware=[
+            MutationSerializationMiddleware(
+                runtime,
+                lambda name: name in _READ_ONLY_TOOL_NAMES,
+                _is_committed_mutation_result,
+            )
+        ],
+    )
     _wrap_tool_registration(
         mcp,
         project_access_policy=project_access_policy,
         expose_host_diagnostics=expose_host_diagnostics,
+        runtime=runtime,
     )
     register_all(
         mcp,
         Context,
         project_access_policy=project_access_policy,
         expose_host_diagnostics=expose_host_diagnostics,
+        resolution_runtime=runtime.resolution,
     )
 
     # region agent log
@@ -638,12 +694,63 @@ def build_server():
     return mcp
 
 
-def main() -> int:
+def _parse_server_arguments(argv: list[str]) -> tuple[argparse.Namespace | None, int]:
+    parser = argparse.ArgumentParser(prog="gms-mcp server", description="Run the GameMaker MCP server.")
+    parser.add_argument(
+        "--transport",
+        choices=("stdio", "streamable-http"),
+        default="stdio",
+        help="MCP transport (default: stdio).",
+    )
+    parser.add_argument("--host", default="127.0.0.1", help="HTTP bind host (loopback only).")
+    parser.add_argument("--port", type=int, default=8000, help="HTTP bind port (default: 8000).")
+    parser.add_argument("--path", default="/mcp", help="Streamable HTTP endpoint path (default: /mcp).")
+    try:
+        args = parser.parse_args(argv)
+    except SystemExit as exc:
+        return None, int(exc.code or 0)
+
+    args.host = str(args.host).strip().removeprefix("[").removesuffix("]")
+    try:
+        loopback = args.host.lower() == "localhost" or ipaddress.ip_address(args.host).is_loopback
+    except ValueError:
+        loopback = False
+    if args.transport == "streamable-http" and not loopback:
+        parser.print_usage(sys.stderr)
+        sys.stderr.write("gms-mcp server: error: unauthenticated HTTP transport is restricted to loopback hosts.\n")
+        return None, 2
+    if not 1 <= args.port <= 65_535:
+        parser.print_usage(sys.stderr)
+        sys.stderr.write("gms-mcp server: error: --port must be between 1 and 65535.\n")
+        return None, 2
+    if not args.path.startswith("/") or any(character.isspace() for character in args.path):
+        parser.print_usage(sys.stderr)
+        sys.stderr.write("gms-mcp server: error: --path must be an absolute URL path without whitespace.\n")
+        return None, 2
+    return args, 0
+
+
+def _http_transport_security(host: str, port: int):
+    from mcp.server.transport_security import TransportSecuritySettings
+
+    authority = f"[{host}]" if ":" in host else host
+    return TransportSecuritySettings(
+        enable_dns_rebinding_protection=True,
+        allowed_hosts=[authority, f"{authority}:{port}"],
+        allowed_origins=[f"http://{authority}:{port}"],
+    )
+
+
+def main(argv: list[str] | None = None) -> int:
     # Suppress MCP SDK INFO logging to stderr (Cursor displays stderr as [error] which is confusing)
     import logging
 
     logging.getLogger("mcp").setLevel(logging.WARNING)
     logging.getLogger("mcp.server").setLevel(logging.WARNING)
+
+    server_args, argument_exit_code = _parse_server_arguments(list(argv or []))
+    if server_args is None:
+        return argument_exit_code
 
     # region agent log
     _dbg(
@@ -653,7 +760,7 @@ def main() -> int:
         {
             "pid": os.getpid(),
             "exe": sys.executable,
-            "argv": sys.argv,
+            "argv": argv if argv is not None else sys.argv,
             "cwd": os.getcwd(),
             "stdin_isatty": bool(getattr(sys.stdin, "isatty", lambda: False)()),
             "stdout_isatty": bool(getattr(sys.stdout, "isatty", lambda: False)()),
@@ -669,7 +776,7 @@ def main() -> int:
             tool_family="server",
             result="ok",
             duration_ms=0,
-            execution_mode="stdio",
+            execution_mode=server_args.transport,
         )
     except ModuleNotFoundError as e:
         sys.stderr.write("MCP dependency is missing. Reinstall or upgrade the gms-mcp package.\n")
@@ -693,7 +800,17 @@ def main() -> int:
     )
     # endregion
     try:
-        server.run()
+        if server_args.transport == "stdio":
+            server.run()
+        else:
+            server.run(
+                "streamable-http",
+                host=server_args.host,
+                port=server_args.port,
+                streamable_http_path=server_args.path,
+                stateless_http=True,
+                transport_security=_http_transport_security(server_args.host, server_args.port),
+            )
         return 0
     except Exception as exc:
         sys.stderr.write("MCP server stopped after an internal error; host details were withheld.\n")
@@ -703,4 +820,4 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(main(list(sys.argv[1:])))

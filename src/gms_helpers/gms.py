@@ -863,6 +863,7 @@ def setup_room_commands(subparsers):
     delete_parser = ops_subparsers.add_parser("delete", help="Delete a room")
     delete_parser.add_argument("room_name", help="Room name to delete (e.g., r_unused)")
     delete_parser.add_argument("--dry-run", action="store_true", help="Preview deletion without actually deleting")
+    delete_parser.add_argument("--force", action="store_true", help="Delete despite current incoming references")
     delete_parser.set_defaults(func=handle_room_delete)
 
     # List rooms

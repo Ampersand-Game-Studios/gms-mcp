@@ -1,0 +1,22 @@
+{
+  "$GMProject": "v1",
+  "%Name": "Conformance",
+  "AudioGroups": [],
+  "configs": {
+    "children": [],
+    "name": "Default"
+  },
+  "defaultScriptType": 1,
+  "Folders": [],
+  "IncludedFiles": [],
+  "isEcma": false,
+  "LibraryEmitters": [],
+  "MetaData": {
+    "IDEVersion": "2024.14.4.264"
+  },
+  "name": "Conformance",
+  "resources": [],
+  "RoomOrderNodes": [],
+  "templateType": "game",
+  "TextureGroups": []
+}

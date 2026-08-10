@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import json
 import sys
 import tempfile
@@ -39,7 +40,8 @@ class TestBridgeToolWrappers(unittest.TestCase):
         bridge.register(self.mcp, object)
 
     def call_tool(self, tool_name: str, **kwargs):
-        return asyncio.run(self.mcp.tools[tool_name](**kwargs))
+        result = self.mcp.tools[tool_name](**kwargs)
+        return asyncio.run(result) if inspect.isawaitable(result) else result
 
     def test_install_uninstall_and_status_branches(self):
         with patch("gms_helpers.bridge_installer.install_bridge", return_value={"ok": True, "message": "installed"}):

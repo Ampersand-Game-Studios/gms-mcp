@@ -94,7 +94,7 @@ def handle_room_rename(args):
 def handle_room_delete(args):
     """Handle room deletion."""
     return _room_result(
-        delete_room(args.room_name, getattr(args, "dry_run", False)),
+        delete_room(args.room_name, getattr(args, "dry_run", False), force=getattr(args, "force", False)),
         "Room delete",
         room_name=args.room_name,
         dry_run=getattr(args, "dry_run", False),

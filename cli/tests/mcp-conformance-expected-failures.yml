@@ -1,0 +1,10 @@
+server:
+  # The upstream server-stateless scenario reserves a diagnostic tool that
+  # application servers do not expose. Keep the two resulting checks exact so
+  # every other stateless lifecycle check remains release-gating.
+  - server-stateless:sep-2575-server-rejects-undeclared-capability
+  - server-stateless:sep-2575-missing-capability-http-400
+  # Tool and prompt registration is immutable after server construction, so
+  # application code has no runtime list mutation to notify about.
+  - server-stateless:sep-2575-server-sends-prompts-list-changed-on-subscription
+  - server-stateless:sep-2575-server-sends-tools-list-changed-on-subscription

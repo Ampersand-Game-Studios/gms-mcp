@@ -401,7 +401,9 @@ class TestRoomHelperCoverage(unittest.TestCase):
         self.assertFalse(result)
         self.assertIn("Failed to rename room", output)
 
-        with patch("gms_helpers.room_helper.delete_asset", return_value=SimpleNamespace(success=False, message="nope")):
+        from gms_helpers.results import OperationResult
+
+        with patch("gms_helpers.room_helper.delete_asset", return_value=OperationResult.fail("nope")):
             room_dir = self.temp_dir / "rooms" / "r_delete"
             room_dir.mkdir()
             (room_dir / "r_delete.yy").touch()
@@ -416,6 +418,18 @@ class TestRoomHelperCoverage(unittest.TestCase):
         room_dir = self.temp_dir / "rooms" / "r_delete"
         room_dir.mkdir(exist_ok=True)
         (room_dir / "r_delete.yy").touch()
+        (self.temp_dir / "game.yyp").write_text(
+            json.dumps(
+                {
+                    "resources": [{"id": {"name": "r_delete", "path": "rooms/r_delete/r_delete.yy"}}],
+                    "RoomOrderNodes": [{"roomId": {"name": "r_delete", "path": "rooms/r_delete/r_delete.yy"}}],
+                    "folders": [],
+                    "resourceType": "GMProject",
+                    "resourceVersion": "2.0",
+                }
+            ),
+            encoding="utf-8",
+        )
         result, output = _capture_output(room_helper.delete_room, "r_delete", True)
         self.assertTrue(result)
         self.assertIn("Would delete room", output)
@@ -469,7 +483,7 @@ class TestRoomHelperCoverage(unittest.TestCase):
 
         with patch("gms_helpers.room_helper.delete_room", return_value=True) as mock_delete:
             self.assertTrue(room_helper.handle_delete(SimpleNamespace(room_name="r_old", dry_run=True)))
-        mock_delete.assert_called_once_with("r_old", True)
+        mock_delete.assert_called_once_with("r_old", True, force=False)
 
         with patch("gms_helpers.room_helper.list_rooms", return_value=[{"name": "r_main"}]) as mock_list:
             self.assertEqual(room_helper.handle_list(SimpleNamespace(verbose=True)), [{"name": "r_main"}])

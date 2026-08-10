@@ -40,6 +40,7 @@ try:
         NoteAsset,
     )
     from gms_helpers.base_asset import BaseAsset
+    from gms_helpers.exceptions import AssetExistsError
     from gms_helpers.utils import generate_uuid, create_dummy_png, ensure_directory, load_json_loose
 except ImportError as e:
     print(f"Import error: {e}")
@@ -325,11 +326,8 @@ class TestScriptAsset(TestAssetsComprehensive):
         yy_file = asset_folder / "test_script.yy"
         yy_file.write_text('{"existing": "data"}', encoding="utf-8")
 
-        with patch("builtins.print") as mock_print:
+        with self.assertRaises(AssetExistsError):
             self.script_asset.create_files(self.project_root, "test_script", self.parent_path)
-
-        # Verify skip message was printed
-        mock_print.assert_any_call("Asset test_script already exists - skipping .yy creation")
 
         # Verify existing file is preserved
         content = yy_file.read_text(encoding="utf-8")

@@ -13,6 +13,10 @@ All notable changes to this project will be documented in this file.
 - **Privacy-Safe Local Diagnostics**: Codex previews now omit unrelated configuration and redact secret values and host paths. Automatic diagnostic logs now use private, opaque per-project directories under `~/.gms-mcp/logs/` instead of writing inside GameMaker projects.
 
 ### Added
+- **MCP 2.0 Runtime Delivery**: Modern MCP clients now receive server cache hints, structured `is_error` tool failures, project-resource subscriptions after committed writes and debounced external edits, secure asset/room URI templates, mutation serialization, and a read-only MCP Apps project dashboard with text/structured fallback.
+- **Local Streamable HTTP**: `gms-mcp server --transport streamable-http` serves a stateless local endpoint, rejects non-loopback binds and unapproved Host/Origin headers, and validates standard and parameter-routing MCP headers. This is deliberately local-only and does not add remote authentication or shared-server support.
+- **MCP 2.0 Verification**: Added modern in-memory client, subscriptions, cache, middleware, templates, Apps, lifespan, worker-thread, local HTTP, OpenTelemetry, and pinned official 2026-07-28 wire-conformance coverage. CI now audits the exact `uv.lock` dependency graph.
+- **MCP Resolve Workflows**: Added typed, multi-round Resolve support for dependency-blocked asset/room deletion, asset-name collisions, and referenced texture-group deletion. Normal operations stay automatic; declined, cancelled, stale, or unauthorized resolutions cannot write or publish mutation updates. CI gates the full official input-required scenario set.
 - **GML Documentation Lookup**: Built-in documentation for GameMaker functions fetched on-demand from manual.gamemaker.io:
     - `gms doc lookup <function>`: Look up specific GML function documentation (description, syntax, parameters, return value, examples)
     - `gms doc search <query>`: Search for GML functions by name

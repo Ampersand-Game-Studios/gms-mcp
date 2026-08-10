@@ -11,7 +11,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     # =========================================================================
 
     @mcp.tool()
-    async def gm_doc_lookup(
+    def gm_doc_lookup(
         function_name: str,
         force_refresh: bool = False,
     ) -> Dict[str, Any]:
@@ -34,7 +34,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         return lookup(function_name, force_refresh=force_refresh)
 
     @mcp.tool()
-    async def gm_doc_search(
+    def gm_doc_search(
         query: str,
         category: Optional[str] = None,
         limit: int = 20,
@@ -57,7 +57,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         return search(query, category=category, limit=limit)
 
     @mcp.tool()
-    async def gm_doc_list(
+    def gm_doc_list(
         category: Optional[str] = None,
         pattern: Optional[str] = None,
         limit: int = 100,
@@ -78,7 +78,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         return list_functions(category=category, pattern=pattern, limit=limit)
 
     @mcp.tool()
-    async def gm_doc_categories() -> Dict[str, Any]:
+    def gm_doc_categories() -> Dict[str, Any]:
         """
         List all GML documentation categories.
 
@@ -90,7 +90,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         return list_categories()
 
     @mcp.tool()
-    async def gm_doc_cache_stats() -> Dict[str, Any]:
+    def gm_doc_cache_stats() -> Dict[str, Any]:
         """
         Get statistics about the GML documentation cache.
 
@@ -102,7 +102,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         return get_cache_stats()
 
     @mcp.tool()
-    async def gm_doc_cache_clear(functions_only: bool = False) -> Dict[str, Any]:
+    def gm_doc_cache_clear(functions_only: bool = False) -> Dict[str, Any]:
         """
         Clear the GML documentation cache.
 

@@ -13,6 +13,7 @@ from typing import Dict, List, Any, Optional
 
 from .utils import load_json_loose, save_json_loose, find_yyp, validate_working_directory, validate_name
 from .exceptions import GMSError, ProjectNotFoundError, AssetNotFoundError, ValidationError
+from .results import OperationResult
 from .workflow import duplicate_asset, rename_asset, delete_asset
 from .path_safety import validate_resource_name
 
@@ -87,33 +88,37 @@ def rename_room(room_name: str, new_name: str) -> bool:
         return False
 
 
-def delete_room(room_name: str, dry_run: bool = False) -> bool:
-    """Delete a room."""
+def delete_room(room_name: str, dry_run: bool = False, *, force: bool = False) -> OperationResult:
+    """Delete a room while preserving dependency evidence for callers."""
     try:
         room_name = validate_resource_name(room_name, "room")
     except ValidationError as e:
         print(f"[ERROR] Error deleting room: {e}")
-        return False
+        return OperationResult.fail(
+            f"Error deleting room: {e}",
+            code="invalid_room_name",
+            error_type="validation_error",
+            data={"room_name": room_name, "dry_run": dry_run, "force": force},
+        )
 
     project_root = Path(".")
     asset_path = f"rooms/{room_name}/{room_name}.yy"
 
     if not (project_root / asset_path).exists():
         print(f"[ERROR] Room '{room_name}' not found")
-        return False
+        return OperationResult.fail(
+            f"Room '{room_name}' not found",
+            code="room_not_found",
+            error_type="not_found",
+            data={"room_name": room_name, "dry_run": dry_run, "force": force},
+        )
 
-    if dry_run:
-        print(f"[dry-run] Would delete folder rooms/{room_name}")
-        print(f"[OK] Would delete room '{room_name}'")
-        return True
-
-    result = delete_asset(project_root, asset_path)
+    result = delete_asset(project_root, asset_path, dry_run=dry_run, force=force)
     if result.success:
-        print(f"[OK] Deleted room '{room_name}'")
-        return True
+        print(f"[OK] {'Would delete' if dry_run else 'Deleted'} room '{room_name}'")
     else:
         print(f"[ERROR] Failed to delete room: {result.message}")
-        return False
+    return result
 
 
 def list_rooms(verbose: bool = False) -> List[Dict[str, Any]]:
@@ -195,7 +200,7 @@ def handle_rename(args):
 
 
 def handle_delete(args):
-    return delete_room(args.room_name, args.dry_run)
+    return delete_room(args.room_name, args.dry_run, force=getattr(args, "force", False))
 
 
 def handle_list(args):
@@ -222,6 +227,7 @@ def main():
     del_parser = subparsers.add_parser("delete", help="Delete a room")
     del_parser.add_argument("room_name", help="Room name to delete")
     del_parser.add_argument("--dry-run", action="store_true", help="Don't actually delete")
+    del_parser.add_argument("--force", action="store_true", help="Delete despite current incoming references")
     del_parser.set_defaults(func=handle_delete)
 
     # List
