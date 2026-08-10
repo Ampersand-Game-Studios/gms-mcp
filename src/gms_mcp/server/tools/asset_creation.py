@@ -1,17 +1,40 @@
 from __future__ import annotations
 
 import argparse
-from typing import Any, Dict
+from typing import Annotated, Any, Dict
+
+from mcp.server.mcpserver import Resolve
 
 from ..debug import _dbg
 from ..dispatch import _run_with_fallback
 from ..mcp_types import Context
-from ..project import _ensure_cli_on_sys_path, _resolve_repo_root
+from ..project import ProjectAccessError, _ensure_cli_on_sys_path, _resolve_repo_root
+from ..resolution import ResolutionRuntime
 from ..tool_types import OutputMode
 
+AssetNameResolution = Any
 
-def register(mcp: Any, ContextType: Any) -> None:
+
+def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) -> None:
     globals()["Context"] = ContextType
+    from ..resolution import NameCollisionDecision
+
+    globals()["NameCollisionDecision"] = NameCollisionDecision
+
+    async def resolve_asset_name(ctx: Context, name: str, project_root: str = "."):
+        try:
+            return await resolution_runtime.asset_name_collision_resolver()(name, project_root, ctx)
+        except ProjectAccessError:
+            return None
+
+    def resolved_asset_name(name: str, resolution: NameCollisionDecision | None) -> str:
+        if resolution is None:
+            return name
+        if resolution.action == "rename" and resolution.replacement_name:
+            return resolution.replacement_name
+        return ""
+
+    globals()["AssetNameResolution"] = Annotated[NameCollisionDecision, Resolve(resolve_asset_name)]
 
     # -----------------------------
     # Asset creation tools
@@ -19,6 +42,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_create_script(
         name: str,
+        resolution: AssetNameResolution = None,
         parent_path: str = "",
         is_constructor: bool = False,
         skip_maintenance: bool = True,
@@ -32,6 +56,13 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a GameMaker script asset."""
+        name = resolved_asset_name(name, resolution)
+        if not name:
+            return {
+                "ok": False,
+                "cancelled": resolution is not None and resolution.action == "cancel",
+                "message": "A replacement name is required; existing assets are never overwritten.",
+            }
         # region agent log
         _dbg(
             "H2",
@@ -91,6 +122,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_create_object(
         name: str,
+        resolution: AssetNameResolution = None,
         parent_path: str = "",
         sprite_id: str = "",
         parent_object: str = "",
@@ -105,6 +137,13 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a GameMaker object asset."""
+        name = resolved_asset_name(name, resolution)
+        if not name:
+            return {
+                "ok": False,
+                "cancelled": resolution is not None and resolution.action == "cancel",
+                "message": "A replacement name is required; existing assets are never overwritten.",
+            }
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.asset_commands import handle_asset_create
@@ -153,6 +192,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_create_sprite(
         name: str,
+        resolution: AssetNameResolution = None,
         parent_path: str = "",
         frame_count: int = 1,
         skip_maintenance: bool = True,
@@ -172,6 +212,13 @@ def register(mcp: Any, ContextType: Any) -> None:
             parent_path: Existing parent folder path; omit to reuse or create the default Sprites folder
             frame_count: Number of animation frames (default: 1)
         """
+        name = resolved_asset_name(name, resolution)
+        if not name:
+            return {
+                "ok": False,
+                "cancelled": resolution is not None and resolution.action == "cancel",
+                "message": "A replacement name is required; existing assets are never overwritten.",
+            }
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.asset_commands import handle_asset_create
@@ -217,6 +264,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_create_room(
         name: str,
+        resolution: AssetNameResolution = None,
         parent_path: str = "",
         width: int = 1024,
         height: int = 768,
@@ -231,6 +279,13 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a GameMaker room asset."""
+        name = resolved_asset_name(name, resolution)
+        if not name:
+            return {
+                "ok": False,
+                "cancelled": resolution is not None and resolution.action == "cancel",
+                "message": "A replacement name is required; existing assets are never overwritten.",
+            }
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.asset_commands import handle_asset_create
@@ -280,6 +335,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     async def gm_create_folder(
         name: str,
         path: str,
+        resolution: AssetNameResolution = None,
         skip_maintenance: bool = True,
         no_auto_fix: bool = False,
         maintenance_verbose: bool = False,
@@ -291,6 +347,18 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a GameMaker folder asset (`folders/My Folder.yy`)."""
+        requested_name = name
+        name = resolved_asset_name(name, resolution)
+        if not name:
+            return {
+                "ok": False,
+                "cancelled": resolution is not None and resolution.action == "cancel",
+                "message": "A replacement name is required; existing assets are never overwritten.",
+            }
+        normalized_path = path.replace("\\", "/")
+        requested_suffix = f"/{requested_name}.yy"
+        if name != requested_name and normalized_path.casefold().endswith(requested_suffix.casefold()):
+            path = f"{normalized_path[: -len(requested_suffix)]}/{name}.yy"
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.asset_commands import handle_asset_create
@@ -333,6 +401,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_create_font(
         name: str,
+        resolution: AssetNameResolution = None,
         parent_path: str = "",
         font_name: str = "Arial",
         size: int = 12,
@@ -351,6 +420,13 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a GameMaker font asset."""
+        name = resolved_asset_name(name, resolution)
+        if not name:
+            return {
+                "ok": False,
+                "cancelled": resolution is not None and resolution.action == "cancel",
+                "message": "A replacement name is required; existing assets are never overwritten.",
+            }
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.asset_commands import handle_asset_create
@@ -411,6 +487,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_create_shader(
         name: str,
+        resolution: AssetNameResolution = None,
         parent_path: str = "",
         shader_type: int = 1,
         skip_maintenance: bool = True,
@@ -424,6 +501,13 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a GameMaker shader asset."""
+        name = resolved_asset_name(name, resolution)
+        if not name:
+            return {
+                "ok": False,
+                "cancelled": resolution is not None and resolution.action == "cancel",
+                "message": "A replacement name is required; existing assets are never overwritten.",
+            }
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.asset_commands import handle_asset_create
@@ -460,6 +544,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_create_animcurve(
         name: str,
+        resolution: AssetNameResolution = None,
         parent_path: str = "",
         curve_type: str = "linear",
         channel_name: str = "curve",
@@ -474,6 +559,13 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create an animation curve asset."""
+        name = resolved_asset_name(name, resolution)
+        if not name:
+            return {
+                "ok": False,
+                "cancelled": resolution is not None and resolution.action == "cancel",
+                "message": "A replacement name is required; existing assets are never overwritten.",
+            }
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.asset_commands import handle_asset_create
@@ -522,6 +614,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_create_sound(
         name: str,
+        resolution: AssetNameResolution = None,
         parent_path: str = "",
         volume: float = 1.0,
         pitch: float = 1.0,
@@ -540,6 +633,13 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a sound asset."""
+        name = resolved_asset_name(name, resolution)
+        if not name:
+            return {
+                "ok": False,
+                "cancelled": resolution is not None and resolution.action == "cancel",
+                "message": "A replacement name is required; existing assets are never overwritten.",
+            }
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.asset_commands import handle_asset_create
@@ -600,6 +700,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_create_path(
         name: str,
+        resolution: AssetNameResolution = None,
         parent_path: str = "",
         closed: bool = False,
         precision: int = 4,
@@ -615,6 +716,13 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a path asset."""
+        name = resolved_asset_name(name, resolution)
+        if not name:
+            return {
+                "ok": False,
+                "cancelled": resolution is not None and resolution.action == "cancel",
+                "message": "A replacement name is required; existing assets are never overwritten.",
+            }
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.asset_commands import handle_asset_create
@@ -666,6 +774,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_create_tileset(
         name: str,
+        resolution: AssetNameResolution = None,
         parent_path: str = "",
         sprite_id: str = "",
         tile_width: int = 32,
@@ -685,6 +794,13 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a tileset asset."""
+        name = resolved_asset_name(name, resolution)
+        if not name:
+            return {
+                "ok": False,
+                "cancelled": resolution is not None and resolution.action == "cancel",
+                "message": "A replacement name is required; existing assets are never overwritten.",
+            }
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.asset_commands import handle_asset_create
@@ -748,6 +864,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_create_timeline(
         name: str,
+        resolution: AssetNameResolution = None,
         parent_path: str = "",
         skip_maintenance: bool = True,
         no_auto_fix: bool = False,
@@ -760,6 +877,13 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a timeline asset."""
+        name = resolved_asset_name(name, resolution)
+        if not name:
+            return {
+                "ok": False,
+                "cancelled": resolution is not None and resolution.action == "cancel",
+                "message": "A replacement name is required; existing assets are never overwritten.",
+            }
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.asset_commands import handle_asset_create
@@ -797,6 +921,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_create_sequence(
         name: str,
+        resolution: AssetNameResolution = None,
         parent_path: str = "",
         length: float = 60.0,
         playback_speed: float = 30.0,
@@ -811,6 +936,13 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a sequence asset."""
+        name = resolved_asset_name(name, resolution)
+        if not name:
+            return {
+                "ok": False,
+                "cancelled": resolution is not None and resolution.action == "cancel",
+                "message": "A replacement name is required; existing assets are never overwritten.",
+            }
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.asset_commands import handle_asset_create
@@ -851,6 +983,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_create_note(
         name: str,
+        resolution: AssetNameResolution = None,
         parent_path: str = "",
         content: str = "",
         skip_maintenance: bool = True,
@@ -864,6 +997,13 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Create a note asset."""
+        name = resolved_asset_name(name, resolution)
+        if not name:
+            return {
+                "ok": False,
+                "cancelled": resolution is not None and resolution.action == "cancel",
+                "message": "A replacement name is required; existing assets are never overwritten.",
+            }
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.asset_commands import handle_asset_create

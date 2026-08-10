@@ -166,7 +166,52 @@ class _FakeServer:
                 "compile_verification": {"ok": True},
                 "pending_compile_verification": None,
             }
+        if tool_name in {
+            "gm_texture_group_create",
+            "gm_texture_group_assign",
+            "gm_texture_group_delete",
+        }:
+            return {"ok": True, "transaction": {"verification_policy": {"action": "skip"}}}
         return {"ok": False, "error": f"unexpected tool {tool_name}"}
+
+
+class _FakeClient:
+    def __init__(self, server, *, elicitation_callback=None, **_kwargs):
+        self.server = server
+        self.elicitation_callback = elicitation_callback
+
+    async def __aenter__(self):
+        return self
+
+    async def __aexit__(self, *_args):
+        return None
+
+    async def call_tool(self, tool_name, arguments):
+        arguments = dict(arguments)
+        if tool_name == "gm_create_object":
+            project_root = Path(arguments["project_root"])
+            if project_root.joinpath("objects", arguments["name"]).exists():
+                answer = await self.elicitation_callback(None, None)
+                decision = answer.content or {}
+                if decision.get("action") == "cancel":
+                    payload = {"ok": False, "cancelled": True}
+                    return CallToolResult(
+                        content=[TextContent(type="text", text=json.dumps(payload))],
+                        structured_content={"result": payload},
+                        is_error=True,
+                    )
+                arguments["name"] = decision["replacement_name"]
+        if tool_name == "gm_safe_delete" and arguments.get("asset_type") == "object":
+            answer = await self.elicitation_callback(None, None)
+            decision = answer.content or {}
+            if decision.get("action") == "cancel":
+                payload = {"ok": False, "cancelled": True}
+                return CallToolResult(
+                    content=[TextContent(type="text", text=json.dumps(payload))],
+                    structured_content={"result": payload},
+                    is_error=True,
+                )
+        return await self.server.call_tool(tool_name, arguments)
 
 
 class TestRealGameMakerSmoke(unittest.TestCase):
@@ -269,6 +314,7 @@ class TestRealGameMakerSmoke(unittest.TestCase):
                 patch.object(real_smoke.platform, "system", return_value="Linux"),
                 patch.object(real_smoke.RuntimeManager, "select", return_value=runtime),
                 patch.object(real_smoke, "build_server", return_value=_FakeServer()),
+                patch.object(real_smoke, "Client", _FakeClient),
             ):
                 exit_code = real_smoke.main()
                 self.assertEqual(os.environ["GM_PROJECT_ROOT"], "previous-project")

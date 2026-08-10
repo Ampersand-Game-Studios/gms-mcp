@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import datetime as dt
+import json
 import re
 from collections.abc import Mapping
 from dataclasses import asdict, dataclass, is_dataclass
@@ -26,6 +27,50 @@ _HOST_ONLY_RESULT_KEYS = {
 }
 _PROJECT_ROOT_RESULT_KEYS = {"project_directory", "project_path", "project_root"}
 _TRUTHY_VALUES = {"1", "true", "yes", "on"}
+
+
+def mcp_tool_result(
+    value: Any,
+    *,
+    project_root: str | Path | None,
+    expose_host_diagnostics: bool = False,
+) -> Any:
+    """Return a native v2 tool result with structured, sanitized failure data."""
+    from mcp.types import CallToolResult, TextContent
+
+    if isinstance(value, CallToolResult):
+        return value
+    public_value = public_mcp_result(
+        value,
+        project_root=project_root,
+        expose_host_diagnostics=expose_host_diagnostics,
+    )
+    is_error = isinstance(public_value, Mapping) and public_value.get("ok") is False
+    if is_error and isinstance(public_value, Mapping) and "error_code" not in public_value:
+        error_type = public_value.get("error_type")
+        if "validation_errors" in public_value:
+            error_code = "invalid_arguments"
+        elif error_type == "ProjectAccessError":
+            error_code = "project_access_denied"
+        elif error_type == "TransactionValidationError":
+            error_code = "transaction_validation_failed"
+        elif error_type == "InternalToolError":
+            error_code = "internal_error"
+        else:
+            error_code = "tool_failed"
+        public_value = {**public_value, "error_code": error_code}
+    return CallToolResult(
+        content=[
+            TextContent(
+                type="text",
+                text=json.dumps(public_value, ensure_ascii=False, indent=2),
+            )
+        ],
+        # Every registered GMS tool returns Dict[str, Any], whose SDK output
+        # schema uses a sole `result` envelope.
+        structured_content={"result": public_value},
+        is_error=is_error,
+    )
 
 
 def unwrap_call_tool_result(result: Any) -> Any:

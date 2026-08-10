@@ -16,10 +16,16 @@
 - **GML Symbol Indexing & Code Intelligence**: `gm_build_index`, `gm_find_definition`, `gm_find_references`, and `gm_list_symbols` provide deep, fast, and filtered code analysis (definitions and cross-file references).
 - **Introspection**: complete project inspection with support for all asset types (including extensions and datafiles).
 - **MCP Resources**: addressable project index and asset graph for high-performance agent context loading.
+- **MCP 2.0 Runtime Features**: modern clients receive cache hints, structured tool failures, live project-resource updates after committed mutations or external project edits, safe RFC6570 asset/room resource templates, and multi-round Resolve input requests for exceptional mutation choices.
+- **Resolve Safety Policies**: normal calls remain automatic. Dependency-blocked asset/room deletion can request an explicit force-or-cancel choice; name collisions request a replacement name and never overwrite; referenced texture-group deletion requests a valid reassignment. Every resumed operation reauthorizes and revalidates immediately before writing.
+- **MCP Apps Dashboard**: clients that support MCP Apps can render a read-only project dashboard; every client still receives the same useful text and structured dashboard result.
+- **Local Streamable HTTP**: `gms-mcp server --transport streamable-http --host 127.0.0.1` provides stateless MCP HTTP for local clients. It rejects non-loopback binds and unapproved Host/Origin headers, and supports validated `Mcp-Param-*` routing headers; it is not a remote shared-server deployment mode.
 - `gms-mcp-init`: generates shareable MCP config files for a workspace. Now auto-detects environment variables like `GMS_MCP_GMS_PATH` to include in the generated config.
 - **Privacy-Safe Telemetry (opt-in)**: `gms`, `gms-mcp-init`, and MCP usage can send anonymous usage metadata only after explicit consent.
 
 The MCP server starts with a curated core toolset. Enable optional domains with `GMS_MCP_TOOLSETS=assets,events,rooms` or use `GMS_MCP_TOOLSETS=all`; `gm_capabilities` reports the active profile and available domains.
+
+MCP SDK OpenTelemetry middleware is active by default. It creates spans only when the host configures an OpenTelemetry exporter; GMS MCP does not send telemetry to an external tracing service by itself.
 
 ## Install (recommended: pipx)
 
@@ -188,6 +194,8 @@ Built package archives are checked against a public-file allowlist before public
 - Core CI runs on Ubuntu and Windows across Python `3.10`-`3.13` from the committed `uv.lock`.
 - Runner/session regression tests also run on macOS across Python `3.11`-`3.13`, including a mockless smoke test that builds a real `.app` bundle structure and validates executable path resolution.
 - Core CI also runs a deterministic MCP tool smoke subset against a generated minimal GameMaker project fixture.
+- CI runs pinned official MCP 2026-07-28 wire scenarios for stateless discovery, schema validation, caching, HTTP header routing, DNS-rebinding protection, tools, resources, prompts, concurrent streams, Resolve/input-required retries, capability checks, multi-round input, and tamper-resistant request state.
+- CI audits every dependency resolved from `uv.lock` against the vulnerability database. The audit exports the locked graph first because `pip-audit --locked` does not read `uv.lock` directly.
 
 ### Quality Reports
 

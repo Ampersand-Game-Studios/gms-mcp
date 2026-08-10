@@ -13,7 +13,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     # Bridge tools (Phase 3)
     # -----------------------------
     @mcp.tool()
-    async def gm_bridge_install(
+    def gm_bridge_install(
         port: int = 6502,
         project_root: str = ".",
         ctx: Context | None = None,
@@ -51,7 +51,7 @@ def register(mcp: Any, ContextType: Any) -> None:
             return {"ok": False, "error": str(e), "message": f"Installation failed: {e}"}
 
     @mcp.tool()
-    async def gm_bridge_uninstall(
+    def gm_bridge_uninstall(
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
@@ -80,7 +80,7 @@ def register(mcp: Any, ContextType: Any) -> None:
             return {"ok": False, "error": str(e), "message": f"Uninstallation failed: {e}"}
 
     @mcp.tool()
-    async def gm_bridge_status(
+    def gm_bridge_status(
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
@@ -126,7 +126,7 @@ def register(mcp: Any, ContextType: Any) -> None:
             return {"ok": False, "error": str(e), "message": f"Status check failed: {e}"}
 
     @mcp.tool()
-    async def gm_bridge_enable_one_shot(
+    def gm_bridge_enable_one_shot(
         port: int = 6502,
         room_name: str = "",
         layer: str = "Instances",
@@ -266,7 +266,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         }
 
     @mcp.tool()
-    async def gm_run_logs(
+    def gm_run_logs(
         lines: int = 50,
         project_root: str = ".",
         ctx: Context | None = None,
@@ -329,7 +329,7 @@ def register(mcp: Any, ContextType: Any) -> None:
             return {"ok": False, "error": str(e), "message": f"Failed to get logs: {e}", "logs": []}
 
     @mcp.tool()
-    async def gm_run_command(
+    def gm_run_command(
         command: str,
         timeout: float = 5.0,
         project_root: str = ".",

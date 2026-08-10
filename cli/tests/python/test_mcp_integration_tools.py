@@ -10,6 +10,9 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from mcp import Client
+from mcp.types import ElicitResult
+
 from gms_mcp.server.results import unwrap_call_tool_result
 
 
@@ -442,13 +445,22 @@ class TestMCPIntegrationTools(unittest.TestCase):
         yyp_data["resources"].append({"id": {"name": "scr_conflict", "path": "scripts/scr_conflict/scr_conflict.yy"}})
         yyp_path.write_text(json.dumps(yyp_data, indent=2), encoding="utf-8")
 
-        result = self._call_tool(
-            "gm_create_script",
-            {"name": "scr_conflict", "project_root": str(self.project_root)},
-        )
+        async def cancel(_context, _params):
+            return ElicitResult(action="accept", content={"action": "cancel"})
+
+        async def resolve_collision():
+            async with Client(self.mcp, mode="2026-07-28", elicitation_callback=cancel) as client:
+                return unwrap_call_tool_result(
+                    await client.call_tool(
+                        "gm_create_script",
+                        {"name": "scr_conflict", "project_root": str(self.project_root)},
+                    )
+                )
+
+        result = asyncio.run(resolve_collision())
 
         self.assertFalse(result["ok"])
-        self.assertTrue(result["transaction"]["rolled_back"])
+        self.assertTrue(result["cancelled"])
         self.assertFalse((self.project_root / "scripts" / "scr_conflict").exists())
 
     def test_smart_verification_compiles_high_risk_mutation_immediately(self):

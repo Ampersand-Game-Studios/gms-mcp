@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
-from typing import Any, Dict
+from typing import Annotated, Any, Dict
+
+from pydantic import Field
 
 from ...update_status import get_update_status
 from ..dispatch import _run_with_fallback
@@ -15,6 +17,12 @@ from ..project import (
 from ..tool_types import OutputMode
 
 
+ProjectRootHeader = Annotated[
+    str,
+    Field(json_schema_extra={"x-mcp-header": "project-root"}),
+]
+
+
 def register(mcp: Any, ContextType: Any) -> None:
     # MCPServer evaluates type annotations at runtime (inspect.signature(..., eval_str=True)).
     # Because we use `from __future__ import annotations`, annotations are strings and must be
@@ -22,7 +30,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     globals()["Context"] = ContextType
 
     @mcp.tool()
-    async def gm_project_info(project_root: str = ".", ctx: Context | None = None) -> Dict[str, Any]:
+    def gm_project_info(project_root: ProjectRootHeader = ".", ctx: Context | None = None) -> Dict[str, Any]:
         """
         Resolve GameMaker project directory (where the .yyp lives) and return basic info.
         """
@@ -38,7 +46,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         }
 
     @mcp.tool()
-    async def gm_mcp_health(project_root: str = ".", ctx: Context | None = None) -> Dict[str, Any]:
+    def gm_mcp_health(project_root: str = ".", ctx: Context | None = None) -> Dict[str, Any]:
         """
         Perform a comprehensive health check of the GameMaker development environment.
         Verifies project validity, GameMaker runtimes/Igor, licenses, and Python dependencies.
@@ -99,6 +107,6 @@ def register(mcp: Any, ContextType: Any) -> None:
         )
 
     @mcp.tool()
-    async def gm_check_updates() -> Dict[str, Any]:
+    def gm_check_updates() -> Dict[str, Any]:
         """Check for newer versions of gms-mcp on PyPI."""
         return get_update_status().to_dict()
