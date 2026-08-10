@@ -31,7 +31,7 @@ def _policy(root: Path) -> ProjectAccessPolicy:
 def _resolution_server(runtime: ResolutionRuntime) -> MCPServer:
     resolver = runtime.safe_delete_resolver()
 
-    def commit_delete(asset_type, asset_name, force=False, dry_run=True, project_root=".", decision=None):
+    def commit_delete(asset_type, asset_name, force=False, dry_run=True, project_root=".", decision=...):
         del asset_type, asset_name, force, dry_run, project_root
         return decision.data.action if hasattr(decision, "data") else decision.action
 
@@ -167,7 +167,7 @@ class ResolutionPolicyTests(unittest.IsolatedAsyncioTestCase):
                         self.assertTrue(room_deleted["ok"])
                         self.assertFalse(root.joinpath("rooms/r_resolve").exists())
                         self.assertEqual((await asyncio.wait_for(next_update, timeout=1)).uri, PROJECT_INDEX_URI)
-                        with self.assertRaises(TimeoutError):
+                        with self.assertRaises(asyncio.TimeoutError):
                             await asyncio.wait_for(anext(subscription), timeout=0.03)
 
                     stale_pending = await client.session.call_tool(
