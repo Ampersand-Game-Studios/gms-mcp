@@ -314,6 +314,59 @@ class TestVerificationPolicy(unittest.TestCase):
         self.assertTrue(result["attempts"][1]["retryable_infrastructure_failure"])
         self.assertFalse(result["attempts"][2]["retryable_infrastructure_failure"])
 
+    def test_compile_verify_renews_single_use_lock_delegation_for_each_retry(self):
+        issued_tokens: list[str] = []
+        child_tokens: list[str] = []
+
+        class RecordingLock:
+            def __init__(self, _operation, _project_root):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, _exc_type, _exc, _traceback):
+                pass
+
+            def delegation_environment(self, operation):
+                self.assertEqual(operation, "compile")
+                token = f"delegation-{len(issued_tokens) + 1}"
+                issued_tokens.append(token)
+                return {"GMS_MCP_MACHINE_LOCK_DELEGATION_TOKEN": token}
+
+            @staticmethod
+            def assertEqual(actual, expected):
+                if actual != expected:
+                    raise AssertionError(f"{actual!r} != {expected!r}")
+
+        access_violation = subprocess.CompletedProcess(
+            args=["gms"],
+            returncode=1,
+            stdout="",
+            stderr="System.AccessViolationException: unstable Igor runtime",
+        )
+        success = subprocess.CompletedProcess(
+            args=["gms"],
+            returncode=0,
+            stdout="Final Compile finished.\nSaving IFF file... game.ios\nIgor complete.",
+            stderr="",
+        )
+
+        def run_attempt(*_args, **kwargs):
+            child_tokens.append(kwargs["env"]["GMS_MCP_MACHINE_LOCK_DELEGATION_TOKEN"])
+            return access_violation if len(child_tokens) == 1 else success
+
+        with (
+            tempfile.TemporaryDirectory() as temp_dir,
+            patch("gms_helpers.transactions.GameMakerMachineLock", RecordingLock),
+            patch("gms_helpers.transactions.subprocess.run", side_effect=run_attempt),
+        ):
+            result = compile_verify_project(temp_dir, platform="macOS", runtime="VM", timeout_seconds=1)
+
+        self.assertTrue(result["ok"])
+        self.assertEqual(issued_tokens, ["delegation-1", "delegation-2"])
+        self.assertEqual(child_tokens, issued_tokens)
+
     def test_compile_verify_does_not_retry_genuine_compile_failure(self):
         compile_failure = subprocess.CompletedProcess(
             args=["gms"],

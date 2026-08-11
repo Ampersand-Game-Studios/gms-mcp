@@ -18,6 +18,9 @@ from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any, Dict
 
+from mcp import Client
+from mcp.types import ElicitResult
+
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 SRC_ROOT = REPO_ROOT / "src"
@@ -279,6 +282,21 @@ async def _run_smoke(project_root: Path) -> Dict[str, Any]:
             return {"ok": False, "error": f"Unexpected result from {tool_name}: {result!r}"}
         return result
 
+    async def call_tool_with_resolution(
+        tool_name: str,
+        arguments: Dict[str, Any],
+        decision: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        async def resolve(context, params) -> ElicitResult:
+            del context, params
+            return ElicitResult(action="accept", content=decision)
+
+        async with Client(mcp, mode="2026-07-28", elicitation_callback=resolve) as client:
+            result = unwrap_call_tool_result(await client.call_tool(tool_name, arguments))
+        if not isinstance(result, dict):
+            return {"ok": False, "error": f"Unexpected result from {tool_name}: {result!r}"}
+        return result
+
     create_sprite = await call_tool(
         "gm_create_sprite",
         {
@@ -348,6 +366,44 @@ async def _run_smoke(project_root: Path) -> Dict[str, Any]:
                 "skip_maintenance": True,
             },
         )
+        cancelled_collision = await call_tool_with_resolution(
+            "gm_create_object",
+            {
+                "name": "o_real_smoke_collision_source",
+                "project_root": str(project_root),
+                "skip_maintenance": True,
+            },
+            {"action": "cancel"},
+        )
+        resolved_collision = await call_tool_with_resolution(
+            "gm_create_object",
+            {
+                "name": "o_real_smoke_collision_source",
+                "project_root": str(project_root),
+                "skip_maintenance": True,
+            },
+            {"action": "rename", "replacement_name": "o_real_smoke_resolved_alternative"},
+        )
+        create_resolve_texture_group = await call_tool(
+            "gm_texture_group_create",
+            {
+                "name": "ResolveTemp",
+                "project_root": str(project_root),
+            },
+        )
+        assign_resolve_texture_group = await call_tool(
+            "gm_texture_group_assign",
+            {
+                "group_name": "ResolveTemp",
+                "asset_identifiers": ["o_real_smoke_resolved_alternative"],
+                "project_root": str(project_root),
+            },
+        )
+        delete_resolve_texture_group = await call_tool_with_resolution(
+            "gm_texture_group_delete",
+            {"name": "ResolveTemp", "project_root": str(project_root)},
+            {"action": "reassign", "reassign_to": "Default"},
+        )
     finally:
         if previous_verify_mode is None:
             os.environ.pop("GMS_MCP_POST_MUTATION_VERIFY", None)
@@ -360,6 +416,22 @@ async def _run_smoke(project_root: Path) -> Dict[str, Any]:
         return {"ok": False, "stage": "gm_create_collision_target", "result": create_collision_target}
     if not create_room_order_source.get("ok"):
         return {"ok": False, "stage": "gm_create_room_order_source", "result": create_room_order_source}
+    if (
+        not cancelled_collision.get("cancelled")
+        or not project_root.joinpath("objects/o_real_smoke_collision_source").is_dir()
+    ):
+        return {"ok": False, "stage": "gm_resolve_collision_cancel", "result": cancelled_collision}
+    if (
+        not resolved_collision.get("ok")
+        or not project_root.joinpath("objects/o_real_smoke_resolved_alternative").is_dir()
+    ):
+        return {"ok": False, "stage": "gm_resolve_collision_alternative", "result": resolved_collision}
+    if not create_resolve_texture_group.get("ok"):
+        return {"ok": False, "stage": "gm_resolve_texture_group_create", "result": create_resolve_texture_group}
+    if not assign_resolve_texture_group.get("ok"):
+        return {"ok": False, "stage": "gm_resolve_texture_group_assign", "result": assign_resolve_texture_group}
+    if not delete_resolve_texture_group.get("ok"):
+        return {"ok": False, "stage": "gm_resolve_texture_group_delete", "result": delete_resolve_texture_group}
 
     collision_event = await call_tool(
         "gm_event_add",
@@ -413,6 +485,16 @@ async def _run_smoke(project_root: Path) -> Dict[str, Any]:
     previous_verify_mode = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY")
     os.environ["GMS_MCP_POST_MUTATION_VERIFY"] = "off"
     try:
+        cancelled_dependency_delete = await call_tool_with_resolution(
+            "gm_safe_delete",
+            {
+                "asset_type": "object",
+                "asset_name": "o_real_smoke_collision_target",
+                "dry_run": False,
+                "project_root": str(project_root),
+            },
+            {"action": "cancel"},
+        )
         duplicate_room = await call_tool(
             "gm_workflow_duplicate",
             {
@@ -440,6 +522,15 @@ async def _run_smoke(project_root: Path) -> Dict[str, Any]:
 
     if not duplicate_room.get("ok"):
         return {"ok": False, "stage": "gm_workflow_duplicate_room", "result": duplicate_room}
+    if (
+        not cancelled_dependency_delete.get("cancelled")
+        or not project_root.joinpath("objects/o_real_smoke_collision_target").is_dir()
+    ):
+        return {
+            "ok": False,
+            "stage": "gm_resolve_dependency_delete_cancel",
+            "result": cancelled_dependency_delete,
+        }
     if not delete_room_source.get("ok"):
         return {"ok": False, "stage": "gm_safe_delete_room", "result": delete_room_source}
     project_data = load_json_loose(next(project_root.glob("*.yyp")))
@@ -517,6 +608,10 @@ async def _run_smoke(project_root: Path) -> Dict[str, Any]:
             "collision_target_rename_compiled": True,
             "room_order_duplicate_delete_schema": True,
             "room_order_changes_compiled": True,
+            "resolve_cancel_left_existing_asset": True,
+            "resolve_alternative_name_compiled": True,
+            "resolve_texture_reassignment_compiled": True,
+            "resolve_dependency_delete_cancelled": True,
         },
         "results": {
             "gm_create_sprite": create_sprite,
@@ -524,6 +619,12 @@ async def _run_smoke(project_root: Path) -> Dict[str, Any]:
             "gm_create_collision_source": create_collision_source,
             "gm_create_collision_target": create_collision_target,
             "gm_create_room_order_source": create_room_order_source,
+            "gm_resolve_collision_cancel": cancelled_collision,
+            "gm_resolve_collision_alternative": resolved_collision,
+            "gm_resolve_texture_group_create": create_resolve_texture_group,
+            "gm_resolve_texture_group_assign": assign_resolve_texture_group,
+            "gm_resolve_texture_group_delete": delete_resolve_texture_group,
+            "gm_resolve_dependency_delete_cancel": cancelled_dependency_delete,
             "gm_event_add_collision": collision_event,
             "gm_verification_flush": flush,
             "gm_workflow_duplicate_room": duplicate_room,

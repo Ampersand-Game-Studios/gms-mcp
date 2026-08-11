@@ -13,7 +13,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     # Runtime management tools
     # -----------------------------
     @mcp.tool()
-    async def gm_runtime_list(
+    def gm_runtime_list(
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
@@ -38,7 +38,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         }
 
     @mcp.tool()
-    async def gm_runtime_pin(
+    def gm_runtime_pin(
         version: str,
         project_root: str = ".",
         ctx: Context | None = None,
@@ -61,7 +61,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         }
 
     @mcp.tool()
-    async def gm_runtime_unpin(
+    def gm_runtime_unpin(
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
@@ -82,7 +82,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         }
 
     @mcp.tool()
-    async def gm_runtime_verify(
+    def gm_runtime_verify(
         version: str | None = None,
         project_root: str = ".",
         ctx: Context | None = None,

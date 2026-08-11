@@ -5,6 +5,7 @@ from typing import Any
 
 from . import resources
 from .project import ProjectAccessPolicy
+from .resolution import ResolutionRuntime
 from .tools import (
     asset_creation,
     bridge,
@@ -57,19 +58,23 @@ def register_all(
     *,
     project_access_policy: ProjectAccessPolicy,
     expose_host_diagnostics: bool,
+    resolution_runtime: ResolutionRuntime,
 ) -> None:
     toolsets = enabled_toolsets()
     capabilities.register(mcp, Context, enabled=toolsets, optional=tuple(sorted(_OPTIONAL_TOOLSETS)))
     project_health.register(mcp, Context)
     runner.register(mcp, Context)
     verification.register(mcp, Context)
-    workflow.register(mcp, Context)
+    workflow.register(mcp, Context, resolution_runtime)
     introspection.register(mcp, Context)
     code_intel.register(mcp, Context)
     for toolset in toolsets:
         module = _OPTIONAL_TOOLSETS.get(toolset)
         if module is not None:
-            module.register(mcp, Context)
+            if module in {asset_creation, rooms, texture_groups}:
+                module.register(mcp, Context, resolution_runtime)
+            else:
+                module.register(mcp, Context)
     resources.register(
         mcp,
         project_access_policy=project_access_policy,

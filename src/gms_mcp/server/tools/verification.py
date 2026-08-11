@@ -15,7 +15,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     globals()["Context"] = ContextType
 
     @mcp.tool()
-    async def gm_verification_status(project_root: str = ".", ctx: Context | None = None) -> Dict[str, Any]:
+    def gm_verification_status(project_root: str = ".", ctx: Context | None = None) -> Dict[str, Any]:
         """Show pending post-mutation compile verification state for the project."""
         _ = ctx
         root = Path(project_root).resolve()
@@ -27,7 +27,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         }
 
     @mcp.tool()
-    async def gm_verification_flush(
+    def gm_verification_flush(
         project_root: str = ".",
         force: bool = False,
         platform: str = "",

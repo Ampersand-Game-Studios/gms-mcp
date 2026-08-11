@@ -140,6 +140,174 @@ jobs:
       - name: Pyright
         run: uv run --frozen pyright
 
+  dependency_audit:
+    name: Dependency audit (Py3.12)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - name: Install audit tooling from the committed lock
+        run: uv sync --frozen --extra dev --python 3.12
+
+      - name: Audit every locked dependency
+        run: >-
+          uv export --frozen --all-extras --format requirements-txt --no-emit-project |
+          uv run --frozen pip-audit --requirement /dev/stdin --no-deps --disable-pip
+          --strict --progress-spinner off
+
+  mcp_conformance:
+    name: MCP 2026-07-28 Conformance
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
+        with:
+          version: "0.11.28"
+          enable-cache: true
+          cache-dependency-glob: uv.lock
+
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: "24"
+
+      - name: Install server dependencies
+        run: uv sync --frozen --all-extras --python 3.12
+
+      - name: Start loopback Streamable HTTP server
+        env:
+          GM_PROJECT_ROOT: ${{ github.workspace }}/cli/tests/fixtures/mcp-conformance
+          GMS_MCP_POST_MUTATION_VERIFY: "off"
+          GMS_MCP_TOOLSETS: core
+        run: |
+          mkdir -p build/reports/mcp-conformance
+          uv run --frozen gms-mcp server \
+            --transport streamable-http --host 127.0.0.1 --port 8765 --path /mcp \
+            >build/reports/mcp-conformance/server.log 2>&1 &
+          server_pid=$!
+          echo "GMS_MCP_SERVER_PID=$server_pid" >> "$GITHUB_ENV"
+          for attempt in {1..30}; do
+            probe_code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+              --max-time 2 --request POST \
+              --header 'Content-Type: application/json' \
+              --header 'Accept: application/json, text/event-stream' \
+              --data '{}' http://127.0.0.1:8765/mcp || true)
+            if [ "$probe_code" = "400" ]; then
+              exit 0
+            fi
+            if ! kill -0 "$server_pid"; then
+              cat build/reports/mcp-conformance/server.log
+              exit 1
+            fi
+            sleep 0.5
+          done
+          cat build/reports/mcp-conformance/server.log
+          exit 1
+
+      - name: Run official protocol scenarios
+        run: |
+          scenarios=(
+            server-stateless
+            tools-list
+            tools-call-simple-text
+            tools-call-error
+            server-sse-multiple-streams
+            resources-list
+            sep-2164-resource-not-found
+            prompts-list
+            dns-rebinding-protection
+            caching
+            http-header-validation
+            http-custom-header-server-validation
+            input-required-result-unsupported-methods
+          )
+          for scenario in "${scenarios[@]}"; do
+            npx -y @modelcontextprotocol/conformance@0.2.0-alpha.11 server \
+              --url http://127.0.0.1:8765/mcp \
+              --scenario "$scenario" \
+              --spec-version 2026-07-28 \
+              --expected-failures cli/tests/mcp-conformance-expected-failures.yml \
+              --output-dir build/reports/mcp-conformance
+          done
+
+      - name: Stop conformance server
+        if: always()
+        run: |
+          if kill -0 "$GMS_MCP_SERVER_PID" 2>/dev/null; then
+            kill "$GMS_MCP_SERVER_PID"
+          fi
+
+      - name: Start Resolve conformance fixture
+        run: |
+          uv run --frozen python3 cli/tests/fixtures/mcp-resolve-conformance/server.py \
+            >build/reports/mcp-conformance/resolve-server.log 2>&1 &
+          resolve_server_pid=$!
+          echo "GMS_MCP_RESOLVE_SERVER_PID=$resolve_server_pid" >> "$GITHUB_ENV"
+          for attempt in {1..30}; do
+            probe_code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
+              --max-time 2 --request POST \
+              --header 'Content-Type: application/json' \
+              --header 'Accept: application/json, text/event-stream' \
+              --data '{}' http://127.0.0.1:8766/mcp || true)
+            if [ "$probe_code" = "400" ]; then
+              exit 0
+            fi
+            if ! kill -0 "$resolve_server_pid"; then
+              cat build/reports/mcp-conformance/resolve-server.log
+              exit 1
+            fi
+            sleep 0.5
+          done
+          cat build/reports/mcp-conformance/resolve-server.log
+          exit 1
+
+      - name: Run official Resolve and input-required scenarios
+        run: |
+          scenarios=(
+            input-required-result-basic-elicitation
+            input-required-result-basic-sampling
+            input-required-result-basic-list-roots
+            input-required-result-request-state
+            input-required-result-multiple-input-requests
+            input-required-result-multi-round
+            input-required-result-missing-input-response
+            input-required-result-non-tool-request
+            input-required-result-result-type
+            input-required-result-unsupported-methods
+            input-required-result-tampered-state
+            input-required-result-capability-check
+            input-required-result-ignore-extra-params
+            input-required-result-validate-input
+          )
+          for scenario in "${scenarios[@]}"; do
+            npx -y @modelcontextprotocol/conformance@0.2.0-alpha.11 server \
+              --url http://127.0.0.1:8766/mcp \
+              --scenario "$scenario" \
+              --spec-version 2026-07-28 \
+              --output-dir build/reports/mcp-conformance
+          done
+
+      - name: Stop Resolve conformance fixture
+        if: always()
+        run: |
+          if kill -0 "$GMS_MCP_RESOLVE_SERVER_PID" 2>/dev/null; then
+            kill "$GMS_MCP_RESOLVE_SERVER_PID"
+          fi
+
+      - name: Upload conformance reports
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mcp-2026-07-28-conformance
+          path: build/reports/mcp-conformance
+          if-no-files-found: error
+
   mac_runner_session:
     name: macOS Runner/Session (Py${{ matrix.python-version }})
     runs-on: macos-latest
@@ -265,7 +433,7 @@ jobs:
   ci:
     name: ci
     runs-on: ubuntu-latest
-    needs: [test, quality, lint_and_types, mac_runner_session, real_gamemaker_smoke]
+    needs: [test, quality, lint_and_types, dependency_audit, mcp_conformance, mac_runner_session, real_gamemaker_smoke]
     if: always()
     steps:
       - name: Check test results
@@ -285,6 +453,14 @@ jobs:
           fi
           if [ "${{ needs.lint_and_types.result }}" != "success" ]; then
             echo "Lint/types failed or were cancelled"
+            exit 1
+          fi
+          if [ "${{ needs.dependency_audit.result }}" != "success" ]; then
+            echo "Dependency audit failed or was cancelled"
+            exit 1
+          fi
+          if [ "${{ needs.mcp_conformance.result }}" != "success" ]; then
+            echo "MCP conformance failed or was cancelled"
             exit 1
           fi
           if [ "${{ needs.mac_runner_session.result }}" != "success" ]; then

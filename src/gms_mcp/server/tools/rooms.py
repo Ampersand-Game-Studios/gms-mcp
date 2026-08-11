@@ -1,17 +1,43 @@
 from __future__ import annotations
 
 import argparse
-from typing import Any, Dict
+from typing import Annotated, Any, Dict
+
+from mcp.server.mcpserver import Resolve
 
 from ..dispatch import _run_with_fallback
 from ..dry_run_policy import _dry_run_policy_blocked_result, _requires_dry_run_for_tool
 from ..mcp_types import Context
-from ..project import _ensure_cli_on_sys_path, _resolve_repo_root
+from ..project import ProjectAccessError, _ensure_cli_on_sys_path, _resolve_repo_root
+from ..resolution import ResolutionRuntime
 from ..tool_types import OutputMode
 
+RoomDeleteResolution = Any
+RoomNameResolution = Any
 
-def register(mcp: Any, ContextType: Any) -> None:
+
+def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) -> None:
     globals()["Context"] = ContextType
+    from ..resolution import RoomDeleteDecision
+    from ..resolution import NameCollisionDecision
+
+    globals()["RoomDeleteDecision"] = RoomDeleteDecision
+    globals()["NameCollisionDecision"] = NameCollisionDecision
+
+    async def resolve_room_delete(ctx: Context, room_name: str, dry_run: bool = False, project_root: str = "."):
+        try:
+            return await resolution_runtime.room_delete_resolver()(room_name, dry_run, project_root, ctx)
+        except ProjectAccessError:
+            return RoomDeleteDecision(action="cancel")
+
+    async def resolve_room_name(ctx: Context, new_name: str, project_root: str = "."):
+        try:
+            return await resolution_runtime.name_collision_resolver()(new_name, project_root, ctx)
+        except ProjectAccessError:
+            return None
+
+    globals()["RoomDeleteResolution"] = Annotated[RoomDeleteDecision, Resolve(resolve_room_delete)]
+    globals()["RoomNameResolution"] = Annotated[NameCollisionDecision, Resolve(resolve_room_name)]
 
     # -----------------------------
     # Room tools
@@ -20,6 +46,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     async def gm_room_ops_duplicate(
         source_room: str,
         new_name: str,
+        resolution: RoomNameResolution = None,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: OutputMode = "full",
@@ -28,6 +55,14 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Duplicate an existing room."""
+        if resolution is not None:
+            if resolution.action != "rename" or not resolution.replacement_name:
+                return {
+                    "ok": False,
+                    "cancelled": resolution.action == "cancel",
+                    "message": "A replacement name is required; existing assets are never overwritten.",
+                }
+            new_name = resolution.replacement_name
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.room_commands import handle_room_duplicate
@@ -51,6 +86,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     async def gm_room_ops_rename(
         room_name: str,
         new_name: str,
+        resolution: RoomNameResolution = None,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: OutputMode = "full",
@@ -59,6 +95,14 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Rename an existing room."""
+        if resolution is not None:
+            if resolution.action != "rename" or not resolution.replacement_name:
+                return {
+                    "ok": False,
+                    "cancelled": resolution.action == "cancel",
+                    "message": "A replacement name is required; existing assets are never overwritten.",
+                }
+            new_name = resolution.replacement_name
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.room_commands import handle_room_rename
@@ -83,6 +127,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         room_name: str,
         dry_run: bool = False,
         project_root: str = ".",
+        resolution: RoomDeleteResolution = None,
         prefer_cli: bool = False,
         output_mode: OutputMode = "full",
         tail_lines: int = 120,
@@ -90,14 +135,23 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Delete a room (supports dry-run)."""
+        if resolution.action == "cancel":
+            return {"ok": False, "cancelled": True, "message": "Room deletion cancelled; no changes were made."}
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.room_commands import handle_room_delete
 
-        args = argparse.Namespace(room_name=room_name, dry_run=dry_run, project_root=project_root)
+        args = argparse.Namespace(
+            room_name=room_name,
+            dry_run=dry_run,
+            force=resolution.action == "force",
+            project_root=project_root,
+        )
         cli_args = ["room", "ops", "delete", room_name]
         if dry_run:
             cli_args.append("--dry-run")
+        if resolution.action == "force":
+            cli_args.append("--force")
         if not dry_run and _requires_dry_run_for_tool("gm_room_ops_delete"):
             return _dry_run_policy_blocked_result(
                 "gm_room_ops_delete",

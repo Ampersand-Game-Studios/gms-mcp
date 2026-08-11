@@ -1,29 +1,63 @@
 from __future__ import annotations
 
 import argparse
-from pathlib import Path
-from typing import Any, Dict
+from typing import Annotated, Any, Dict
+
+from mcp.server.mcpserver import Resolve
 
 from ..dispatch import _run_with_fallback
 from ..dry_run_policy import _dry_run_policy_blocked_result, _requires_dry_run_for_tool
 from ..mcp_types import Context
-from ..project import _ensure_cli_on_sys_path, _resolve_project_directory, _resolve_repo_root
+from ..project import ProjectAccessError, _ensure_cli_on_sys_path, _resolve_project_directory, _resolve_repo_root
+from ..resolution import ResolutionRuntime
 from ..tool_types import OutputMode
 
+SafeDeleteResolution = Any
+WorkflowNameResolution = Any
 
-def register(mcp: Any, ContextType: Any) -> None:
+
+def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) -> None:
     globals()["Context"] = ContextType
+    from ..resolution import NameCollisionDecision, SafeDeleteDecision
 
-    # -----------------------------
-    # Workflow tools
-    # -----------------------------
-    @mcp.tool()
-    async def gm_safe_delete(
+    globals()["NameCollisionDecision"] = NameCollisionDecision
+    globals()["SafeDeleteDecision"] = SafeDeleteDecision
+
+    async def resolve_safe_delete_decision(
+        ctx: Context,
         asset_type: str,
         asset_name: str,
         force: bool = False,
         dry_run: bool = True,
         project_root: str = ".",
+    ):
+        try:
+            return await resolution_runtime.safe_delete_resolver()(
+                asset_type, asset_name, force, dry_run, project_root, ctx
+            )
+        except ProjectAccessError:
+            return SafeDeleteDecision(action="cancel")
+
+    async def resolve_workflow_name(ctx: Context, asset_path: str, new_name: str, project_root: str = "."):
+        try:
+            return await resolution_runtime.name_collision_resolver()(new_name, project_root, ctx)
+        except ProjectAccessError:
+            return None
+
+    globals()["SafeDeleteResolution"] = Annotated[SafeDeleteDecision, Resolve(resolve_safe_delete_decision)]
+    globals()["WorkflowNameResolution"] = Annotated[NameCollisionDecision, Resolve(resolve_workflow_name)]
+
+    # -----------------------------
+    # Workflow tools
+    # -----------------------------
+    @mcp.tool()
+    def gm_safe_delete(
+        asset_type: str,
+        asset_name: str,
+        force: bool = False,
+        dry_run: bool = True,
+        project_root: str = ".",
+        resolution: SafeDeleteResolution = None,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Dependency-aware delete for an asset by type/name."""
@@ -40,11 +74,13 @@ def register(mcp: Any, ContextType: Any) -> None:
             )
 
         project_directory = _resolve_project_directory(project_root)
+        if resolution.action == "cancel":
+            return {"ok": False, "cancelled": True, "message": "Safe delete cancelled; no changes were made."}
         result = safe_delete_asset(
             project_root=project_directory,
             asset_type=asset_type,
             asset_name=asset_name,
-            force=force,
+            force=resolution.action == "force",
             dry_run=dry_run,
         )
         if result.get("blocked"):
@@ -55,6 +91,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     async def gm_workflow_duplicate(
         asset_path: str,
         new_name: str,
+        resolution: WorkflowNameResolution = None,
         yes: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
@@ -64,6 +101,14 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Duplicate an asset (.yy path relative to project root)."""
+        if resolution is not None:
+            if resolution.action != "rename" or not resolution.replacement_name:
+                return {
+                    "ok": False,
+                    "cancelled": resolution.action == "cancel",
+                    "message": "A replacement name is required; existing assets are never overwritten.",
+                }
+            new_name = resolution.replacement_name
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.workflow_commands import handle_workflow_duplicate
@@ -89,6 +134,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     async def gm_workflow_rename(
         asset_path: str,
         new_name: str,
+        resolution: WorkflowNameResolution = None,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: OutputMode = "full",
@@ -97,6 +143,14 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Rename an asset (.yy path relative to project root)."""
+        if resolution is not None:
+            if resolution.action != "rename" or not resolution.replacement_name:
+                return {
+                    "ok": False,
+                    "cancelled": resolution.action == "cancel",
+                    "message": "A replacement name is required; existing assets are never overwritten.",
+                }
+            new_name = resolution.replacement_name
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.workflow_commands import handle_workflow_rename

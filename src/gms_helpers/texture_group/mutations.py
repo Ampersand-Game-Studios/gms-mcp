@@ -255,19 +255,9 @@ def texture_group_rename(
     }
 
 
-def texture_group_delete(
-    project_root: Path,
-    name: str,
-    *,
-    reassign_to: Optional[str] = None,
-    dry_run: bool = False,
-) -> Dict[str, Any]:
-    yyp_path, yyp_data = load_project_yyp(project_root)
-    hit = find_texture_group(yyp_data, name)
-    if hit is None:
-        return {"ok": False, "dry_run": dry_run, "error": f"Texture group '{name}' not found", "changed_files": []}
-
-    # Scan references in assets.
+def texture_group_reference_evidence(project_root: Path, name: str) -> Dict[str, Any]:
+    """Collect read-only texture-group reference evidence from assets and .yyp."""
+    _, yyp_data = load_project_yyp(project_root)
     references: List[Dict[str, Any]] = []
     affected_assets: List[Dict[str, Any]] = []
     for asset in _iter_resource_assets(project_root):
@@ -275,53 +265,155 @@ def texture_group_delete(
         if not isinstance(yy, dict) or not _asset_supports_texture_groups(yy):
             continue
         assignments = get_asset_group_assignments(yy)
-        top = assignments["top"]
-        cfgs: Dict[str, Optional[str]] = assignments["configs"]
         where: List[str] = []
-        if top == name:
+        if assignments["top"] == name:
             where.append("top")
-        for cfg_name, cfg_val in cfgs.items():
-            if cfg_val == name:
+        for cfg_name, cfg_value in assignments["configs"].items():
+            if cfg_value == name:
                 where.append(f"ConfigValues.{cfg_name}")
         if where:
             references.append({"name": asset["name"], "type": asset["type"], "path": asset["path"], "where": where})
             affected_assets.append(asset)
 
-    # Scan groupParent references.
-    for tg in get_texture_groups_list(yyp_data):
-        if not isinstance(tg, dict):
+    for texture_group in get_texture_groups_list(yyp_data):
+        if not isinstance(texture_group, dict):
             continue
-        if tg.get("groupParent") == name:
-            references.append({"kind": "texture_group", "name": tg.get("name"), "where": ["groupParent"]})
-        cv = tg.get("ConfigValues")
-        if isinstance(cv, dict):
-            for cfg_name, cfg_dict in cv.items():
-                if isinstance(cfg_dict, dict) and cfg_dict.get("groupParent") == name:
+        if texture_group.get("groupParent") == name:
+            references.append({"kind": "texture_group", "name": texture_group.get("name"), "where": ["groupParent"]})
+        config_values = texture_group.get("ConfigValues")
+        if isinstance(config_values, dict):
+            for config_name, config in config_values.items():
+                if isinstance(config, dict) and config.get("groupParent") == name:
                     references.append(
                         {
                             "kind": "texture_group",
-                            "name": tg.get("name"),
-                            "where": [f"ConfigValues.{cfg_name}.groupParent"],
+                            "name": texture_group.get("name"),
+                            "where": [f"ConfigValues.{config_name}.groupParent"],
                         }
                     )
+    return {"references": references, "affected_assets": affected_assets}
 
-    if references and not reassign_to:
+
+def texture_group_delete_preflight(
+    project_root: Path,
+    name: str,
+    *,
+    reassign_to: Optional[str] = None,
+) -> Dict[str, Any]:
+    """Return read-only evidence and validated reassignment requirements."""
+    _, yyp_data = load_project_yyp(project_root)
+    groups = yyp_data.get("TextureGroups", yyp_data.get("textureGroups"))
+    if not isinstance(groups, list):
+        return {
+            "ok": False,
+            "ready": False,
+            "name": name,
+            "reassign_to": reassign_to,
+            "error": "YYP TextureGroups is not a list",
+            "references_found": [],
+        }
+    hit = find_texture_group(yyp_data, name)
+    if hit is None or not 0 <= hit[0] < len(groups):
+        return {
+            "ok": False,
+            "ready": False,
+            "name": name,
+            "reassign_to": reassign_to,
+            "error": f"Texture group '{name}' not found",
+            "references_found": [],
+        }
+    if reassign_to == name:
+        return {
+            "ok": False,
+            "ready": False,
+            "name": name,
+            "reassign_to": reassign_to,
+            "error": "Reassign target must be a different texture group than the deleted group",
+            "references_found": [],
+        }
+    if reassign_to and find_texture_group(yyp_data, reassign_to) is None:
+        return {
+            "ok": False,
+            "ready": False,
+            "name": name,
+            "reassign_to": reassign_to,
+            "error": f"Reassign target texture group '{reassign_to}' not found",
+            "references_found": [],
+        }
+
+    evidence = texture_group_reference_evidence(project_root, name)
+    references = evidence["references"]
+    blocked = bool(references) and not reassign_to
+    return {
+        "ok": not blocked,
+        "ready": not blocked,
+        "blocked": blocked,
+        "name": name,
+        "reassign_to": reassign_to,
+        "references_found": references,
+        "affected_assets": evidence["affected_assets"],
+        "resolution_required": "reassign_to" if blocked else None,
+    }
+
+
+def texture_group_delete(
+    project_root: Path,
+    name: str,
+    *,
+    reassign_to: Optional[str] = None,
+    dry_run: bool = False,
+) -> Dict[str, Any]:
+    project_root = Path(project_root).resolve()
+    preflight = texture_group_delete_preflight(project_root, name, reassign_to=reassign_to)
+    if not preflight["ok"]:
         return {
             "ok": False,
             "dry_run": dry_run,
-            "error": f"Texture group '{name}' is referenced; provide reassign_to to delete safely",
+            "error": preflight["error"]
+            if "error" in preflight
+            else f"Texture group '{name}' is referenced; provide reassign_to to delete safely",
             "changed_files": [],
-            "details": {"references_found": references},
+            "details": preflight,
         }
 
-    if reassign_to:
-        if find_texture_group(yyp_data, reassign_to) is None:
-            return {
-                "ok": False,
-                "dry_run": dry_run,
-                "error": f"Reassign target texture group '{reassign_to}' not found",
-                "changed_files": [],
-            }
+    if dry_run:
+        changed_files = [asset["path"] for asset in preflight["affected_assets"]]
+        yyp_path, _ = load_project_yyp(project_root)
+        changed_files.append(str(yyp_path.relative_to(project_root)))
+        return {
+            "ok": True,
+            "dry_run": True,
+            "message": f"Would delete texture group '{name}'",
+            "warnings": [],
+            "changed_files": sorted(set(changed_files)),
+            "details": {**preflight, "assets_changed": len(preflight["affected_assets"]), "assets_skipped": []},
+        }
+
+    # Revalidate directly before the first write so stale Resolve choices do
+    # not delete a newly referenced group or assign to a removed target.
+    final_preflight = texture_group_delete_preflight(project_root, name, reassign_to=reassign_to)
+    if not final_preflight["ok"]:
+        return {
+            "ok": False,
+            "dry_run": False,
+            "error": final_preflight.get("error")
+            or f"Texture group '{name}' is referenced; provide reassign_to to delete safely",
+            "changed_files": [],
+            "details": {"preflight": preflight, "revalidation": final_preflight},
+        }
+
+    yyp_path, yyp_data = load_project_yyp(project_root)
+    references = final_preflight["references_found"]
+    affected_assets = final_preflight["affected_assets"]
+    if "TextureGroups" in yyp_data:
+        groups_key = "TextureGroups"
+    elif "textureGroups" in yyp_data:
+        groups_key = "textureGroups"
+    else:
+        groups_key = "TextureGroups"
+    groups = yyp_data.get(groups_key)
+    if not isinstance(groups, list):
+        return {"ok": False, "dry_run": False, "error": "YYP TextureGroups is not a list", "changed_files": []}
 
     changed_files: List[str] = []
     warnings: List[str] = []
@@ -353,15 +445,18 @@ def texture_group_delete(
             else:
                 assets_skipped.append(asset["name"])
 
-    if "TextureGroups" in yyp_data:
-        groups_key = "TextureGroups"
-    elif "textureGroups" in yyp_data:
-        groups_key = "textureGroups"
-    else:
-        groups_key = "TextureGroups"
-    groups = yyp_data.get(groups_key)
-    if not isinstance(groups, list):
-        return {"ok": False, "dry_run": dry_run, "error": "YYP TextureGroups is not a list", "changed_files": []}
+        # groupParent references live in the project file, so they must move
+        # with asset assignments before the deleted group is removed.
+        for texture_group in get_texture_groups_list(yyp_data):
+            if not isinstance(texture_group, dict):
+                continue
+            if texture_group.get("groupParent") == name:
+                texture_group["groupParent"] = reassign_to
+            config_values = texture_group.get("ConfigValues")
+            if isinstance(config_values, dict):
+                for config in config_values.values():
+                    if isinstance(config, dict) and config.get("groupParent") == name:
+                        config["groupParent"] = reassign_to
 
     # Remove by index in the actual list stored in the .yyp (not the filtered dict-only list).
     removed = False
@@ -381,8 +476,21 @@ def texture_group_delete(
         }
 
     changed_files.append(str(yyp_path.relative_to(project_root)))
-    if not dry_run:
-        save_pretty_json_gm(yyp_path, yyp_data)
+    save_pretty_json_gm(yyp_path, yyp_data)
+
+    final_references = texture_group_reference_evidence(project_root, name)["references"]
+    if final_references:
+        return {
+            "ok": False,
+            "dry_run": False,
+            "error": f"Texture group deletion validation found {len(final_references)} stale reference(s)",
+            "changed_files": sorted(set(changed_files)),
+            "details": {
+                "preflight": preflight,
+                "revalidation": final_preflight,
+                "remaining_references": final_references,
+            },
+        }
 
     return {
         "ok": True,
@@ -395,6 +503,12 @@ def texture_group_delete(
             "assets_skipped": assets_skipped,
             "references_found": references,
             "reassign_to": reassign_to,
+            "preflight": preflight,
+            "revalidation": final_preflight,
+            "final_validation": {
+                "references_remaining": 0,
+                "group_removed": find_texture_group(yyp_data, name) is None,
+            },
         },
     }
 

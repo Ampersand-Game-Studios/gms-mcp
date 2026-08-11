@@ -22,26 +22,28 @@ class TestBridgeOneShotEnable(unittest.TestCase):
         for d in ("objects", "sprites", "scripts", "rooms", "folders"):
             (self.project_root / d).mkdir(parents=True, exist_ok=True)
 
-        # Create a startup room and a minimal .yyp with RoomOrderNodes.
+        # Create a startup room before registering it. Asset creation now
+        # deliberately rejects destinations already present in the project index.
         yyp = {
             "$GMProject": "",
             "%Name": "TestProject",
             "name": "TestProject",
-            "resources": [
-                {"id": {"name": "r_main", "path": "rooms/r_main/r_main.yy"}},
-            ],
+            "resources": [],
             "folders": [],
-            "RoomOrderNodes": [
-                {"roomId": {"name": "r_main", "path": "rooms/r_main/r_main.yy"}},
-            ],
+            "RoomOrderNodes": [],
             "resourceType": "GMProject",
             "resourceVersion": "2.0",
         }
         (self.project_root / "TestProject.yyp").write_text(json.dumps(yyp, indent=2), encoding="utf-8")
 
         from gms_helpers.assets import RoomAsset
+        from gms_helpers.utils import load_json_loose
 
-        RoomAsset().create_files(self.project_root, "r_main", "", width=800, height=600)
+        room_path = RoomAsset().create_files(self.project_root, "r_main", "", width=800, height=600)
+        yyp = load_json_loose(self.project_root / "TestProject.yyp")
+        yyp["resources"].append({"id": {"name": "r_main", "path": room_path}})
+        yyp["RoomOrderNodes"].append({"roomId": {"name": "r_main", "path": room_path}})
+        (self.project_root / "TestProject.yyp").write_text(json.dumps(yyp, indent=2), encoding="utf-8")
 
         from gms_mcp.gamemaker_mcp_server import build_server
 

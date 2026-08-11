@@ -17,7 +17,7 @@ def register(
     globals()["Context"] = ContextType
 
     @mcp.tool()
-    async def gm_capabilities(ctx: Context | None = None) -> Dict[str, Any]:
+    def gm_capabilities(ctx: Context | None = None) -> Dict[str, Any]:
         """List enabled MCP toolsets and the single restart-time setting used to enable optional domains."""
         _ = ctx
         enabled_set = set(enabled)

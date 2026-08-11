@@ -13,7 +13,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     # Introspection tools
     # -----------------------------
     @mcp.tool()
-    async def gm_list_assets(
+    def gm_list_assets(
         asset_type: Optional[str] = None,
         name_contains: Optional[str] = None,
         folder_prefix: Optional[str] = None,
@@ -53,7 +53,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         }
 
     @mcp.tool()
-    async def gm_read_asset(
+    def gm_read_asset(
         asset_identifier: str,
         project_root: str = ".",
         ctx: Context | None = None,
@@ -73,7 +73,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         return {"ok": True, "asset_data": asset_data}
 
     @mcp.tool()
-    async def gm_search_references(
+    def gm_search_references(
         pattern: str,
         scope: str = "all",
         is_regex: bool = False,
@@ -102,7 +102,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         return {"pattern": pattern, "scope": scope, "results": results, "count": len(results)}
 
     @mcp.tool()
-    async def gm_get_asset_graph(
+    def gm_get_asset_graph(
         deep: bool = False,
         project_root: str = ".",
         ctx: Context | None = None,
@@ -124,7 +124,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         return graph
 
     @mcp.tool()
-    async def gm_get_project_stats(
+    def gm_get_project_stats(
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
