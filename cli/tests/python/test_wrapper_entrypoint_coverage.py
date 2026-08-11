@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import inspect
 import io
 import os
 import runpy
@@ -66,7 +67,7 @@ class FakeMCP:
 
         return decorator
 
-    def resource(self, uri):
+    def resource(self, uri, **_kwargs):
         def decorator(func):
             self.resources[uri] = func
             return func
@@ -82,7 +83,8 @@ class MCPToolTestCase(unittest.TestCase):
         self.module.register(self.mcp, object)
 
     def call_tool(self, tool_name: str, **kwargs):
-        return asyncio.run(self.mcp.tools[tool_name](**kwargs))
+        result = self.mcp.tools[tool_name](**kwargs)
+        return asyncio.run(result) if inspect.isawaitable(result) else result
 
     def call_resource(self, uri: str):
         return asyncio.run(self.mcp.resources[uri]())
@@ -176,10 +178,10 @@ class TestEntrypoints(unittest.TestCase):
             pass
 
         class FakeMCPServer:
-            def __init__(self, name):
+            def __init__(self, name, **_kwargs):
                 self.name = name
 
-            def run(self):
+            def run(self, *_args, **_kwargs):
                 self.ran = True
 
         fake_mcpserver_mod.Context = FakeContext
@@ -197,6 +199,7 @@ class TestEntrypoints(unittest.TestCase):
             FakeContext,
             project_access_policy=ANY,
             expose_host_diagnostics=ANY,
+            resolution_runtime=ANY,
         )
 
         run_server = Mock()
@@ -410,7 +413,7 @@ class TestCommandWrappers(unittest.TestCase):
 
         with patch.object(room_commands, "delete_room", return_value=True) as delete_room:
             self.assertTrue(room_commands.handle_room_delete(SimpleNamespace(room_name="r_old", dry_run=True)))
-        delete_room.assert_called_once_with("r_old", True)
+        delete_room.assert_called_once_with("r_old", True, force=False)
 
         with patch.object(room_commands, "list_rooms", return_value=["r_old"]) as list_rooms:
             result = room_commands.handle_room_list(SimpleNamespace(verbose=True))

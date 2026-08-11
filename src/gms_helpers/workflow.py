@@ -38,6 +38,7 @@ from .utils import (
     generate_uuid,
 )
 from .asset_types import ASSET_TYPES
+from .base_asset import preflight_asset_destination, require_asset_destination_available
 from .exceptions import (
     AssetExistsError,
     AssetNotFoundError,
@@ -432,9 +433,14 @@ def duplicate_asset(project_root: Path, asset_path: str, new_name: str, *, yes: 
         raise InvalidAssetTypeError("Folder resources cannot be duplicated with the asset workflow.")
     asset_dir = _asset_directory(asset_type)
 
-    dst_folder = project_root / asset_dir / new_name
-    if dst_folder.exists():
-        raise AssetExistsError(f"Destination asset '{new_name}' already exists.")
+    require_asset_destination_available(
+        project_root=project_root,
+        asset_type=asset_type,
+        folder_prefix=asset_dir,
+        name=new_name,
+        operation="duplicate",
+    )
+    dst_folder = project_root / asset_dir / new_name.lower()
     source_yy = src_folder / f"{old_name}.yy"
     source_data = load_json_loose(source_yy)
     if not isinstance(source_data, dict):
@@ -462,8 +468,17 @@ def duplicate_asset(project_root: Path, asset_path: str, new_name: str, *, yes: 
     ):
         raise AssetExistsError(f"A project resource named '{new_name}' already exists.")
 
-    rel_path = f"{asset_dir}/{new_name}/{new_name}.yy"
+    rel_path = f"{asset_dir}/{new_name.lower()}/{new_name}.yy"
     try:
+        # Final read-only validation closes the gap between a Resolve choice
+        # and the first filesystem mutation.
+        require_asset_destination_available(
+            project_root=project_root,
+            asset_type=asset_type,
+            folder_prefix=asset_dir,
+            name=new_name,
+            operation="duplicate",
+        )
         transactional_copytree(src_folder, dst_folder)
         old_yy = dst_folder / f"{old_name}.yy"
         new_yy = dst_folder / f"{new_name}.yy"
@@ -530,9 +545,14 @@ def rename_asset(project_root: Path, asset_path: str, new_name: str) -> AssetRes
         raise InvalidAssetTypeError("Folder resources cannot be renamed with the asset workflow.")
     asset_dir = _asset_directory(asset_type)
 
-    dst_folder = project_root / asset_dir / new_name
-    if dst_folder.exists():
-        raise AssetExistsError(f"Destination name '{new_name}' already exists.")
+    require_asset_destination_available(
+        project_root=project_root,
+        asset_type=asset_type,
+        folder_prefix=asset_dir,
+        name=new_name,
+        operation="rename",
+    )
+    dst_folder = project_root / asset_dir / new_name.lower()
 
     old_yy = src_folder / f"{old_name}.yy"
     yy_data = load_json_loose(old_yy)
@@ -566,6 +586,14 @@ def rename_asset(project_root: Path, asset_path: str, new_name: str) -> AssetRes
 
     preflight_asset_rename(project_root, old_name, new_name, asset_type)
 
+    # The checked destination can become stale while references are scanned.
+    require_asset_destination_available(
+        project_root=project_root,
+        asset_type=asset_type,
+        folder_prefix=asset_dir,
+        name=new_name,
+        operation="rename",
+    )
     transactional_rename(src_folder, dst_folder)
 
     # Rename key files
@@ -588,7 +616,7 @@ def rename_asset(project_root: Path, asset_path: str, new_name: str) -> AssetRes
     save_pretty_json_gm(new_yy, yy_data)
 
     # Update .yyp entry
-    new_rel_path = f"{asset_dir}/{new_name}/{new_name}.yy"
+    new_rel_path = f"{asset_dir}/{new_name.lower()}/{new_name}.yy"
     source_entry = source_entries[0]["id"]
     source_entry["name"] = new_name
     source_entry["path"] = new_rel_path
@@ -867,6 +895,43 @@ def _collect_incoming_dependencies(project_root: Path, asset_name: str) -> List[
     return incoming
 
 
+def safe_delete_preflight(
+    project_root: Path, asset_type: str, asset_name: str, *, force: bool = False
+) -> Dict[str, Any]:
+    """Return read-only deletion evidence suitable for a Resolve decision."""
+    root = Path(project_root).resolve()
+    asset_path = _resolve_asset_path(root, asset_type, asset_name)
+    if not asset_path:
+        return {
+            "ok": False,
+            "ready": False,
+            "blocked": False,
+            "asset_type": asset_type,
+            "asset_name": asset_name,
+            "asset_path": None,
+            "dependencies": [],
+            "dependency_count": 0,
+            "force": force,
+            "error": f"Asset '{asset_name}' of type '{asset_type}' was not found.",
+        }
+
+    dependencies = _collect_incoming_dependencies(root, asset_name)
+    blocked = bool(dependencies) and not force
+    return {
+        "ok": not blocked,
+        "ready": not blocked,
+        "blocked": blocked,
+        "asset_type": asset_type,
+        "asset_name": asset_name,
+        "asset_path": asset_path,
+        "dependencies": dependencies,
+        "dependency_count": len(dependencies),
+        "force": force,
+        "resolution_required": "force" if blocked else None,
+        "overwrite_supported": False,
+    }
+
+
 def safe_delete_asset(
     project_root: Path,
     asset_type: str,
@@ -879,24 +944,19 @@ def safe_delete_asset(
     Dependency-aware delete workflow.
     Defaults to dry-run and blocks apply when incoming dependencies exist unless force=True.
     """
-    project_root = Path(project_root)
-
-    asset_path = _resolve_asset_path(project_root, asset_type, asset_name)
+    project_root = Path(project_root).resolve()
+    preflight = safe_delete_preflight(project_root, asset_type, asset_name, force=force)
+    asset_path = preflight.get("asset_path")
     if not asset_path:
         return {
-            "ok": False,
-            "blocked": False,
-            "asset_type": asset_type,
-            "asset_name": asset_name,
-            "error": f"Asset '{asset_name}' of type '{asset_type}' was not found.",
-            "dependencies": [],
-            "dependency_count": 0,
+            **preflight,
+            "dry_run": dry_run,
             "deleted": False,
             "warnings": [],
         }
 
-    dependencies = _collect_incoming_dependencies(project_root, asset_name)
-    blocked = len(dependencies) > 0 and not force
+    dependencies = preflight["dependencies"]
+    blocked = bool(preflight["blocked"])
     warnings: List[str] = []
 
     if blocked:
@@ -925,6 +985,34 @@ def safe_delete_asset(
             "deleted": False,
             "warnings": warnings,
             "message": message,
+            "preflight": preflight,
+        }
+
+    # A resolved apply must re-scan immediately before mutation.  This avoids
+    # acting on dependency evidence that became stale after the initial probe.
+    final_preflight = safe_delete_preflight(project_root, asset_type, asset_name, force=force)
+    if not final_preflight.get("asset_path") or final_preflight.get("blocked"):
+        final_dependencies = final_preflight.get("dependencies", [])
+        final_blocked = bool(final_preflight.get("blocked"))
+        return {
+            **final_preflight,
+            "ok": False,
+            "blocked": final_blocked,
+            "dry_run": False,
+            "deleted": False,
+            "warnings": (
+                ["Deletion blocked because dependent assets reference this target. Use force=True to continue."]
+                if final_blocked
+                else []
+            ),
+            "message": (
+                f"[SAFE DELETE] Blocked for {asset_type} '{asset_name}' "
+                f"({len(final_dependencies)} dependent reference(s))."
+                if final_blocked
+                else str(final_preflight.get("error") or "Safe delete preflight is no longer valid.")
+            ),
+            "preflight": preflight,
+            "revalidation": final_preflight,
         }
 
     delete_result = delete_asset(project_root, asset_path, dry_run=False, force=force)
@@ -938,11 +1026,17 @@ def safe_delete_asset(
         "asset_path": asset_path,
         "dry_run": False,
         "force": force,
-        "dependencies": dependencies,
-        "dependency_count": len(dependencies),
+        "dependencies": final_preflight["dependencies"],
+        "dependency_count": final_preflight["dependency_count"],
         "deleted": bool(delete_result.success),
         "warnings": warnings,
         "message": delete_result.message,
+        "preflight": preflight,
+        "revalidation": final_preflight,
+        "final_validation": {
+            "asset_absent": _resolve_asset_path(project_root, asset_type, asset_name) is None,
+            "deleted": bool(delete_result.success),
+        },
     }
 
 

@@ -252,11 +252,28 @@ class FolderAsset(BaseAsset):
             raise ValueError(f"Could not load {yyp_file}")
 
         # Add folder to the Folders section
-        folders = project_data.get("Folders", [])
+        folders = project_data.get("Folders", project_data.get("folders", []))
+        if not isinstance(folders, list):
+            raise ValueError("Folders must be a list")
+        from ..exceptions import AssetExistsError
+
+        if any(
+            isinstance(folder, dict)
+            and (
+                str(folder.get("name") or "").casefold() == name.casefold()
+                or str(folder.get("folderPath") or "").replace("\\", "/").casefold() == folder_path.casefold()
+            )
+            for folder in folders
+        ):
+            raise AssetExistsError(
+                f"Folder destination collision for '{name}'; provide a replacement name. "
+                "Existing folders are never reused."
+            )
         success = insert_into_folders(folders, name, folder_path)
 
         if success:
             project_data["Folders"] = folders
+            project_data.pop("folders", None)
             save_pretty_json(yyp_file, project_data)
             print(f"[OK] Added folder '{name}' to {yyp_file.name} Folders list")
         else:

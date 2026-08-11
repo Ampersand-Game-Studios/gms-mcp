@@ -1,21 +1,39 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Annotated, Any, Dict, List, Optional
+
+from mcp.server.mcpserver import Resolve
 
 from ..dry_run_policy import _dry_run_policy_blocked_result, _requires_dry_run_for_tool
 from ..mcp_types import Context
-from ..project import _resolve_project_directory
+from ..project import ProjectAccessError, _resolve_project_directory
+from ..resolution import ResolutionRuntime
+
+TextureGroupDeleteResolution = Any
 
 
-def register(mcp: Any, ContextType: Any) -> None:
+def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) -> None:
     globals()["Context"] = ContextType
+    from ..resolution import TextureGroupDecision
+
+    globals()["TextureGroupDecision"] = TextureGroupDecision
+
+    async def resolve_texture_group_delete(
+        ctx: Context, name: str, reassign_to: str | None = None, dry_run: bool = False, project_root: str = "."
+    ):
+        try:
+            return await resolution_runtime.texture_group_resolver()(name, reassign_to, dry_run, project_root, ctx)
+        except ProjectAccessError:
+            return TextureGroupDecision(action="cancel")
+
+    globals()["TextureGroupDeleteResolution"] = Annotated[TextureGroupDecision, Resolve(resolve_texture_group_delete)]
 
     # -----------------------------
     # Texture group tools
     # -----------------------------
 
     @mcp.tool()
-    async def gm_texture_group_list(
+    def gm_texture_group_list(
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
@@ -37,7 +55,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         }
 
     @mcp.tool()
-    async def gm_texture_group_read(
+    def gm_texture_group_read(
         name: str,
         project_root: str = ".",
         ctx: Context | None = None,
@@ -65,7 +83,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         }
 
     @mcp.tool()
-    async def gm_texture_group_members(
+    def gm_texture_group_members(
         group_name: str,
         asset_types: Optional[List[str]] = None,
         configs: Optional[List[str]] = None,
@@ -85,7 +103,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         return result
 
     @mcp.tool()
-    async def gm_texture_group_scan(
+    def gm_texture_group_scan(
         asset_types: Optional[List[str]] = None,
         configs: Optional[List[str]] = None,
         include_assets: bool = False,
@@ -114,7 +132,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     # -----------------------------
 
     @mcp.tool()
-    async def gm_texture_group_create(
+    def gm_texture_group_create(
         name: str,
         template: str = "Default",
         patch: Optional[Dict[str, Any]] = None,
@@ -140,7 +158,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         return result
 
     @mcp.tool()
-    async def gm_texture_group_update(
+    def gm_texture_group_update(
         name: str,
         patch: Dict[str, Any],
         configs: Optional[List[str]] = None,
@@ -174,7 +192,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         return result
 
     @mcp.tool()
-    async def gm_texture_group_rename(
+    def gm_texture_group_rename(
         old_name: str,
         new_name: str,
         update_references: bool = True,
@@ -206,15 +224,26 @@ def register(mcp: Any, ContextType: Any) -> None:
         return result
 
     @mcp.tool()
-    async def gm_texture_group_delete(
+    def gm_texture_group_delete(
         name: str,
         reassign_to: Optional[str] = None,
         dry_run: bool = False,
         project_root: str = ".",
+        resolution: TextureGroupDeleteResolution = None,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """Delete a texture group (blocks by default if referenced unless reassign_to is provided)."""
         _ = ctx
+        if resolution.action == "cancel":
+            return {
+                "ok": False,
+                "cancelled": True,
+                "message": "Texture-group deletion cancelled; no changes were made.",
+            }
+        if resolution.action == "reassign":
+            reassign_to = resolution.reassign_to
+        elif resolution.action == "delete":
+            reassign_to = None
         if not dry_run and _requires_dry_run_for_tool("gm_texture_group_delete"):
             return _dry_run_policy_blocked_result(
                 "gm_texture_group_delete",
@@ -231,7 +260,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         return result
 
     @mcp.tool()
-    async def gm_texture_group_assign(
+    def gm_texture_group_assign(
         group_name: str,
         asset_identifiers: Optional[List[str]] = None,
         asset_type: Optional[str] = None,
