@@ -42,6 +42,23 @@ class TestInstallParity(unittest.TestCase):
             with self.subTest(client=spec.key):
                 self.assertIn(f"`{spec.key}`", content)
 
+    def test_sdk_v2_runtime_documentation_covers_public_contract(self):
+        repo_root = Path(__file__).resolve().parents[3]
+        configuration = (repo_root / "documentation" / "CONFIGURATION.md").read_text(encoding="utf-8")
+        support_matrix = (repo_root / "documentation" / "CLIENT_SUPPORT_MATRIX.md").read_text(encoding="utf-8")
+
+        for option in ("--transport", "--host", "--port", "--path"):
+            with self.subTest(option=option):
+                self.assertIn(f"`{option}`", configuration)
+        for protocol in ("2026-07-28", "2025-11-25"):
+            with self.subTest(protocol=protocol):
+                self.assertIn(protocol, configuration)
+                self.assertIn(protocol, support_matrix)
+        for capability in ("MCP Apps", "resource subscriptions", "Resolve"):
+            with self.subTest(capability=capability):
+                self.assertIn(capability, configuration)
+                self.assertIn(capability, support_matrix)
+
     def test_canonical_setup_dry_run_workspace_for_supported_clients(self):
         clients = [spec.key for spec in CLIENT_SPECS if spec.workspace_supported]
         with tempfile.TemporaryDirectory() as tmpdir:

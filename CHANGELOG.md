@@ -81,6 +81,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - **MCP Python SDK v2**: Migrated the server, client integration coverage, and smoke tooling to MCP SDK v2 while retaining modern and legacy protocol compatibility and the real stdio transport regression.
+- **MCP SDK v2 Documentation**: Expanded the configuration and client-support guides with the stdio and local Streamable HTTP contracts, loopback security constraints, protocol negotiation, optional capability fallbacks, and the verified runtime test surface.
 - **MCP Tool Surface**: Named, annotated tools are the only MCP execution surface. Destructive policy is derived from full command prefixes and `gm_safe_delete` is the sole general asset-deletion endpoint.
 - **Diagnostic output**: Refined tool outputs to be cleaner and more consistent across the code intelligence suite.
 - **Legacy Helper Results**: Command/MCP paths that still call print-heavy legacy helpers now normalize raw booleans, ad-hoc error dictionaries, list payloads, and direct safe-delete workflow results into structured `success`/`ok`/`message`/`error` result payloads with operation data under `data`.

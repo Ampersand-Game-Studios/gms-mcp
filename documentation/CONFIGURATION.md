@@ -256,6 +256,61 @@ You can set user-wide defaults by creating `~/.gms-mcp/config.json`:
 
 This applies to all projects that don't have their own `.gms-mcp.json` override.
 
+## MCP Server Runtime
+
+The generated client configurations use the default `stdio` transport. This is the recommended mode for Cursor, Codex, Claude Code, VS Code, and other desktop MCP clients because the client starts and owns one server process for the selected project.
+
+```bash
+gms-mcp server
+```
+
+The explicit equivalent is:
+
+```bash
+gms-mcp server --transport stdio
+```
+
+### Local Streamable HTTP
+
+Use Streamable HTTP only when a local MCP client needs to connect to an already-running server:
+
+```bash
+gms-mcp server \
+  --transport streamable-http \
+  --host 127.0.0.1 \
+  --port 8000 \
+  --path /mcp
+```
+
+| Option | Default | Constraint |
+|---|---|---|
+| `--transport` | `stdio` | `stdio` or `streamable-http` |
+| `--host` | `127.0.0.1` | HTTP accepts only `localhost` or a loopback IP address |
+| `--port` | `8000` | Integer from 1 through 65535 |
+| `--path` | `/mcp` | Absolute URL path with no whitespace |
+
+Streamable HTTP is stateless and local-only. It has no remote-user authentication and must not be exposed through `0.0.0.0`, a LAN address, a public interface, or a reverse proxy. The server enables DNS-rebinding protection and accepts only the configured loopback Host and Origin values. `Mcp-Param-*` routing headers are validated by the MCP SDK.
+
+The HTTP endpoint for the example above is `http://127.0.0.1:8000/mcp`. Starting the server does not update client configuration automatically; configure that URL only in clients that support Streamable HTTP.
+
+### Project and Tool Profile
+
+Transport selection does not change project access. Pin each server process to one GameMaker project with `GM_PROJECT_ROOT`, and select optional tool domains with `GMS_MCP_TOOLSETS`:
+
+```bash
+GM_PROJECT_ROOT=/absolute/path/to/project \
+GMS_MCP_TOOLSETS=all \
+gms-mcp server
+```
+
+Use `GMS_MCP_TOOLSETS=assets,events,rooms` for selected optional domains. The default curated core profile remains active when the variable is omitted. `gm_capabilities` reports the effective profile and available domains.
+
+### MCP SDK v2 Capability Negotiation
+
+The server supports the modern MCP `2026-07-28` protocol and the legacy `2025-11-25` mode. The base tool surface remains available in both modes. Modern clients can additionally negotiate cache hints, structured tool errors, resource subscriptions, RFC6570 resource templates, MCP Apps metadata, and Resolve/input-required workflows.
+
+Unsupported optional features degrade to their documented base result where possible. For example, `gm_project_dashboard` still returns text and structured data without MCP Apps rendering. Resolve-dependent exceptional mutations cannot silently bypass a missing input capability; they remain cancelled or unresolved rather than forcing a write.
+
 ## Prefabs Support
 
 Projects that use GameMaker prefabs (indicated by `ForcedPrefabProjectReferences` in the `.yyp` file) require the prefabs library path to be specified when running or compiling via Igor.
