@@ -1056,6 +1056,40 @@ class TestSoundAndTimelineRegression(TestAssetsComprehensive):
         yy_data = sound_asset.create_yy_data("snd_test", self.parent_path)
         self.assertEqual(yy_data["soundFile"], "snd_test.wav")
 
+    def test_sound_create_yy_matches_current_compiler_schema(self):
+        sound_asset = SoundAsset()
+
+        yy_data = sound_asset.create_yy_data("snd_test", self.parent_path)
+
+        self.assertEqual(
+            list(yy_data),
+            [
+                "$GMSound",
+                "%Name",
+                "audioGroupId",
+                "bitDepth",
+                "channelFormat",
+                "compression",
+                "compressionQuality",
+                "conversionMode",
+                "duration",
+                "exportDir",
+                "name",
+                "parent",
+                "preload",
+                "resourceType",
+                "resourceVersion",
+                "sampleRate",
+                "soundFile",
+                "volume",
+            ],
+        )
+        self.assertEqual(yy_data["channelFormat"], 0)
+        self.assertEqual(yy_data["compressionQuality"], 4)
+        self.assertEqual(yy_data["exportDir"], "")
+        self.assertNotIn("bitRate", yy_data)
+        self.assertNotIn("type", yy_data)
+
     def test_sound_placeholder_is_valid_wav_even_if_ogg_requested(self):
         sound_asset = SoundAsset()
         asset_folder = self.project_root / "sounds" / "snd_test"

@@ -815,7 +815,12 @@ def validate_project_after_mutation(project_root: str | Path) -> ProjectValidati
 
     for json_path in sorted([*root.rglob("*.yyp"), *root.rglob("*.yy")]):
         rel = json_path.relative_to(root)
-        if _is_ignored_path(rel) or json_path.name.endswith(".inherited.yy"):
+        packed_platform_option = (
+            bool(rel.parts)
+            and rel.parts[0].casefold() == "options"
+            and json_path.name.endswith((".desktop.yy", ".android.yy"))
+        )
+        if _is_ignored_path(rel) or json_path.name.endswith(".inherited.yy") or packed_platform_option:
             continue
         if load_json_loose(json_path) is None:
             result.errors.append(f"Invalid JSON: {rel.as_posix()}")
@@ -1167,7 +1172,6 @@ def _compile_verify_project_locked(
     )
     child_env = os.environ.copy()
     child_env.update(transaction_env)
-    child_env.update(machine_lock.delegation_environment("compile"))
     attempt_limit = _compile_verify_attempt_limit()
     attempts: List[Dict[str, Any]] = []
     retried_infrastructure_failure = False
@@ -1177,11 +1181,13 @@ def _compile_verify_project_locked(
         baseline_compile_pids = _compile_verification_process_pids(root)
         timed_out = False
         timeout_cleanup: Dict[str, Any] = {"terminated_pids": [], "failed_pids": []}
+        attempt_env = child_env.copy()
+        attempt_env.update(machine_lock.delegation_environment("compile"))
         try:
             completed = subprocess.run(
                 cmd,
                 cwd=str(root),
-                env=child_env,
+                env=attempt_env,
                 text=True,
                 capture_output=True,
                 timeout=timeout_seconds,

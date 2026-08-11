@@ -142,6 +142,26 @@ class TestGameMakerProjectTransactions(unittest.TestCase):
             self.assertEqual(validation.errors, [])
             self.assertIn("metadata-only empty event: Step_0.gml", validation.warnings[0])
 
+    def test_validation_accepts_packed_platform_option_payloads(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            option_paths = (
+                root / "options" / "mac" / "desktop" / "options_mac.desktop.yy",
+                root / "options" / "android" / "android" / "options_android.android.yy",
+            )
+            for option_path in option_paths:
+                option_path.parent.mkdir(parents=True, exist_ok=True)
+                option_path.write_text(
+                    '1.0.0←f418569b-3bdd-4706-a0e4-364317f54032|{"option": true}',
+                    encoding="utf-8",
+                )
+            (root / "TestProject.yyp").write_text("{}", encoding="utf-8")
+
+            validation = validate_project_after_mutation(root)
+
+            self.assertTrue(validation.success, msg=validation.errors)
+            self.assertEqual(validation.errors, [])
+
     def test_validation_still_rejects_named_missing_event_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
