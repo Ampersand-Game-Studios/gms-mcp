@@ -6,6 +6,9 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 - **First Trusted PyPI Publish**: Removed the incorrect package-existence preflight so a configured pending trusted publisher can create `gms-mcp` during its first OIDC upload.
+- **Current GameMaker Sound Schema**: Sound creation now emits the current `GMSound` fields and ordering required by GameMaker 2024 and 2026 LTS compilers.
+- **Packed Platform Options**: Post-mutation validation now accepts GameMaker's packed `.desktop.yy` and `.android.yy` option payloads while continuing to validate ordinary JSON project files.
+- **Compile Retry Lock Delegation**: Each bounded compiler retry now receives a fresh single-use machine-lock delegation, preventing a confirmed pre-compile runtime abort from deadlocking the following attempt.
 
 ### Security
 - **Public Artifact Boundary**: Removed repository-only project, planning, service-operation, and release material from the public tree; package builds now use an explicit runtime allowlist and fail CI or publication if generated archives contain development files, personal author contact metadata, or SCM repository inventories.

@@ -66,9 +66,6 @@ class SoundAsset(BaseAsset):
     def create_yy_data(self, name: str, parent_path: str, **kwargs) -> Dict[str, Any]:
         # Sound configuration parameters
         volume = kwargs.get("volume", 1.0)
-        pitch = kwargs.get("pitch", 1.0)
-        sound_type = kwargs.get("sound_type", 0)  # 0=normal, 1=background, 2=3D
-        bitrate = kwargs.get("bitrate", 128)
         sample_rate = kwargs.get("sample_rate", 44100)
         sound_format = kwargs.get("format", 0)  # 0=OGG, 1=MP3, 2=WAV
         sound_file_ext = self._placeholder_extension(sound_format)
@@ -78,10 +75,12 @@ class SoundAsset(BaseAsset):
             "%Name": name,
             "audioGroupId": {"name": "audiogroup_default", "path": "audiogroups/audiogroup_default"},
             "bitDepth": 1,
-            "bitRate": bitrate,
+            "channelFormat": 0,
             "compression": 0,
+            "compressionQuality": 4,
             "conversionMode": 0,
             "duration": 1.0,
+            "exportDir": "",
             "name": name,
             "parent": {"name": self.get_parent_name(parent_path), "path": parent_path},
             "preload": False,
@@ -89,7 +88,6 @@ class SoundAsset(BaseAsset):
             "resourceVersion": "2.0",
             "sampleRate": sample_rate,
             "soundFile": f"{name}.{sound_file_ext}",
-            "type": sound_type,
             "volume": volume,
         }
 
