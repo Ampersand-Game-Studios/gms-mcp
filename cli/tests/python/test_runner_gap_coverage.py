@@ -430,6 +430,32 @@ class TestRunnerGapCoverage(unittest.TestCase):
 
         output_thread.join.assert_called_once_with(timeout=5)
 
+    def test_macos_compile_checks_main_loop_log_when_runner_pid_is_missed(self):
+        runner = self._make_runner()
+        fake_process = MagicMock()
+        fake_process.poll.return_value = 0
+        fake_process.returncode = 0
+        output_thread = MagicMock()
+
+        def verify_final_log(_process, _path, _start_offset, timeout_seconds):
+            self.assertEqual(timeout_seconds, 0.0)
+            return True
+
+        with (
+            patch.object(runner, "_build_macos_compile_validation_command", return_value=["igor", "Run"]),
+            patch.object(runner, "_wait_for_igor_idle"),
+            patch.object(runner, "_snapshot_macos_processes", return_value={}),
+            patch.object(runner, "_run_igor_command", return_value=fake_process),
+            patch.object(runner, "_reject_foreign_igor_after_launch"),
+            patch.object(runner, "_collect_igor_output_async", return_value=([], output_thread)),
+            patch.object(runner, "_wait_for_macos_runner_start", return_value=(None, set(), set())),
+            patch.object(runner, "_wait_for_macos_main_loop", side_effect=verify_final_log),
+            patch.object(runner, "_cleanup_macos_validation_helpers"),
+        ):
+            self.assertTrue(runner._compile_project_once("macOS", "VM"))
+
+        output_thread.join.assert_called_once_with(timeout=5)
+
     def test_infrastructure_retry_reset_removes_only_project_scoped_igor_state(self):
         runner = self._make_runner()
         runner.runtime_path = self.project_root / "runtime"
