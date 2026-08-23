@@ -69,11 +69,13 @@ class GMLIndex:
         Returns:
             Dict with build statistics
         """
-        self._remove_legacy_project_cache()
+        read_only = os.environ.get("GMS_MCP_READ_ONLY", "").strip() == "1"
+        if not read_only:
+            self._remove_legacy_project_cache()
         cache_path = self.cache_path
 
         # Try to load cache if not forcing rebuild
-        if not force and cache_path.exists():
+        if not read_only and not force and cache_path.exists():
             if self._load_cache(cache_path):
                 # Incremental update: only rescan changed/new files and purge deleted files.
                 current_files = {f.relative_to(self.project_root).as_posix() for f in self._find_gml_files()}
@@ -136,7 +138,8 @@ class GMLIndex:
                     files_scanned += 1
 
                 self._is_built = True
-                self._save_cache(cache_path)
+                if not read_only:
+                    self._save_cache(cache_path)
                 return {
                     "status": "incremental",
                     "symbols": total_symbols,
@@ -194,7 +197,8 @@ class GMLIndex:
         self._is_built = True
 
         # Save cache
-        self._save_cache(cache_path)
+        if not read_only:
+            self._save_cache(cache_path)
 
         return {
             "status": "built",

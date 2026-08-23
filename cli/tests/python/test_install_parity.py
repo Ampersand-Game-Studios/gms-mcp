@@ -5,6 +5,7 @@ import tempfile
 import unittest
 from contextlib import contextmanager, redirect_stdout
 from pathlib import Path
+from unittest.mock import patch
 
 from gms_mcp.client_registry import CLIENT_SPECS
 from gms_mcp.install import main
@@ -83,6 +84,215 @@ class TestInstallParity(unittest.TestCase):
                             ]
                         )
                     self.assertEqual(code, 0, msg=buf.getvalue())
+
+    def test_canonical_safe_profile_is_default_and_toolsets_are_explicit(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            (workspace / "project.yyp").touch()
+
+            safe_buffer = io.StringIO()
+            with redirect_stdout(safe_buffer):
+                safe_code = main(
+                    [
+                        "--workspace-root",
+                        str(workspace),
+                        "--non-interactive",
+                        "--client",
+                        "cursor",
+                        "--scope",
+                        "workspace",
+                        "--action",
+                        "setup",
+                        "--dry-run",
+                    ]
+                )
+            self.assertEqual(safe_code, 0, msg=safe_buffer.getvalue())
+            safe_payload = json.loads(safe_buffer.getvalue()[safe_buffer.getvalue().index("{") :])
+            env = safe_payload["mcpServers"]["gms"]["env"]
+            self.assertEqual(env["GMS_MCP_TOOLSETS"], "core")
+            self.assertEqual(env["GMS_MCP_ENABLE_DIRECT"], "0")
+            self.assertEqual(env["GMS_MCP_REQUIRE_DRY_RUN"], "1")
+            self.assertEqual(env["GMS_MCP_READ_ONLY"], "1")
+            self.assertNotIn(str(workspace), safe_buffer.getvalue())
+
+            full_buffer = io.StringIO()
+            with redirect_stdout(full_buffer):
+                full_code = main(
+                    [
+                        "--workspace-root",
+                        str(workspace),
+                        "--non-interactive",
+                        "--client",
+                        "cursor",
+                        "--scope",
+                        "workspace",
+                        "--action",
+                        "setup",
+                        "--profile",
+                        "full",
+                        "--toolsets",
+                        "events,rooms",
+                        "--dry-run",
+                    ]
+                )
+            self.assertEqual(full_code, 0, msg=full_buffer.getvalue())
+            full_payload = json.loads(full_buffer.getvalue()[full_buffer.getvalue().index("{") :])
+            self.assertEqual(full_payload["mcpServers"]["gms"]["env"]["GMS_MCP_TOOLSETS"], "events,rooms")
+            self.assertEqual(full_payload["mcpServers"]["gms"]["env"]["GMS_MCP_REQUIRE_DRY_RUN"], "0")
+            self.assertEqual(full_payload["mcpServers"]["gms"]["env"]["GMS_MCP_READ_ONLY"], "0")
+
+    def test_safe_profile_rejects_mutating_toolset_override(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                code = main(
+                    [
+                        "--workspace-root",
+                        str(workspace),
+                        "--non-interactive",
+                        "--client",
+                        "cursor",
+                        "--profile",
+                        "safe",
+                        "--toolsets",
+                        "assets",
+                        "--dry-run",
+                    ]
+                )
+            self.assertEqual(code, 2)
+            self.assertIn("safe profile only supports", buffer.getvalue())
+
+    def test_explicit_full_profile_overrides_antigravity_global_safe_default(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                code = main(
+                    [
+                        "--workspace-root",
+                        str(workspace),
+                        "--non-interactive",
+                        "--client",
+                        "antigravity",
+                        "--scope",
+                        "global",
+                        "--profile",
+                        "full",
+                        "--config-path",
+                        str(workspace / "mcp.json"),
+                        "--dry-run",
+                    ]
+                )
+            self.assertEqual(code, 0, msg=buffer.getvalue())
+            payload = json.loads(buffer.getvalue()[buffer.getvalue().index("{") :].split("\n{", 1)[0])
+            env = payload["mcpServers"]["gms"]["env"]
+            self.assertEqual(env["GMS_MCP_TOOLSETS"], "all")
+            self.assertEqual(env["GMS_MCP_READ_ONLY"], "0")
+            self.assertEqual(env["GMS_MCP_REQUIRE_DRY_RUN"], "0")
+            self.assertEqual(env["GMS_MCP_ENABLE_DIRECT"], "1")
+
+    def test_explicit_standard_and_full_clear_inherited_safe_profile_controls(self):
+        inherited = {
+            "GMS_MCP_ENABLE_DIRECT": "0",
+            "GMS_MCP_REQUIRE_DRY_RUN": "1",
+            "GMS_MCP_READ_ONLY": "1",
+            "GMS_MCP_TOOLSETS": "core",
+        }
+        with tempfile.TemporaryDirectory() as tmpdir, patch.dict(os.environ, inherited, clear=False):
+            workspace = Path(tmpdir)
+            (workspace / "project.yyp").touch()
+            for profile, expected_toolsets in (("standard", "core"), ("full", "all")):
+                with self.subTest(profile=profile):
+                    buffer = io.StringIO()
+                    with redirect_stdout(buffer):
+                        code = main(
+                            [
+                                "--workspace-root",
+                                str(workspace),
+                                "--non-interactive",
+                                "--client",
+                                "cursor",
+                                "--scope",
+                                "workspace",
+                                "--profile",
+                                profile,
+                                "--action",
+                                "setup",
+                                "--dry-run",
+                            ]
+                        )
+                    self.assertEqual(code, 0, msg=buffer.getvalue())
+                    payload = json.loads(buffer.getvalue()[buffer.getvalue().index("{") :])
+                    env = payload["mcpServers"]["gms"]["env"]
+                    self.assertEqual(env["GMS_MCP_TOOLSETS"], expected_toolsets)
+                    self.assertEqual(env["GMS_MCP_ENABLE_DIRECT"], "1")
+                    self.assertEqual(env["GMS_MCP_REQUIRE_DRY_RUN"], "0")
+                    self.assertEqual(env["GMS_MCP_READ_ONLY"], "0")
+
+    def test_canonical_toolsets_are_validated_before_writing(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                code = main(
+                    [
+                        "--workspace-root",
+                        str(workspace),
+                        "--non-interactive",
+                        "--client",
+                        "cursor",
+                        "--toolsets",
+                        "not-a-toolset",
+                    ]
+                )
+            self.assertEqual(code, 2)
+            self.assertIn("Unsupported toolset", buffer.getvalue())
+
+    def test_canonical_check_json_redacts_private_paths_and_secrets(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir)
+            config_path = workspace / "mcp.json"
+            config_path.write_text(
+                json.dumps(
+                    {
+                        "mcpServers": {
+                            "gms": {
+                                "command": str(workspace / "private" / "gms-mcp"),
+                                "args": [f"--project={workspace / 'private'}"],
+                                "env": {
+                                    "GM_PROJECT_ROOT": str(workspace / "private"),
+                                    "PYTHONUNBUFFERED": "1",
+                                    "API_KEY": "not-for-output",
+                                },
+                            }
+                        }
+                    }
+                ),
+                encoding="utf-8",
+            )
+            buffer = io.StringIO()
+            with redirect_stdout(buffer):
+                code = main(
+                    [
+                        "--workspace-root",
+                        str(workspace),
+                        "--non-interactive",
+                        "--client",
+                        "cursor",
+                        "--action",
+                        "check-json",
+                        "--config-path",
+                        str(config_path),
+                    ]
+                )
+            self.assertEqual(code, 0)
+            output = buffer.getvalue()
+            self.assertNotIn(str(workspace), output)
+            self.assertNotIn("not-for-output", output)
+            payload = json.loads(output)
+            self.assertEqual(payload["config"]["path"], "<host-path>")
+            self.assertEqual(payload["config"]["entry"]["env"]["API_KEY"], "***REDACTED***")
 
     def test_canonical_setup_global_for_supported_clients(self):
         clients = [spec.key for spec in CLIENT_SPECS if spec.global_supported]
@@ -168,12 +378,19 @@ class TestInstallParity(unittest.TestCase):
                         "workspace",
                         "--action",
                         "setup",
+                        "--profile",
+                        "standard",
                     ]
                 )
             self.assertEqual(canonical_code, 0, msg=canonical_buffer.getvalue())
 
-            legacy_config = (legacy_workspace / ".cursor" / "mcp.json").read_text(encoding="utf-8")
-            canonical_config = (canonical_workspace / ".cursor" / "mcp.json").read_text(encoding="utf-8")
+            legacy_config = json.loads((legacy_workspace / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
+            canonical_config = json.loads((canonical_workspace / ".cursor" / "mcp.json").read_text(encoding="utf-8"))
+            canonical_env = canonical_config["mcpServers"]["gms"]["env"]
+            self.assertEqual(canonical_env.pop("GMS_MCP_ENABLE_DIRECT"), "1")
+            self.assertEqual(canonical_env.pop("GMS_MCP_REQUIRE_DRY_RUN"), "0")
+            self.assertEqual(canonical_env.pop("GMS_MCP_READ_ONLY"), "0")
+            self.assertEqual(canonical_env.pop("GMS_MCP_TOOLSETS"), "core")
             self.assertEqual(legacy_config, canonical_config)
 
     def test_canonical_check_json_schema_workspace(self):

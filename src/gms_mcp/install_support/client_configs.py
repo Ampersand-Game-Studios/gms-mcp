@@ -15,6 +15,7 @@ from gms_helpers.bundle_assets import bundled_hooks_dir, bundled_skills_dir
 
 from .common import (
     _FORWARDED_ENV_VARS,
+    _apply_onboarding_profile_env,
     _apply_safe_profile_env,
     _make_antigravity_server_config,
     _make_server_config,
@@ -44,6 +45,8 @@ def _generate_cursor_config(
     out_path: Path,
     dry_run: bool,
     safe_profile: bool = False,
+    onboarding_profile: str | None = None,
+    toolsets: str | None = None,
 ) -> Path:
     gm_rel_posix = _relpath_posix_or_none(gm_project_root, workspace_root)
     config = _make_server_config(
@@ -53,6 +56,8 @@ def _generate_cursor_config(
         args=args_prefix,
         gm_project_root_rel_posix=gm_rel_posix,
         safe_profile=safe_profile,
+        onboarding_profile=onboarding_profile,
+        toolsets=toolsets,
     )
     _write_json(out_path, config, dry_run=dry_run)
     return out_path
@@ -68,6 +73,8 @@ def _generate_example_configs(
     clients: Iterable[str],
     dry_run: bool,
     safe_profile: bool = False,
+    onboarding_profile: str | None = None,
+    toolsets: str | None = None,
 ) -> list[Path]:
     gm_rel_posix = _relpath_posix_or_none(gm_project_root, workspace_root)
 
@@ -82,6 +89,8 @@ def _generate_example_configs(
                 workspace_root=workspace_root,
                 gm_project_root=gm_project_root,
                 safe_profile=safe_profile,
+                onboarding_profile=onboarding_profile,
+                toolsets=toolsets,
             )
         else:
             config = _make_server_config(
@@ -91,6 +100,8 @@ def _generate_example_configs(
                 args=args_prefix,
                 gm_project_root_rel_posix=gm_rel_posix,
                 safe_profile=safe_profile,
+                onboarding_profile=onboarding_profile,
+                toolsets=toolsets,
             )
         out_path = out_dir / f"{client}.mcp.json"
         _write_json(out_path, config, dry_run=dry_run)
@@ -116,6 +127,8 @@ def _make_claude_code_mcp_config(
     command: str,
     args: list[str],
     safe_profile: bool = False,
+    onboarding_profile: str | None = None,
+    toolsets: str | None = None,
 ) -> dict:
     """
     Create the .mcp.json config for Claude Code.
@@ -133,7 +146,11 @@ def _make_claude_code_mcp_config(
         val = os.environ.get(env_var)
         if val:
             env[env_var] = val
-    _apply_safe_profile_env(env, enabled=safe_profile)
+    _apply_onboarding_profile_env(
+        env,
+        profile="safe" if safe_profile else onboarding_profile,
+        toolsets=toolsets,
+    )
 
     return {
         "mcpServers": {
@@ -152,6 +169,8 @@ def _build_codex_env(
     *,
     include_project_root: bool = True,
     safe_profile: bool = False,
+    onboarding_profile: str | None = None,
+    toolsets: str | None = None,
 ) -> dict[str, str]:
     env: dict[str, str] = {
         "PYTHONUNBUFFERED": "1",
@@ -172,7 +191,11 @@ def _build_codex_env(
         val = os.environ.get(env_var)
         if val:
             env[env_var] = val
-    _apply_safe_profile_env(env, enabled=safe_profile)
+    _apply_onboarding_profile_env(
+        env,
+        profile="safe" if safe_profile else onboarding_profile,
+        toolsets=toolsets,
+    )
 
     return env
 
@@ -344,6 +367,8 @@ def _make_codex_mcp_config(
     workspace_root: Path,
     include_project_root: bool = True,
     safe_profile: bool = False,
+    onboarding_profile: str | None = None,
+    toolsets: str | None = None,
 ) -> str:
     """Create a Codex MCP config block in TOML format."""
     env: dict[str, str] = _build_codex_env(
@@ -351,6 +376,8 @@ def _make_codex_mcp_config(
         workspace_root=workspace_root,
         include_project_root=include_project_root,
         safe_profile=safe_profile,
+        onboarding_profile=onboarding_profile,
+        toolsets=toolsets,
     )
 
     lines = [
@@ -378,6 +405,8 @@ def _generate_codex_config(
     dry_run: bool,
     include_project_root: bool = True,
     safe_profile: bool = False,
+    onboarding_profile: str | None = None,
+    toolsets: str | None = None,
 ) -> tuple[Path, str, str]:
     """Generate a Codex config entry for the target server."""
     resolved_root = gm_project_root if gm_project_root is not None else workspace_root
@@ -389,6 +418,8 @@ def _generate_codex_config(
         workspace_root=workspace_root,
         include_project_root=include_project_root,
         safe_profile=safe_profile,
+        onboarding_profile=onboarding_profile,
+        toolsets=toolsets,
     )
     merged = _render_codex_merged_config(
         output_path=output_path,
@@ -510,6 +541,8 @@ def _generate_antigravity_config(
     gm_project_root: Path | None,
     safe_profile: bool,
     dry_run: bool,
+    onboarding_profile: str | None = None,
+    toolsets: str | None = None,
 ) -> tuple[Path, dict, dict, Path | None]:
     payload = _make_antigravity_server_config(
         server_name=server_name,
@@ -518,6 +551,8 @@ def _generate_antigravity_config(
         workspace_root=workspace_root,
         gm_project_root=gm_project_root,
         safe_profile=safe_profile,
+        onboarding_profile=onboarding_profile,
+        toolsets=toolsets,
     )
     server_entry = payload["mcpServers"][server_name]
     merged = _render_antigravity_merged_config(
@@ -862,6 +897,8 @@ def _generate_claude_code_plugin(
     dry_run: bool,
     include_bundle_assets: bool = False,
     safe_profile: bool = False,
+    onboarding_profile: str | None = None,
+    toolsets: str | None = None,
 ) -> list[Path]:
     """
     Generate Claude plugin files with MCP server configuration.
@@ -915,6 +952,8 @@ def _generate_claude_code_plugin(
         command=command,
         args=args_prefix,
         safe_profile=safe_profile,
+        onboarding_profile=onboarding_profile,
+        toolsets=toolsets,
     )
     _write_json(mcp_config_path, mcp_config, dry_run=dry_run)
     written.append(mcp_config_path)

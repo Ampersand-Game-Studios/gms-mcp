@@ -422,7 +422,7 @@ def discover_mcp_tools(server_sources_dir: Path) -> List[str]:
                     decorator = decorator.func
                 if isinstance(decorator, ast.Attribute) and decorator.attr == "tool":
                     has_tool = True
-                elif isinstance(decorator, ast.Name) and decorator.id == "tool":
+                elif isinstance(decorator, ast.Name) and decorator.id in {"tool", "mutating_tool"}:
                     has_tool = True
             if has_tool and node.name.startswith("gm_"):
                 tools.add(node.name)

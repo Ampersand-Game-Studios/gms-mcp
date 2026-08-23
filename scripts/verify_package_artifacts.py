@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import email
+import re
 import stat
 import tarfile
 import zipfile
@@ -36,7 +37,71 @@ DIST_INFO_FILES = {
     "entry_points.txt",
     "top_level.txt",
 }
-FORBIDDEN_METADATA_FILES = {"scm_file_list.json", "scm_version.json"}
+FORBIDDEN_METADATA_FILES = {
+    "direct_url.json",
+    "scm_file_list.json",
+    "scm_version.json",
+}
+FORBIDDEN_PATH_COMPONENTS = {
+    ".agents",
+    ".env",
+    ".git",
+    ".github",
+    ".idea",
+    ".pytest_cache",
+    ".vscode",
+    "__pycache__",
+    "build",
+    "coverage",
+    "dist",
+    "reports",
+}
+FORBIDDEN_FILENAMES = {
+    ".netrc",
+    ".npmrc",
+    ".pypirc",
+    "credentials",
+    "credentials.json",
+    "google-services.json",
+    "googleservice-info.plist",
+    "id_dsa",
+    "id_ecdsa",
+    "id_ed25519",
+    "id_rsa",
+    "known_hosts",
+    "secrets.json",
+}
+FORBIDDEN_SUFFIXES = {".pem", ".p12", ".pfx", ".key", ".mobileprovision"}
+PRIVATE_CONTENT_PATTERNS = (
+    ("private key", re.compile(rb"-----BEGIN [A-Z0-9 ]*PRIVATE KEY-----")),
+    ("macOS user path", re.compile(rb"/Users/(?!Shared/)[A-Za-z0-9._-]+/")),
+    ("Linux user path", re.compile(rb"/home/[A-Za-z0-9._-]+/")),
+    ("Windows user path", re.compile(rb"[A-Za-z]:\\Users\\[^\\\r\n]+\\")),
+    ("macOS private temporary path", re.compile(rb"/(?:private/)?var/folders/[A-Za-z0-9_./-]+")),
+    (
+        "private network address",
+        re.compile(rb"(?<![0-9])(?:10(?:\.[0-9]{1,3}){3}|192\.168(?:\.[0-9]{1,3}){2}|172\.(?:1[6-9]|2[0-9]|3[01])(?:\.[0-9]{1,3}){2})(?![0-9])"),
+    ),
+    ("private IPv6 address", re.compile(rb"(?i)\[(?:fc|fd)[0-9a-f:]+\]")),
+    (
+        "private hostname",
+        re.compile(rb"(?i)\b[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)*\.(?:corp|internal|lan|local)\b"),
+    ),
+    ("cloud metadata address", re.compile(rb"(?<![0-9])169\.254\.169\.254(?![0-9])")),
+    ("GitHub token", re.compile(rb"(?:gh[pousr]_[A-Za-z0-9]{20,}|github_pat_[A-Za-z0-9_]{30,})")),
+    ("AWS access key", re.compile(rb"(?:AKIA|ASIA)[A-Z0-9]{16}")),
+    ("Slack token", re.compile(rb"xox[baprs]-[A-Za-z0-9-]{20,}")),
+    ("OpenAI token", re.compile(rb"sk-(?:proj|svcacct)-[A-Za-z0-9_-]{20,}")),
+    ("Basic authorization", re.compile(rb"(?i)\bbasic\s+[A-Za-z0-9+/=]{16,}")),
+    (
+        "assigned secret",
+        re.compile(
+            rb"(?i)['\"]?\b[A-Za-z0-9_.-]*(?:access[_-]?key|api[_-]?key|client[_-]?secret|connection[_-]?string|"
+            rb"password|passwd|private[_-]?key|secret|session[_-]?id|token)['\"]?"
+            rb"\s*[=:]\s*(?:(['\"])[A-Za-z0-9+/_.-]{24,}\1|[A-Za-z0-9+/_-]{24,}(?![A-Za-z0-9+/_-]))"
+        ),
+    ),
+)
 
 
 class ArtifactPrivacyError(RuntimeError):
@@ -48,6 +113,18 @@ def _safe_member_path(name: str) -> PurePosixPath:
     if path.is_absolute() or ".." in path.parts or "\\" in name:
         raise ArtifactPrivacyError(f"unsafe archive path: {name}")
     return path
+
+
+def _is_sensitive_member_path(path: PurePosixPath) -> bool:
+    """Reject exact private-artifact conventions without matching normal source names."""
+    lowered_parts = {part.lower() for part in path.parts}
+    name = path.name.lower()
+    return (
+        bool(lowered_parts & FORBIDDEN_PATH_COMPONENTS)
+        or name in FORBIDDEN_FILENAMES
+        or name.startswith(".env.")
+        or path.suffix.lower() in FORBIDDEN_SUFFIXES
+    )
 
 
 def _is_sdist_file_allowed(path: PurePosixPath) -> bool:
@@ -95,10 +172,26 @@ def _validate_metadata(raw: bytes, source: str) -> None:
         raise ArtifactPrivacyError(f"{source}: unexpected Author metadata: {authors!r}")
     if metadata.get_all("Author-email"):
         raise ArtifactPrivacyError(f"{source}: Author-email must not be published")
+    for field in ("Maintainer", "Maintainer-email"):
+        if metadata.get_all(field):
+            raise ArtifactPrivacyError(f"{source}: {field} must not be published")
+    for field in ("Author", "Author-email", "Maintainer", "Maintainer-email", "Home-page"):
+        for value in metadata.get_all(field, []):
+            if value.startswith(("/", "~")) or "file://" in value.lower():
+                raise ArtifactPrivacyError(f"{source}: {field} must not contain a local path")
+
+
+def _validate_public_content(raw: bytes, source: str) -> None:
+    """Reject concrete credential/private-host signatures inside allowed files."""
+    for label, pattern in PRIVATE_CONTENT_PATTERNS:
+        if pattern.search(raw):
+            raise ArtifactPrivacyError(f"{source}: detected {label}")
 
 
 def verify_wheel(path: Path) -> None:
     with zipfile.ZipFile(path) as archive:
+        if archive.comment:
+            raise ArtifactPrivacyError(f"{path.name}: archive comment must be empty")
         failures: list[str] = []
         metadata_names: list[str] = []
         for entry in archive.infolist():
@@ -108,12 +201,16 @@ def verify_wheel(path: Path) -> None:
             if (
                 entry.is_dir()
                 or stat.S_ISLNK(mode)
+                or bool(entry.extra)
                 or member.name in FORBIDDEN_METADATA_FILES
+                or _is_sensitive_member_path(member)
                 or not _is_wheel_file_allowed(member)
             ):
                 failures.append(name)
             if member.name == "METADATA" and member.parent.name.endswith(".dist-info"):
                 metadata_names.append(name)
+            if not entry.is_dir():
+                _validate_public_content(archive.read(entry), f"{path.name}:{name}")
         if failures:
             raise ArtifactPrivacyError(f"{path.name}: non-public wheel members: {sorted(failures)!r}")
         if len(metadata_names) != 1:
@@ -138,7 +235,13 @@ def verify_sdist(path: Path) -> None:
             relative = PurePosixPath(*member.parts[1:])
             if entry.uid != 0 or entry.gid != 0 or entry.uname not in {"", "root"} or entry.gname not in {"", "root"}:
                 failures.append(f"{entry.name} [non-public owner metadata]")
-            if member.parts[0] != root or relative.name in FORBIDDEN_METADATA_FILES:
+            if any(key != "mtime" or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", value) for key, value in entry.pax_headers.items()):
+                failures.append(f"{entry.name} [non-public PAX metadata]")
+            if (
+                member.parts[0] != root
+                or relative.name in FORBIDDEN_METADATA_FILES
+                or _is_sensitive_member_path(relative)
+            ):
                 failures.append(entry.name)
                 continue
             if entry.isdir():
@@ -148,6 +251,11 @@ def verify_sdist(path: Path) -> None:
                 failures.append(entry.name)
                 continue
             public_files.append(entry.name)
+            extracted = archive.extractfile(entry)
+            if extracted is None:
+                failures.append(f"{entry.name} [unreadable]")
+                continue
+            _validate_public_content(extracted.read(), f"{path.name}:{relative.as_posix()}")
             if relative == PurePosixPath("PKG-INFO"):
                 metadata_members.append(entry)
             if relative == PurePosixPath("src/gms_mcp.egg-info/SOURCES.txt"):
@@ -171,7 +279,7 @@ def verify_sdist(path: Path) -> None:
         source_failures = []
         for line in sources_file.read().decode("utf-8").splitlines():
             source = _safe_member_path(line.strip())
-            if not _is_sdist_file_allowed(source):
+            if _is_sensitive_member_path(source) or not _is_sdist_file_allowed(source):
                 source_failures.append(line)
         if source_failures:
             raise ArtifactPrivacyError(
@@ -202,7 +310,15 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("path", nargs="?", type=Path, default=Path("dist"))
     args = parser.parse_args(argv)
 
-    paths = sorted(args.path.iterdir()) if args.path.is_dir() else [args.path]
+    if args.path.is_dir():
+        entries = sorted(args.path.iterdir())
+        paths = []
+        for entry in entries:
+            if entry.name == ".gitignore" and entry.is_file() and entry.read_bytes() == b"*":
+                continue
+            paths.append(entry)
+    else:
+        paths = [args.path]
     try:
         verify_artifacts(paths)
     except (ArtifactPrivacyError, OSError, tarfile.TarError, zipfile.BadZipFile) as exc:

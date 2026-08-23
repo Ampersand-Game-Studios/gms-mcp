@@ -11,11 +11,17 @@ All notable changes to this project will be documented in this file.
 - **Compile Retry Lock Delegation**: Each bounded compiler retry now receives a fresh single-use machine-lock delegation, preventing a confirmed pre-compile runtime abort from deadlocking the following attempt.
 
 ### Security
+- **ResourceTool Isolation**: Optional official ResourceTool validation runs only against a checksummed disposable copy with stripped environment, bounded execution, redacted output, rewrite detection, and fail-closed configuration.
+- **Release Privacy Gate**: Package verification now rejects agent state, environment/credential/key conventions, report directories, local-path metadata, forbidden build metadata, and wheel comments before trusted publishing.
 - **Public Artifact Boundary**: Removed repository-only project, planning, service-operation, and release material from the public tree; package builds now use an explicit runtime allowlist and fail CI or publication if generated archives contain development files, personal author contact metadata, or SCM repository inventories.
 - **GitHub Actions Hardening**: Restricted workflow tokens and third-party actions, removed self-hosted runner access, and confined licensed GameMaker smoke jobs to a branch-restricted environment with a non-publishing manual verification path.
 - **Privacy-Safe Local Diagnostics**: Codex previews now omit unrelated configuration and redact secret values and host paths. Automatic diagnostic logs now use private, opaque per-project directories under `~/.gms-mcp/logs/` instead of writing inside GameMaker projects.
 
 ### Added
+- **Safe Onboarding Profiles**: Canonical client setup defaults to a read-only `safe` core surface with project mutators omitted; explicit `standard`/`full` profiles and validated toolset overrides remain available.
+- **Compatibility Evidence**: A deterministic generated client/profile/toolset matrix is freshness-checked in CI, while sanitized executed-evidence JSON is published separately from declarations.
+- **Workflow Prompt Catalogue**: Added five mutation-free MCP prompts for feature creation, project diagnosis, safe refactoring, compile/fix/retry, and live-game inspection.
+- **Official ResourceTool Validator**: Added an opt-in `resourcetool` toolset and `gm_resourcetool_validate` adapter restricted to YoYo's documented read-only `resource list` positional `.yyp` contract, with private-project-file rejection and isolated environment roots.
 - **MCP 2.0 Runtime Delivery**: Modern MCP clients now receive server cache hints, structured `is_error` tool failures, project-resource subscriptions after committed writes and debounced external edits, secure asset/room URI templates, mutation serialization, and a read-only MCP Apps project dashboard with text/structured fallback.
 - **Local Streamable HTTP**: `gms-mcp server --transport streamable-http` serves a stateless local endpoint, rejects non-loopback binds and unapproved Host/Origin headers, and validates standard and parameter-routing MCP headers. This is deliberately local-only and does not add remote authentication or shared-server support.
 - **MCP 2.0 Verification**: Added modern in-memory client, subscriptions, cache, middleware, templates, Apps, lifespan, worker-thread, local HTTP, OpenTelemetry, and pinned official 2026-07-28 wire-conformance coverage. CI now audits the exact `uv.lock` dependency graph.

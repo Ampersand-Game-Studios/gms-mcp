@@ -9,13 +9,14 @@ from ..project import _ensure_cli_on_sys_path, _resolve_project_directory, _reso
 from ..tool_types import OutputMode
 
 
-def register(mcp: Any, ContextType: Any) -> None:
+def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
     globals()["Context"] = ContextType
+    mutating_tool = (lambda function: function) if read_only else mcp.tool()
 
     # -----------------------------
     # Code Intelligence Tools
     # -----------------------------
-    @mcp.tool()
+    @mutating_tool
     async def gm_build_index(
         project_root: str = ".",
         force: bool = False,
