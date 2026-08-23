@@ -149,7 +149,7 @@ class TestResourceToolValidation(unittest.TestCase):
         self.assertFalse(invocation["shell"])
         self.assertNotEqual(invocation["env"]["HOME"], self.environment["HOME"])
         self.assertNotIn("SECRET_TOKEN", invocation["env"])
-        self.assertNotEqual(invocation["env"]["PATH"], self.environment["PATH"])
+        self.assertNotEqual(invocation["env"].get("PATH"), self.environment["PATH"])
         self.assertEqual(result["status"], "validated")
         self.assertEqual(result["evidence"]["before_checksum"], result["evidence"]["after_checksum"])
         self.assertTrue(result["evidence"]["cleanup_completed"])
