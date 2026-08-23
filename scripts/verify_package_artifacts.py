@@ -80,7 +80,9 @@ PRIVATE_CONTENT_PATTERNS = (
     ("macOS private temporary path", re.compile(rb"/(?:private/)?var/folders/[A-Za-z0-9_./-]+")),
     (
         "private network address",
-        re.compile(rb"(?<![0-9])(?:10(?:\.[0-9]{1,3}){3}|192\.168(?:\.[0-9]{1,3}){2}|172\.(?:1[6-9]|2[0-9]|3[01])(?:\.[0-9]{1,3}){2})(?![0-9])"),
+        re.compile(
+            rb"(?<![0-9])(?:10(?:\.[0-9]{1,3}){3}|192\.168(?:\.[0-9]{1,3}){2}|172\.(?:1[6-9]|2[0-9]|3[01])(?:\.[0-9]{1,3}){2})(?![0-9])"
+        ),
     ),
     ("private IPv6 address", re.compile(rb"(?i)\[(?:fc|fd)[0-9a-f:]+\]")),
     (
@@ -235,7 +237,10 @@ def verify_sdist(path: Path) -> None:
             relative = PurePosixPath(*member.parts[1:])
             if entry.uid != 0 or entry.gid != 0 or entry.uname not in {"", "root"} or entry.gname not in {"", "root"}:
                 failures.append(f"{entry.name} [non-public owner metadata]")
-            if any(key != "mtime" or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", value) for key, value in entry.pax_headers.items()):
+            if any(
+                key != "mtime" or not re.fullmatch(r"[0-9]+(?:\.[0-9]+)?", value)
+                for key, value in entry.pax_headers.items()
+            ):
                 failures.append(f"{entry.name} [non-public PAX metadata]")
             if (
                 member.parts[0] != root
