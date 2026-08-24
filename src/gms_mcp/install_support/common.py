@@ -30,6 +30,19 @@ _FORWARDED_ENV_VARS = [
 ]
 _SAFE_PROFILE_TIMEOUT_SECONDS = 600
 _REDACTED_VALUE = "***REDACTED***"
+ONBOARDING_PROFILES = ("safe", "standard", "full")
+SUPPORTED_TOOLSETS = (
+    "assets",
+    "bridge",
+    "core",
+    "docs",
+    "events",
+    "maintenance",
+    "resourcetool",
+    "rooms",
+    "runtime",
+    "texture-groups",
+)
 _SAFE_ENV_OUTPUT_KEYS = {
     "GM_PROJECT_ROOT",
     "GMS_MCP_DEFAULT_TIMEOUT_SECONDS",
@@ -37,6 +50,7 @@ _SAFE_ENV_OUTPUT_KEYS = {
     "GMS_MCP_GMS_PATH",
     "GMS_MCP_IGOR_PROCESSOR_COUNT",
     "GMS_MCP_REQUIRE_DRY_RUN",
+    "GMS_MCP_READ_ONLY",
     "GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST",
     "GMS_MCP_TOOLSETS",
     "PYTHONUNBUFFERED",
@@ -139,6 +153,36 @@ def _redact_config_value(value: object) -> object:
     if isinstance(value, list):
         return [_redact_config_value(item) for item in value]
     return value
+
+
+def _redact_private_paths(value: object) -> object:
+    """Remove machine-specific absolute paths from output-only payloads."""
+    if isinstance(value, dict):
+        return {key: _redact_private_paths(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_redact_private_paths(item) for item in value]
+    if not isinstance(value, str):
+        return value
+
+    stripped = value.strip()
+    if stripped.startswith(("/", "\\\\", "~/", "~\\")) or re.match(r"^[A-Za-z]:[\\/]", stripped):
+        return "<host-path>"
+    option, separator, option_value = value.partition("=")
+    if separator and (
+        option_value.strip().startswith(("/", "\\\\", "~/", "~\\"))
+        or re.match(r"^[A-Za-z]:[\\/]", option_value.strip())
+    ):
+        return f"{option}=<host-path>"
+    return re.sub(
+        r"(^|[\s\"'=(])(?:/|~[/\\]|[A-Za-z]:[\\/])[^\s\"')\]}]+",
+        lambda match: f"{match.group(1)}<host-path>",
+        value,
+    )
+
+
+def _privacy_safe_path_label(path: Path) -> str:
+    """Return a stable label suitable for machine-readable installer output."""
+    return "<host-path>" if path.is_absolute() else path.as_posix()
 
 
 def _find_yyp_dirs(workspace_root: Path, max_results: int = 5) -> list[Path]:
@@ -268,6 +312,8 @@ def _make_server_config(
     args: list[str],
     gm_project_root_rel_posix: str | None,
     safe_profile: bool = False,
+    onboarding_profile: str | None = None,
+    toolsets: str | None = None,
 ) -> dict:
     workspace_var = _workspace_folder_var(client)
     env: dict[str, str] = {}
@@ -283,7 +329,11 @@ def _make_server_config(
         val = os.environ.get(env_var)
         if val:
             env[env_var] = val
-    _apply_safe_profile_env(env, enabled=safe_profile)
+    _apply_onboarding_profile_env(
+        env,
+        profile="safe" if safe_profile else onboarding_profile,
+        toolsets=toolsets,
+    )
 
     return {
         "mcpServers": {
@@ -311,10 +361,57 @@ def _resolve_antigravity_config_path(config_path: str | None) -> Path:
 
 
 def _apply_safe_profile_env(env: dict[str, str], *, enabled: bool) -> None:
-    if not enabled:
+    _apply_onboarding_profile_env(env, profile="safe" if enabled else None, toolsets=None)
+
+
+def _normalize_toolsets(value: str) -> str:
+    requested = {
+        token.strip().lower().replace("_", "-") for token in value.replace(";", ",").split(",") if token.strip()
+    }
+    if not requested:
+        raise ValueError("Toolset selection cannot be empty.")
+    if "all" in requested:
+        if len(requested) != 1:
+            raise ValueError("`all` cannot be combined with individual toolsets.")
+        return "all"
+    unknown = requested - set(SUPPORTED_TOOLSETS)
+    if unknown:
+        raise ValueError(f"Unsupported toolset(s): {', '.join(sorted(unknown))}.")
+    return ",".join(sorted(requested))
+
+
+def _apply_onboarding_profile_env(env: dict[str, str], *, profile: str | None, toolsets: str | None) -> None:
+    """Apply explicit onboarding policy after inherited environment values."""
+    if profile is not None and profile not in ONBOARDING_PROFILES:
+        raise ValueError(f"Unsupported onboarding profile '{profile}'.")
+    selected_toolsets = _normalize_toolsets(toolsets) if toolsets is not None else None
+    if profile is not None:
+        env.pop("GMS_MCP_READ_ONLY", None)
+        env.pop("GMS_MCP_REQUIRE_DRY_RUN", None)
+        env.pop("GMS_MCP_TOOLSETS", None)
+        env.pop("GMS_MCP_ENABLE_DIRECT", None)
+    if profile == "safe":
+        if selected_toolsets not in (None, "core"):
+            raise ValueError("The safe profile only supports the read-only core tool surface.")
+        env["GMS_MCP_ENABLE_DIRECT"] = "0"
+        env["GMS_MCP_REQUIRE_DRY_RUN"] = "1"
+        env["GMS_MCP_READ_ONLY"] = "1"
+        selected_toolsets = "core"
+    elif profile == "standard":
+        env["GMS_MCP_ENABLE_DIRECT"] = "1"
+        env["GMS_MCP_REQUIRE_DRY_RUN"] = "0"
+        env["GMS_MCP_READ_ONLY"] = "0"
+        selected_toolsets = selected_toolsets or "core"
+    elif profile == "full":
+        env["GMS_MCP_ENABLE_DIRECT"] = "1"
+        env["GMS_MCP_REQUIRE_DRY_RUN"] = "0"
+        env["GMS_MCP_READ_ONLY"] = "0"
+        selected_toolsets = selected_toolsets or "all"
+    if selected_toolsets is not None:
+        env["GMS_MCP_TOOLSETS"] = selected_toolsets
+
+    if profile != "safe":
         return
-    env["GMS_MCP_ENABLE_DIRECT"] = "0"
-    env["GMS_MCP_REQUIRE_DRY_RUN"] = "1"
     timeout = env.get("GMS_MCP_DEFAULT_TIMEOUT_SECONDS", "").strip()
     if timeout:
         try:
@@ -345,26 +442,28 @@ class ConfigState:
     readiness: ReadinessResult
 
     def as_dict(self) -> dict:
-        redacted = _redact_config_value(
-            {
-                "ok": True,
-                "client": self.client,
-                "scope": self.scope,
-                "server_name": self.server_name,
-                "config": {
-                    "path": self.path,
-                    "exists": self.exists,
-                    "entry": self.entry,
-                },
-                "active": {
+        redacted = _redact_private_paths(
+            _redact_config_value(
+                {
+                    "ok": True,
+                    "client": self.client,
                     "scope": self.scope,
-                    "path": self.path,
-                    "entry": self.entry,
-                },
-                "ready": self.readiness.ready,
-                "problems": self.readiness.problems,
-                "not_applicable": self.readiness.not_applicable,
-            }
+                    "server_name": self.server_name,
+                    "config": {
+                        "path": self.path,
+                        "exists": self.exists,
+                        "entry": self.entry,
+                    },
+                    "active": {
+                        "scope": self.scope,
+                        "path": self.path,
+                        "entry": self.entry,
+                    },
+                    "ready": self.readiness.ready,
+                    "problems": self.readiness.problems,
+                    "not_applicable": self.readiness.not_applicable,
+                }
+            )
         )
         assert isinstance(redacted, dict)
         return redacted
@@ -506,6 +605,8 @@ def _make_antigravity_server_config(
     workspace_root: Path,
     gm_project_root: Path | None,
     safe_profile: bool,
+    onboarding_profile: str | None = None,
+    toolsets: str | None = None,
 ) -> dict:
     env: dict[str, str] = {
         "GM_PROJECT_ROOT": str(gm_project_root if gm_project_root is not None else workspace_root),
@@ -515,7 +616,11 @@ def _make_antigravity_server_config(
         val = os.environ.get(env_var)
         if val:
             env[env_var] = val
-    _apply_safe_profile_env(env, enabled=safe_profile)
+    _apply_onboarding_profile_env(
+        env,
+        profile="safe" if safe_profile else onboarding_profile,
+        toolsets=toolsets,
+    )
 
     return {
         "mcpServers": {

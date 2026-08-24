@@ -59,6 +59,41 @@ class TestMCPProfiles(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "Unknown GMS_MCP_TOOLSETS"):
                 build_server()
 
+    def test_read_only_core_omits_project_mutators(self):
+        with patch.dict(
+            os.environ,
+            {"GMS_MCP_TOOLSETS": "core", "GMS_MCP_READ_ONLY": "1"},
+            clear=False,
+        ):
+            tools = {tool.name for tool in asyncio.run(build_server().list_tools())}
+
+        self.assertIn("gm_project_info", tools)
+        self.assertNotIn("gm_safe_delete", tools)
+        self.assertNotIn("gm_workflow_rename", tools)
+        self.assertNotIn("gm_sprite_add_frame", tools)
+        self.assertNotIn("gm_run", tools)
+        self.assertNotIn("gm_run_stop", tools)
+        self.assertNotIn("gm_run_status", tools)
+        self.assertNotIn("gm_compile", tools)
+        self.assertNotIn("gm_verification_status", tools)
+        self.assertNotIn("gm_verification_flush", tools)
+        self.assertNotIn("gm_build_index", tools)
+
+    def test_resourcetool_has_no_caller_selected_path_or_timeout(self):
+        specs = {tool.name: tool for tool in _tools("resourcetool")}
+
+        schema = specs["gm_resourcetool_validate"].input_schema
+        self.assertEqual(schema.get("properties", {}), {})
+
+    def test_read_only_rejects_optional_toolsets(self):
+        with patch.dict(
+            os.environ,
+            {"GMS_MCP_TOOLSETS": "assets", "GMS_MCP_READ_ONLY": "1"},
+            clear=False,
+        ):
+            with self.assertRaisesRegex(ValueError, "READ_ONLY"):
+                build_server()
+
 
 if __name__ == "__main__":
     unittest.main()

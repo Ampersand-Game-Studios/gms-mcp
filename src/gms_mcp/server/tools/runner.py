@@ -12,8 +12,9 @@ from ..subprocess_runner import _default_timeout_seconds_for_cli_args
 from ..tool_types import OutputMode, RunnerPlatform
 
 
-def register(mcp: Any, ContextType: Any) -> None:
+def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
     globals()["Context"] = ContextType
+    mutating_tool = (lambda function: function) if read_only else mcp.tool()
 
     def _run_direct_preserve_result(
         handler: Any,
@@ -34,7 +35,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     # -----------------------------
     # Runner tools
     # -----------------------------
-    @mcp.tool()
+    @mutating_tool
     async def gm_compile(
         platform: RunnerPlatform | None = None,
         runtime: str = "VM",
@@ -74,7 +75,7 @@ def register(mcp: Any, ContextType: Any) -> None:
             ctx=ctx,
         )
 
-    @mcp.tool()
+    @mutating_tool
     async def gm_run(
         platform: RunnerPlatform | None = None,
         runtime: str = "VM",
@@ -236,7 +237,7 @@ def register(mcp: Any, ContextType: Any) -> None:
             ctx=ctx,
         )
 
-    @mcp.tool()
+    @mutating_tool
     async def gm_run_stop(
         project_root: str = ".",
         prefer_cli: bool = False,
@@ -308,7 +309,7 @@ def register(mcp: Any, ContextType: Any) -> None:
             "message": "Game stopped" if ok_bool else "Failed to stop game",
         }
 
-    @mcp.tool()
+    @mutating_tool
     async def gm_run_status(
         project_root: str = ".",
         prefer_cli: bool = False,
