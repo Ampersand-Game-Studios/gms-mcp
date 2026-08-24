@@ -16,6 +16,7 @@ from .client_configs import (
     _generate_cursor_config,
     _make_claude_code_mcp_config,
     _read_codex_server_entry,
+    _render_codex_privacy_safe_preview,
 )
 from .common import (
     ConfigState,
@@ -23,9 +24,13 @@ from .common import (
     _collect_standard_check_state,
     _make_antigravity_server_config,
     _make_server_config,
+    _normalize_toolsets,
     _print_standard_app_setup_summary,
     _print_standard_check,
     _print_standard_check_json,
+    _privacy_safe_path_label,
+    _redact_config_value,
+    _redact_private_paths,
     _relpath_posix_or_none,
     _validate_common_entry,
     _write_json,
@@ -151,6 +156,8 @@ def _run_setup_for_client(
     args_prefix: list[str],
     dry_run: bool,
     safe_profile: bool,
+    onboarding_profile: str | None = None,
+    toolsets: str | None = None,
     config_path_override: str | None,
 ) -> int:
     spec = resolve_client_spec(client)
@@ -170,6 +177,8 @@ def _run_setup_for_client(
             args=args_prefix,
             gm_project_root_rel_posix=gm_rel_posix,
             safe_profile=safe_profile,
+            onboarding_profile=onboarding_profile,
+            toolsets=toolsets,
         )
         _generate_cursor_config(
             workspace_root=workspace_root,
@@ -180,12 +189,14 @@ def _run_setup_for_client(
             out_path=target,
             dry_run=dry_run,
             safe_profile=safe_profile,
+            onboarding_profile=onboarding_profile,
+            toolsets=toolsets,
         )
         print(
-            f"[{'DRY-RUN' if dry_run else 'INFO'}] Cursor config {'would be written to' if dry_run else 'written to'}: {target}"
+            f"[{'DRY-RUN' if dry_run else 'INFO'}] Cursor config {'would be written to' if dry_run else 'written to'}: {_privacy_safe_path_label(target)}"
         )
         if dry_run:
-            print(json.dumps(payload, indent=2, sort_keys=True))
+            print(json.dumps(_redact_private_paths(_redact_config_value(payload)), indent=2, sort_keys=True))
         return 0
 
     if spec.key == "codex":
@@ -200,15 +211,32 @@ def _run_setup_for_client(
                 dry_run=dry_run,
                 include_project_root=scope == "workspace",
                 safe_profile=safe_profile,
+                onboarding_profile=onboarding_profile,
+                toolsets=toolsets,
             )
         except (RuntimeError, ValueError) as exc:
             print(f"[ERROR] Could not generate Codex config: {exc}")
             return 2
         if dry_run:
-            print(f"[DRY-RUN] Codex config would be {'merged into' if scope == 'global' else 'written to'}: {target}")
-            print(payload)
-            print("[DRY-RUN] Final merged payload:")
-            print(merged.rstrip())
+            print(
+                f"[DRY-RUN] Codex config would be {'merged into' if scope == 'global' else 'written to'}: "
+                f"{_privacy_safe_path_label(target)}"
+            )
+            print(
+                _render_codex_privacy_safe_preview(
+                    merged_text=payload,
+                    server_name=server_name,
+                    source_label="<generated>",
+                )
+            )
+            print("[DRY-RUN] Final merged target entry (unrelated configuration omitted):")
+            print(
+                _render_codex_privacy_safe_preview(
+                    merged_text=merged,
+                    server_name=server_name,
+                    source_label="<generated>",
+                )
+            )
         else:
             print(f"[INFO] Codex config updated: {target}")
         return 0
@@ -225,14 +253,16 @@ def _run_setup_for_client(
                     gm_project_root=gm_project_root,
                     safe_profile=safe_profile,
                     dry_run=dry_run,
+                    onboarding_profile=onboarding_profile,
+                    toolsets=toolsets,
                 )
             except ValueError as exc:
                 print(f"[ERROR] Could not generate Antigravity config: {exc}")
                 return 2
             if dry_run:
-                print(f"[DRY-RUN] Antigravity config would be merged into: {target}")
-                print(json.dumps(payload, indent=2, sort_keys=True))
-                print(json.dumps(merged, indent=2, sort_keys=True))
+                print(f"[DRY-RUN] Antigravity config would be merged into: {_privacy_safe_path_label(target)}")
+                print(json.dumps(_redact_private_paths(_redact_config_value(payload)), indent=2, sort_keys=True))
+                print(json.dumps(_redact_private_paths(_redact_config_value(merged)), indent=2, sort_keys=True))
             else:
                 print(f"[INFO] Antigravity config updated: {target}")
             return 0
@@ -244,10 +274,12 @@ def _run_setup_for_client(
             workspace_root=workspace_root,
             gm_project_root=gm_project_root,
             safe_profile=safe_profile,
+            onboarding_profile=onboarding_profile,
+            toolsets=toolsets,
         )
         _write_json(target, payload, dry_run=dry_run)
         print(
-            f"[{'DRY-RUN' if dry_run else 'INFO'}] Antigravity workspace config {'would be written to' if dry_run else 'written to'}: {target}"
+            f"[{'DRY-RUN' if dry_run else 'INFO'}] Antigravity workspace config {'would be written to' if dry_run else 'written to'}: {_privacy_safe_path_label(target)}"
         )
         return 0
 
@@ -259,6 +291,8 @@ def _run_setup_for_client(
             command=command,
             args=args_prefix,
             safe_profile=safe_profile,
+            onboarding_profile=onboarding_profile,
+            toolsets=toolsets,
         )
         _generate_claude_code_plugin(
             plugin_dir=plugin_dir,
@@ -268,13 +302,16 @@ def _run_setup_for_client(
             dry_run=dry_run,
             include_bundle_assets=False,
             safe_profile=safe_profile,
+            onboarding_profile=onboarding_profile,
+            toolsets=toolsets,
         )
         print(
-            f"[{'DRY-RUN' if dry_run else 'INFO'}] Claude Code config {'would be written to' if dry_run else 'written to'}: {plugin_dir / '.mcp.json'}"
+            f"[{'DRY-RUN' if dry_run else 'INFO'}] Claude Code config {'would be written to' if dry_run else 'written to'}: "
+            f"{_privacy_safe_path_label(plugin_dir / '.mcp.json')}"
         )
         if dry_run:
-            print(json.dumps(manifest_payload, indent=2, sort_keys=True))
-            print(json.dumps(mcp_payload, indent=2, sort_keys=True))
+            print(json.dumps(_redact_private_paths(manifest_payload), indent=2, sort_keys=True))
+            print(json.dumps(_redact_private_paths(_redact_config_value(mcp_payload)), indent=2, sort_keys=True))
         return 0
 
     if spec.key == "claude-desktop":
@@ -284,6 +321,8 @@ def _run_setup_for_client(
             command=command,
             args=args_prefix,
             safe_profile=safe_profile,
+            onboarding_profile=onboarding_profile,
+            toolsets=toolsets,
         )
         _generate_claude_code_plugin(
             plugin_dir=target,
@@ -293,13 +332,15 @@ def _run_setup_for_client(
             dry_run=dry_run,
             include_bundle_assets=True,
             safe_profile=safe_profile,
+            onboarding_profile=onboarding_profile,
+            toolsets=toolsets,
         )
         print(
-            f"[{'DRY-RUN' if dry_run else 'INFO'}] Claude Desktop plugin {'would be synced to' if dry_run else 'synced to'}: {target}"
+            f"[{'DRY-RUN' if dry_run else 'INFO'}] Claude Desktop plugin {'would be synced to' if dry_run else 'synced to'}: {_privacy_safe_path_label(target)}"
         )
         if dry_run:
-            print(json.dumps(manifest_payload, indent=2, sort_keys=True))
-            print(json.dumps(mcp_payload, indent=2, sort_keys=True))
+            print(json.dumps(_redact_private_paths(manifest_payload), indent=2, sort_keys=True))
+            print(json.dumps(_redact_private_paths(_redact_config_value(mcp_payload)), indent=2, sort_keys=True))
         return 0
 
     # Generic JSON-style path for vscode/windsurf/openclaw/generic and future clients.
@@ -311,13 +352,15 @@ def _run_setup_for_client(
         args=args_prefix,
         gm_project_root_rel_posix=gm_rel_posix,
         safe_profile=safe_profile,
+        onboarding_profile=onboarding_profile,
+        toolsets=toolsets,
     )
     _write_json(target, payload, dry_run=dry_run)
     print(
-        f"[{'DRY-RUN' if dry_run else 'INFO'}] {spec.key} config {'would be written to' if dry_run else 'written to'}: {target}"
+        f"[{'DRY-RUN' if dry_run else 'INFO'}] {spec.key} config {'would be written to' if dry_run else 'written to'}: {_privacy_safe_path_label(target)}"
     )
     if dry_run:
-        print(json.dumps(payload, indent=2, sort_keys=True))
+        print(json.dumps(_redact_private_paths(_redact_config_value(payload)), indent=2, sort_keys=True))
     return 0
 
 
@@ -361,6 +404,8 @@ def _run_canonical_flow(
     args_prefix: list[str],
     dry_run: bool,
     safe_profile: bool,
+    onboarding_profile: str | None = None,
+    toolsets: str | None = None,
     config_path_override: str | None,
     openclaw_install_skills: bool,
     openclaw_skills_project: bool,
@@ -370,6 +415,15 @@ def _run_canonical_flow(
         return 2
     if scope not in CLIENT_SCOPES:
         print(f"[ERROR] Unsupported scope '{scope}'.")
+        return 2
+    if toolsets is not None:
+        try:
+            toolsets = _normalize_toolsets(toolsets)
+        except ValueError as exc:
+            print(f"[ERROR] {exc}")
+            return 2
+    if onboarding_profile == "safe" and toolsets not in (None, "core"):
+        print("[ERROR] The safe profile only supports the read-only core tool surface.")
         return 2
 
     if action == "setup":
@@ -383,6 +437,8 @@ def _run_canonical_flow(
             args_prefix=args_prefix,
             dry_run=dry_run,
             safe_profile=safe_profile,
+            onboarding_profile=onboarding_profile,
+            toolsets=toolsets,
             config_path_override=config_path_override,
         )
 
@@ -417,6 +473,8 @@ def _run_canonical_flow(
         args_prefix=args_prefix,
         dry_run=dry_run,
         safe_profile=safe_profile,
+        onboarding_profile=onboarding_profile,
+        toolsets=toolsets,
         config_path_override=config_path_override,
     )
     if setup_code != 0:

@@ -48,6 +48,7 @@ from .install_support.client_configs import (
 )
 from .install_support.common import (
     ConfigState,
+    ONBOARDING_PROFILES,
     ReadinessResult,
     _apply_safe_profile_env,
     _as_posix_path,
@@ -273,6 +274,17 @@ def main(argv: list[str] | None = None) -> int:
         help="Apply conservative env defaults to generated configs (disable direct mode, require dry-run for destructive tools).",
     )
     parser.add_argument(
+        "--profile",
+        choices=ONBOARDING_PROFILES,
+        default=None,
+        help="Canonical onboarding profile: safe (default), standard, or full. Ignored by legacy flags.",
+    )
+    parser.add_argument(
+        "--toolsets",
+        default=None,
+        help="Explicit comma-separated MCP toolsets for canonical setup; overrides the profile toolset selection.",
+    )
+    parser.add_argument(
         "--openclaw-install-skills",
         action="store_true",
         help="For canonical openclaw app-setup, also install bundled skills.",
@@ -348,9 +360,17 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.client:
         spec = resolve_client_spec(args.client)
+        canonical_profile = args.profile or "safe"
+        if args.safe_profile and args.profile not in (None, "safe"):
+            parser.error("--safe-profile cannot be combined with --profile standard or --profile full.")
         canonical_safe_profile = bool(
             args.safe_profile
-            or (spec.key == "antigravity" and args.scope == "global" and args.action in ("setup", "app-setup"))
+            or (
+                args.profile is None
+                and spec.key == "antigravity"
+                and args.scope == "global"
+                and args.action in ("setup", "app-setup")
+            )
         )
         return _finish(
             _run_canonical_flow(
@@ -364,6 +384,8 @@ def main(argv: list[str] | None = None) -> int:
                 args_prefix=args_prefix,
                 dry_run=dry_run,
                 safe_profile=canonical_safe_profile,
+                onboarding_profile="safe" if canonical_safe_profile else canonical_profile,
+                toolsets=args.toolsets,
                 config_path_override=args.config_path,
                 openclaw_install_skills=bool(args.openclaw_install_skills),
                 openclaw_skills_project=bool(args.openclaw_skills_project),

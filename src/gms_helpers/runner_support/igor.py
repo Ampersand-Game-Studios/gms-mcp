@@ -324,9 +324,12 @@ class RunnerIgorMixin:
                                 game_path.parent / "debug.log"
                             )
                             start_offset = 0
-                        reached_main_loop = self._wait_for_macos_main_loop(
-                            process, debug_log, start_offset, timeout_seconds=90.0
-                        )
+                    reached_main_loop = self._wait_for_macos_main_loop(
+                        process,
+                        debug_log,
+                        start_offset,
+                        timeout_seconds=90.0 if runner_pid is not None else 0.0,
+                    )
                     timed_out = (not reached_main_loop) and process.poll() is None
                 finally:
                     if process is not None and process.poll() is None:

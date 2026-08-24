@@ -58,6 +58,17 @@ Task-focused guides for common GameMaker development tasks.
 | [check-quality](workflows/check-quality.md) | Detect code anti-patterns |
 | [cleanup-project](workflows/cleanup-project.md) | Fix orphans and sync issues |
 | [pre-commit](workflows/pre-commit.md) | Validate before committing |
+
+### MCP Prompt Catalogue
+| Prompt | Outcome | Related workflow |
+|--------|---------|------------------|
+| `create-feature` | Build a scoped feature with organized assets and verification | [setup-object](workflows/setup-object.md), [setup-script](workflows/setup-script.md), [setup-room](workflows/setup-room.md), [orchestrate-macro](workflows/orchestrate-macro.md) |
+| `diagnose-project` | Establish a focused, evidence-backed project diagnosis | [check-health](workflows/check-health.md), [check-quality](workflows/check-quality.md), [analyze-logic](workflows/analyze-logic.md) |
+| `safe-refactor` | Change code or assets without losing references or structure | [smart-refactor](workflows/smart-refactor.md), [safe-delete](workflows/safe-delete.md) |
+| `compile-fix-retry` | Fix an actual compiler failure and rerun verification | [run-game](workflows/run-game.md), [check-health](workflows/check-health.md) |
+| `inspect-live-game` | Inspect supported live-game state without arbitrary evaluation | [debug-live](workflows/debug-live.md) |
+
+All MCP prompts are read-only templates: fetching one does not inspect or modify a project. Follow its linked workflow for command detail. For all implementation work, initialize required fields during setup, avoid GameMaker reflective `*_exists` probes, and place new assets under an intended folder rather than the project root.
 ---
 
 ## Reference

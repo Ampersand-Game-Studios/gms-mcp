@@ -11,10 +11,11 @@ from ..verification_policy import (
 )
 
 
-def register(mcp: Any, ContextType: Any) -> None:
+def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
     globals()["Context"] = ContextType
+    mutating_tool = (lambda function: function) if read_only else mcp.tool()
 
-    @mcp.tool()
+    @mutating_tool
     def gm_verification_status(project_root: str = ".", ctx: Context | None = None) -> Dict[str, Any]:
         """Show pending post-mutation compile verification state for the project."""
         _ = ctx
@@ -26,7 +27,7 @@ def register(mcp: Any, ContextType: Any) -> None:
             "pending_compile_verification": get_pending_compile_verification(root),
         }
 
-    @mcp.tool()
+    @mutating_tool
     def gm_verification_flush(
         project_root: str = ".",
         force: bool = False,
