@@ -187,6 +187,7 @@ class TestGMLIndex(unittest.TestCase):
         self.temp_dir = tempfile.mkdtemp()
         self.cache_dir = tempfile.mkdtemp()
         self.previous_cache_dir = os.environ.get("GMS_MCP_GML_INDEX_CACHE_DIR")
+        self.previous_read_only = os.environ.get("GMS_MCP_READ_ONLY")
         os.environ["GMS_MCP_GML_INDEX_CACHE_DIR"] = self.cache_dir
         self.addCleanup(lambda: self._cleanup_temp_dir())
 
@@ -211,6 +212,10 @@ class TestGMLIndex(unittest.TestCase):
             os.environ.pop("GMS_MCP_GML_INDEX_CACHE_DIR", None)
         else:
             os.environ["GMS_MCP_GML_INDEX_CACHE_DIR"] = self.previous_cache_dir
+        if self.previous_read_only is None:
+            os.environ.pop("GMS_MCP_READ_ONLY", None)
+        else:
+            os.environ["GMS_MCP_READ_ONLY"] = self.previous_read_only
 
     def _write_gml(self, rel_path: str, content: str) -> Path:
         """Write a GML file to temp project."""
@@ -255,6 +260,22 @@ function game_start() {
         self.assertTrue(index.cache_path.is_relative_to(Path(self.cache_dir)))
         self.assertFalse((Path(self.temp_dir) / index.CACHE_FILE).exists())
         self.assertNotIn(str(Path(self.temp_dir).resolve()), index.cache_path.read_text(encoding="utf-8"))
+
+    def test_read_only_build_never_writes_or_removes_cache_files(self):
+        from gms_helpers.gml_index import GMLIndex
+
+        self._write_gml("scripts/read_only/read_only.gml", "function read_only_symbol() { return 1; }")
+        legacy_cache = Path(self.temp_dir) / GMLIndex.CACHE_FILE
+        legacy_cache.write_text("legacy remains untouched", encoding="utf-8")
+        os.environ["GMS_MCP_READ_ONLY"] = "1"
+
+        index = GMLIndex(Path(self.temp_dir))
+        stats = index.build(force=True)
+
+        self.assertEqual(stats["status"], "built")
+        self.assertTrue(legacy_cache.is_file())
+        self.assertEqual(legacy_cache.read_text(encoding="utf-8"), "legacy remains untouched")
+        self.assertFalse(index.cache_path.exists())
 
     @unittest.skipIf(os.name == "nt", "Symlink containment test requires POSIX symlinks")
     def test_index_does_not_follow_gml_symlinks_outside_the_project(self):

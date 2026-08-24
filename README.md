@@ -19,6 +19,8 @@
 - **MCP 2.0 Runtime Features**: modern clients receive cache hints, structured tool failures, live project-resource updates after committed mutations or external project edits, safe RFC6570 asset/room resource templates, and multi-round Resolve input requests for exceptional mutation choices.
 - **Resolve Safety Policies**: normal calls remain automatic. Dependency-blocked asset/room deletion can request an explicit force-or-cancel choice; name collisions request a replacement name and never overwrite; referenced texture-group deletion requests a valid reassignment. Every resumed operation reauthorizes and revalidates immediately before writing.
 - **MCP Apps Dashboard**: clients that support MCP Apps can render a read-only project dashboard; every client still receives the same useful text and structured dashboard result.
+- **Outcome-Oriented MCP Prompts**: five read-only prompt templates adapt to the active profile, guiding implementation workflows when mutation tools exist and diagnosis-only plans in safe mode.
+- **Official ResourceTool Validation (opt-in)**: `gm_resourcetool_validate` runs only YoYo's fixed read-only `resource list` contract against a checksummed disposable `.yyp` descriptor under an OS sandbox. Live project files and child output are never exposed.
 - **Local Streamable HTTP**: `gms-mcp server --transport streamable-http --host 127.0.0.1` provides stateless MCP HTTP for local clients. It rejects non-loopback binds and unapproved Host/Origin headers, and supports validated `Mcp-Param-*` routing headers; it is not a remote shared-server deployment mode.
 - `gms-mcp-init`: generates shareable MCP config files for a workspace. Now auto-detects environment variables like `GMS_MCP_GMS_PATH` to include in the generated config.
 - **Privacy-Safe Telemetry (opt-in)**: `gms`, `gms-mcp-init`, and MCP usage can send anonymous usage metadata only after explicit consent.
@@ -331,7 +333,9 @@ gms-mcp-init \
 
 Optional:
 - `--config-path /custom/path` to override default config location
-- `--safe-profile` to enforce conservative env defaults
+- `--profile safe|standard|full` selects a named permission/tool profile; canonical setup defaults to read-only `safe`
+- `--toolsets core,assets,...` overrides `standard` or `full`; `safe` accepts only the read-only `core` surface
+- `--safe-profile` remains as the legacy alias for `--profile safe`
 
 Examples:
 
@@ -353,7 +357,7 @@ gms-mcp-init --client openclaw --scope workspace --action app-setup \
   --openclaw-install-skills --openclaw-skills-project
 ```
 
-For parity status and supported defaults, see `documentation/CLIENT_SUPPORT_MATRIX.md`.
+For declared support and the exact evidence boundary, see `documentation/COMPATIBILITY_MATRIX.md` and `documentation/CLIENT_SUPPORT_MATRIX.md`.
 
 Generate example configs for other MCP-capable clients:
 
@@ -486,6 +490,27 @@ Destructive tools (all support `dry_run=true`):
 Config scope defaults:
 - Assignment updates an asset's top-level `textureGroupId` **only when it is a dict** (null is left as-is).
 - If `configs` is omitted, assignment updates only **existing** `ConfigValues` entries; pass `configs=[...]` to create explicit overrides.
+
+### MCP Prompts
+Fetching a prompt is read-only and does not inspect or modify the project:
+- `create-feature`
+- `diagnose-project`
+- `safe-refactor`
+- `compile-fix-retry`
+- `inspect-live-game`
+
+### Official ResourceTool Validation
+The optional `resourcetool` toolset is disabled by default. Configure an absolute executable and the exact fixed JSON argv contract shown below. Other arguments fail closed. For an installed official `gm-cli`:
+
+```bash
+export GMS_MCP_TOOLSETS=resourcetool
+export GMS_MCP_RESOURCETOOL_ENABLED=1
+export GMS_MCP_RESOURCETOOL_EXECUTABLE="$(command -v gm-cli)"
+export GMS_MCP_RESOURCETOOL_SHA256="$(shasum -a 256 "$(command -v gm-cli)" | awk '{print $1}')"
+export GMS_MCP_RESOURCETOOL_ARGUMENTS_JSON='["resourcetool","eval","resource list","{project_copy_yyp}"]'
+```
+
+`gm_resourcetool_validate` requires the configured `gm-cli` executable to match its pinned SHA-256, rejects symlinks and private-file/content conventions, and copies only the `.yyp` descriptor into a task-owned temporary directory. It runs the fixed read-only command in an OS sandbox that blocks network access, live-project reads, and host writes; platforms without the required sandbox fail closed. Child output is suppressed, the minimal copy is checksummed before and after, and cleanup happens before returning. A rewrite, timeout, nonzero exit, ambiguous `.yyp`, identity mismatch, private data, or altered command contract fails closed. This validates ResourceTool project-list compatibility; it is not a mutation backend.
 
 ### MCP Resources
 Pre-built, cacheable project data for agents:
