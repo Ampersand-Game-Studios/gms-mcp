@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import subprocess
 from pathlib import Path
 
 
@@ -37,6 +38,38 @@ def _search_upwards_for_gamemaker_yyp(start_dir: Path) -> Path | None:
     return None
 
 
+def _single_tracked_nested_yyp_directory(directory: Path) -> Path | None:
+    """Resolve one tracked nested project when the MCP starts at a Git workspace root."""
+    if not (directory / ".git").exists():
+        return None
+    try:
+        completed = subprocess.run(
+            ["git", "-C", str(directory), "ls-files", "-z", "--", "*.yyp"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if completed.returncode != 0:
+        return None
+
+    tracked: list[Path] = []
+    for raw_path in completed.stdout.decode("utf-8", errors="surrogateescape").split("\0"):
+        if not raw_path:
+            continue
+        relative = Path(raw_path)
+        if any(part.casefold() == "prefabs" for part in relative.parts):
+            continue
+        candidate = directory / relative
+        if candidate.is_file():
+            tracked.append(candidate)
+    if len(tracked) != 1:
+        return None
+    return tracked[0].parent.resolve()
+
+
 def _resolve_candidate(candidate: Path) -> Path | None:
     if not candidate.exists() or not candidate.is_dir():
         return None
@@ -47,6 +80,10 @@ def _resolve_candidate(candidate: Path) -> Path | None:
     gamemaker_dir = candidate / "gamemaker"
     if gamemaker_dir.is_dir() and _list_yyp_files(gamemaker_dir):
         return gamemaker_dir
+
+    tracked_project = _single_tracked_nested_yyp_directory(candidate)
+    if tracked_project is not None:
+        return tracked_project
 
     found = _search_upwards_for_yyp(candidate)
     if found is not None:

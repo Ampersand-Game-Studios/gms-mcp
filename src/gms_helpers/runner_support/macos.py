@@ -11,7 +11,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from ..exceptions import RuntimeNotFoundError
 from ..runner_process import build_igor_environment
@@ -345,11 +345,15 @@ class RunnerMacOSMixin:
         baseline_tail_pids: set[int] | dict[int, MacOSProcess],
         launch_token: Optional[str] = None,
         timeout_seconds: float = 120.0,
+        output_lines: Optional[List[str]] = None,
     ) -> tuple[Optional[int], set[int], set[int]]:
         """Wait for a new macOS local run helper process to appear for this project."""
         deadline = time.monotonic() + timeout_seconds
 
         while time.monotonic() < deadline:
+            output = "\n".join(output_lines or [])
+            if "-600" in output and ("LSOpenApplication" in output or "LaunchServices" in output):
+                return None, set(), set()
             runner_pids, tail_pids, processes = self._find_macos_owned_helper_pids(
                 game_path,
                 debug_log_path,

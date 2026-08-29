@@ -8,6 +8,7 @@ import json
 import os
 import runpy
 import shutil
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -181,6 +182,16 @@ class TestUtilsCoverage(unittest.TestCase):
 
         with self.assertRaisesRegex(ValueError, "Multiple .yyp files"):
             find_yyp_file()
+
+    def test_project_resolution_finds_one_tracked_nested_yyp_from_repo_root(self):
+        repo_root = self.temp_dir / "tracked-repo"
+        project_root = repo_root / "game"
+        project_root.mkdir(parents=True)
+        (project_root / "nested.yyp").write_text('{"resources": []}', encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(repo_root)], check=True)
+        subprocess.run(["git", "-C", str(repo_root), "add", "game/nested.yyp"], check=True)
+
+        self.assertEqual(resolve_project_directory(repo_root), project_root.resolve())
 
     def test_update_yyp_parent_folder_and_listing_branches(self):
         self._write_project()
