@@ -297,6 +297,7 @@ class RunnerExecutionMixin:
                     baseline_runner_pids,
                     baseline_tail_pids,
                     macos_launch_token,
+                    output_lines=output_lines,
                 )
                 if self.game_process.poll() is not None and output_thread is not None:
                     output_thread.join(timeout=5)

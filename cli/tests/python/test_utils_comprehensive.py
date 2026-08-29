@@ -25,6 +25,7 @@ from gms_helpers.utils import (
     load_json_loose,
     save_pretty_json,
     save_pretty_json_gm,
+    save_json_loose,
     save_json,
     find_yyp,
     ensure_directory,
@@ -229,6 +230,16 @@ class TestJSONUtilities(TestUtilsComprehensive):
         # Should be loadable with load_json_loose due to trailing commas
         loaded_data = load_json_loose(Path(json_file))
         self.assertEqual(loaded_data, test_data)
+
+    def test_save_json_loose_preserves_existing_compact_style(self):
+        json_file = self.project_root / "compact.yy"
+        json_file.write_text('{"name":"room","layers":[]}', encoding="utf-8")
+
+        save_json_loose(json_file, {"name": "room", "layers": [], "visible": True})
+
+        content = json_file.read_text(encoding="utf-8")
+        self.assertNotIn("\n", content)
+        self.assertEqual(content, '{"name":"room","layers":[],"visible":true}')
 
     def test_add_trailing_commas(self):
         """Test adding trailing commas to JSON strings."""

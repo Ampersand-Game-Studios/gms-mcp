@@ -62,23 +62,19 @@ def load_json_loose(path: Path) -> Dict[str, Any] | None:
 
 def save_pretty_json(path: Path, data: Dict[str, Any]):
     """Pretty-print JSON (no trailing commas) - for compatibility."""
-    atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False))
+    atomic_write_text(path, _render_json_for_existing_path(path, data, default_trailing_commas=False))
 
 
 def save_pretty_json_gm(path: Path, data: Dict[str, Any]):
     """Pretty-print JSON with GameMaker-style trailing commas."""
-    json_str = json.dumps(data, indent=2, ensure_ascii=False)
-    json_str = add_trailing_commas(json_str)
-    atomic_write_text(path, json_str)
+    atomic_write_text(path, _render_json_for_existing_path(path, data, default_trailing_commas=True))
 
 
 def save_json_loose(path: Path | str, data: Dict[str, Any]):
     """Save data as JSON with GameMaker-style trailing commas."""
     if isinstance(path, str):
         path = Path(path)
-    json_str = json.dumps(data, indent=2, ensure_ascii=False)
-    json_str = add_trailing_commas(json_str)
-    atomic_write_text(path, json_str)
+    atomic_write_text(path, _render_json_for_existing_path(path, data, default_trailing_commas=True))
 
 
 def save_json(data, file_path):
@@ -86,9 +82,42 @@ def save_json(data, file_path):
     dir_path = os.path.dirname(file_path)
     if dir_path:  # Only create directory if there is one
         os.makedirs(dir_path, exist_ok=True)
-    json_str = json.dumps(data, indent=2, ensure_ascii=False)
-    json_str = add_trailing_commas(json_str)
-    atomic_write_text(Path(file_path), json_str)
+    path = Path(file_path)
+    atomic_write_text(path, _render_json_for_existing_path(path, data, default_trailing_commas=True))
+
+
+def _render_json_for_existing_path(
+    path: Path,
+    data: Dict[str, Any],
+    *,
+    default_trailing_commas: bool,
+) -> str:
+    """Render JSON without expanding an existing compact GameMaker file."""
+    original = ""
+    try:
+        original = path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        pass
+
+    if original and "\n" not in original.strip():
+        return json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+
+    indent: int | str = 2
+    trailing_commas = default_trailing_commas
+    final_newline = False
+    if original:
+        indent_match = re.search(r"(?m)^([ \t]+)\S", original)
+        if indent_match:
+            indent = indent_match.group(1)
+        trailing_commas = bool(TRAILING_COMMA_RE.search(original))
+        final_newline = original.endswith("\n")
+
+    rendered = json.dumps(data, indent=indent, ensure_ascii=False)
+    if trailing_commas:
+        rendered = add_trailing_commas(rendered)
+    if final_newline:
+        rendered += "\n"
+    return rendered
 
 
 def atomic_write_text(path: Path | str, content: str, encoding: str = "utf-8") -> None:

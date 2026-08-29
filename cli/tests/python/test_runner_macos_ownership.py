@@ -243,6 +243,31 @@ class TestMacOSRunnerOwnership(unittest.TestCase):
         self.assertEqual(runners, {20, 21})
         self.assertEqual(tails, {30})
 
+    def test_runner_start_stops_waiting_after_launchservices_failure(self) -> None:
+        process = MagicMock(pid=77)
+        process.poll.return_value = None
+        output_lines = ["LSOpenApplication() failed with error -600"]
+
+        with (
+            patch.object(self.runner, "_find_macos_owned_helper_pids") as find_helpers,
+            patch("gms_helpers.runner_support.macos.time.sleep") as sleep,
+        ):
+            pid, runners, tails = self.runner._wait_for_macos_runner_start(
+                process,
+                self.game_path,
+                self.debug_log,
+                set(),
+                set(),
+                output_lines=output_lines,
+                timeout_seconds=120,
+            )
+
+        self.assertIsNone(pid)
+        self.assertEqual(runners, set())
+        self.assertEqual(tails, set())
+        find_helpers.assert_not_called()
+        sleep.assert_not_called()
+
     def test_session_token_finds_bare_runner_spawned_after_initial_tracking(self) -> None:
         bare = MacOSProcess(
             21,
