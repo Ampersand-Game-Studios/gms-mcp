@@ -312,10 +312,8 @@ def validate_with_resourcetool(
         copy_root = temporary_root / "project"
         private_paths = (source, copy_root, temporary_root)
         try:
-            _manifest(source)
-            copy_root.mkdir()
-            shutil.copy2(project_files[0], copy_root / project_files[0].name, follow_symlinks=False)
-            before = _manifest(copy_root)
+            source_before = _manifest(source)
+            shutil.copytree(source, copy_root, copy_function=shutil.copy2)
             copied = _manifest(copy_root)
         except (OSError, ValueError) as error:
             return _public_result(
@@ -325,7 +323,7 @@ def validate_with_resourcetool(
                 evidence={"copy_created": copy_root.exists(), "cleanup_completed": True},
                 error=_safe_text(error, private_paths=private_paths),
             )
-        if copied != before:
+        if copied != source_before:
             return _public_result(
                 ok=False,
                 status="copy_mismatch",
@@ -333,11 +331,13 @@ def validate_with_resourcetool(
                 evidence={
                     "copy_created": True,
                     "cleanup_completed": True,
-                    "source_checksum": _manifest_checksum(before),
+                    "source_checksum": _manifest_checksum(source_before),
                     "copy_checksum": _manifest_checksum(copied),
-                    "file_count": len(before),
+                    "file_count": len(source_before),
                 },
             )
+
+        before = copied
 
         command = _copy_only_command(command_template, copy_root / project_files[0].name)
         sandboxed_command = _sandboxed_command(command, source=source, temporary_root=temporary_root)
@@ -362,6 +362,7 @@ def validate_with_resourcetool(
                 shell=False,
             )
         except subprocess.TimeoutExpired as error:
+            source_after = _manifest(source)
             after = _manifest(copy_root)
             return _public_result(
                 ok=False,
@@ -372,6 +373,8 @@ def validate_with_resourcetool(
                     "cleanup_completed": True,
                     "before_checksum": _manifest_checksum(before),
                     "after_checksum": _manifest_checksum(after),
+                    "source_checksum": _manifest_checksum(source_before),
+                    "rewritten_source": source_after != source_before,
                     "rewritten_copy": after != before,
                     "file_count": len(before),
                     "timeout_seconds": timeout,
@@ -379,6 +382,7 @@ def validate_with_resourcetool(
                 output_suppressed=True,
             )
         except OSError as error:
+            source_after = _manifest(source)
             after = _manifest(copy_root)
             return _public_result(
                 ok=False,
@@ -389,17 +393,23 @@ def validate_with_resourcetool(
                     "cleanup_completed": True,
                     "before_checksum": _manifest_checksum(before),
                     "after_checksum": _manifest_checksum(after),
+                    "source_checksum": _manifest_checksum(source_before),
+                    "rewritten_source": source_after != source_before,
                     "rewritten_copy": after != before,
                     "file_count": len(before),
                 },
                 error=_safe_text(error, private_paths=private_paths),
             )
 
+        source_after = _manifest(source)
         after = _manifest(copy_root)
+        rewritten_source = source_after != source_before
         rewritten = after != before
         status = (
             "validated"
-            if completed.returncode == 0 and not rewritten
+            if completed.returncode == 0 and not rewritten and not rewritten_source
+            else "source_rewritten"
+            if rewritten_source
             else "rewrote_copy"
             if rewritten
             else "validation_failed"
@@ -413,6 +423,8 @@ def validate_with_resourcetool(
                 "cleanup_completed": True,
                 "before_checksum": _manifest_checksum(before),
                 "after_checksum": _manifest_checksum(after),
+                "source_checksum": _manifest_checksum(source_before),
+                "rewritten_source": rewritten_source,
                 "rewritten_copy": rewritten,
                 "file_count": len(before),
                 "timeout_seconds": timeout,
