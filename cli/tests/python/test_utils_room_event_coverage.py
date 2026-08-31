@@ -26,6 +26,7 @@ if str(SRC_ROOT) not in sys.path:
 from gms_helpers import room_helper, room_instance_helper
 from gms_helpers.exceptions import AssetNotFoundError, GMSError, ProjectNotFoundError, ValidationError
 from gms_helpers.maintenance import event_sync
+from gms_mcp import project_detection
 from gms_helpers.utils import (
     _list_yyp_files,
     _search_upwards_for_gamemaker_yyp,
@@ -188,10 +189,123 @@ class TestUtilsCoverage(unittest.TestCase):
         project_root = repo_root / "game"
         project_root.mkdir(parents=True)
         (project_root / "nested.yyp").write_text('{"resources": []}', encoding="utf-8")
+        prefab_yyp = repo_root / "Prefabs" / "template.yyp"
+        prefab_yyp.parent.mkdir()
+        prefab_yyp.write_text('{"resources": []}', encoding="utf-8")
         subprocess.run(["git", "init", "-q", str(repo_root)], check=True)
-        subprocess.run(["git", "-C", str(repo_root), "add", "game/nested.yyp"], check=True)
+        subprocess.run(["git", "-C", str(repo_root), "add", "game/nested.yyp", "Prefabs/template.yyp"], check=True)
 
         self.assertEqual(resolve_project_directory(repo_root), project_root.resolve())
+        with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
+            resolve_project_directory(prefab_yyp)
+
+    def test_project_resolution_rejects_ambiguous_or_untracked_git_workspace_projects(self):
+        ambiguous_root = self.temp_dir / "ambiguous-repo"
+        for relative_path in ("gamemaker/one.yyp", "other/two.yyp"):
+            path = ambiguous_root / relative_path
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text('{"resources": []}', encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(ambiguous_root)], check=True)
+        subprocess.run(["git", "-C", str(ambiguous_root), "add", "gamemaker/one.yyp", "other/two.yyp"], check=True)
+
+        with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
+            resolve_project_directory(ambiguous_root)
+
+        self.assertEqual(
+            resolve_project_directory(ambiguous_root / "gamemaker"),
+            (ambiguous_root / "gamemaker").resolve(),
+        )
+
+        untracked_root = self.temp_dir / "untracked-repo"
+        untracked_yyp = untracked_root / "gamemaker" / "untracked.yyp"
+        untracked_yyp.parent.mkdir(parents=True)
+        untracked_yyp.write_text('{"resources": []}', encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(untracked_root)], check=True)
+
+        with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
+            resolve_project_directory(untracked_root)
+        self.assertEqual(
+            resolve_project_directory(untracked_yyp.parent),
+            untracked_yyp.parent.resolve(),
+        )
+
+    def test_project_resolution_rejects_git_failure_and_paths_outside_workspace(self):
+        repo_root = self.temp_dir / "failure-repo"
+        untracked_yyp = repo_root / "gamemaker" / "untracked.yyp"
+        untracked_yyp.parent.mkdir(parents=True)
+        untracked_yyp.write_text('{"resources": []}', encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(repo_root)], check=True)
+
+        with patch.object(project_detection.subprocess, "run", side_effect=OSError("git unavailable")):
+            with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
+                resolve_project_directory(repo_root)
+
+        outside_yyp = self.temp_dir / "outside" / "escape.yyp"
+        outside_yyp.parent.mkdir(parents=True)
+        outside_yyp.write_text('{"resources": []}', encoding="utf-8")
+        escaped = SimpleNamespace(returncode=0, stdout=b"../outside/escape.yyp\\0")
+        with patch.object(project_detection.subprocess, "run", return_value=escaped):
+            with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
+                resolve_project_directory(repo_root)
+
+    def test_project_resolution_rejects_untracked_projects_from_git_subdirectories(self):
+        repo_root = self.temp_dir / "subdirectory-repo"
+        nested = repo_root / "tools" / "nested"
+        nested.mkdir(parents=True)
+        untracked_yyp = repo_root / "gamemaker" / "untracked.yyp"
+        untracked_yyp.parent.mkdir()
+        untracked_yyp.write_text('{"resources": []}', encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(repo_root)], check=True)
+
+        with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
+            resolve_project_directory(nested)
+
+    def test_project_resolution_does_not_redirect_untracked_explicit_project(self):
+        repo_root = self.temp_dir / "redirect-repo"
+        tracked_yyp = repo_root / "game" / "tracked.yyp"
+        untracked_yyp = repo_root / "game" / "untracked.yyp"
+        tracked_yyp.parent.mkdir(parents=True)
+        tracked_yyp.write_text('{"resources": []}', encoding="utf-8")
+        untracked_yyp.write_text('{"resources": []}', encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(repo_root)], check=True)
+        subprocess.run(["git", "-C", str(repo_root), "add", "game/tracked.yyp"], check=True)
+
+        with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
+            resolve_project_directory(untracked_yyp)
+        with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
+            resolve_project_directory(repo_root)
+        with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
+            resolve_project_directory(tracked_yyp)
+
+    def test_project_resolution_accepts_nested_path_inside_selected_tracked_project(self):
+        repo_root = self.temp_dir / "multi-project-repo"
+        selected_yyp = repo_root / "game" / "selected.yyp"
+        other_yyp = repo_root / "other" / "other.yyp"
+        nested = selected_yyp.parent / "scripts" / "deep"
+        nested.mkdir(parents=True)
+        other_yyp.parent.mkdir(parents=True)
+        selected_yyp.write_text('{"resources": []}', encoding="utf-8")
+        other_yyp.write_text('{"resources": []}', encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(repo_root)], check=True)
+        subprocess.run(["git", "-C", str(repo_root), "add", "game/selected.yyp", "other/other.yyp"], check=True)
+
+        self.assertEqual(resolve_project_directory(nested), selected_yyp.parent.resolve())
+
+    def test_project_resolution_does_not_cross_nested_git_workspace_boundary(self):
+        outer_root = self.temp_dir / "outer-repo"
+        outer_project = outer_root / "gamemaker" / "outer.yyp"
+        outer_project.parent.mkdir(parents=True)
+        outer_project.write_text('{"resources": []}', encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(outer_root)], check=True)
+        subprocess.run(["git", "-C", str(outer_root), "add", "gamemaker/outer.yyp"], check=True)
+
+        inner_root = outer_root / "vendor" / "inner-repo"
+        nested = inner_root / "tools"
+        nested.mkdir(parents=True)
+        subprocess.run(["git", "init", "-q", str(inner_root)], check=True)
+
+        with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
+            resolve_project_directory(nested)
 
     def test_update_yyp_parent_folder_and_listing_branches(self):
         self._write_project()

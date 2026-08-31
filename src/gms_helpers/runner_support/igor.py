@@ -127,10 +127,16 @@ class RunnerIgorMixin:
         return cmd
 
     def _stream_igor_output(
-        self, process: subprocess.Popen, stage_label: str, *, emit_output: bool = True
+        self,
+        process: subprocess.Popen,
+        stage_label: str,
+        *,
+        emit_output: bool = True,
+        output_lines: Optional[List[str]] = None,
     ) -> List[str]:
         """Stream Igor stdout while lightly classifying lines for humans."""
-        output_lines: List[str] = []
+        if output_lines is None:
+            output_lines = []
 
         if not process.stdout:
             return output_lines
@@ -202,7 +208,12 @@ class RunnerIgorMixin:
         output_lines: List[str] = []
 
         def _reader() -> None:
-            output_lines.extend(self._stream_igor_output(process, stage_label, emit_output=emit_output))
+            self._stream_igor_output(
+                process,
+                stage_label,
+                emit_output=emit_output,
+                output_lines=output_lines,
+            )
 
         thread = threading.Thread(target=_reader, daemon=True)
         thread.start()
@@ -315,6 +326,7 @@ class RunnerIgorMixin:
                         baseline_tail_pids,
                         macos_launch_token,
                         timeout_seconds=90.0,
+                        output_lines=output_lines,
                     )
                     if runner_pid is not None:
                         runner_process = self._snapshot_macos_processes().get(runner_pid)
@@ -365,7 +377,10 @@ class RunnerIgorMixin:
                     print("[OK] Local compile validation reached the game main loop successfully!")
                     return True
 
-                if timed_out:
+                launch_failure = self._macos_launchservices_failure(output_lines)
+                if launch_failure is not None:
+                    failure_message = f"macOS runner launch failed: {launch_failure}"
+                elif timed_out:
                     failure_message = "Local compile validation timed out before the game reached the main loop."
                 elif process is not None and process.returncode == 0:
                     failure_message = "Local compile validation exited before the game reached the main loop."

@@ -303,13 +303,20 @@ class RunnerExecutionMixin:
                     output_thread.join(timeout=5)
 
                 if runner_pid is None:
-                    if self.game_process.poll() is None:
+                    process_was_running = self.game_process.poll() is None
+                    if process_was_running:
                         self.game_process.terminate()
                         try:
                             self.game_process.wait(timeout=5)
                         except subprocess.TimeoutExpired:
                             self.game_process.kill()
                             self.game_process.wait(timeout=5)
+                    if output_thread is not None:
+                        output_thread.join(timeout=5)
+                    launch_failure = self._macos_launchservices_failure(output_lines)
+                    if launch_failure is not None:
+                        failure_message = f"macOS runner launch failed: {launch_failure}"
+                    elif process_was_running:
                         failure_message = "Local run timed out before macOS launched the runner process."
                     else:
                         failure_message = self._build_stage_failure_message(
@@ -324,8 +331,6 @@ class RunnerExecutionMixin:
                             output_lines,
                         ),
                     )
-                    if output_thread is not None:
-                        output_thread.join(timeout=5)
                     print(f"[ERROR] {failure_message}")
                     if background:
                         return {

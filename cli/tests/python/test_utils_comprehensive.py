@@ -145,6 +145,17 @@ class TestJSONUtilities(TestUtilsComprehensive):
         except json.JSONDecodeError:
             self.fail("Result should be valid JSON after stripping trailing commas")
 
+    def test_strip_trailing_commas_preserves_commas_inside_strings(self):
+        raw = '{"array_marker": ",]", "object_marker": ",}", "escaped_quote": "\\",]", "items": [1,],}'
+
+        stripped = strip_trailing_commas(raw)
+
+        self.assertEqual(
+            stripped,
+            '{"array_marker": ",]", "object_marker": ",}", "escaped_quote": "\\",]", "items": [1]}',
+        )
+        self.assertEqual(json.loads(stripped)["escaped_quote"], '",]')
+
     def test_load_json_loose_valid_json(self):
         """Test loading valid JSON files."""
         test_data = {"name": "test", "value": 123}
@@ -240,6 +251,60 @@ class TestJSONUtilities(TestUtilsComprehensive):
         content = json_file.read_text(encoding="utf-8")
         self.assertNotIn("\n", content)
         self.assertEqual(content, '{"name":"room","layers":[],"visible":true}')
+
+    def test_save_json_loose_preserves_compact_trailing_commas_and_strings(self):
+        json_file = self.project_root / "compact_trailing.yy"
+        json_file.write_text('{"name":"room","marker":",}","layers":[],}', encoding="utf-8")
+        data = {"name": "room", "marker": ",}", "layers": [], "visible": True}
+
+        save_json_loose(json_file, data)
+
+        content = json_file.read_text(encoding="utf-8")
+        self.assertEqual(content, '{"name":"room","marker":",}","layers":[],"visible":true,}')
+        self.assertEqual(json.loads(strip_trailing_commas(content)), data)
+
+    def test_save_json_loose_preserves_compact_file_with_final_newline(self):
+        data = {"name": "room", "layers": [], "visible": True}
+
+        for label, line_ending in (("lf", b"\n"), ("crlf", b"\r\n")):
+            with self.subTest(line_ending=label):
+                json_file = self.project_root / f"compact_newline_{label}.yy"
+                json_file.write_bytes(b'{"name":"room","layers":[],}' + line_ending)
+
+                save_json_loose(json_file, data)
+
+                self.assertEqual(
+                    json_file.read_bytes(),
+                    b'{"name":"room","layers":[],"visible":true,}' + line_ending,
+                )
+
+    def test_save_json_loose_preserves_space_indentation_and_no_final_newline(self):
+        json_file = self.project_root / "spaces.yy"
+        json_file.write_text('{\n    "name": "room",\n}', encoding="utf-8")
+        data = {"name": "room", "marker": ",["}
+
+        save_json_loose(json_file, data)
+
+        content = json_file.read_text(encoding="utf-8")
+        self.assertTrue(content.startswith('{\n    "name"'))
+        self.assertFalse(content.endswith("\n"))
+        self.assertIn('"marker": ",[",', content)
+        self.assertEqual(json.loads(strip_trailing_commas(content)), data)
+
+    def test_save_json_loose_preserves_crlf_tab_indentation_and_final_newline(self):
+        json_file = self.project_root / "tabs_crlf.yy"
+        json_file.write_bytes(b'{\r\n\t"name": "room",\r\n\t"layers": [],\r\n}\r\n')
+        data = {"name": "room", "marker": ",]", "layers": ["ends with ,}"]}
+
+        save_json_loose(json_file, data)
+
+        content = json_file.read_bytes().decode("utf-8")
+        self.assertTrue(content.startswith('{\r\n\t"name"'))
+        self.assertNotIn("\n", content.replace("\r\n", ""))
+        self.assertTrue(content.endswith("\r\n"))
+        self.assertIn('\t"marker": ",]",\r\n', content)
+        self.assertIn('\t\t"ends with ,}",\r\n', content)
+        self.assertEqual(json.loads(strip_trailing_commas(content)), data)
 
     def test_add_trailing_commas(self):
         """Test adding trailing commas to JSON strings."""
@@ -782,7 +847,7 @@ class TestErrorConditions(TestUtilsComprehensive):
         """Test loading JSON file with permission error."""
         json_file = self.project_root / "restricted.json"
         json_file.write_text('{"test": "data"}', encoding="utf-8")
-        with patch("pathlib.Path.read_text", side_effect=PermissionError("No permission")):
+        with patch("gms_helpers.utils._read_text_preserving_newlines", side_effect=PermissionError("No permission")):
             with self.assertRaises(PermissionError):
                 load_json_loose(json_file)
 
@@ -793,7 +858,7 @@ class TestErrorConditions(TestUtilsComprehensive):
         readonly_dir = self.project_root / "readonly"
         readonly_dir.mkdir()
         json_file = readonly_dir / "test.json"
-        with patch("pathlib.Path.write_text", side_effect=PermissionError("No permission")):
+        with patch("gms_helpers.utils.atomic_write_text", side_effect=PermissionError("No permission")):
             with self.assertRaises(PermissionError):
                 save_pretty_json(json_file, test_data)
 
