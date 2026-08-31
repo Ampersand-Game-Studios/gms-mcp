@@ -38,10 +38,19 @@ def _search_upwards_for_gamemaker_yyp(start_dir: Path) -> Path | None:
     return None
 
 
-def _single_tracked_nested_yyp_directory(directory: Path) -> Path | None:
-    """Resolve one tracked nested project when the MCP starts at a Git workspace root."""
+def _git_workspace_root(directory: Path) -> Path | None:
+    resolved_directory = directory.resolve()
+    for candidate in [resolved_directory, *resolved_directory.parents]:
+        if (candidate / ".git").exists():
+            return candidate
+    return None
+
+
+def _tracked_yyp_paths(directory: Path) -> list[Path] | None:
+    """Return safe, tracked, non-prefab projects, or ``None`` when Git fails."""
     if not (directory / ".git").exists():
-        return None
+        return []
+    workspace_root = directory.resolve()
     try:
         completed = subprocess.run(
             ["git", "-C", str(directory), "ls-files", "-z", "--", "*.yyp"],
@@ -62,16 +71,64 @@ def _single_tracked_nested_yyp_directory(directory: Path) -> Path | None:
         relative = Path(raw_path)
         if any(part.casefold() == "prefabs" for part in relative.parts):
             continue
-        candidate = directory / relative
+        if relative.is_absolute():
+            continue
+        candidate = (workspace_root / relative).resolve()
+        if not candidate.is_relative_to(workspace_root):
+            continue
         if candidate.is_file():
             tracked.append(candidate)
+    return tracked
+
+
+def _single_tracked_nested_yyp_directory(directory: Path) -> Path | None:
+    """Resolve one tracked nested project when the MCP starts at a Git workspace root."""
+    tracked = _tracked_yyp_paths(directory)
+    if tracked is None:
+        return None
     if len(tracked) != 1:
         return None
     return tracked[0].parent.resolve()
 
 
-def _resolve_candidate(candidate: Path) -> Path | None:
+def _resolve_candidate(candidate: Path, *, requested_yyp: Path | None = None) -> Path | None:
     if not candidate.exists() or not candidate.is_dir():
+        return None
+
+    # A Git workspace is authoritative: only a single tracked, non-prefab
+    # project may be selected. Do not fall back to arbitrary filesystem matches
+    # or traverse beyond a nested workspace boundary.
+    workspace_root = _git_workspace_root(candidate)
+    if workspace_root is not None:
+        tracked = _tracked_yyp_paths(workspace_root)
+        if tracked is None:
+            return None
+        if requested_yyp is not None:
+            requested_yyp = requested_yyp.resolve()
+            project_files = _list_yyp_files(requested_yyp.parent)
+            if requested_yyp in tracked and len(project_files) == 1 and project_files[0].resolve() == requested_yyp:
+                return requested_yyp.parent
+            return None
+        direct_yyp_files = _list_yyp_files(candidate)
+        direct_tracked = [path for path in direct_yyp_files if path.resolve() in tracked]
+        if len(direct_yyp_files) == 1 and len(direct_tracked) == 1:
+            return candidate.resolve()
+        if direct_yyp_files:
+            return None
+
+        project_directories = sorted({path.parent.resolve() for path in tracked})
+
+        def _is_unambiguous_project(directory: Path) -> bool:
+            project_files = _list_yyp_files(directory)
+            return len(project_files) == 1 and project_files[0].resolve() in tracked
+
+        containing_projects = [path for path in project_directories if candidate.resolve().is_relative_to(path)]
+        if containing_projects:
+            selected = max(containing_projects, key=lambda path: len(path.parts))
+            return selected if _is_unambiguous_project(selected) else None
+        nested_projects = [path for path in project_directories if path.is_relative_to(candidate.resolve())]
+        if len(nested_projects) == 1 and _is_unambiguous_project(nested_projects[0]):
+            return nested_projects[0]
         return None
 
     if _list_yyp_files(candidate):
@@ -97,8 +154,16 @@ def resolve_project_directory(project_root: str | Path | None = None) -> Path:
     if project_root is not None:
         project_root_str = str(project_root).strip()
         if project_root_str and project_root_str != ".":
-            explicit_candidate = _normalize_candidate(Path(project_root_str))
-            resolved = _resolve_candidate(explicit_candidate)
+            raw_candidate = Path(project_root_str).expanduser()
+            if not raw_candidate.is_absolute():
+                raw_candidate = (Path.cwd() / raw_candidate).resolve()
+            requested_yyp = (
+                raw_candidate.resolve()
+                if raw_candidate.is_file() and raw_candidate.suffix.casefold() == ".yyp"
+                else None
+            )
+            explicit_candidate = _normalize_candidate(raw_candidate)
+            resolved = _resolve_candidate(explicit_candidate, requested_yyp=requested_yyp)
             if resolved is not None:
                 return resolved
             raise FileNotFoundError(
