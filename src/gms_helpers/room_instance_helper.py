@@ -52,11 +52,21 @@ def _save_room_data(room_path: Path, data: Dict[str, Any]):
 
 def _find_layer_by_name(room_data: Dict[str, Any], layer_name: str) -> Dict[str, Any]:
     """Find a layer by name in room data."""
-    layers = room_data.get("layers", [])
-    for layer in layers:
+    for layer in _iter_layers(room_data.get("layers", [])):
         if layer.get("name") == layer_name:
             return layer
     raise ValidationError(f"Layer '{layer_name}' not found in room")
+
+
+def _iter_layers(layers: Any):
+    """Yield every layer in GameMaker's nested room-layer hierarchy."""
+    if not isinstance(layers, list):
+        return
+    for layer in layers:
+        if not isinstance(layer, dict):
+            continue
+        yield layer
+        yield from _iter_layers(layer.get("layers", []))
 
 
 # ------------------------------------------------------------------
@@ -160,7 +170,7 @@ def remove_instance(room_name: str, instance_id: str):
     room_data = _load_room_data(room_path)
 
     found = False
-    for layer in room_data.get("layers", []):
+    for layer in _iter_layers(room_data.get("layers", [])):
         if layer.get("resourceType") == "GMRInstanceLayer":
             instances = layer.get("instances", [])
             new_instances = [inst for inst in instances if inst.get("name") != instance_id]
@@ -205,7 +215,7 @@ def list_instances(room_name: str, layer_name: Optional[str] = None) -> List[Dic
     results = []
     print(f"[ROOM] Instances in room '{room_name}':")
 
-    layers = room_data.get("layers", [])
+    layers = list(_iter_layers(room_data.get("layers", [])))
     if layer_name:
         layers = [l for l in layers if l.get("name") == layer_name]
         if not layers:
@@ -258,7 +268,7 @@ def modify_instance(room_name: str, instance_id: str, **kwargs):
     found_inst = None
     target_layer = None
 
-    for layer in room_data.get("layers", []):
+    for layer in _iter_layers(room_data.get("layers", [])):
         if layer.get("resourceType") == "GMRInstanceLayer":
             for inst in layer.get("instances", []):
                 if inst.get("name") == instance_id:
@@ -299,7 +309,7 @@ def set_creation_code(room_name: str, instance_id: str, code: str):
     room_data = _load_room_data(room_path)
 
     found_inst = None
-    for layer in room_data.get("layers", []):
+    for layer in _iter_layers(room_data.get("layers", [])):
         if layer.get("resourceType") == "GMRInstanceLayer":
             for inst in layer.get("instances", []):
                 if inst.get("name") == instance_id:

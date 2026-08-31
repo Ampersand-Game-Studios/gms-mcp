@@ -7,6 +7,8 @@ import subprocess
 import platform
 import sys
 import tempfile
+import threading
+import time
 import unittest
 import json
 from pathlib import Path
@@ -242,6 +244,170 @@ class TestMacOSRunnerOwnership(unittest.TestCase):
         self.assertEqual(pid, 20)
         self.assertEqual(runners, {20, 21})
         self.assertEqual(tails, {30})
+
+    def test_runner_start_stops_waiting_after_launchservices_failure(self) -> None:
+        process = MagicMock(pid=77)
+        process.poll.return_value = None
+        output_lines = ["LSOpenApplication() failed with error -600"]
+
+        with (
+            patch.object(self.runner, "_find_macos_owned_helper_pids") as find_helpers,
+            patch("gms_helpers.runner_support.macos.time.sleep") as sleep,
+        ):
+            pid, runners, tails = self.runner._wait_for_macos_runner_start(
+                process,
+                self.game_path,
+                self.debug_log,
+                set(),
+                set(),
+                output_lines=output_lines,
+                timeout_seconds=120,
+            )
+
+        self.assertIsNone(pid)
+        self.assertEqual(runners, set())
+        self.assertEqual(tails, set())
+        find_helpers.assert_not_called()
+        sleep.assert_not_called()
+        self.assertEqual(
+            self.runner.last_failure_message,
+            "macOS runner launch failed: LSOpenApplication() failed with error -600",
+        )
+
+    def test_async_igor_output_is_visible_before_process_stdout_closes(self) -> None:
+        line_emitted = threading.Event()
+        release_stdout = threading.Event()
+
+        def stdout_lines():
+            line_emitted.set()
+            yield "LSOpenApplication() failed with error -600\n"
+            release_stdout.wait(timeout=2)
+
+        process = MagicMock()
+        process.stdout = stdout_lines()
+        output_lines, output_thread = self.runner._collect_igor_output_async(
+            process,
+            "local run",
+            emit_output=False,
+        )
+
+        try:
+            self.assertTrue(line_emitted.wait(timeout=1))
+            deadline = time.monotonic() + 1
+            while not output_lines and time.monotonic() < deadline:
+                time.sleep(0.01)
+            self.assertEqual(output_lines, ["LSOpenApplication() failed with error -600"])
+        finally:
+            release_stdout.set()
+            output_thread.join(timeout=1)
+
+    def test_runner_start_does_not_combine_unrelated_lines_into_launchservices_failure(self) -> None:
+        process = MagicMock(pid=77)
+        process.poll.return_value = None
+        expected = MacOSProcess(20, 77, f"/runtime/Mac_Runner -game {self.game_path}")
+
+        with patch.object(
+            self.runner,
+            "_find_macos_owned_helper_pids",
+            return_value=({20}, set(), {20: expected}),
+        ):
+            pid, runners, tails = self.runner._wait_for_macos_runner_start(
+                process,
+                self.game_path,
+                self.debug_log,
+                set(),
+                set(),
+                output_lines=["LaunchServices initialized", "asset offset -600"],
+                timeout_seconds=1,
+            )
+
+        self.assertEqual(pid, 20)
+        self.assertEqual(runners, {20})
+        self.assertEqual(tails, set())
+
+    def test_runner_start_rejects_similar_non_launchservices_error_code(self) -> None:
+        process = MagicMock(pid=77)
+        process.poll.return_value = None
+        expected = MacOSProcess(20, 77, f"/runtime/Mac_Runner -game {self.game_path}")
+
+        with patch.object(
+            self.runner,
+            "_find_macos_owned_helper_pids",
+            return_value=({20}, set(), {20: expected}),
+        ):
+            pid, _runners, _tails = self.runner._wait_for_macos_runner_start(
+                process,
+                self.game_path,
+                self.debug_log,
+                set(),
+                set(),
+                output_lines=["LaunchServices failed with error -6000"],
+                timeout_seconds=1,
+            )
+
+        self.assertEqual(pid, 20)
+
+    def test_classic_run_preserves_launchservices_failure_arriving_during_join(self) -> None:
+        process = MagicMock(pid=77, returncode=1)
+        process.poll.return_value = 1
+        output_lines = []
+        output_thread = MagicMock()
+
+        def publish_final_line(*_args, **_kwargs):
+            if not output_lines:
+                output_lines.append("LSOpenApplication() failed with error -600")
+
+        output_thread.join.side_effect = publish_final_line
+        with (
+            patch.object(self.runner, "_wait_for_igor_idle"),
+            patch.object(self.runner, "_build_platform_action_command", return_value=["igor", "Run"]),
+            patch.object(self.runner, "_snapshot_macos_processes", return_value={}),
+            patch.object(self.runner, "_run_igor_command", return_value=process),
+            patch.object(self.runner, "_reject_foreign_igor_after_launch"),
+            patch.object(self.runner, "_collect_igor_output_async", return_value=(output_lines, output_thread)),
+            patch.object(self.runner, "_wait_for_macos_runner_start", return_value=(None, set(), set())),
+            patch.object(self.runner, "_cleanup_macos_validation_helpers"),
+        ):
+            result = self.runner._run_project_classic_approach("macOS", background=True)
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(
+            result["message"],
+            "macOS runner launch failed: LSOpenApplication() failed with error -600",
+        )
+
+    def test_compile_validation_preserves_launchservices_failure_arriving_during_join(self) -> None:
+        process = MagicMock(pid=77, returncode=1)
+        process.poll.return_value = 1
+        output_lines = []
+        output_thread = MagicMock()
+
+        def publish_final_line(*_args, **_kwargs):
+            if not output_lines:
+                output_lines.append("LSOpenApplication() failed with error -600")
+
+        output_thread.join.side_effect = publish_final_line
+        with (
+            patch.object(self.runner, "_wait_for_igor_idle"),
+            patch.object(self.runner, "_build_macos_compile_validation_command", return_value=["igor", "Run"]),
+            patch.object(self.runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"),
+            patch.object(self.runner, "_macos_debug_log_path", return_value=self.debug_log),
+            patch.object(self.runner, "_snapshot_macos_processes", return_value={}),
+            patch.object(self.runner, "_write_macos_ownership_manifest"),
+            patch.object(self.runner, "_run_igor_command", return_value=process),
+            patch.object(self.runner, "_reject_foreign_igor_after_launch"),
+            patch.object(self.runner, "_collect_igor_output_async", return_value=(output_lines, output_thread)),
+            patch.object(self.runner, "_wait_for_macos_runner_start", return_value=(None, set(), set())),
+            patch.object(self.runner, "_wait_for_macos_main_loop", return_value=False),
+            patch.object(self.runner, "_cleanup_macos_validation_helpers"),
+        ):
+            result = self.runner._compile_project_once("macOS", "VM")
+
+        self.assertFalse(result)
+        self.assertEqual(
+            self.runner.last_failure_message,
+            "macOS runner launch failed: LSOpenApplication() failed with error -600",
+        )
 
     def test_session_token_finds_bare_runner_spawned_after_initial_tracking(self) -> None:
         bare = MacOSProcess(

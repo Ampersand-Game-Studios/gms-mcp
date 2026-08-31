@@ -240,12 +240,14 @@ def run_test_file(test_file_path, *, mcp_test_mode: str):
 
         print(f"[MODE] {mode}")
         # Run from gamemaker directory so CLI tools find the .yyp file.
+        test_env = os.environ.copy()
+        test_env["GM_PROJECT_ROOT"] = str(gamemaker_dir)
         result = subprocess.run(
             command,
             cwd=str(gamemaker_dir),
             capture_output=False,
             text=True,
-            env=os.environ.copy(),
+            env=test_env,
         )
 
         return ("pass" if result.returncode == 0 else "fail"), result.returncode
