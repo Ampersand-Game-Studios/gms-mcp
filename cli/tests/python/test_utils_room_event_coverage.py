@@ -224,6 +224,10 @@ class TestUtilsCoverage(unittest.TestCase):
 
         with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
             resolve_project_directory(untracked_root)
+        self.assertEqual(
+            resolve_project_directory(untracked_yyp.parent),
+            untracked_yyp.parent.resolve(),
+        )
 
     def test_project_resolution_rejects_git_failure_and_paths_outside_workspace(self):
         repo_root = self.temp_dir / "failure-repo"

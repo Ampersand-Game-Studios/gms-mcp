@@ -91,7 +91,12 @@ def _single_tracked_nested_yyp_directory(directory: Path) -> Path | None:
     return tracked[0].parent.resolve()
 
 
-def _resolve_candidate(candidate: Path, *, requested_yyp: Path | None = None) -> Path | None:
+def _resolve_candidate(
+    candidate: Path,
+    *,
+    requested_yyp: Path | None = None,
+    allow_untracked_direct: bool = False,
+) -> Path | None:
     if not candidate.exists() or not candidate.is_dir():
         return None
 
@@ -103,15 +108,25 @@ def _resolve_candidate(candidate: Path, *, requested_yyp: Path | None = None) ->
         tracked = _tracked_yyp_paths(workspace_root)
         if tracked is None:
             return None
+        direct_yyp_files = _list_yyp_files(candidate)
         if requested_yyp is not None:
             requested_yyp = requested_yyp.resolve()
-            project_files = _list_yyp_files(requested_yyp.parent)
-            if requested_yyp in tracked and len(project_files) == 1 and project_files[0].resolve() == requested_yyp:
+            if (
+                len(direct_yyp_files) == 1
+                and direct_yyp_files[0].resolve() == requested_yyp
+                and not any(part.casefold() == "prefabs" for part in requested_yyp.parts)
+                and (requested_yyp in tracked or allow_untracked_direct)
+            ):
                 return requested_yyp.parent
             return None
-        direct_yyp_files = _list_yyp_files(candidate)
         direct_tracked = [path for path in direct_yyp_files if path.resolve() in tracked]
         if len(direct_yyp_files) == 1 and len(direct_tracked) == 1:
+            return candidate.resolve()
+        if (
+            allow_untracked_direct
+            and len(direct_yyp_files) == 1
+            and not any(part.casefold() == "prefabs" for part in direct_yyp_files[0].parts)
+        ):
             return candidate.resolve()
         if direct_yyp_files:
             return None
@@ -163,7 +178,11 @@ def resolve_project_directory(project_root: str | Path | None = None) -> Path:
                 else None
             )
             explicit_candidate = _normalize_candidate(raw_candidate)
-            resolved = _resolve_candidate(explicit_candidate, requested_yyp=requested_yyp)
+            resolved = _resolve_candidate(
+                explicit_candidate,
+                requested_yyp=requested_yyp,
+                allow_untracked_direct=True,
+            )
             if resolved is not None:
                 return resolved
             raise FileNotFoundError(
@@ -172,17 +191,17 @@ def resolve_project_directory(project_root: str | Path | None = None) -> Path:
                 "Fix: pass a directory that contains your .yyp, a .yyp file path, or a nested path inside the target project."
             )
 
-    candidates: list[Path] = []
+    candidates: list[tuple[Path, bool]] = []
     for env_key in ("GM_PROJECT_ROOT", "PROJECT_ROOT"):
         env_value = os.environ.get(env_key)
         if env_value:
-            candidates.append(Path(env_value))
+            candidates.append((Path(env_value), True))
 
-    candidates.append(Path.cwd())
+    candidates.append((Path.cwd(), False))
 
     tried: list[str] = []
     seen: set[str] = set()
-    for raw in candidates:
+    for raw, allow_untracked_direct in candidates:
         candidate = _normalize_candidate(raw)
         candidate_key = str(candidate)
         if candidate_key in seen:
@@ -190,7 +209,7 @@ def resolve_project_directory(project_root: str | Path | None = None) -> Path:
         seen.add(candidate_key)
         tried.append(candidate_key)
 
-        resolved = _resolve_candidate(candidate)
+        resolved = _resolve_candidate(candidate, allow_untracked_direct=allow_untracked_direct)
         if resolved is not None:
             return resolved
 
