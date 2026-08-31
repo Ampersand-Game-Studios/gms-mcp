@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import os
 import platform
+import re
 import secrets
 import shlex
 import signal
@@ -11,7 +12,7 @@ import subprocess
 import time
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from ..exceptions import RuntimeNotFoundError
 from ..runner_process import build_igor_environment
@@ -30,6 +31,18 @@ class MacOSProcess:
 class RunnerMacOSMixin:
     _MACOS_OWNERSHIP_MANIFEST_ENV = "GMS_MCP_MACOS_OWNERSHIP_MANIFEST"
     _MACOS_LAUNCH_TOKEN_ENV = "GMS_MCP_MACOS_LAUNCH_TOKEN"
+
+    @staticmethod
+    def _macos_launchservices_failure(output_lines: Optional[List[str]]) -> Optional[str]:
+        """Return one explicit LaunchServices -600 failure line, without cross-line matching."""
+        patterns = (
+            re.compile(r"\bLSOpenApplication\(\)\s+failed\s+with\s+error\s+-600\b", re.IGNORECASE),
+            re.compile(r"\bLaunchServices\b.*\b(?:failed|error)\b.*(?<!\d)-600(?!\d)", re.IGNORECASE),
+        )
+        for line in output_lines or []:
+            if any(pattern.search(line) for pattern in patterns):
+                return line
+        return None
 
     @staticmethod
     def _igor_idle_wait_seconds() -> float:
@@ -345,11 +358,16 @@ class RunnerMacOSMixin:
         baseline_tail_pids: set[int] | dict[int, MacOSProcess],
         launch_token: Optional[str] = None,
         timeout_seconds: float = 120.0,
+        output_lines: Optional[List[str]] = None,
     ) -> tuple[Optional[int], set[int], set[int]]:
         """Wait for a new macOS local run helper process to appear for this project."""
         deadline = time.monotonic() + timeout_seconds
 
         while time.monotonic() < deadline:
+            launch_failure = self._macos_launchservices_failure(output_lines)
+            if launch_failure is not None:
+                self._remember_failure(f"macOS runner launch failed: {launch_failure}")
+                return None, set(), set()
             runner_pids, tail_pids, processes = self._find_macos_owned_helper_pids(
                 game_path,
                 debug_log_path,

@@ -16,15 +16,14 @@ class TestMasterCLI(unittest.TestCase):
         self.python_exe = sys.executable
         repo_root = Path(__file__).resolve().parents[3]
         self.env = {**os.environ, "PYTHONPATH": str(repo_root / "src")}
+        self.project_dir = repo_root / "cli" / "tests" / "fixtures" / "mcp-conformance"
 
     def run_gms_command(self, args):
         """Run a gms command and return result."""
         cmd = [self.python_exe, "-m", "gms_helpers.gms"] + args
-        # Run from gamemaker directory so CLI tools find the .yyp file
-        repo_root = Path(__file__).resolve().parents[3]
-        gamemaker_dir = repo_root / "gamemaker"
+        # Run from a tracked GameMaker fixture so this also works in clean checkouts.
         result = subprocess.run(
-            cmd, cwd=str(gamemaker_dir), capture_output=True, text=True, encoding="utf-8", env=self.env
+            cmd, cwd=str(self.project_dir), capture_output=True, text=True, encoding="utf-8", env=self.env
         )
         return result.returncode, result.stdout, result.stderr
 
