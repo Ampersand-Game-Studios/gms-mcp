@@ -33,21 +33,58 @@ if os.name == "nt" and not os.environ.get("GMS_TEST_SUITE") and not os.environ.g
         sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding="utf-8", errors="replace", line_buffering=True)
 # ------------------------------------------------------------------
 
+
 # ------------------------------------------------------------------
 # JSON Utilities
 # ------------------------------------------------------------------
-TRAILING_COMMA_RE = re.compile(r",(\s*[}\]])")
+def _iter_json_structural_characters(raw_text: str):
+    """Yield non-string JSON punctuation without parsing the document."""
+    in_string = False
+    escaped = False
+    for index, character in enumerate(raw_text):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif character == "\\":
+                escaped = True
+            elif character == '"':
+                in_string = False
+        elif character == '"':
+            in_string = True
+        else:
+            yield index, character
+
+
+def _trailing_comma_positions(raw_text: str):
+    for index, character in _iter_json_structural_characters(raw_text):
+        if character != ",":
+            continue
+        next_index = index + 1
+        while next_index < len(raw_text) and raw_text[next_index].isspace():
+            next_index += 1
+        if next_index < len(raw_text) and raw_text[next_index] in "}]":
+            yield index
 
 
 def strip_trailing_commas(raw_text: str) -> str:
-    """Remove JSON-breaking trailing commas."""
-    return TRAILING_COMMA_RE.sub(r"\1", raw_text)
+    """Remove JSON-breaking trailing commas without changing string contents."""
+    trailing_positions = set(_trailing_comma_positions(raw_text))
+    return "".join(character for index, character in enumerate(raw_text) if index not in trailing_positions)
+
+
+def _has_trailing_commas(raw_text: str) -> bool:
+    return next(_trailing_comma_positions(raw_text), None) is not None
+
+
+def _read_text_preserving_newlines(path: Path) -> str:
+    with path.open(encoding="utf-8", newline="") as file_handle:
+        return file_handle.read()
 
 
 def load_json_loose(path: Path) -> Dict[str, Any] | None:
     """Load a (possibly trailing-comma) JSON file."""
     try:
-        raw = path.read_text(encoding="utf-8")
+        raw = _read_text_preserving_newlines(path)
     except FileNotFoundError:
         return None
 
@@ -62,23 +99,19 @@ def load_json_loose(path: Path) -> Dict[str, Any] | None:
 
 def save_pretty_json(path: Path, data: Dict[str, Any]):
     """Pretty-print JSON (no trailing commas) - for compatibility."""
-    atomic_write_text(path, json.dumps(data, indent=2, ensure_ascii=False))
+    atomic_write_text(path, _render_json_for_existing_path(path, data, default_trailing_commas=False))
 
 
 def save_pretty_json_gm(path: Path, data: Dict[str, Any]):
     """Pretty-print JSON with GameMaker-style trailing commas."""
-    json_str = json.dumps(data, indent=2, ensure_ascii=False)
-    json_str = add_trailing_commas(json_str)
-    atomic_write_text(path, json_str)
+    atomic_write_text(path, _render_json_for_existing_path(path, data, default_trailing_commas=True))
 
 
 def save_json_loose(path: Path | str, data: Dict[str, Any]):
     """Save data as JSON with GameMaker-style trailing commas."""
     if isinstance(path, str):
         path = Path(path)
-    json_str = json.dumps(data, indent=2, ensure_ascii=False)
-    json_str = add_trailing_commas(json_str)
-    atomic_write_text(path, json_str)
+    atomic_write_text(path, _render_json_for_existing_path(path, data, default_trailing_commas=True))
 
 
 def save_json(data, file_path):
@@ -86,9 +119,52 @@ def save_json(data, file_path):
     dir_path = os.path.dirname(file_path)
     if dir_path:  # Only create directory if there is one
         os.makedirs(dir_path, exist_ok=True)
-    json_str = json.dumps(data, indent=2, ensure_ascii=False)
-    json_str = add_trailing_commas(json_str)
-    atomic_write_text(Path(file_path), json_str)
+    path = Path(file_path)
+    atomic_write_text(path, _render_json_for_existing_path(path, data, default_trailing_commas=True))
+
+
+def _render_json_for_existing_path(
+    path: Path,
+    data: Dict[str, Any],
+    *,
+    default_trailing_commas: bool,
+) -> str:
+    """Render JSON without expanding an existing compact GameMaker file."""
+    original = ""
+    try:
+        original = _read_text_preserving_newlines(path)
+    except FileNotFoundError:
+        pass
+
+    indent: int | str = 2
+    trailing_commas = default_trailing_commas
+    final_newline = False
+    line_ending = "\n"
+    if original:
+        for line in original.splitlines():
+            indentation = line[: len(line) - len(line.lstrip(" \t"))]
+            if indentation and line[len(indentation) :].strip():
+                indent = indentation
+                break
+        trailing_commas = _has_trailing_commas(original)
+        line_ending = "\r\n" if "\r\n" in original else "\n"
+        final_newline = original.endswith(("\r\n", "\n"))
+
+        compact_body = original[: -len(line_ending)] if final_newline else original
+        if "\r" not in compact_body and "\n" not in compact_body:
+            rendered = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
+            if trailing_commas:
+                rendered = add_trailing_commas(rendered)
+            return rendered + (line_ending if final_newline else "")
+
+    rendered = json.dumps(data, indent=indent, ensure_ascii=False)
+    if line_ending != "\n":
+        rendered = rendered.replace("\n", line_ending)
+    if trailing_commas:
+        rendered = add_trailing_commas(rendered)
+    if final_newline:
+        rendered += line_ending
+    return rendered
 
 
 def atomic_write_text(path: Path | str, content: str, encoding: str = "utf-8") -> None:
@@ -99,10 +175,10 @@ def atomic_write_text(path: Path | str, content: str, encoding: str = "utf-8") -
     os.close(fd)
     tmp_path = target.parent / os.path.basename(tmp_name)
     try:
-        tmp_path.write_text(content, encoding=encoding)
-        with tmp_path.open("a", encoding=encoding) as fh:
-            fh.flush()
-            os.fsync(fh.fileno())
+        with tmp_path.open("w", encoding=encoding, newline="") as file_handle:
+            file_handle.write(content)
+            file_handle.flush()
+            os.fsync(file_handle.fileno())
         tmp_path.replace(target)
         from .transactions import mark_transaction_path_owned
 
@@ -381,32 +457,19 @@ def detect_asset_format_version(project_root: Path, asset_type: str) -> str | No
     return None
 
 
-def add_trailing_commas(json_str):
-    """Add trailing commas to JSON string to match GameMaker's style."""
-    lines = json_str.split("\n")
-
-    # Find the last non-whitespace line index
-    last_line_index = len(lines) - 1
-    while last_line_index >= 0 and lines[last_line_index].strip() == "":
-        last_line_index -= 1
-
-    # Add trailing commas to all lines except the last non-whitespace line
-    for i in range(len(lines)):
-        if i >= last_line_index:
-            continue  # Skip the final closing brace/bracket
-
-        stripped = lines[i].strip()
-        # Skip empty lines, opening braces/brackets, and lines ending with opening braces/brackets
-        if not stripped or stripped in ["{", "["] or stripped.endswith("{") or stripped.endswith("["):
+def add_trailing_commas(json_str: str) -> str:
+    """Add GameMaker-style trailing commas without changing string contents."""
+    insert_positions = set()
+    for index, character in _iter_json_structural_characters(json_str):
+        if character not in "}]":
             continue
+        previous_index = index - 1
+        while previous_index >= 0 and json_str[previous_index].isspace():
+            previous_index -= 1
+        if previous_index >= 0 and json_str[previous_index] not in "[{,":
+            insert_positions.add(previous_index + 1)
 
-        # Add comma to any line that doesn't already have one
-        if not stripped.endswith(","):
-            # Add comma while preserving indentation
-            indent = len(lines[i]) - len(lines[i].lstrip())
-            lines[i] = " " * indent + stripped + ","
-
-    return "\n".join(lines)
+    return "".join(("," if index in insert_positions else "") + character for index, character in enumerate(json_str))
 
 
 def validate_name(name, asset_type, allow_constructor=False, config=None):
