@@ -136,7 +136,10 @@ class TestResourceToolValidation(unittest.TestCase):
 
     def test_runs_only_against_copy_with_checksums_and_minimal_environment(self) -> None:
         def inspect_minimal_copy(command, **kwargs):
-            self.assertEqual({path.name for path in Path(kwargs["cwd"]).iterdir()}, {"Game.yyp"})
+            self.assertEqual(
+                {path.name for path in Path(kwargs["cwd"]).iterdir()},
+                {"Game.yyp", "script.gml"},
+            )
             return subprocess.CompletedProcess(args=command, returncode=0, stdout="ok", stderr="")
 
         with patch("gms_mcp.resourcetool_validation.subprocess.run", side_effect=inspect_minimal_copy) as run:
@@ -151,6 +154,7 @@ class TestResourceToolValidation(unittest.TestCase):
         self.assertNotIn("SECRET_TOKEN", invocation["env"])
         self.assertNotEqual(invocation["env"].get("PATH"), self.environment["PATH"])
         self.assertEqual(result["status"], "validated")
+        self.assertEqual(result["evidence"]["source_checksum"], result["evidence"]["before_checksum"])
         self.assertEqual(result["evidence"]["before_checksum"], result["evidence"]["after_checksum"])
         self.assertTrue(result["evidence"]["cleanup_completed"])
         self.assertEqual(Path(command[-1]).name, "Game.yyp")
@@ -178,6 +182,18 @@ class TestResourceToolValidation(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertTrue(result["evidence"]["rewritten_copy"])
         self.assertEqual((self.project / "script.gml").read_text(encoding="utf-8"), "show_debug_message('hello');")
+
+    def test_detects_attempted_source_rewrite_even_when_the_process_reports_success(self) -> None:
+        def rewrite_source(command, **_kwargs):
+            (self.project / "script.gml").write_text("rewritten", encoding="utf-8")
+            return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+        with patch("gms_mcp.resourcetool_validation.subprocess.run", side_effect=rewrite_source):
+            result = validate_with_resourcetool(self.project, environ=self.environment)
+
+        self.assertEqual(result["status"], "source_rewritten")
+        self.assertFalse(result["ok"])
+        self.assertTrue(result["evidence"]["rewritten_source"])
 
     def test_detects_validation_failure_and_sanitizes_output(self) -> None:
         private_output = (
