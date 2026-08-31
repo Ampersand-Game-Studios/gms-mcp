@@ -141,6 +141,81 @@ class TestRoomInstanceHelper(unittest.TestCase):
         with self.assertRaises(ValidationError):
             _find_layer_by_name(room_data, "NonExistent")
 
+    def test_find_layer_by_name_recurses_into_inherited_layer_hierarchy(self):
+        nested = {
+            "name": "Inherited Instances",
+            "resourceType": "GMRInstanceLayer",
+            "instances": [],
+        }
+        room_data = {
+            "layers": [
+                {
+                    "name": "Inherited Group",
+                    "resourceType": "GMRFolderLayer",
+                    "layers": [nested],
+                }
+            ]
+        }
+
+        self.assertIs(_find_layer_by_name(room_data, "Inherited Instances"), nested)
+
+    def test_add_instance_to_nested_inherited_layer(self):
+        room_path = _find_room_file("r_test")
+        room_data = _load_room_data(room_path)
+        nested = {
+            "name": "Inherited Instances",
+            "resourceType": "GMRInstanceLayer",
+            "instances": [],
+        }
+        room_data["layers"] = [
+            {
+                "name": "Inherited Group",
+                "resourceType": "GMRFolderLayer",
+                "layers": [nested],
+            }
+        ]
+        _save_room_data(room_path, room_data)
+
+        instance_id = add_instance("r_test", "o_player", 10, 20, "Inherited Instances")
+
+        saved = _load_room_data(room_path)
+        saved_layer = _find_layer_by_name(saved, "Inherited Instances")
+        self.assertEqual(saved_layer["instances"][0]["name"], instance_id)
+
+    def test_nested_inherited_layer_supports_every_instance_operation(self):
+        room_path = _find_room_file("r_test")
+        room_data = _load_room_data(room_path)
+        nested = {
+            "name": "Inherited Instances",
+            "resourceType": "GMRInstanceLayer",
+            "instances": [],
+        }
+        room_data["layers"] = [
+            {
+                "name": "Inherited Group",
+                "resourceType": "GMRFolderLayer",
+                "layers": [nested],
+            }
+        ]
+        _save_room_data(room_path, room_data)
+
+        instance_id = add_instance("r_test", "o_player", 10, 20, "Inherited Instances")
+        self.assertEqual(list_instances("r_test", "Inherited Instances")[0]["name"], instance_id)
+
+        self.assertTrue(modify_instance("r_test", instance_id, x=30, y=40, rotation=15))
+        modified = _find_layer_by_name(_load_room_data(room_path), "Inherited Instances")["instances"][0]
+        self.assertEqual((modified["x"], modified["y"], modified["rotation"]), (30.0, 40.0, 15.0))
+
+        self.assertTrue(set_creation_code("r_test", instance_id, 'show_debug_message("nested");'))
+        self.assertTrue((Path("rooms/r_test") / f"{instance_id}.gml").is_file())
+        with_code = _find_layer_by_name(_load_room_data(room_path), "Inherited Instances")["instances"][0]
+        self.assertTrue(with_code["hasCreationCode"])
+
+        self.assertTrue(remove_instance("r_test", instance_id))
+        saved_layer = _find_layer_by_name(_load_room_data(room_path), "Inherited Instances")
+        self.assertEqual(saved_layer["instances"], [])
+        self.assertFalse((Path("rooms/r_test") / f"{instance_id}.gml").exists())
+
     def test_add_instance_success(self):
         """Test successfully adding instances to a room."""
         # Test adding an instance using library-style API
