@@ -46,6 +46,19 @@ class TestRunAllTestsRunner(unittest.TestCase):
         self.assertEqual(status, "skip")
         self.assertEqual(code, 0)
 
+    def test_run_test_file_sets_explicit_gamemaker_project_root(self):
+        with (
+            patch.object(run_all_tests, "find_python_executable", return_value="python3"),
+            patch.object(run_all_tests, "_build_test_command", return_value=(["python3", "test_example.py"], "python")),
+            patch.object(run_all_tests.subprocess, "run") as run,
+        ):
+            run.return_value.returncode = 0
+            status, code = run_all_tests.run_test_file(Path("test_example.py"), mcp_test_mode="native")
+
+        self.assertEqual(status, "pass")
+        self.assertEqual(code, 0)
+        self.assertEqual(run.call_args.kwargs["env"]["GM_PROJECT_ROOT"], str(PROJECT_ROOT / "gamemaker"))
+
 
 if __name__ == "__main__":
     unittest.main()
