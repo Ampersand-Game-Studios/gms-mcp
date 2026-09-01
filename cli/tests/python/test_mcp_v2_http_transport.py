@@ -51,9 +51,11 @@ class MCPV2HTTPTransportTests(unittest.TestCase):
 
     def test_loopback_http_requires_bearer_token_before_server_construction(self):
         stderr = io.StringIO()
-        with patch.dict(os.environ, {}, clear=True), patch(
-            "gms_mcp.gamemaker_mcp_server.build_server"
-        ) as build_server, redirect_stderr(stderr):
+        with (
+            patch.dict(os.environ, {}, clear=True),
+            patch("gms_mcp.gamemaker_mcp_server.build_server") as build_server,
+            redirect_stderr(stderr),
+        ):
             exit_code = gamemaker_mcp_server.main(["--transport", "streamable-http"])
 
         self.assertEqual(exit_code, 2)
@@ -62,9 +64,11 @@ class MCPV2HTTPTransportTests(unittest.TestCase):
 
     def test_loopback_http_rejects_short_bearer_token_before_server_construction(self):
         stderr = io.StringIO()
-        with patch.dict(os.environ, {"GMS_MCP_HTTP_BEARER_TOKEN": "too-short"}, clear=False), patch(
-            "gms_mcp.gamemaker_mcp_server.build_server"
-        ) as build_server, redirect_stderr(stderr):
+        with (
+            patch.dict(os.environ, {"GMS_MCP_HTTP_BEARER_TOKEN": "too-short"}, clear=False),
+            patch("gms_mcp.gamemaker_mcp_server.build_server") as build_server,
+            redirect_stderr(stderr),
+        ):
             exit_code = gamemaker_mcp_server.main(["--transport", "streamable-http"])
 
         self.assertEqual(exit_code, 2)
@@ -74,9 +78,11 @@ class MCPV2HTTPTransportTests(unittest.TestCase):
     def test_loopback_http_rejects_non_bearer_token_characters(self):
         stderr = io.StringIO()
         invalid_token = f"{'a' * 31}£"
-        with patch.dict(os.environ, {"GMS_MCP_HTTP_BEARER_TOKEN": invalid_token}, clear=False), patch(
-            "gms_mcp.gamemaker_mcp_server.build_server"
-        ) as build_server, redirect_stderr(stderr):
+        with (
+            patch.dict(os.environ, {"GMS_MCP_HTTP_BEARER_TOKEN": invalid_token}, clear=False),
+            patch("gms_mcp.gamemaker_mcp_server.build_server") as build_server,
+            redirect_stderr(stderr),
+        ):
             exit_code = gamemaker_mcp_server.main(["--transport", "streamable-http"])
 
         self.assertEqual(exit_code, 2)
