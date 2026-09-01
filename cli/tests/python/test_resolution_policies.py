@@ -402,6 +402,112 @@ class ResolutionPolicyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(final.content[0].text, "delete")
         self.assertGreaterEqual(reads, 3)
 
+    async def test_evidence_history_evicts_idle_scenarios_without_false_staleness(self):
+        reads_by_asset: dict[str, int] = {}
+
+        def changing_evidence(_project_root, arguments) -> ResolutionEvidence:
+            asset_name = str(arguments["asset_name"])
+            reads_by_asset[asset_name] = reads_by_asset.get(asset_name, 0) + 1
+            return ResolutionEvidence(
+                f"current dependent set for {asset_name}: {reads_by_asset[asset_name]}",
+                affected_count=1,
+                facts={"asset_exists": True, "blocked": True},
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "game.yyp").write_text("{}", encoding="utf-8")
+            runtime = ResolutionRuntime(
+                _policy(root),
+                evidence_readers={ResolutionPolicy.SAFE_DELETE: changing_evidence},
+                evidence_history_capacity=1,
+            )
+            first_arguments = {
+                "asset_type": "script",
+                "asset_name": "scr_first",
+                "dry_run": False,
+                "project_root": str(root),
+            }
+            second_arguments = {**first_arguments, "asset_name": "scr_second"}
+            async with Client(_resolution_server(runtime), mode="2026-07-28", elicitation_callback=_delete) as client:
+                first = await client.session.call_tool("commit_delete", first_arguments, allow_input_required=True)
+                self.assertIsInstance(first, InputRequiredResult)
+                assert isinstance(first, InputRequiredResult)
+
+                second = await client.session.call_tool("commit_delete", second_arguments, allow_input_required=True)
+                self.assertIsInstance(second, InputRequiredResult)
+
+                key = next(iter(first.input_requests or {}))
+                refreshed = await client.session.call_tool(
+                    "commit_delete",
+                    first_arguments,
+                    input_responses={key: ElicitResult(action="accept", content={"action": "delete"})},
+                    request_state=first.request_state,
+                    allow_input_required=True,
+                )
+
+        self.assertIsInstance(refreshed, InputRequiredResult)
+        assert isinstance(refreshed, InputRequiredResult)
+        message = next(iter(refreshed.input_requests.values())).params.message
+        self.assertNotIn("Evidence changed", message)
+        self.assertIn("Evidence revision: 1", message)
+        self.assertEqual(reads_by_asset["scr_first"], 2)
+
+    async def test_evicted_scenario_reasks_when_facts_change_but_its_summary_does_not(self):
+        reads_by_asset: dict[str, int] = {}
+
+        def changing_facts(_project_root, arguments) -> ResolutionEvidence:
+            asset_name = str(arguments["asset_name"])
+            reads_by_asset[asset_name] = reads_by_asset.get(asset_name, 0) + 1
+            return ResolutionEvidence(
+                "Current dependency scan requires confirmation.",
+                affected_count=1,
+                facts={
+                    "asset_exists": True,
+                    "blocked": True,
+                    "dependency_set_digest": f"snapshot-{asset_name}-{reads_by_asset[asset_name]}",
+                },
+            )
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "game.yyp").write_text("{}", encoding="utf-8")
+            runtime = ResolutionRuntime(
+                _policy(root),
+                evidence_readers={ResolutionPolicy.SAFE_DELETE: changing_facts},
+                evidence_history_capacity=1,
+            )
+            first_arguments = {
+                "asset_type": "script",
+                "asset_name": "scr_first",
+                "dry_run": False,
+                "project_root": str(root),
+            }
+            second_arguments = {**first_arguments, "asset_name": "scr_second"}
+            async with Client(_resolution_server(runtime), mode="2026-07-28", elicitation_callback=_delete) as client:
+                first = await client.session.call_tool("commit_delete", first_arguments, allow_input_required=True)
+                self.assertIsInstance(first, InputRequiredResult)
+                assert isinstance(first, InputRequiredResult)
+                first_message = next(iter(first.input_requests.values())).params.message
+
+                second = await client.session.call_tool("commit_delete", second_arguments, allow_input_required=True)
+                self.assertIsInstance(second, InputRequiredResult)
+
+                key = next(iter(first.input_requests or {}))
+                refreshed = await client.session.call_tool(
+                    "commit_delete",
+                    first_arguments,
+                    input_responses={key: ElicitResult(action="accept", content={"action": "delete"})},
+                    request_state=first.request_state,
+                    allow_input_required=True,
+                )
+
+        self.assertIsInstance(refreshed, InputRequiredResult)
+        assert isinstance(refreshed, InputRequiredResult)
+        refreshed_message = next(iter(refreshed.input_requests.values())).params.message
+        self.assertNotEqual(first_message, refreshed_message)
+        self.assertEqual(reads_by_asset["scr_first"], 2)
+
     async def test_stale_project_is_rejected_before_any_resolution_request(self):
         with tempfile.TemporaryDirectory() as project_dir, tempfile.TemporaryDirectory() as outside_dir:
             root, outside = Path(project_dir), Path(outside_dir)

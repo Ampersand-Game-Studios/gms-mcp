@@ -275,6 +275,8 @@ gms-mcp server --transport stdio
 Use Streamable HTTP only when a local MCP client needs to connect to an already-running server:
 
 ```bash
+export GMS_MCP_HTTP_BEARER_TOKEN="$(openssl rand -hex 32)"
+
 gms-mcp server \
   --transport streamable-http \
   --host 127.0.0.1 \
@@ -289,7 +291,9 @@ gms-mcp server \
 | `--port` | `8000` | Integer from 1 through 65535 |
 | `--path` | `/mcp` | Absolute URL path with no whitespace |
 
-Streamable HTTP is stateless and local-only. It has no remote-user authentication and must not be exposed through `0.0.0.0`, a LAN address, a public interface, or a reverse proxy. The server enables DNS-rebinding protection and accepts only the configured loopback Host and Origin values. `Mcp-Param-*` routing headers are validated by the MCP SDK.
+Streamable HTTP is stateless, bearer-authenticated, and local-only. Before startup, set `GMS_MCP_HTTP_BEARER_TOKEN` to a secret containing 32–4096 ASCII bearer-token characters; `openssl rand -hex 32` produces a suitable value. The server fails before binding when the token is absent or invalid. Configure the client to send the same value as `Authorization: Bearer <token>`. Keep the token out of command-line arguments, logs, and committed configuration.
+
+The server must not be exposed through `0.0.0.0`, a LAN address, a public interface, or a reverse proxy. It enables DNS-rebinding protection, accepts only the configured loopback Host and Origin values, validates `Mcp-Param-*` routing headers through the MCP SDK, and returns HTTP `413` before JSON parsing when a request body exceeds 1 MiB.
 
 The HTTP endpoint for the example above is `http://127.0.0.1:8000/mcp`. Starting the server does not update client configuration automatically; configure that URL only in clients that support Streamable HTTP.
 

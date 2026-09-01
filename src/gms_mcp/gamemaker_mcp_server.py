@@ -26,6 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .server.debug import _dbg
+from .server.http_security import local_bearer_auth, validate_local_bearer_token
 from .server.mcp_v2 import MCP_CACHE_HINTS, MCPV2Runtime, MutationSerializationMiddleware
 from .server.project import ProjectAccessError, ProjectAccessPolicy
 from .server.register_all import register_all
@@ -140,6 +141,8 @@ _DESTRUCTIVE_TOOL_MARKERS = (
     "_sync_",
     "_uninstall",
 )
+_HTTP_AUTH_ENV_NAME = "GMS_MCP_HTTP_BEARER_TOKEN"
+_HTTP_MAX_REQUEST_BODY_BYTES = 1 * 1024 * 1024
 
 
 def _tool_family_for_function(func) -> str:
@@ -625,7 +628,7 @@ def _wrap_tool_registration(
     mcp.tool = instrumented_tool
 
 
-def build_server():
+def build_server(*, http_auth_value: str | None = None, http_auth_issuer_url: str | None = None):
     """
     Create and return the MCP server instance.
 
@@ -646,6 +649,13 @@ def build_server():
     # in this module's globals for compatibility.
     globals()["Context"] = Context
 
+    if (http_auth_value is None) != (http_auth_issuer_url is None):
+        raise ValueError("HTTP bearer authentication requires both token and issuer URL.")
+    auth, token_verifier = (
+        local_bearer_auth(http_auth_value, http_auth_issuer_url)
+        if http_auth_value is not None and http_auth_issuer_url is not None
+        else (None, None)
+    )
     project_access_policy = ProjectAccessPolicy.from_server_environment()
     expose_host_diagnostics = expose_host_diagnostics_from_environment()
     runtime = MCPV2Runtime(project_access_policy)
@@ -660,6 +670,8 @@ def build_server():
         cache_hints=MCP_CACHE_HINTS,
         subscriptions=runtime.subscriptions,
         lifespan=runtime.lifespan,
+        auth=auth,
+        token_verifier=token_verifier,
         extensions=[dashboard_app],
         middleware=[
             MutationSerializationMiddleware(
@@ -700,7 +712,10 @@ def _parse_server_arguments(argv: list[str]) -> tuple[argparse.Namespace | None,
         "--transport",
         choices=("stdio", "streamable-http"),
         default="stdio",
-        help="MCP transport (default: stdio).",
+        help=(
+            "MCP transport (default: stdio). Streamable HTTP requires a non-empty "
+            f"{_HTTP_AUTH_ENV_NAME} environment variable."
+        ),
     )
     parser.add_argument("--host", default="127.0.0.1", help="HTTP bind host (loopback only).")
     parser.add_argument("--port", type=int, default=8000, help="HTTP bind port (default: 8000).")
@@ -717,7 +732,7 @@ def _parse_server_arguments(argv: list[str]) -> tuple[argparse.Namespace | None,
         loopback = False
     if args.transport == "streamable-http" and not loopback:
         parser.print_usage(sys.stderr)
-        sys.stderr.write("gms-mcp server: error: unauthenticated HTTP transport is restricted to loopback hosts.\n")
+        sys.stderr.write("gms-mcp server: error: HTTP transport is restricted to loopback hosts.\n")
         return None, 2
     if not 1 <= args.port <= 65_535:
         parser.print_usage(sys.stderr)
@@ -739,6 +754,15 @@ def _http_transport_security(host: str, port: int):
         allowed_hosts=[authority, f"{authority}:{port}"],
         allowed_origins=[f"http://{authority}:{port}"],
     )
+
+
+def _http_origin(host: str, port: int) -> str:
+    authority = f"[{host}]" if ":" in host else host
+    return f"http://{authority}:{port}"
+
+
+def _http_auth_value_from_environment() -> str | None:
+    return os.environ.get(_HTTP_AUTH_ENV_NAME) or None
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -768,7 +792,28 @@ def main(argv: list[str] | None = None) -> int:
     )
     # endregion
     try:
-        server = build_server()
+        if server_args.transport == "streamable-http":
+            http_auth_value = _http_auth_value_from_environment()
+            if http_auth_value is None:
+                sys.stderr.write(
+                    "gms-mcp server: error: streamable HTTP requires a non-empty "
+                    f"{_HTTP_AUTH_ENV_NAME} environment variable.\n"
+                )
+                return 2
+            try:
+                validate_local_bearer_token(http_auth_value)
+            except ValueError:
+                sys.stderr.write(
+                    "gms-mcp server: error: streamable HTTP requires a bearer token with 32-4096 "
+                    "ASCII bearer-token characters.\n"
+                )
+                return 2
+            server = build_server(
+                http_auth_value=http_auth_value,
+                http_auth_issuer_url=f"{_http_origin(server_args.host, server_args.port)}{server_args.path}",
+            )
+        else:
+            server = build_server()
         _record_mcp_event(
             event_type="mcp.server_start",
             action="server.start",
@@ -809,6 +854,7 @@ def main(argv: list[str] | None = None) -> int:
                 port=server_args.port,
                 streamable_http_path=server_args.path,
                 stateless_http=True,
+                max_request_body_size=_HTTP_MAX_REQUEST_BODY_BYTES,
                 transport_security=_http_transport_security(server_args.host, server_args.port),
             )
         return 0
