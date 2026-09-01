@@ -50,7 +50,7 @@ Client products evolve independently, so installer support does not imply that e
 | Asset and room URI templates | Resource-template support | Fixed project resources and tools remain available |
 | Project dashboard UI | MCP Apps extension | `gm_project_dashboard` returns equivalent text and structured data |
 | Resolve safety choices | MCP `2026-07-28` input-required handling plus the requested input capability | Normal calls remain automatic; exceptional mutations stop without writing until the required choice can be resolved |
-| Local Streamable HTTP | Client Streamable HTTP transport support | Use the generated `stdio` configuration |
+| Local Streamable HTTP | Client Streamable HTTP transport support and a configurable `Authorization: Bearer` header | Use the generated `stdio` configuration |
 
 GMS-MCP's automated compatibility suite verifies the modern MCP `2026-07-28` mode, legacy `2025-11-25` mode, real stdio transport, local Streamable HTTP, resource subscriptions, MCP Apps fallback, OpenTelemetry middleware, and multi-round Resolve flows. It does not certify every released version of every client product.
 
