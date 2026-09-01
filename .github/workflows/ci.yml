@@ -204,15 +204,20 @@ jobs:
       - name: Start loopback Streamable HTTP server
         env:
           GM_PROJECT_ROOT: ${{ github.workspace }}/cli/tests/fixtures/mcp-conformance
+          GMS_MCP_HTTP_BEARER_TOKEN: ci-conformance-bearer-token-2026-09-02
           GMS_MCP_POST_MUTATION_VERIFY: "off"
           GMS_MCP_TOOLSETS: core
         run: |
           mkdir -p build/reports/mcp-conformance
           uv run --frozen gms-mcp server \
-            --transport streamable-http --host 127.0.0.1 --port 8765 --path /mcp \
+            --transport streamable-http --host 127.0.0.1 --port 8767 --path /mcp \
             >build/reports/mcp-conformance/server.log 2>&1 &
           server_pid=$!
           echo "GMS_MCP_SERVER_PID=$server_pid" >> "$GITHUB_ENV"
+          node cli/tests/fixtures/mcp-conformance/bearer_proxy.mjs \
+            >build/reports/mcp-conformance/proxy.log 2>&1 &
+          proxy_pid=$!
+          echo "GMS_MCP_PROXY_PID=$proxy_pid" >> "$GITHUB_ENV"
           for attempt in {1..30}; do
             probe_code=$(curl --silent --output /dev/null --write-out '%{http_code}' \
               --max-time 2 --request POST \
@@ -226,9 +231,14 @@ jobs:
               cat build/reports/mcp-conformance/server.log
               exit 1
             fi
+            if ! kill -0 "$proxy_pid"; then
+              cat build/reports/mcp-conformance/proxy.log
+              exit 1
+            fi
             sleep 0.5
           done
           cat build/reports/mcp-conformance/server.log
+          cat build/reports/mcp-conformance/proxy.log
           exit 1
 
       - name: Run official protocol scenarios
@@ -260,6 +270,9 @@ jobs:
       - name: Stop conformance server
         if: always()
         run: |
+          if kill -0 "$GMS_MCP_PROXY_PID" 2>/dev/null; then
+            kill "$GMS_MCP_PROXY_PID"
+          fi
           if kill -0 "$GMS_MCP_SERVER_PID" 2>/dev/null; then
             kill "$GMS_MCP_SERVER_PID"
           fi

@@ -10,6 +10,7 @@ import hashlib
 import inspect
 import json
 import re
+from collections import OrderedDict
 from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from enum import Enum
@@ -31,6 +32,7 @@ from .project import ProjectAccessPolicy
 
 
 _MAX_PROMPT_CHARS = 560
+_DEFAULT_EVIDENCE_HISTORY_CAPACITY = 256
 _CONTROL_CHARACTERS = re.compile(r"[\x00-\x1f\x7f]")
 _ABSOLUTE_PATH = re.compile(r"(?<!\w)(?:[A-Za-z]:[\\/]|/)[^\s,;:()\[\]{}<>]+")
 
@@ -361,7 +363,10 @@ class ResolutionRuntime:
         *,
         evidence_readers: Mapping[ResolutionPolicy, ResolutionEvidenceReader] | None = None,
         telemetry_sink: ResolutionTelemetrySink | None = None,
+        evidence_history_capacity: int = _DEFAULT_EVIDENCE_HISTORY_CAPACITY,
     ) -> None:
+        if evidence_history_capacity < 1:
+            raise ValueError("evidence_history_capacity must be at least 1")
         self.project_access_policy = project_access_policy
         self._evidence_readers: dict[ResolutionPolicy, ResolutionEvidenceReader] = {
             ResolutionPolicy.SAFE_DELETE: _safe_delete_evidence,
@@ -371,7 +376,8 @@ class ResolutionRuntime:
         }
         self._evidence_readers.update(evidence_readers or {})
         self._telemetry_sink = telemetry_sink
-        self._previous_evidence: dict[str, tuple[str, bool, int]] = {}
+        self._evidence_history_capacity = evidence_history_capacity
+        self._previous_evidence: OrderedDict[str, tuple[str, bool, int]] = OrderedDict()
 
     def set_evidence_reader(self, policy: ResolutionPolicy, reader: ResolutionEvidenceReader) -> None:
         """Install a policy-specific read seam before tools are registered."""
@@ -404,7 +410,7 @@ class ResolutionRuntime:
         project_root: str,
         arguments: Mapping[str, Any],
         ctx: Context[Any, Any],
-    ) -> tuple[Any, ResolutionEvidence, bool, int]:
+    ) -> tuple[Any, ResolutionEvidence, str, bool, int]:
         # Do these checks before each evidence read.  The resolver can run again on
         # every input round, and an echoed request_state is never an authorization.
         authorized_root = self.project_access_policy.authorize(project_root)
@@ -418,7 +424,7 @@ class ResolutionRuntime:
         authorized_root = self.project_access_policy.authorize(project_root)
         key = _scenario_key(policy, arguments)
         fingerprint = _fingerprint(policy, evidence)
-        previous = self._previous_evidence.get(key)
+        previous = self._previous_evidence.pop(key, None)
         if previous is None:
             stale = evidence.stale
             revision = 1
@@ -431,12 +437,15 @@ class ResolutionRuntime:
             stale = True
             revision = previous[2] + 1
         self._previous_evidence[key] = (fingerprint, stale, revision)
-        return authorized_root, evidence, stale, revision
+        if len(self._previous_evidence) > self._evidence_history_capacity:
+            self._previous_evidence.popitem(last=False)
+        return authorized_root, evidence, fingerprint, stale, revision
 
     @staticmethod
     def _message(
         policy: ResolutionPolicy,
         evidence: ResolutionEvidence,
+        fingerprint: str,
         stale: bool,
         revision: int,
         project_root: object,
@@ -454,7 +463,7 @@ class ResolutionRuntime:
         else:
             prefix = "Resolve the requested texture-group operation."
         return sanitize_resolution_prompt(
-            f"{prefix}{impact} {summary}{current} Evidence revision: {revision}.",
+            f"{prefix} Evidence snapshot: {fingerprint}.{impact} {summary}{current} Evidence revision: {revision}.",
             project_root=project_root,
         )
 
@@ -502,7 +511,7 @@ class ResolutionRuntime:
         arguments: Mapping[str, Any],
         ctx: Context[Any, Any],
     ) -> Elicit[DecisionT] | DecisionT | None:
-        authorized_root, evidence, stale, revision = await self._evidence(
+        authorized_root, evidence, fingerprint, stale, revision = await self._evidence(
             policy,
             project_root=project_root,
             arguments=arguments,
@@ -526,7 +535,7 @@ class ResolutionRuntime:
             stale_evidence=stale,
         )
         require_form_elicitation_capability(ctx)
-        return Elicit(self._message(policy, evidence, stale, revision, authorized_root), schema)
+        return Elicit(self._message(policy, evidence, fingerprint, stale, revision, authorized_root), schema)
 
     def safe_delete_resolver(self):
         async def resolve_safe_delete(
