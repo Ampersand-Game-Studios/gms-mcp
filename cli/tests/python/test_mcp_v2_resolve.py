@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-import asyncio
 import unittest
 from typing import Annotated
+from unittest.mock import patch
 
 from mcp import Client
 from mcp.server.mcpserver import Context, Elicit, MCPServer, Resolve
@@ -94,15 +94,15 @@ class MCPV2ResolveTests(unittest.IsolatedAsyncioTestCase):
                     )
                 self.assertEqual(raised.exception.code, -32602)
 
-            await asyncio.sleep(0.02)
-            with self.assertRaises(MCPError) as raised:
-                await client.session.call_tool(
-                    "issue_state",
-                    {"project": "one"},
-                    input_responses=response,
-                    request_state=initial.request_state,
-                    allow_input_required=True,
-                )
+            with patch("mcp.server.request_state.time.time", return_value=10_000_000_000.0):
+                with self.assertRaises(MCPError) as raised:
+                    await client.session.call_tool(
+                        "issue_state",
+                        {"project": "one"},
+                        input_responses=response,
+                        request_state=initial.request_state,
+                        allow_input_required=True,
+                    )
         self.assertEqual(raised.exception.code, -32602)
 
 
