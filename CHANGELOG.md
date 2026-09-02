@@ -89,6 +89,7 @@ All notable changes to this project will be documented in this file.
 - **Privacy-Safe Release Evidence**: Real GameMaker certification artifacts now publish only fixture filenames, hashes, IDE versions, runtime versions, and semantic checks; runner-local source, runtime, and work paths are omitted.
 
 ### Changed
+- **MCP Python SDK 2.1.1**: Updated the lock-stepped `mcp` and `mcp-types` runtime to the latest stable release, including MCP HTTP/schema fixes and safer handler-error behavior.
 - **MCP Python SDK v2**: Migrated the server, client integration coverage, and smoke tooling to MCP SDK v2 while retaining modern and legacy protocol compatibility and the real stdio transport regression.
 - **MCP SDK v2 Documentation**: Expanded the configuration and client-support guides with the stdio and local Streamable HTTP contracts, loopback security constraints, protocol negotiation, optional capability fallbacks, and the verified runtime test surface.
 - **MCP Tool Surface**: Named, annotated tools are the only MCP execution surface. Destructive policy is derived from full command prefixes and `gm_safe_delete` is the sole general asset-deletion endpoint.

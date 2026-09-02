@@ -23,8 +23,8 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
-  "mcp==2.0.0",
-  "mcp-types==2.0.0",
+  "mcp==2.1.1",
+  "mcp-types==2.1.1",
   "pydantic>=2,<3",
   "colorama>=0.4.6,<1",
   "tomli>=2,<3; python_version < '3.11'",
