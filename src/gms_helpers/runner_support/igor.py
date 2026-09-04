@@ -110,6 +110,7 @@ class RunnerIgorMixin:
 
         cmd = [str(igor_path)]
         cmd.extend([f"/lf={license_file}"])
+        cmd.extend([f"/uf={license_file.parent}"])
         cmd.extend([f"/rp={self.runtime_path}"])
         cmd.extend([f"/project={project_file}"])
         cmd.extend([f"/cache={cache_dir}"])
