@@ -415,6 +415,10 @@ class TestRunnerGapCoverage(unittest.TestCase):
             self.assertEqual(timeout_seconds, 90.0)
             return True
 
+        def verify_runner_start(*_args, **kwargs):
+            self.assertEqual(kwargs["timeout_seconds"], 1800.0)
+            return 20, {20}, set()
+
         with (
             patch.object(runner, "_build_macos_compile_validation_command", return_value=["igor", "Run"]),
             patch.object(runner, "_wait_for_igor_idle"),
@@ -422,13 +426,38 @@ class TestRunnerGapCoverage(unittest.TestCase):
             patch.object(runner, "_run_igor_command", return_value=fake_process),
             patch.object(runner, "_reject_foreign_igor_after_launch"),
             patch.object(runner, "_collect_igor_output_async", return_value=([], output_thread)),
-            patch.object(runner, "_wait_for_macos_runner_start", return_value=(20, {20}, set())),
+            patch.object(runner, "_wait_for_macos_runner_start", side_effect=verify_runner_start),
             patch.object(runner, "_wait_for_macos_main_loop", side_effect=verify_fresh_log),
             patch.object(runner, "_cleanup_macos_validation_helpers"),
         ):
             self.assertTrue(runner._compile_project_once("macOS", "VM"))
 
         output_thread.join.assert_called_once_with(timeout=5)
+
+    def test_macos_compile_launch_timeout_is_configurable_and_bounded(self):
+        runner = self._make_runner()
+
+        with patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GMS_MCP_MACOS_COMPILE_LAUNCH_TIMEOUT_SECONDS", None)
+            self.assertEqual(runner._macos_compile_launch_timeout_seconds(), 1800.0)
+
+        with patch.dict(
+            os.environ,
+            {"GMS_MCP_MACOS_COMPILE_LAUNCH_TIMEOUT_SECONDS": "not-a-number"},
+        ):
+            self.assertEqual(runner._macos_compile_launch_timeout_seconds(), 1800.0)
+
+        with patch.dict(
+            os.environ,
+            {"GMS_MCP_MACOS_COMPILE_LAUNCH_TIMEOUT_SECONDS": "45"},
+        ):
+            self.assertEqual(runner._macos_compile_launch_timeout_seconds(), 45.0)
+
+        with patch.dict(
+            os.environ,
+            {"GMS_MCP_MACOS_COMPILE_LAUNCH_TIMEOUT_SECONDS": "99999"},
+        ):
+            self.assertEqual(runner._macos_compile_launch_timeout_seconds(), 7200.0)
 
     def test_macos_compile_checks_main_loop_log_when_runner_pid_is_missed(self):
         runner = self._make_runner()
