@@ -51,6 +51,15 @@ class RunnerIgorMixin:
         except ValueError:
             return 3
 
+    @staticmethod
+    def _macos_compile_launch_timeout_seconds() -> float:
+        """Bound the full macOS compile-and-launch wait for large projects."""
+        raw = os.environ.get("GMS_MCP_MACOS_COMPILE_LAUNCH_TIMEOUT_SECONDS", "1800").strip()
+        try:
+            return min(7200.0, max(1.0, float(raw)))
+        except ValueError:
+            return 1800.0
+
     def _system_temp_root(self) -> Path:
         """Return the system temp directory used for Igor cache/temp folders."""
         import tempfile
@@ -331,7 +340,7 @@ class RunnerIgorMixin:
                         baseline_runner_pids,
                         baseline_tail_pids,
                         macos_launch_token,
-                        timeout_seconds=90.0,
+                        timeout_seconds=self._macos_compile_launch_timeout_seconds(),
                         output_lines=output_lines,
                     )
                     if runner_pid is not None:
