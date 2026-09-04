@@ -31,6 +31,10 @@ class RunnerIgorMixin:
         compile_finished = "Final Compile finished" in output and "Saving IFF file" in output
         return compile_finished and ("Igor complete." in output or "Stats : GMA" in output)
 
+    @staticmethod
+    def _igor_rejected_command(output_lines: List[str]) -> bool:
+        return any("igor: unknown command" in line.lower() for line in output_lines)
+
     def _is_retryable_igor_failure(self, returncode: int, output_lines: List[str]) -> bool:
         output = "\n".join(output_lines)
         return (
@@ -184,6 +188,8 @@ class RunnerIgorMixin:
         """Build a stage-aware failure summary instead of a generic compile error."""
         if self._is_retryable_igor_failure(returncode, output_lines):
             return "GameMaker runtime aborted with System.AccessViolationException before compilation completed."
+        if self._igor_rejected_command(output_lines):
+            return "GameMaker rejected the requested Igor command."
         if stage_label == "package/export":
             if self._is_macos_signing_failure(output_lines):
                 return (
@@ -407,7 +413,7 @@ class RunnerIgorMixin:
             ide_temp_dir = system_temp / "GameMakerStudio2" / project_name
             ide_temp_dir.mkdir(parents=True, exist_ok=True)
 
-            compile_action = "Package" if platform_target == "Linux" else "PackageZip"
+            compile_action = "Package" if platform_target in {"Android", "Linux"} else "PackageZip"
             output_args = [f"/of={ide_temp_dir / project_name}"]
             cmd = self._build_platform_action_command(
                 compile_action,
@@ -422,7 +428,7 @@ class RunnerIgorMixin:
             output_lines = self._stream_igor_output(process, stage_label)
             process.wait()
 
-            if process.returncode == 0:
+            if process.returncode == 0 and not self._igor_rejected_command(output_lines):
                 print(f"[OK] {stage_label.capitalize()} completed successfully!")
                 return True
 
