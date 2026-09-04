@@ -162,6 +162,7 @@ class TestRunnerGapCoverage(unittest.TestCase):
                         cmd = runner._build_igor_base_command()
         normalized_cmd = [entry.replace("\\", "/") for entry in cmd]
         self.assertIn("/lf=/fake/license.plist", normalized_cmd)
+        self.assertIn("/uf=/fake", normalized_cmd)
         self.assertIn("/rp=/fake/runtime", normalized_cmd)
         self.assertIn("--pf=/fake/Prefabs", normalized_cmd)
         cache_arg = next(entry for entry in normalized_cmd if entry.startswith("/cache="))
