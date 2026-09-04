@@ -196,6 +196,41 @@ class TestRunnerCommandSelection(unittest.TestCase):
 
         self.assertIn("Package/export step failed during macOS signing", message)
 
+    def test_compile_project_uses_package_on_android(self):
+        runner = GameMakerRunner(self.project_root)
+        captured_cmd = []
+
+        def fake_run_igor(cmd, **_kwargs):
+            captured_cmd[:] = cmd
+            return self._fake_process()
+
+        with patch.object(runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)):
+            with patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")):
+                with patch.object(runner, "get_prefabs_path", return_value=None):
+                    with patch.object(runner, "_run_igor_command", side_effect=fake_run_igor):
+                        ok = runner.compile_project(platform_target="Android", runtime_type="VM")
+
+        self.assertTrue(ok)
+        self.assertIn("Package", captured_cmd)
+        self.assertNotIn("PackageZip", captured_cmd)
+
+    def test_compile_project_rejects_unknown_igor_command_with_zero_exit(self):
+        runner = GameMakerRunner(self.project_root)
+        process = self._fake_process()
+
+        with patch.object(runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)):
+            with patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")):
+                with patch.object(runner, "get_prefabs_path", return_value=None):
+                    with patch.object(runner, "_run_igor_command", return_value=process):
+                        with patch.object(
+                            runner,
+                            "_stream_igor_output",
+                            return_value=["Igor: Unknown command PackageZip"],
+                        ):
+                            ok = runner.compile_project(platform_target="Windows", runtime_type="VM")
+
+        self.assertFalse(ok)
+
 
 if __name__ == "__main__":
     unittest.main()
