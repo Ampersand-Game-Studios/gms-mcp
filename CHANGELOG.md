@@ -11,6 +11,7 @@ All notable changes to this project will be documented in this file.
 - **Compile Retry Lock Delegation**: Each bounded compiler retry now receives a fresh single-use machine-lock delegation, preventing a confirmed pre-compile runtime abort from deadlocking the following attempt.
 
 ### Security
+- **MCP Python SDK 2.2.0**: Updated `mcp` and `mcp-types` together, adopting upstream HTTP/OAuth hardening and explicitly validating the local bearer token's configured resource endpoint. Updated the locked `httpx2` and `httpcore2` dependencies to 2.12.0 to address five reported vulnerabilities.
 - **Authenticated and Bounded MCP HTTP**: Local Streamable HTTP now fails closed unless a 32-character-or-longer bearer token is configured, verifies credentials through the SDK auth seam with constant-time digest comparison, and explicitly rejects request bodies over 1 MiB before JSON parsing.
 - **Bounded Resolve State**: Multi-round resolution evidence history now uses a 256-entry LRU bound, preventing unique scenario arguments from growing process memory for the server lifetime.
 - **Complete Protocol Contract Parity**: Modern and legacy MCP tests now compare every serialized tool contract field, including complete schemas, descriptions, metadata, and all safety annotations.
