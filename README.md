@@ -1,224 +1,281 @@
-# GameMaker MCP Tools
+# GMS MCP
+
+**Give your AI assistant tools to understand, edit, build, and interact with your GameMaker game.**
+
+[![PyPI version](https://img.shields.io/pypi/v/gms-mcp)](https://pypi.org/project/gms-mcp/)
+[![Python versions](https://img.shields.io/pypi/pyversions/gms-mcp)](https://pypi.org/project/gms-mcp/)
 [![CI](https://github.com/Ampersand-Game-Studios/gms-mcp/actions/workflows/ci.yml/badge.svg)](https://github.com/Ampersand-Game-Studios/gms-mcp/actions/workflows/ci.yml)
-[![GitHub stars](https://img.shields.io/github/stars/Ampersand-Game-Studios/gms-mcp?label=GitHub%20stars)](https://github.com/Ampersand-Game-Studios/gms-mcp/stargazers)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/LICENSE)
 
-## Project Features
+GMS MCP connects an MCP-capable AI client to a local GameMaker project. It gives the assistant structured operations for GameMaker assets and metadata, code navigation, project diagnostics, and Igor builds. An optional TCP bridge lets it send supported commands to a running game and read instrumented game logs.
 
-- `gms`: a Python CLI for GameMaker project operations (asset creation, maintenance, runner, etc).
-- `gms-mcp`: an MCP server that exposes the same operations as MCP tools (Cursor is the primary example client).
-- **TCP Bridge (optional)**: live, bidirectional game communication (commands + log capture) via `gm_bridge_install`, `gm_run_command`, and `gm_run_logs`. Bridge lifecycle logging stays off the MCP stdio transport so `gm_run(..., enable_bridge=true)` does not corrupt JSON-RPC. See `documentation/BRIDGE.md`.
-- **Reliability-First Architecture**: Custom exception hierarchy, typed result objects, and an execution policy manager replace monolithic exit calls and raw dictionaries. Legacy helper results are normalized into structured `success`/`ok`/`message`/`error` payloads for consistent tool integration and optimized performance (Fast assets, Resilient runner).
-- **Health & Diagnostics**: `gm_mcp_health` provides a one-click diagnostic tool to verify the local GameMaker environment. `gm_diagnostics` provides structured, machine-readable project diagnostics (JSON, naming, orphans, references) compatible with IDE problem panels.
-- **Imported Template Cleanup**: `gms maintenance normalize-names` / `gm_maintenance_normalize_names` plans naming-convention renames, and applies them only when explicitly requested.
-- **Runtime Management**: `gm_runtime_list`, `gm_runtime_pin`, and `gm_runtime_verify` allow precise control over builds and execution. Unpinned projects prefer the runtime family recorded by their IDE version, then the newest stable runtime; LTS2026 installs are identified as LTS.
-- **Cross-Platform Runner Defaults**: `gm_run` / `gm_compile` now default to the host OS target platform (`macOS`, `Linux`, or `Windows`) when not explicitly provided.
-- **macOS Local Runner Behavior**: local `gm_run` / `gm_compile` use Igor's run-based path for IDE-equivalent validation without Developer ID packaging. Launches wait for existing IDE or MCP Igor activity, snapshot all runner PIDs, and attach a unique inherited ownership marker so cleanup can distinguish owned path-bearing and bare Download runners from user processes. Packaged temp-output runs still resolve `.app` bundles via `Contents/MacOS/` when `PackageZip` is used.
-- **GML Symbol Indexing & Code Intelligence**: `gm_build_index`, `gm_find_definition`, `gm_find_references`, and `gm_list_symbols` provide deep, fast, and filtered code analysis (definitions and cross-file references).
-- **Introspection**: complete project inspection with support for all asset types (including extensions and datafiles).
-- **MCP Resources**: addressable project index and asset graph for high-performance agent context loading.
-- **MCP 2.0 Runtime Features**: modern clients receive cache hints, structured tool failures, live project-resource updates after committed mutations or external project edits, safe RFC6570 asset/room resource templates, and multi-round Resolve input requests for exceptional mutation choices.
-- **Resolve Safety Policies**: normal calls remain automatic. Dependency-blocked asset/room deletion can request an explicit force-or-cancel choice; name collisions request a replacement name and never overwrite; referenced texture-group deletion requests a valid reassignment. Every resumed operation reauthorizes and revalidates immediately before writing.
-- **MCP Apps Dashboard**: clients that support MCP Apps can render a read-only project dashboard; every client still receives the same useful text and structured dashboard result.
-- **Outcome-Oriented MCP Prompts**: five read-only prompt templates adapt to the active profile, guiding implementation workflows when mutation tools exist and diagnosis-only plans in safe mode.
-- **Official ResourceTool Validation (opt-in)**: `gm_resourcetool_validate` runs only YoYo's fixed read-only `resource list` contract against a checksummed disposable `.yyp` descriptor under an OS sandbox. Live project files and child output are never exposed.
-- **Authenticated Local Streamable HTTP**: `gms-mcp server --transport streamable-http --host 127.0.0.1` provides stateless MCP HTTP for local clients when `GMS_MCP_HTTP_BEARER_TOKEN` contains a strong pre-shared token. It rejects unauthenticated clients, non-loopback binds, unapproved Host/Origin headers, and request bodies over 1 MiB; it is not a remote shared-server deployment mode.
-  MCP SDK 2.2.0 resource validation is explicitly enabled: verified local credentials carry the configured endpoint resource, which the SDK checks before accepting the request.
-- `gms-mcp-init`: generates shareable MCP config files for a workspace. Now auto-detects environment variables like `GMS_MCP_GMS_PATH` to include in the generated config.
-- **Privacy-Safe Telemetry (opt-in)**: `gms`, `gms-mcp-init`, and MCP usage can send anonymous usage metadata only after explicit consent.
+Use it from Cursor, Codex, Claude Code, or another compatible client. Prefer the terminal? The package also includes the `gms` CLI; no AI client is required for CLI operations.
 
-The MCP server starts with a curated core toolset. Enable optional domains with `GMS_MCP_TOOLSETS=assets,events,rooms` or use `GMS_MCP_TOOLSETS=all`; `gm_capabilities` reports the active profile and available domains.
+GMS MCP is an independent, open-source project by Ampersand Game Studios, not an official GameMaker product. It is a **game-development tool**, not a project-management or social-media service.
 
-MCP SDK OpenTelemetry middleware is active by default. It creates spans only when the host configures an OpenTelemetry exporter; GMS MCP does not send telemetry to an external tracing service by itself.
+[Quick start](#quick-start) · [Capabilities](#what-you-can-do) · [Example workflows](#try-it-with-your-assistant) · [Safety and privacy](#safety-and-privacy) · [Troubleshooting](#troubleshooting) · [Documentation](#documentation)
 
-## Install (recommended: pipx)
+## What you can do
+
+| Task | How GMS MCP helps |
+| --- | --- |
+| Understand an unfamiliar project | Inspect assets, rooms, events, and metadata; find GML definitions and references; explore the project index and asset dependency graph. |
+| Create and change game content | Create GameMaker assets, manage object events, place room instances, edit room layers, and organize audio/texture resources. |
+| Refactor and maintain a project | Use reference-aware rename/delete workflows, check naming and resource integrity, and find orphaned or missing references. |
+| Build and run | Compile and launch through GameMaker's Igor toolchain; select and pin installed runtimes; inspect and stop managed run sessions. |
+| Interact with a running game | Install the optional bridge, send supported commands, and collect logs emitted through `__mcp_log()`. |
+| Give the assistant reusable context | Expose MCP tools, project resources, five workflow prompts, and a project dashboard with optional MCP Apps rendering. |
+
+Availability depends on the selected [tool profile](#enable-editing-and-additional-tools), client capabilities, and installed GameMaker toolchain. The bridge is not a GML hot-reload system, and GMS MCP does not provide automatic synchronization with the GameMaker IDE.
+
+## Quick start
+
+### 1. Install
+
+You need **Python 3.10 or newer**, a GameMaker project containing a `.yyp` file, and an MCP-capable client. Building and running also require an installed GameMaker runtime, the appropriate licence/access credentials, and any target-specific SDKs. Project inspection does not require the GameMaker IDE to be running.
+
+With [pipx](https://pipx.pypa.io/stable/how-to/install-pipx.html) installed:
 
 ```bash
 pipx install gms-mcp
 ```
 
-If `gms-mcp` is useful, consider starring the repo on GitHub. Stars help other GameMaker users find it.
+The package installs three commands:
 
-PowerShell equivalent:
+| Command | Purpose |
+| --- | --- |
+| `gms-mcp` | Start the MCP server or run connection/environment diagnostics. |
+| `gms-mcp-init` | Generate client configuration and check setup. |
+| `gms` | Run GameMaker project operations directly from the terminal. |
 
-```powershell
-pipx install gms-mcp
-```
+For sprite image imports, install the optional image dependency with `pipx inject gms-mcp Pillow`.
 
-## Claude Code Plugin
+### 2. Connect your client
 
-For Claude Code users, install the plugin for the best experience:
-
-```
-/install-plugin github:Ampersand-Game-Studios/gms-mcp
-```
-
-This provides:
-- **Skills**: 19 workflow guides + 8 reference docs
-- **Hooks**: Once-daily update reminders and error notifications
-- **MCP Server**: Auto-configured via uvx (no pip install needed)
-
-### For Other Tools (Cursor, VSCode, OpenClaw, etc.)
+Open a terminal in your **game's project folder**, not the GMS MCP source repository. Run the command for your client:
 
 ```bash
-pip install gms-mcp
-gms-mcp doctor            # quick package + project-detection + update check
-gms-mcp doctor --project  # project-aware environment check
-gms-mcp doctor --full     # add runtime selection + bridge status
-gms-mcp-init --cursor     # or --vscode, --windsurf, --openclaw, etc.
+# Cursor
+gms-mcp-init --client cursor --scope workspace --action app-setup
+
+# Codex
+gms-mcp-init --client codex --scope workspace --action app-setup --config-path .codex/config.toml
+
+# Claude Code
+gms-mcp-init --client claude-code --scope workspace --action app-setup
 ```
 
-For skill packs, OpenClaw users can install to user or workspace scope:
+These canonical setup commands default to the **read-only `safe` profile**. They write client configuration; they do not grant the assistant project-editing or build tools. Read and complete any client registration instructions printed by the installer, then restart the client's MCP connection.
+
+**Codex:** the explicit `--config-path` writes to `.codex/config.toml`, the project-scoped configuration supported by Codex for **trusted projects**. Without that override, the initializer writes a `.codex/mcp.toml` snippet that needs separate registration. Keep the override on subsequent setup/profile/check commands. Review existing configuration before merging, and only trust projects you recognize. See [OpenAI's MCP configuration guide](https://developers.openai.com/codex/mcp/).
+
+Other installer targets include `antigravity` (alias `gemini`), `vscode`, `windsurf`, `openclaw`, and `generic`. Some targets generate configuration for you to import rather than activating a native client connection automatically. The `claude-desktop` target uses `--scope global` and generates a plugin bundle. Check the [compatibility matrix](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/documentation/COMPATIBILITY_MATRIX.md) for supported scopes and the [client guide](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/documentation/CLIENT_SUPPORT_MATRIX.md) for capability limits.
+
+### 3. Verify the connection
+
+From the same project folder:
 
 ```bash
-gms skills install --openclaw            # user scope: ~/.openclaw/skills/
-gms skills install --openclaw --project  # workspace scope: ./skills/
+gms-mcp doctor --project
+gms-mcp-init --client cursor --scope workspace --action check
 ```
 
-Note: `.openclaw/openclaw.json` is for settings. Workspace skills are loaded from `./skills/`.
+Replace `cursor` with your chosen client; for the Codex setup above, also add `--config-path .codex/config.toml`. Configuration checks do not prove that a client has connected: in a new assistant session, ask:
 
-### For Codex
+> Use GMS MCP to call `gm_capabilities` and `gm_project_info`. Confirm the connected project and available tools, then summarize the game without changing anything.
+
+Successful tool responses from the intended project confirm the connection. Missing runtime or licence checks affect builds; they do not necessarily prevent read-only project inspection.
+
+## Enable editing and additional tools
+
+Start read-only to check the project boundary, then choose the access you need:
+
+| Profile | Access |
+| --- | --- |
+| `safe` (default for canonical setup) | Read-only core tools. Project mutators and compile/run actions are omitted. |
+| `standard` | Complete core toolset, including mutation and build workflows. |
+| `full` | Core plus all optional toolsets. Separately gated integrations still require their own configuration. |
+
+To enable editing and the wider tool catalogue for Cursor:
 
 ```bash
-gms-mcp-init --codex
+gms-mcp-init --client cursor --scope workspace --action app-setup --profile full
 ```
 
-This writes a workspace `.codex/mcp.toml` file and prints the `codex mcp add` registration command.
+Use your chosen client and supported scope instead of `cursor`/`workspace` where appropriate. **`standard` and `full` allow writes and do not require every mutation to be a dry run.** Commit or back up your game first, avoid concurrent IDE edits, and restart the MCP connection after changing a profile. These profiles configure the MCP server, not the permissions of the standalone `gms` CLI or your AI client's other tools.
 
-Global config mode writes directly to `~/.codex/config.toml` (merging server entries).
-
-Use the printed command directly, or copy `.codex/mcp.toml` content into the `[mcp_servers]` section of your `~/.codex/config.toml`.
-
-Codex helpers:
-- `gms-mcp-init --codex-check` prints detected Codex config paths and active server entry, with secret-like values redacted.
-- `gms-mcp-init --codex-check-json` prints the same check output in machine-readable JSON, with secret-like values redacted.
-- `gms-mcp-init --codex-dry-run-only` prints final merged payloads for workspace + global Codex config without writing files.
-- `gms-mcp-init --codex-app-setup` runs one-shot Codex app setup: writes workspace config, previews global merge, then prints check + readiness summary.
-
-## Telemetry
-
-Telemetry is `default off`.
-
-- Consent is user-scoped in `~/.gms-mcp/telemetry.json`
-- Interactive `gms` and `gms-mcp-init` runs can prompt once for consent
-- MCP server startup never prompts on stdio
-- By default telemetry excludes file paths, command arguments, stdout/stderr, project names, usernames, emails, hostnames, and persistent IDs
-
-CLI controls:
+To expose selected domains instead of everything:
 
 ```bash
-gms telemetry status
-gms telemetry enable
-gms telemetry enable --with-install-id
-gms telemetry disable
-gms telemetry flush
-gms telemetry clear
+gms-mcp-init --client cursor --scope workspace --action app-setup --profile standard --toolsets core,assets,events,rooms
 ```
 
-Runtime overrides:
+Optional domains: `assets`, `bridge`, `docs`, `events`, `maintenance`, `resourcetool`, `rooms`, `runtime`, and `texture-groups`. Call `gm_capabilities` to see what is actually enabled. `safe` accepts only the read-only core surface; it cannot be combined with extra toolsets.
+
+## Try it with your assistant
+
+These are example requests, not claims that an AI will complete every task correctly. Inspect the resulting changes and verification results.
+
+**Understand the game** (available with `safe`):
+
+> Inspect this project. Explain the startup room, main objects, and their relationships. Identify missing asset references without changing files.
+
+**Add a feature** (enable `full` or the relevant editing domains):
+
+> Add a collectible coin object using the existing project conventions. Put it in the correct asset folder, add its events, place one in the startup room, then validate the changes and compile. Report any remaining errors.
+
+**Refactor with context** (requires editing access):
+
+> Find every reference to `obj_enemy`. Preview a rename to `obj_enemy_basic`, explain what will change, and wait for my approval before applying it. Validate the project afterwards.
+
+**Investigate a running game** (requires `bridge`, build access, and bridge setup):
+
+> Check the bridge setup, run the game with the bridge enabled, verify the connection with a ping, and inspect recent instrumented logs. Stop the managed run when finished.
+
+Clients that expose MCP prompts can also use `create-feature`, `diagnose-project`, `safe-refactor`, `compile-fix-retry`, and `inspect-live-game`. Fetching a prompt does not execute tools or modify the project; its instructions adapt to the active profile.
+
+## Work with a running game
+
+The optional bridge connects the MCP server to GML code inside your game over local TCP. Use it for supported runtime commands and instrumented logging, not arbitrary code hot reload.
+
+1. Enable the `bridge` toolset and editing/build access.
+2. Install the bridge assets and ensure a `__mcp_bridge` instance is created in the startup room. `gm_bridge_enable_one_shot` combines asset installation and room placement; `gm_bridge_install` alone does not place an instance.
+3. Check the platform requirements in the [bridge guide](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/documentation/BRIDGE.md). Windows networking may require changing the GameMaker sandbox option; understand that change before applying it.
+4. Run with `gm_run(background=true, enable_bridge=true)`, check `gm_bridge_status`, then send `ping` through `gm_run_command`.
+5. Read `gm_run_logs` and stop the managed session with `gm_run_stop` when done.
+
+Bridge logs come from `__mcp_log(...)`; they are **not** a scrape of every `show_debug_message(...)` or IDE console message. Only one game should use the bridge port at a time. Treat the bridge and its installed assets as development instrumentation; review or remove them before distributing your game.
+
+## Use the CLI without an AI client
+
+Run these from your game's project folder:
 
 ```bash
-gms --telemetry=off maintenance auto
-gms-mcp-init --telemetry=on --cursor
-GMS_MCP_TELEMETRY=off gms asset create script my_script
-```
-
-## Imported Template Cleanup
-
-GameMaker's blank template may create assets like `room1` that violate stricter project naming rules. Keep lint strict, then normalize imported/template assets explicitly:
-
-```bash
+gms --help
+gms --project-root . texture-groups list
 gms maintenance normalize-names
-gms maintenance normalize-names --fix
-gms maintenance normalize-names --asset-type room --fix
 ```
 
-The command uses the project's `.gms-mcp.json` naming config, defaults to dry-run, detects collisions, and performs real renames through the same reference-aware workflow as `gms workflow rename`.
-
-Dev/test endpoint override:
+The normalization command previews naming changes. Add `--fix` only when you intend to apply them. To create an asset or compile:
 
 ```bash
-GMS_MCP_TELEMETRY_ENDPOINT=https://localhost:8787/v1/events gms telemetry flush
+gms --project-root . asset create script my_function --parent-path "folders/Scripts.yy"
+gms --project-root . run compile
 ```
 
-## Local Development Setup
+Use an existing logical folder from your game in place of `folders/Scripts.yy`. Asset creation writes project files, and compilation requires the GameMaker toolchain. See the [CLI documentation](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/cli/docs/README.md) and `gms <command> --help` for available arguments.
 
-If you are working on the `gms-mcp` codebase itself, follow these steps to set up a local development environment:
+## Safety and privacy
 
-1.  **Clone and install in editable mode**:
-    ```bash
-    git checkout dev
-    uv sync --frozen --all-extras --python 3.12
-    ```
-    `gms-mcp` requires Python `3.10+`; we recommend Python `3.12` for local development.
+- **Choose the project deliberately.** Each MCP server process pins one GameMaker project at startup and checks project-relative access against that boundary. Use separate server entries for separate projects. Sprite PNG inputs must be inside the pinned project.
+- **Project context goes to your client.** Tools intentionally return source and asset metadata from the selected game. Only connect a project whose contents you are willing to share with that AI client/provider. A local server does not make a cloud AI conversation private.
+- **Use version control or backups.** Guarded operations, validation, and rollback mechanisms reduce risk; they do not guarantee that every AI edit is correct or recoverable. Avoid editing the same files simultaneously in the GameMaker IDE and through an assistant.
+- **Usage telemetry is off by default.** Interactive CLI setup can ask for consent; MCP startup never prompts on stdio. Default usage events exclude paths, command arguments, output, project names, usernames, emails, hostnames, and persistent IDs. Check or disable it with `gms telemetry status` or `gms telemetry disable`.
+- **Local does not mean offline.** Documentation lookup and update checks can access online services. SDK OpenTelemetry spans require a host-configured exporter; GMS MCP does not configure an external tracing service itself.
+- **Keep diagnostics private.** Automatic MCP diagnostic logs live outside the game under `~/.gms-mcp/logs/<opaque-project-id>/`. Review logs and screenshots before sharing them; never attach credentials or proprietary game files to a public issue.
 
-2.  **Run the full local test suite**:
-    ```bash
-    uv run --frozen pytest -q
-    ```
+The generated client configurations use **stdio**, with the client starting a local server process. An optional bearer-authenticated **Streamable HTTP** transport is restricted to loopback, checks Host/Origin headers, and limits request bodies to 1 MiB. It is not a public or shared remote-server deployment mode. Follow the [HTTP configuration guide](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/documentation/CONFIGURATION.md#local-streamable-http); keep its token out of committed configuration and logs.
 
-3.  **Initialize local and global MCP servers for testing**:
-    We recommend setting up two separate MCP server configurations in Cursor to test your changes:
-    
-    *   **Global (`gms-global`)**: For general use across all your GameMaker projects.
-    *   **Local (`gms-local`)**: Specifically for testing your current changes to the server.
+## Compatibility and limits
 
-    Run these commands from the project root (zsh/bash):
-    ```bash
-    # Global setup (names it 'gms-global' in Cursor)
-    gms-mcp-init --cursor-global --server-name gms-global --mode python-module --python python3 --non-interactive
+**GameMaker:** build/run defaults follow the host platform: Windows, macOS, or Linux. VM and YYC runtime labels are supported, subject to installed toolchains. GMRT labels are currently rejected because the required Igor command-line contract is not implemented. Runtime selection and pinning are available through `gm_runtime_list`, `gm_runtime_pin`, `gm_runtime_unpin`, and `gm_runtime_verify` in the `runtime` toolset.
 
-    # Local setup (names it 'gms-local' in Cursor)
-    gms-mcp-init --cursor --server-name gms-local --mode python-module --python python3 --non-interactive
-    ```
+**AI clients:** installer support means configuration generation and repository tests, not certification of every client release. Optional dashboard rendering, resource subscriptions, and Resolve choices depend on negotiated client capabilities. The dashboard also returns text and structured data without MCP Apps support.
 
-    PowerShell equivalent:
+**MCP:** the package pins Python SDK `mcp` and `mcp-types` to `2.2.0`. Compatibility tests cover protocol `2026-07-28` and legacy `2025-11-25`; SDK/package version numbers are distinct from protocol revision dates. Modern-mode features include cache hints, live resource updates after mutations or external edits, URI templates, and multi-round Resolve choices for exceptional mutations. See the [runtime capability contract](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/documentation/CLIENT_SUPPORT_MATRIX.md#runtime-capability-contract).
 
-    ```powershell
-    # Global setup (names it 'gms-global' in Cursor)
-    gms-mcp-init --cursor-global --server-name gms-global --mode python-module --python python --non-interactive
+<details>
+<summary>Optional official ResourceTool validation</summary>
 
-    # Local setup (names it 'gms-local' in Cursor)
-    gms-mcp-init --cursor --server-name gms-local --mode python-module --python python --non-interactive
-    ```
+This integration checks compatibility with YoYo's ResourceTool through an installed official `gm-cli`. It is disabled by default, is not an official affiliation, and is **not a mutation backend**.
 
-4.  **Verify in Cursor**:
-    Go to **Cursor Settings > Features > MCP** to see your new servers. You may need to click "Reload" or restart Cursor to see changes.
+Configure the server environment with the opt-in `resourcetool` toolset, an absolute executable path, its independently verified SHA-256, and the fixed argument contract:
 
-## Publishing (maintainers)
+```text
+GMS_MCP_TOOLSETS=resourcetool
+GMS_MCP_RESOURCETOOL_ENABLED=1
+GMS_MCP_RESOURCETOOL_EXECUTABLE=<absolute path to the trusted gm-cli executable>
+GMS_MCP_RESOURCETOOL_SHA256=<verified SHA-256 of that executable>
+GMS_MCP_RESOURCETOOL_ARGUMENTS_JSON=["resourcetool","eval","resource list","{project_copy_yyp}"]
+```
 
-Publishing is chained to successful push-triggered CI on `dev`, `pre-release`, or `main`. It also requires passing real GameMaker 2024 and 2026 LTS certification artifacts from that exact CI run; skipped or missing certification blocks PyPI publication.
+These are configuration values, not a shell script. Do not enable them in the read-only `safe` profile.
 
-The `GAMEMAKER_ACCESS_KEY` secret belongs in the branch-restricted `gamemaker-ci` environment, not at repository scope. Maintainers can safely validate it with the CI workflow's `run_real_gamemaker_smoke` manual input: manually dispatched CI can run the licensed smoke matrix but cannot trigger publication.
+`gm_resourcetool_validate` requires the configured `gm-cli` executable to match its pinned SHA-256, rejects symlinks and private-file/content conventions, and copies only the `.yyp` descriptor into a task-owned temporary directory. It runs the fixed read-only command in an OS sandbox that blocks network access, live-project reads, and host writes; platforms without the required sandbox fail closed. Child output is suppressed, the minimal copy is checksummed before and after, and cleanup happens before returning. A rewrite, timeout, nonzero exit, ambiguous `.yyp`, identity mismatch, private data, or altered command contract fails closed. This validates ResourceTool project-list compatibility; it is not a mutation backend.
 
-Built package archives are checked against a public-file allowlist before publication. Development tests, plans, service operations, CI configuration, and local reports are excluded from PyPI artifacts.
+</details>
 
-## CI Coverage
+## Troubleshooting
 
-- Core CI runs on Ubuntu and Windows across Python `3.10`-`3.13` from the committed `uv.lock`.
-- Runner/session regression tests also run on macOS across Python `3.11`-`3.13`, including a mockless smoke test that builds a real `.app` bundle structure and validates executable path resolution.
-- Core CI also runs a deterministic MCP tool smoke subset against a generated minimal GameMaker project fixture.
-- CI runs pinned official MCP 2026-07-28 wire scenarios for stateless discovery, schema validation, caching, HTTP header routing, DNS-rebinding protection, tools, resources, prompts, concurrent streams, Resolve/input-required retries, capability checks, multi-round input, and tamper-resistant request state.
-- CI audits every dependency resolved from `uv.lock` against the vulnerability database. The audit exports the locked graph first because `pip-audit --locked` does not read `uv.lock` directly.
+| Symptom | Check |
+| --- | --- |
+| The client cannot launch `gms-mcp` | Confirm the package is installed and its executables are on the client's PATH. Restart the client after installation. |
+| Config exists, but no tools appear | Complete the client's registration/import step, restart its MCP connection, and call `gm_capabilities`. Installer readiness is a config check, not proof of a live connection. |
+| Editing or build tools are missing | Check the active profile. `safe` intentionally omits them; select `standard`/`full` and restart. |
+| The wrong project is detected | Run setup from the game workspace and specify `--gm-project-root path/to/game` when needed. Restart the server after changing the target. |
+| A build fails | Run `gms-mcp doctor --full`; check the selected runtime, licence/access credentials, target SDKs, and returned compiler diagnostics. |
+| The bridge runs but has no game connection or logs | Check the startup-room instance, networking requirements, port conflicts, and use of `__mcp_log()`. Follow the bridge guide before recompiling repeatedly. |
 
-### Quality Reports
+### Codex setup and checks
 
-Quality reports are generated during CI and published as `quality-reports-*` artifacts.
-
-The reporting pipeline is subprocess-aware: CLI tests that launch `python -m gms_helpers.gms`
-or other child processes now contribute to the final coverage artifacts instead of silently
-dropping out of `coverage.xml`.
-
-- `TEST_COVERAGE_REPORT.md`
-- `MCP_TOOL_VALIDATION_REPORT.md`
-- `mcp_tool_smoke_report.json`
-- `coverage.xml`
-- `pytest_results.xml`
-- `quality_summary.json`
-
-You can regenerate these locally with:
+Use the same explicit configuration path as the quick start:
 
 ```bash
-uv sync --frozen --all-extras
+gms-mcp-init --client codex --scope workspace --action check --config-path .codex/config.toml
+gms-mcp-init --client codex --scope workspace --action check-json --config-path .codex/config.toml
+gms-mcp-init --client codex --scope workspace --action setup --config-path .codex/config.toml --dry-run
+```
+
+Checks redact secret-like values. Dry-run setup previews only the target server entry without writing, omitting unrelated config and replacing private paths. Workspace Codex configuration stores project roots relative to the repository; roots outside that workspace are rejected. Global configuration deliberately leaves project resolution to the server's startup workspace. The older `--codex-check`, `--codex-check-json`, and `--codex-dry-run-only` helpers target the initializer's default snippet/global paths, not the custom project config above.
+
+### Updates
+
+```bash
+pipx upgrade gms-mcp
+gms-mcp doctor
+```
+
+Restart your MCP connection after upgrading. `gm_check_updates` and `gms://system/updates` expose update status to clients. Bundled hooks can provide once-daily reminders where installed; not every package installation has an active reminder hook.
+
+## Documentation
+
+| Guide | Contents |
+| --- | --- |
+| [Configuration](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/documentation/CONFIGURATION.md) | Naming rules, project configuration, server transports, and runtime settings. |
+| [Client support](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/documentation/CLIENT_SUPPORT_MATRIX.md) | Setup actions, scopes, and optional MCP capability behaviour. |
+| [Compatibility matrix](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/documentation/COMPATIBILITY_MATRIX.md) | Generated installer/profile declarations and their test-evidence boundary. |
+| [Live-game bridge](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/documentation/BRIDGE.md) | Installation, instrumentation, command workflow, and troubleshooting. |
+| [Codex MCP configuration](https://developers.openai.com/codex/mcp/) | Official client configuration, project trust, and connection controls. |
+| [CLI reference](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/cli/docs/README.md) | Direct command-line workflows. |
+| [Changelog](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/CHANGELOG.md) | Project change history. |
+
+The repository also includes a Claude plugin with workflow skills and hooks. The `gms skills install` command supports skill installation, including `gms skills install --openclaw --project` for workspace-scoped OpenClaw skills. Skills are instructions for the assistant, not additional server permissions.
+
+## Development and verification
+
+Contribute against `dev`; maintainers promote `dev` → `pre-release` → `main`. See [Contributing](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/CONTRIBUTING.md).
+
+From a source checkout, using [uv](https://docs.astral.sh/uv/):
+
+```bash
+uv sync --frozen --all-extras --python 3.12
+uv run --frozen pytest -q
+uv run --frozen pytest cli/tests/python/test_final_verification.py
+uv run --frozen python scripts/generate_quality_reports.py
+```
+
+CI runs core tests on Linux and Windows across Python 3.10–3.13, plus macOS runner/session tests across Python 3.11–3.13. It also checks MCP protocol behaviour, locked dependencies for known vulnerabilities, package privacy boundaries, and tool-registration parity. These checks are evidence of tested behaviour, not a guarantee that a project or dependency is free of defects.
+
+Release publication requires passing **real GameMaker 2024 and 2026 LTS certification** from the exact push-triggered CI run on disposable Linux, Windows, and macOS runners. A generated MCP fixture alone does not establish compile/run compatibility. Build archives must also pass the public-file allowlist; local reports, service operations, development tests, and CI configuration are excluded from published packages.
+
+<details>
+<summary>Maintainer smoke tests and release gates</summary>
+
+Run the full Python runner, final verification tests, and quality reports before promotion:
+
+```bash
+uv run --frozen python cli/tests/python/run_all_tests.py
+uv run --frozen pytest cli/tests/python/test_final_verification.py
 GMS_MCP_TOOLSETS=all uv run --frozen python scripts/run_mcp_tool_smoke.py \
   --init-minimal-base \
   --base-project build/mcp-smoke/base-project \
@@ -227,9 +284,9 @@ GMS_MCP_TOOLSETS=all uv run --frozen python scripts/run_mcp_tool_smoke.py \
 uv run --frozen python scripts/generate_quality_reports.py
 ```
 
-The MCP smoke uses a generated portable fixture and does not claim real compile/run coverage. The separate version-authored GameMaker fixtures provide that evidence. Release CI compiles those neutral fixtures on disposable Linux, Windows, and macOS runners. The generator enforces 85% overall coverage, 50% per-module coverage, runtime/source MCP registration parity, and reports executed MCP smoke calls separately from static test-source references.
+The report generator enforces 85% overall coverage, 50% per-module coverage, and runtime/source tool-registration parity. Executed MCP smoke calls are reported separately from static test-source references. Quality artifacts include the coverage/JUnit reports, `TEST_COVERAGE_REPORT.md`, `MCP_TOOL_VALIDATION_REPORT.md`, `mcp_tool_smoke_report.json`, and `quality_summary.json`.
 
-Run both supported real GameMaker fixtures before promotion, for example:
+On a configured GameMaker machine, run both version-authored fixtures:
 
 ```bash
 uv run --frozen python scripts/run_real_gamemaker_smoke.py \
@@ -243,328 +300,12 @@ uv run --frozen python scripts/run_real_gamemaker_smoke.py \
   --required
 ```
 
-## Use with a GameMaker project (multi-project friendly)
+Publication is chained to successful push-triggered CI on `dev`, `pre-release`, or `main`; skipped or missing real-GameMaker certification blocks PyPI publication. Keep `GAMEMAKER_ACCESS_KEY` in the branch-restricted `gamemaker-ci` environment, never in source or repository-wide configuration. A manually dispatched CI run with `run_real_gamemaker_smoke` can validate the licensed matrix but cannot trigger publication. Confirm release-bound CI passes on `main` after promotion.
 
-Run this inside each GameMaker project workspace (or repo) to generate config:
+</details>
 
-```bash
-gms-mcp-init --cursor
-```
+## Support and licence
 
-This writes `.cursor/mcp.json` and attempts to auto-detect the `.yyp` location to set `GM_PROJECT_ROOT`.
+Report reproducible bugs or request features through [GitHub Issues](https://github.com/Ampersand-Game-Studios/gms-mcp/issues). Include the GMS MCP version, OS, client, GameMaker runtime if relevant, and sanitized reproduction steps. Use a minimal non-proprietary project rather than uploading your working game. Do not post secrets or exploitable security details publicly; use [GitHub's private vulnerability reporting](https://github.com/Ampersand-Game-Studios/gms-mcp/security) if available.
 
-Each MCP server process pins that detected project when it starts. Tool calls cannot switch the server to a sibling
-project, traverse above the project, or follow a project symlink to files elsewhere on the host. Run a separate MCP
-server entry for each project you want to expose. Sprite PNG inputs must also live inside that pinned project.
-
-The pinned project is the server's approved data boundary, not a private area hidden from the connected MCP client.
-Tools intentionally return asset metadata and source context from that project, so only pin a project whose contents
-you are willing to send to the connected AI client or provider.
-
-For a one-time setup that works across many projects, write Cursor's global config instead:
-
-```bash
-gms-mcp-init --cursor-global
-```
-
-Generate a Codex config from the current workspace:
-
-```bash
-gms-mcp-init --codex
-```
-
-Workspace Codex config stores `GM_PROJECT_ROOT` relative to the repository (`.` or a subdirectory such as
-`gamemaker`) so `.codex/mcp.toml` can be committed without publishing a username or machine-specific path.
-Project roots outside the workspace are rejected instead of being written as absolute paths.
-
-Generate a global Codex entry in `~/.codex/config.toml`:
-
-```bash
-gms-mcp-init --codex-global
-```
-
-Global mode merges with existing entries so it is safe to keep multiple MCP servers in the same file.
-It deliberately omits `GM_PROJECT_ROOT`, so each server pins the GameMaker project resolved from its own startup
-workspace.
-
-Inspect current Codex config resolution:
-
-```bash
-gms-mcp-init --codex-check
-```
-
-Human and JSON check output redact secret-like env, header, and credential argument values before printing.
-
-Preview the redacted target Codex entries for local + global without writing. Existing unrelated
-configuration is omitted, secret values are redacted, and machine-specific paths are replaced:
-
-```bash
-gms-mcp-init --codex-dry-run-only
-```
-
-Print Codex check output as JSON (useful for app automation):
-
-```bash
-gms-mcp-init --codex-check-json
-```
-
-One-shot Codex app setup (recommended for new workspaces):
-
-```bash
-gms-mcp-init --codex-app-setup
-```
-
-### Codex App Quickstart
-
-1. Run `gms-mcp-init --codex-app-setup` in your GameMaker workspace.
-2. Confirm the output says `Ready for Codex app: yes`.
-3. If needed, run `gms-mcp-init --codex-check-json` and verify `active.scope` is `workspace`.
-4. Use `gms-mcp-init --codex-dry-run-only` before changing global config to preview merged TOML safely.
-
-## Canonical Client Workflow
-
-All clients now support the same canonical action surface:
-
-```bash
-gms-mcp-init \
-  --client <cursor|codex|claude-code|claude-desktop|antigravity|gemini|vscode|windsurf|openclaw|generic> \
-  --scope <workspace|global> \
-  --action <setup|check|check-json|app-setup>
-```
-
-Optional:
-- `--config-path /custom/path` to override default config location
-- `--profile safe|standard|full` selects a named permission/tool profile; canonical setup defaults to read-only `safe`
-- `--toolsets core,assets,...` overrides `standard` or `full`; `safe` accepts only the read-only `core` surface
-- `--safe-profile` remains as the legacy alias for `--profile safe`
-
-Examples:
-
-```bash
-# Cursor setup + readiness check
-gms-mcp-init --client cursor --scope workspace --action app-setup
-
-# Codex machine-readable readiness
-gms-mcp-init --client codex --scope workspace --action check-json
-
-# Claude Desktop global plugin sync
-gms-mcp-init --client claude-desktop --scope global --action setup
-
-# Gemini alias (Antigravity path)
-gms-mcp-init --client gemini --scope global --action app-setup
-
-# OpenClaw app setup + workspace skills install
-gms-mcp-init --client openclaw --scope workspace --action app-setup \
-  --openclaw-install-skills --openclaw-skills-project
-```
-
-For declared support and the exact evidence boundary, see `documentation/COMPATIBILITY_MATRIX.md` and `documentation/CLIENT_SUPPORT_MATRIX.md`.
-
-Generate example configs for other MCP-capable clients:
-
-```bash
-gms-mcp-init --vscode --windsurf --antigravity --openclaw
-```
-
-Set up Antigravity global config (recommended):
-
-```bash
-gms-mcp-init --antigravity-setup
-```
-
-This merges into `~/.gemini/antigravity/mcp_config.json`, writes atomically, creates a timestamped backup on overwrite, and enables a conservative safety profile by default:
-- `GMS_MCP_ENABLE_DIRECT=0`
-- `GMS_MCP_REQUIRE_DRY_RUN=1`
-
-Check Antigravity readiness:
-
-```bash
-gms-mcp-init --antigravity-check
-```
-
-Print Antigravity check output as JSON:
-
-```bash
-gms-mcp-init --antigravity-check-json
-```
-
-Antigravity check output also redacts secret-like env, header, and credential argument values before printing.
-
-One-shot Antigravity app setup:
-
-```bash
-gms-mcp-init --antigravity-app-setup
-```
-
-Use a custom Antigravity config path:
-
-```bash
-gms-mcp-init --antigravity-setup --antigravity-config-path /path/to/mcp_config.json
-```
-
-Opt in to the conservative safety profile for Antigravity example configs too:
-
-```bash
-gms-mcp-init --antigravity --safe-profile
-```
-
-When `GMS_MCP_REQUIRE_DRY_RUN=1` is set, you can allow specific destructive tools with:
-
-```bash
-export GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST=gm_safe_delete
-```
-
-Or generate everything at once:
-
-```bash
-gms-mcp-init --all
-```
-
-## Monorepos / multiple `.yyp`
-
-If multiple `.yyp` projects are detected in a workspace:
-- `gms-mcp-init` will warn and (when interactive) prompt you to pick one.
-- In non-interactive environments, it defaults `GM_PROJECT_ROOT` to `${workspaceFolder}` (safe).
-
-Force a specific project root:
-
-```bash
-gms-mcp-init --cursor --gm-project-root path/to/project
-```
-
-Preview output without writing files:
-
-```bash
-gms-mcp-init --cursor --dry-run
-```
-
-## Code Intelligence & Introspection
-
-The MCP server provides comprehensive project analysis capabilities:
-
-### GML Symbol Indexing (`gm_build_index`)
-Build a high-performance index of all functions, enums, macros, and global variables in the project. This is required for advanced code intelligence tools.
-
-### Symbol Definition (`gm_find_definition`)
-Find the exact location and docstrings for any GML symbol in your project.
-
-### Find References (`gm_find_references`)
-Search for all usages of a specific function or variable across your entire codebase.
-
-### List Symbols (`gm_list_symbols`)
-List all project symbols with filtering by type, name substring, or file path.
-
-### Asset Listing (`gm_list_assets`)
-List all assets in your project, optionally filtered by type:
-- **Supported types**: script, object, sprite, room, sound, font, shader, path, timeline, tileset, animcurve, sequence, note, folder, **particlesystem**, **extension**, **includedfile** (datafiles)
-
-### Asset Reading (`gm_read_asset`)
-Read the complete `.yy` JSON metadata for any asset by name or path.
-
-### Reference Search (`gm_search_references`)
-Search for patterns across project files with:
-- **Scopes**: `all`, `gml`, `yy`, `scripts`, `objects`, `extensions`, `datafiles`
-- **Modes**: literal string or regex
-- **Options**: case sensitivity, max results
-
-### Asset Graph (`gm_get_asset_graph`)
-Build a dependency graph of assets with two modes:
-- **Shallow (fast)**: Parses `.yy` files for structural references (parent objects, sprites, etc.)
-- **Deep (complete)**: Also scans all GML code for runtime references like `instance_create`, `sprite_index`, `audio_play_sound`, etc.
-
-### Texture Groups (`gm_texture_group_*`)
-Create, inspect, and edit `.yyp` `TextureGroups`, plus bulk-assign assets (sprites/fonts/tilesets/etc) via `textureGroupId`.
-
-Read-only tools:
-- `gm_texture_group_list`: list texture groups + available configs (desktop/android/ios/etc)
-- `gm_texture_group_read`: read a single texture group entry
-- `gm_texture_group_members`: list assets in a group (top-level + ConfigValues overrides)
-- `gm_texture_group_scan`: report missing groups referenced + mismatches (top-level vs config override)
-
-Destructive tools (all support `dry_run=true`):
-- `gm_texture_group_create`: clone an existing template group (default: `Default`)
-- `gm_texture_group_update`: patch fields on a group (optionally per config via `ConfigValues`)
-- `gm_texture_group_rename`: rename a group and rewrite asset references
-- `gm_texture_group_delete`: blocks by default if referenced unless `reassign_to` is provided
-- `gm_texture_group_assign`: bulk-assign assets by explicit list or filters
-
-Config scope defaults:
-- Assignment updates an asset's top-level `textureGroupId` **only when it is a dict** (null is left as-is).
-- If `configs` is omitted, assignment updates only **existing** `ConfigValues` entries; pass `configs=[...]` to create explicit overrides.
-
-### MCP Prompts
-Fetching a prompt is read-only and does not inspect or modify the project:
-- `create-feature`
-- `diagnose-project`
-- `safe-refactor`
-- `compile-fix-retry`
-- `inspect-live-game`
-
-### Official ResourceTool Validation
-The optional `resourcetool` toolset is disabled by default. Configure an absolute executable and the exact fixed JSON argv contract shown below. Other arguments fail closed. For an installed official `gm-cli`:
-
-```bash
-export GMS_MCP_TOOLSETS=resourcetool
-export GMS_MCP_RESOURCETOOL_ENABLED=1
-export GMS_MCP_RESOURCETOOL_EXECUTABLE="$(command -v gm-cli)"
-export GMS_MCP_RESOURCETOOL_SHA256="$(shasum -a 256 "$(command -v gm-cli)" | awk '{print $1}')"
-export GMS_MCP_RESOURCETOOL_ARGUMENTS_JSON='["resourcetool","eval","resource list","{project_copy_yyp}"]'
-```
-
-`gm_resourcetool_validate` requires the configured `gm-cli` executable to match its pinned SHA-256, rejects symlinks and private-file/content conventions, and copies only the `.yyp` descriptor into a task-owned temporary directory. It runs the fixed read-only command in an OS sandbox that blocks network access, live-project reads, and host writes; platforms without the required sandbox fail closed. Child output is suppressed, the minimal copy is checksummed before and after, and cleanup happens before returning. A rewrite, timeout, nonzero exit, ambiguous `.yyp`, identity mismatch, private data, or altered command contract fails closed. This validates ResourceTool project-list compatibility; it is not a mutation backend.
-
-### MCP Resources
-Pre-built, cacheable project data for agents:
-- `gms://project/index`: Complete project structure (assets, folders, room order, configs, audio/texture groups, IDE version)
-- `gms://project/asset-graph`: Asset dependency graph
-- `gms://system/updates`: Returns a human-readable message if a newer version of `gms-mcp` is available on PyPI or GitHub.
-
-### Update Notifier
-Shared update status is available through the MCP surfaces below, and supported client hooks can surface a once-daily reminder:
-- **CLI**: `gms-mcp doctor` is the standard local diagnostics command. `gms-mcp doctor --notify` remains the update-only startup hook path.
-- **Tool**: `gm_check_updates` returns structured update info.
-- **Auto-check**: `gm_project_info` includes a cached `updates` field.
-- **Resource**: `gms://system/updates` provides a quick text status.
-- Plain `pip` installs are not guaranteed a proactive reminder unless the client setup includes the bundled startup hook.
-
-Common doctor entry points:
-- `gms-mcp doctor`: quick package/update/project-detection check.
-- `gms-mcp doctor --project`: adds environment, runtime, license, and dependency checks.
-- `gms-mcp doctor --full`: adds runtime selection and bridge status.
-- `gms-mcp doctor --client codex|claude`: validates active client config for the current workspace.
-- `gms-mcp doctor --project-root /path/to/project`: targets an explicit GameMaker project directory.
-- `gms-mcp doctor --client codex --server-name gms-app`: validates a non-default MCP server entry name.
-- `gms-mcp doctor --json`: emits a stable JSON report with `overall_status`, `exit_code`, and `checks`.
-
-Automatic MCP diagnostic logs are stored outside GameMaker projects under
-`~/.gms-mcp/logs/<opaque-project-id>/`. The directory name is a one-way hash of the project path,
-and private directory/file permissions are applied where the operating system supports them.
-
-### Runtime Management
-Runtime list/pin/verify operations are exposed as MCP tools:
-- `gm_runtime_list`
-- `gm_runtime_pin`
-- `gm_runtime_unpin`
-- `gm_runtime_verify`
-
-The plain `gms` CLI has runner commands (`gms run compile`, `gms run start`, `gms run stop`, `gms run status`), but does not expose separate runtime-management subcommands.
-
-Runner runtime labels:
-- `VM` and `GMS2 VM` map to Igor VM builds.
-- `YYC` and `GMS2 YYC` map to Igor YYC builds.
-- `GMRT` and `GMRT VM` are recognized and rejected with a clear error until GameMaker documents the Igor command-line syntax for GMRT targets.
-
-Igor cache/temp paths are isolated by project and runtime. Confirmed pre-compile `System.AccessViolationException` runtime aborts clear that disposable state and retry up to three times; every attempt renews its single-use machine-lock delegation, while source compiler failures and post-compile exits are never retried. Post-mutation validation also recognizes GameMaker's packed platform-option payloads instead of treating them as malformed ordinary JSON. Igor child processes default to one reported .NET processor to avoid the 2026 LTS serializer/compiler race reproduced on macOS; set `GMS_MCP_IGOR_PROCESSOR_COUNT` to an integer from 1 to 256 to opt into more compiler parallelism.
-
-On macOS, runner commands wait up to 30 seconds for any existing Igor build/run—including GameMaker IDE activity—to finish, then fail clearly instead of overlapping it. Set `GMS_MCP_IGOR_IDLE_WAIT_SECONDS` to a non-negative number of seconds; `0` enables immediate fail-fast behavior. Owned launches snapshot all existing `Mac_Runner` processes, recheck for a concurrent IDE Igor immediately after launch, and persist exact process identities plus an unguessable environment marker inherited through LaunchServices. Normal cleanup plus hard MCP/direct-CLI timeout cleanup can therefore remove newly spawned owned project-temp, bare Download, and log-tail helpers without touching pre-existing, concurrent user, or unrelated runners.
-
-## CLI usage
-
-Run from a project directory (or pass `--project-root`):
-
-```bash
-gms --version
-gms --project-root . asset create script my_function --parent-path "folders/Scripts.yy"
-gms --project-root . texture-groups list
-gms --project-root . texture-groups assign game --type sprite --folder-prefix sprites/ --dry-run
-```
+GMS MCP is released under the [MIT licence](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/LICENSE). GameMaker and your AI client's own terms and licensing still apply. If the tools help you build your game, a [GitHub star](https://github.com/Ampersand-Game-Studios/gms-mcp) helps other developers find the project.
