@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Documentation
+- **User-Focused README**: Reorganized the introduction, capabilities, setup, example workflows, troubleshooting, and maintainer guidance. Clarified read-only versus editing profiles, live-game bridge limits, and client/provider privacy boundaries. Codex examples now target the supported project-scoped configuration file explicitly, with connection checks distinguished from installer readiness.
+
 ### Fixed
 - **First Trusted PyPI Publish**: Removed the incorrect package-existence preflight so a configured pending trusted publisher can create `gms-mcp` during its first OIDC upload.
 - **Current GameMaker Sound Schema**: Sound creation now emits the current `GMSound` fields and ordering required by GameMaker 2024 and 2026 LTS compilers.
