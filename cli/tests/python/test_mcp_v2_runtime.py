@@ -98,14 +98,20 @@ class MCPV2RuntimeTests(unittest.IsolatedAsyncioTestCase):
             root = Path(temp_dir)
             runtime = _runtime(root, poll_seconds=0.005, debounce_seconds=0)
             events: list[ServerEvent] = []
-            unsubscribe = runtime.subscriptions.subscribe(events.append)
+            updates_received = asyncio.Event()
+
+            def record_event(event: ServerEvent) -> None:
+                events.append(event)
+                if len(events) == 2:
+                    updates_received.set()
+
+            unsubscribe = runtime.subscriptions.subscribe(record_event)
             watcher = asyncio.create_task(runtime.watch_project())
             try:
                 (root / "external.gml").write_text("show_debug_message('changed');", encoding="utf-8")
-                for _ in range(100):
-                    if events:
-                        break
-                    await asyncio.sleep(0.01)
+                # The SDK yields between publications; cancelling after the
+                # first event can interrupt the second resource notification.
+                await asyncio.wait_for(updates_received.wait(), timeout=1)
             finally:
                 watcher.cancel()
                 with self.assertRaises(asyncio.CancelledError):
