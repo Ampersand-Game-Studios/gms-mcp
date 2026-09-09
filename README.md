@@ -22,6 +22,7 @@
 - **Outcome-Oriented MCP Prompts**: five read-only prompt templates adapt to the active profile, guiding implementation workflows when mutation tools exist and diagnosis-only plans in safe mode.
 - **Official ResourceTool Validation (opt-in)**: `gm_resourcetool_validate` runs only YoYo's fixed read-only `resource list` contract against a checksummed disposable `.yyp` descriptor under an OS sandbox. Live project files and child output are never exposed.
 - **Authenticated Local Streamable HTTP**: `gms-mcp server --transport streamable-http --host 127.0.0.1` provides stateless MCP HTTP for local clients when `GMS_MCP_HTTP_BEARER_TOKEN` contains a strong pre-shared token. It rejects unauthenticated clients, non-loopback binds, unapproved Host/Origin headers, and request bodies over 1 MiB; it is not a remote shared-server deployment mode.
+  MCP SDK 2.2.0 resource validation is explicitly enabled: verified local credentials carry the configured endpoint resource, which the SDK checks before accepting the request.
 - `gms-mcp-init`: generates shareable MCP config files for a workspace. Now auto-detects environment variables like `GMS_MCP_GMS_PATH` to include in the generated config.
 - **Privacy-Safe Telemetry (opt-in)**: `gms`, `gms-mcp-init`, and MCP usage can send anonymous usage metadata only after explicit consent.
 
