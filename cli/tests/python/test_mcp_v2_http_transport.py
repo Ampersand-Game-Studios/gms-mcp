@@ -14,6 +14,7 @@ from starlette.requests import Request
 from starlette.testclient import TestClient
 
 from gms_mcp import gamemaker_mcp_server
+from gms_mcp.server.http_security import local_bearer_auth
 
 HTTP_BEARER_TOKEN = "q8F0Zvr2N3ukMiJ9cLeA5DwyX7sBpR4h"
 
@@ -109,6 +110,19 @@ class MCPV2HTTPTransportTests(unittest.TestCase):
 
 
 class MCPV2HTTPRebindingTests(unittest.IsolatedAsyncioTestCase):
+    async def test_local_token_is_bound_to_the_configured_resource(self):
+        from mcp.server.auth.middleware.bearer_auth import BearerAuthBackend
+        from pydantic import AnyHttpUrl
+
+        resource = "http://127.0.0.1:8765/mcp"
+        settings, verifier = local_bearer_auth(HTTP_BEARER_TOKEN, resource)
+        self.assertTrue(settings.validate_token_resource)
+        request = Request({"type": "http", "headers": [(b"authorization", f"Bearer {HTTP_BEARER_TOKEN}".encode())]})
+        backend = BearerAuthBackend(verifier, resource_server_url=settings.resource_server_url)
+        self.assertIsNotNone(await backend.authenticate(request))
+        other_backend = BearerAuthBackend(verifier, resource_server_url=AnyHttpUrl("http://127.0.0.1:9999/mcp"))
+        self.assertIsNone(await other_backend.authenticate(request))
+
     async def test_http_security_rejects_unapproved_host_and_origin(self):
         settings = gamemaker_mcp_server._http_transport_security("127.0.0.1", 8765)
         middleware = TransportSecurityMiddleware(settings)
@@ -148,7 +162,24 @@ class MCPV2HTTPAuthenticationAndBodyLimitTests(unittest.TestCase):
                 max_request_body_size=gamemaker_mcp_server._HTTP_MAX_REQUEST_BODY_BYTES,
             )
 
-        with TestClient(app) as client:
+        with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+            authenticated = client.post(
+                "/mcp",
+                json={
+                    "jsonrpc": "2.0",
+                    "id": 1,
+                    "method": "initialize",
+                    "params": {
+                        "protocolVersion": "2025-11-25",
+                        "capabilities": {},
+                        "clientInfo": {"name": "auth-test", "version": "1"},
+                    },
+                },
+                headers={
+                    "accept": "application/json, text/event-stream",
+                    "authorization": f"Bearer {HTTP_BEARER_TOKEN}",
+                },
+            )
             unauthenticated = client.post(
                 "/mcp",
                 content=b"{}",
@@ -173,6 +204,8 @@ class MCPV2HTTPAuthenticationAndBodyLimitTests(unittest.TestCase):
                 },
             )
 
+        self.assertEqual(authenticated.status_code, 200)
+        self.assertIn('"protocolVersion":"2025-11-25"', authenticated.text)
         self.assertEqual(unauthenticated.status_code, 401)
         self.assertEqual(invalid_token.status_code, 401)
         self.assertEqual(oversized.status_code, 413)

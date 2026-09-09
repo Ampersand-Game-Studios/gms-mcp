@@ -26,21 +26,22 @@ def validate_local_bearer_token(token: str) -> None:
 class LocalBearerTokenVerifier:
     """Verify one locally configured bearer token without retaining its plaintext."""
 
-    def __init__(self, token: str) -> None:
+    def __init__(self, token: str, resource_url: AnyHttpUrl) -> None:
         validate_local_bearer_token(token)
         self._token_digest = hashlib.sha256(token.encode("utf-8")).digest()
+        self._resource_url = str(resource_url)
 
     async def verify_token(self, token: str) -> AccessToken | None:
         candidate_digest = hashlib.sha256(token.encode("utf-8")).digest()
         if not hmac.compare_digest(candidate_digest, self._token_digest):
             return None
-        return AccessToken(token="", client_id="gms-mcp-local-http", scopes=[])
+        return AccessToken(token="", client_id="gms-mcp-local-http", scopes=[], resource=self._resource_url)
 
 
 def local_bearer_auth(token: str, issuer_url: str) -> tuple[AuthSettings, LocalBearerTokenVerifier]:
     """Create SDK-native Bearer authentication for a loopback HTTP endpoint."""
     resource_url = AnyHttpUrl(issuer_url)
     return (
-        AuthSettings(issuer_url=resource_url, resource_server_url=resource_url),
-        LocalBearerTokenVerifier(token),
+        AuthSettings(issuer_url=resource_url, resource_server_url=resource_url, validate_token_resource=True),
+        LocalBearerTokenVerifier(token, resource_url),
     )
