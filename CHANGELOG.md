@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Documentation
+- **Discoverable GameMaker Skill**: Expanded the public skill description and introduction with concrete game-development capabilities, package-versus-skill setup, supported client choices, access-profile boundaries, and live-game limitations for assistants and directory listings.
 - **User-Focused README**: Reorganized the introduction, capabilities, setup, example workflows, troubleshooting, and maintainer guidance. Clarified read-only versus editing profiles, live-game bridge limits, and client/provider privacy boundaries. Codex examples now target the supported project-scoped configuration file explicitly, with connection checks distinguished from installer readiness.
 
 ### Fixed
