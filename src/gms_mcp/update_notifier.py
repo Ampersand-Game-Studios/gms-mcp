@@ -47,7 +47,6 @@ def _utc_now() -> float:
 
 def _cache_dir() -> Path:
     cache_dir = Path.home() / PACKAGE_HOME_DIR / DOCTOR_CACHE_SUBDIR
-    cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 
 
@@ -249,6 +248,7 @@ def _load_cached_state() -> _CachedUpdateState | None:
 def _save_cached_state(payload: _CachedUpdateState) -> None:
     path = _cache_path()
     try:
+        path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
     except Exception as exc:
         logger.debug("Failed to write update cache: %s", exc)
@@ -318,7 +318,7 @@ def _fetch_update_status(current: str) -> _CachedUpdateState | None:
     return None
 
 
-def check_for_updates(*, force_refresh: bool = False) -> dict[str, Any]:
+def check_for_updates(*, force_refresh: bool = False, persist: bool = True) -> dict[str, Any]:
     """
     Check if a newer version of gms-mcp is available.
 
@@ -340,7 +340,8 @@ def check_for_updates(*, force_refresh: bool = False) -> dict[str, Any]:
             "checked_at": fetched["checked_at"],
             "last_notified_at": cached.get("last_notified_at") if cached else None,
         }
-        _save_cached_state(payload)
+        if persist:
+            _save_cached_state(payload)
         return _build_info_from_cache(payload, current=current, used_cache=False)
 
     if cached:

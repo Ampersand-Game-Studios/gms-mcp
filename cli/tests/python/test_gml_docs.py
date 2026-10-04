@@ -215,8 +215,8 @@ class TestDocCacheClass(unittest.TestCase):
         from gms_helpers.gml_docs.cache import DocCache
 
         cache = DocCache(cache_dir=self.cache_dir)
-        self.assertTrue(self.cache_dir.exists())
-        self.assertTrue((self.cache_dir / "functions").exists())
+        self.assertFalse(self.cache_dir.exists())
+        self.assertFalse(cache.functions_dir.exists())
 
     def test_cache_stats_empty(self):
         """Test cache stats on empty cache."""
@@ -234,9 +234,10 @@ class TestDocCacheClass(unittest.TestCase):
         cache = DocCache(cache_dir=self.cache_dir)
         # Clear should work even on empty cache
         # Note: clear_cache() is a module-level function that operates on default cache
-        # For this test, we just verify the cache dir exists after initialization
-        self.assertTrue(self.cache_dir.exists())
-        self.assertTrue(cache.functions_dir.exists())
+        # Inspecting an absent cache must not create it.
+        self.assertEqual(cache.get_stats()["cached_function_count"], 0)
+        self.assertFalse(self.cache_dir.exists())
+        self.assertFalse(cache.functions_dir.exists())
 
 
 if __name__ == "__main__":

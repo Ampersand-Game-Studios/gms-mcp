@@ -55,6 +55,7 @@ class TestRoomInstanceHelper(unittest.TestCase):
             "$GMRoom": "v1",
             "%Name": "r_test",
             "name": "r_test",
+            "parent": {"name": "Rooms", "path": "folders/Rooms.yy"},
             "layers": [
                 {
                     "__type": "GMRInstanceLayer",
@@ -87,6 +88,16 @@ class TestRoomInstanceHelper(unittest.TestCase):
         }
         with open(obj_dir / "o_player.yy", "w") as f:
             json.dump(obj_data, f)
+
+        # File factories do not register assets; room/object editing requires
+        # the same YYP registrations that a real GameMaker project has.
+        yyp_path = self.project_dir / "test.yyp"
+        yyp_data = load_json_loose(yyp_path)
+        yyp_data["resources"] = [
+            {"id": {"name": "r_test", "path": "rooms/r_test/r_test.yy"}},
+            {"id": {"name": "o_player", "path": "objects/o_player/o_player.yy"}},
+        ]
+        save_pretty_json(yyp_path, yyp_data)
 
     def tearDown(self):
         """Clean up test environment."""

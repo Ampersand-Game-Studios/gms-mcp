@@ -15,18 +15,20 @@ import ast
 import datetime
 import fnmatch
 import json
+import math
 import os
 import re
 import subprocess
 import sys
 import tempfile
 from pathlib import Path
-from typing import Dict, List, Mapping
+from typing import Any, Dict, List, Mapping
 from xml.etree import ElementTree as ET
 
 
 DEFAULT_MIN_OVERALL_COVERAGE = 85.0
 DEFAULT_MIN_MODULE_COVERAGE = 50.0
+DEFAULT_MIN_BRANCH_COVERAGE = 75.0
 
 
 def _parse_int_attr(node: ET.Element, name: str) -> int:
@@ -49,10 +51,24 @@ def _float_setting(name: str, default: float) -> float:
     raw = os.environ.get(name, "").strip()
     if not raw:
         return default
+    return _percentage(raw)
+
+
+def _percentage(value: Any) -> float:
     try:
-        return float(raw)
-    except ValueError:
-        return default
+        percentage = float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Coverage values must be a finite percentage from 0 to 100.") from exc
+    if not math.isfinite(percentage) or not 0 <= percentage <= 100:
+        raise ValueError("Coverage values must be a finite percentage from 0 to 100.")
+    return percentage
+
+
+def _percentage_argument(value: str) -> float:
+    try:
+        return _percentage(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError(str(exc)) from exc
 
 
 def _split_csv(value: str | None) -> List[str]:
@@ -105,13 +121,13 @@ def parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--min-overall-coverage",
-        type=float,
+        type=_percentage_argument,
         default=_float_setting("GMS_MCP_MIN_OVERALL_COVERAGE", DEFAULT_MIN_OVERALL_COVERAGE),
         help="Minimum overall statement coverage percentage.",
     )
     parser.add_argument(
         "--min-module-coverage",
-        type=float,
+        type=_percentage_argument,
         default=_float_setting("GMS_MCP_MIN_MODULE_COVERAGE", DEFAULT_MIN_MODULE_COVERAGE),
         help="Minimum per-module statement coverage percentage.",
     )
@@ -121,6 +137,7 @@ def parse_args() -> argparse.Namespace:
         default=_split_csv(os.environ.get("GMS_MCP_COVERAGE_GATE_EXCLUDE")),
         help="Module path or fnmatch pattern to exclude from per-module coverage gates. Repeatable.",
     )
+    parser.add_argument("--min-branch-coverage", type=_percentage_argument, default=DEFAULT_MIN_BRANCH_COVERAGE)
     return parser.parse_args()
 
 
@@ -262,7 +279,7 @@ def run_quality_suite(paths: Mapping[str, Path], skip_final_verification: bool) 
     return 0
 
 
-def parse_junit(path: Path) -> Dict[str, object]:
+def parse_junit(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {
             "tests": 0,
@@ -304,7 +321,7 @@ def parse_junit(path: Path) -> Dict[str, object]:
     return totals
 
 
-def parse_coverage(path: Path) -> Dict[str, object]:
+def parse_coverage(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {
             "overall": 0.0,
@@ -342,7 +359,23 @@ def parse_coverage(path: Path) -> Dict[str, object]:
         for module_name, values in module_coverage.items()
     ]
     modules.sort(key=lambda item: item["module"].lower())
-    return {"overall": round(overall, 2), "modules": modules}
+    return {
+        "overall": round(overall, 2),
+        "modules": modules,
+        "branch_coverage": round(float(root.attrib.get("branch-rate", "0")) * 100, 2),
+        "branches_valid": int(root.attrib.get("branches-valid", "0")),
+    }
+
+
+def has_executed_junit_cases(path: Path) -> bool:
+    if not path.is_file():
+        return False
+    cases = list(ET.parse(path).getroot().iter("testcase"))
+    return (
+        bool(cases)
+        and any(case.find("skipped") is None for case in cases)
+        and not any(case.find("error") is not None or case.find("failure") is not None for case in cases)
+    )
 
 
 def _is_module_excluded(module_name: str, patterns: List[str]) -> bool:
@@ -350,17 +383,25 @@ def _is_module_excluded(module_name: str, patterns: List[str]) -> bool:
 
 
 def evaluate_coverage_gates(
-    coverage: Dict[str, object],
+    coverage: Dict[str, Any],
     *,
     min_overall: float,
     min_module: float,
     exclude_modules: List[str],
-) -> Dict[str, object]:
+    min_branch: float = 0.0,
+) -> Dict[str, Any]:
+    min_overall = _percentage(min_overall)
+    min_module = _percentage(min_module)
+    min_branch = _percentage(min_branch)
     modules = coverage.get("modules", [])
-    failures: List[Dict[str, object]] = []
+    failures: List[Dict[str, Any]] = []
     excluded: List[str] = []
 
-    overall = float(coverage.get("overall", 0.0))
+    overall = _percentage(coverage.get("overall", 0.0))
+    branch_coverage = _percentage(coverage.get("branch_coverage", 0.0))
+    if min_branch > 0:
+        if not coverage.get("branches_valid") or branch_coverage < min_branch:
+            failures.append({"scope": "branch", "coverage": branch_coverage, "minimum": min_branch})
     if overall < min_overall:
         failures.append(
             {
@@ -379,7 +420,7 @@ def evaluate_coverage_gates(
         if _is_module_excluded(module_name, exclude_modules):
             excluded.append(module_name)
             continue
-        module_coverage = float(entry.get("coverage", 0.0))
+        module_coverage = _percentage(entry.get("coverage", 0.0))
         if module_coverage < min_module:
             failures.append(
                 {
@@ -394,6 +435,7 @@ def evaluate_coverage_gates(
         "ok": not failures,
         "min_overall": round(min_overall, 2),
         "min_module": round(min_module, 2),
+        "min_branch": round(min_branch, 2),
         "excluded_modules": sorted(excluded),
         "failures": failures,
     }
@@ -514,7 +556,7 @@ def discover_registered_mcp_tools(profile: str) -> List[object]:
                 os.environ["GM_PROJECT_ROOT"] = previous_project_root
 
 
-def parse_mcp_smoke(path: Path) -> Dict[str, object]:
+def parse_mcp_smoke(path: Path) -> Dict[str, Any]:
     if not path.exists():
         return {"status": "not_run", "selected": 0, "executed": 0, "passed": 0, "failed": 0, "tools": []}
     try:
@@ -541,9 +583,9 @@ def parse_mcp_smoke(path: Path) -> Dict[str, object]:
 
 
 def write_coverage_report(
-    coverage: Dict[str, object],
-    junit: Dict[str, object],
-    gate: Dict[str, object],
+    coverage: Dict[str, Any],
+    junit: Dict[str, Any],
+    gate: Dict[str, Any],
     out_path: Path,
 ) -> None:
     failures = int(junit["failures"]) + int(junit["errors"])
@@ -565,6 +607,8 @@ def write_coverage_report(
         f"| **Total Tests** | {junit['tests']} |",
         f"| **Pass Rate** | {pass_rate:.1f}% |",
         f"| **Overall Statement Coverage** | {coverage['overall']:.1f}% |",
+        f"| **Overall Branch Coverage** | {float(coverage.get('branch_coverage', 0.0)):.1f}% |",
+        f"| **Minimum Branch Coverage** | {float(gate.get('min_branch', 0.0)):.1f}% |",
         f"| **Minimum Overall Coverage** | {min_overall:.1f}% |",
         f"| **Minimum Module Coverage** | {min_module:.1f}% |",
         f"| **Coverage Gate** | {'PASS' if gate_ok else 'FAIL'} |",
@@ -601,8 +645,9 @@ def write_coverage_report(
                 continue
             coverage_value = float(failure.get("coverage", 0.0))
             minimum_value = float(failure.get("minimum", 0.0))
-            if failure.get("scope") == "overall":
-                lines.append(f"- Overall coverage {coverage_value:.1f}% is below {minimum_value:.1f}%.")
+            if failure.get("scope") in {"overall", "branch"}:
+                scope = "Branch" if failure.get("scope") == "branch" else "Overall statement"
+                lines.append(f"- {scope} coverage {coverage_value:.1f}% is below {minimum_value:.1f}%.")
             else:
                 module_name = str(failure.get("module", "unknown"))
                 lines.append(f"- `{module_name}` coverage {coverage_value:.1f}% is below {minimum_value:.1f}%.")
@@ -617,8 +662,8 @@ def write_tool_report(
     referenced: List[str],
     core_tools: List[str],
     registered_tools: List[str],
-    smoke: Dict[str, object],
-    junit: Dict[str, object],
+    smoke: Dict[str, Any],
+    junit: Dict[str, Any],
     out_path: Path,
 ) -> None:
     referenced_map = {name: name in referenced for name in tools}
@@ -689,12 +734,24 @@ def main() -> int:
             return status
 
     junit = parse_junit(paths["junit_xml"])
+    if not has_executed_junit_cases(paths["junit_xml"]):
+        print("[ERROR] Quality evidence contains no executed passing test cases, or contains failures.")
+        return 1
+    if (
+        int(junit.get("tests", 0)) <= 0
+        or int(junit.get("passed", 0)) <= 0
+        or int(junit.get("failures", 0))
+        or int(junit.get("errors", 0))
+    ):
+        print("[ERROR] Quality evidence must contain executed passing tests and no failures.")
+        return 1
     coverage = parse_coverage(paths["coverage_xml"])
     gate = evaluate_coverage_gates(
         coverage,
         min_overall=args.min_overall_coverage,
         min_module=args.min_module_coverage,
         exclude_modules=args.coverage_gate_exclude,
+        min_branch=args.min_branch_coverage,
     )
     tools = discover_mcp_tools(paths["server_sources_dir"])
     referenced = scan_tool_references(paths["root"] / "cli/tests/python", tools)
@@ -738,8 +795,9 @@ def main() -> int:
                 continue
             coverage_value = float(failure.get("coverage", 0.0))
             minimum_value = float(failure.get("minimum", 0.0))
-            if failure.get("scope") == "overall":
-                print(f"[ERROR] Overall coverage {coverage_value:.1f}% is below {minimum_value:.1f}%.")
+            if failure.get("scope") in {"overall", "branch"}:
+                scope = "Branch" if failure.get("scope") == "branch" else "Overall statement"
+                print(f"[ERROR] {scope} coverage {coverage_value:.1f}% is below {minimum_value:.1f}%.")
             else:
                 module_name = str(failure.get("module", "unknown"))
                 print(f"[ERROR] {module_name} coverage {coverage_value:.1f}% is below {minimum_value:.1f}%.")

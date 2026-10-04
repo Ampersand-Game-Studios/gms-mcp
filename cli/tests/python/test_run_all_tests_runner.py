@@ -1,64 +1,36 @@
-#!/usr/bin/env python3
-"""Tests for cli/tests/python/run_all_tests.py behavior."""
+"""The full-suite entry point must collect tests and propagate every failure."""
 
 import importlib.util
-import unittest
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
 
-PROJECT_ROOT = Path(__file__).resolve().parents[3]
-RUNNER_PATH = PROJECT_ROOT / "cli" / "tests" / "python" / "run_all_tests.py"
 
+RUNNER_PATH = Path(__file__).with_name("run_all_tests.py")
 spec = importlib.util.spec_from_file_location("run_all_tests_module", RUNNER_PATH)
 run_all_tests = importlib.util.module_from_spec(spec)
-assert spec and spec.loader
 spec.loader.exec_module(run_all_tests)
 
 
-class TestRunAllTestsRunner(unittest.TestCase):
-    def test_determine_mcp_mode_native(self):
-        with patch.object(run_all_tests, "_python_has_module", return_value=True):
-            mode = run_all_tests._determine_mcp_test_mode("python3")
-        self.assertEqual(mode, "native")
-
-    def test_determine_mcp_mode_uv(self):
-        with (
-            patch.object(run_all_tests, "_python_has_module", return_value=False),
-            patch("shutil.which", return_value="/usr/bin/uv"),
-        ):
-            mode = run_all_tests._determine_mcp_test_mode("python3")
-        self.assertEqual(mode, "uv")
-
-    def test_determine_mcp_mode_skip(self):
-        with (
-            patch.object(run_all_tests, "_python_has_module", return_value=False),
-            patch("shutil.which", return_value=None),
-        ):
-            mode = run_all_tests._determine_mcp_test_mode("python3")
-        self.assertEqual(mode, "skip")
-
-    def test_run_test_file_skips_mcp_when_requested(self):
-        status, code = run_all_tests.run_test_file(
-            Path("test_mcp_integration_tools.py"),
-            mcp_test_mode="skip",
-        )
-        self.assertEqual(status, "skip")
-        self.assertEqual(code, 0)
-
-    def test_run_test_file_sets_explicit_gamemaker_project_root(self):
-        with (
-            patch.object(run_all_tests, "find_python_executable", return_value="python3"),
-            patch.object(run_all_tests, "_build_test_command", return_value=(["python3", "test_example.py"], "python")),
-            patch.object(run_all_tests.subprocess, "run") as run,
-        ):
-            run.return_value.returncode = 0
-            status, code = run_all_tests.run_test_file(Path("test_example.py"), mcp_test_mode="native")
-
-        self.assertEqual(status, "pass")
-        self.assertEqual(code, 0)
-        self.assertEqual(run.call_args.kwargs["env"]["GM_PROJECT_ROOT"], str(PROJECT_ROOT / "gamemaker"))
+@pytest.mark.parametrize("exit_code", [0, 1, 2, 5])
+def test_propagates_pytest_result(exit_code):
+    with (
+        patch.object(run_all_tests, "find_spec", return_value=object()),
+        patch.object(run_all_tests.subprocess, "run") as run,
+    ):
+        run.return_value.returncode = exit_code
+        assert run_all_tests.main() == exit_code
+    args = run.call_args.args[0]
+    assert args[1:3] == ["-m", "pytest"]
+    assert Path(args[3]).is_absolute()
+    assert run.call_args.kwargs["env"]["GMS_TEST_SUITE"] == "1"
 
 
-if __name__ == "__main__":
-    unittest.main()
+def test_missing_dependencies_fail_without_skipping():
+    with (
+        patch.object(run_all_tests, "find_spec", return_value=None),
+        patch.object(run_all_tests.subprocess, "run") as run,
+    ):
+        assert run_all_tests.main() == 1
+    run.assert_not_called()

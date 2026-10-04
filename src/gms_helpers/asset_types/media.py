@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import re
 import wave
+from io import BytesIO
 from pathlib import Path
 from typing import Any, Dict
 
 from ..base_asset import BaseAsset
-from ..transactions import mark_transaction_path_owned
-from ..utils import atomic_write_text
+from ..utils import atomic_write_bytes, atomic_write_text
 from .naming import get_config
 
 
@@ -56,12 +56,13 @@ class SoundAsset(BaseAsset):
 
         frame_count = max(1, int(safe_rate * max(duration_seconds, 0.01)))
 
-        with wave.open(str(path), "wb") as wav_file:
-            wav_file.setnchannels(1)
-            wav_file.setsampwidth(2)  # 16-bit PCM
-            wav_file.setframerate(safe_rate)
-            wav_file.writeframes(b"\x00\x00" * frame_count)
-        mark_transaction_path_owned(path)
+        with BytesIO() as output:
+            with wave.open(output, "wb") as wav_file:
+                wav_file.setnchannels(1)
+                wav_file.setsampwidth(2)  # 16-bit PCM
+                wav_file.setframerate(safe_rate)
+                wav_file.writeframes(b"\x00\x00" * frame_count)
+            atomic_write_bytes(path, output.getvalue())
 
     def create_yy_data(self, name: str, parent_path: str, **kwargs) -> Dict[str, Any]:
         # Sound configuration parameters
@@ -332,15 +333,22 @@ class TimelineAsset(BaseAsset):
         }
 
     def create_stub_files(self, asset_folder: Path, name: str, **kwargs):
-        # Create a moment_0.gml file for the first timeline moment
-        moment_path = asset_folder / "moment_0.gml"
-        if not moment_path.exists():
-            moment_content = f"""/// Timeline moment 0 for {name}
+        from ..utils import load_json_loose
+
+        data = load_json_loose(asset_folder / f"{name}.yy")
+        if not isinstance(data, dict):
+            raise ValueError("Timeline metadata must exist before writing moment code")
+        for item in data["momentList"]:
+            moment = item["moment"]
+            moment_path = asset_folder / f"moment_{moment}.gml"
+            if moment_path.exists():
+                continue
+            moment_content = f"""/// Timeline moment {moment} for {name}
 // Add timeline actions here
-// This code runs at moment 0 of the timeline
+// This code runs at moment {moment} of the timeline
 """
             atomic_write_text(moment_path, moment_content)
-            print(f"Created moment_0.gml")
+            print(f"Created moment_{moment}.gml")
 
     def validate_name(self, name: str) -> bool:
         """Validate timeline name against configured pattern."""

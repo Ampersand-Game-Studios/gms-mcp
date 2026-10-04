@@ -41,6 +41,16 @@ class TestRoomOperations(unittest.TestCase):
         os.chdir(self.original_cwd)
         shutil.rmtree(self.temp_dir)
 
+    def _register_room(self, name):
+        path = self.temp_dir / "rooms" / name / f"{name}.yy"
+        data = json.loads(path.read_text())
+        data.update({"name": name, "resourceType": "GMRoom"})
+        path.write_text(json.dumps(data))
+        yyp = self.temp_dir / "test.yyp"
+        project = json.loads(yyp.read_text())
+        project.setdefault("resources", []).append({"id": {"name": name, "path": f"rooms/{name}/{name}.yy"}})
+        yyp.write_text(json.dumps(project))
+
     @patch("gms_helpers.room_helper.duplicate_asset")
     def test_duplicate_room(self, mock_dup):
         """Test duplicating a room."""
@@ -49,6 +59,7 @@ class TestRoomOperations(unittest.TestCase):
         # Create a fake room
         (self.temp_dir / "rooms" / "r_test").mkdir()
         (self.temp_dir / "rooms" / "r_test" / "r_test.yy").write_text("{}")
+        self._register_room("r_test")
 
         result = duplicate_room("r_test", "r_new")
         self.assertTrue(result)
@@ -62,6 +73,7 @@ class TestRoomOperations(unittest.TestCase):
         # Create a fake room
         (self.temp_dir / "rooms" / "r_old").mkdir()
         (self.temp_dir / "rooms" / "r_old" / "r_old.yy").write_text("{}")
+        self._register_room("r_old")
 
         result = rename_room("r_old", "r_new")
         self.assertTrue(result)
@@ -75,6 +87,7 @@ class TestRoomOperations(unittest.TestCase):
         # Create a fake room
         (self.temp_dir / "rooms" / "r_delete").mkdir()
         (self.temp_dir / "rooms" / "r_delete" / "r_delete.yy").write_text("{}")
+        self._register_room("r_delete")
 
         result = delete_room("r_delete")
         self.assertTrue(result)
@@ -94,6 +107,7 @@ class TestRoomOperations(unittest.TestCase):
         (self.temp_dir / "rooms" / "r_1" / "r_1.yy").write_text(
             json.dumps({"roomSettings": {"Width": 800, "Height": 600}, "layers": []})
         )
+        self._register_room("r_1")
 
         rooms = list_rooms()
         self.assertEqual(len(rooms), 1)

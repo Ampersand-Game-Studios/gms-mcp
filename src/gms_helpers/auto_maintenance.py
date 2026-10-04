@@ -15,6 +15,7 @@ from .maintenance.tidy_json import validate_project_json, print_json_validation_
 from .maintenance.validate_paths import validate_folder_paths, print_path_validation_report, PathValidationIssue
 from .maintenance.orphans import find_orphaned_assets, find_missing_assets, print_orphan_report
 from .maintenance.orphan_cleanup import delete_orphan_files
+from .path_safety import assert_project_tree_contained
 
 
 class MaintenanceInterruptedError(Exception):
@@ -149,6 +150,8 @@ def run_auto_maintenance(
     """
     if fix_issues is None:
         fix_issues = config.AUTO_FIX_ISSUES
+    if fix_issues:
+        assert_project_tree_contained(Path(project_root))
     if verbose is None:
         verbose = config.VERBOSE_MAINTENANCE
     result = MaintenanceResult()

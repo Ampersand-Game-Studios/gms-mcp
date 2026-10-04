@@ -11,6 +11,9 @@ from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict, Any
 from datetime import datetime
+from .path_safety import assert_project_tree_contained
+from .transactions import transactional_unlink
+from .utils import atomic_write_text
 
 
 @dataclass
@@ -171,22 +174,23 @@ class RuntimeManager:
         if not any(r.version == version for r in installed):
             return False
 
+        assert_project_tree_contained(self.project_root)
         config_dir = self.project_root / self.CONFIG_DIR
         config_dir.mkdir(parents=True, exist_ok=True)
 
         config_path = config_dir / self.CONFIG_FILE
         data = {"pinned_version": version, "pinned_at": datetime.now().isoformat(), "pinned_by": "gms-mcp"}
 
-        with open(config_path, "w") as f:
-            json.dump(data, f, indent=2)
+        atomic_write_text(config_path, json.dumps(data, indent=2))
 
         return True
 
     def unpin(self) -> bool:
         """Remove runtime pin."""
+        assert_project_tree_contained(self.project_root)
         config_path = self.project_root / self.CONFIG_DIR / self.CONFIG_FILE
         if config_path.exists():
-            config_path.unlink()
+            transactional_unlink(config_path)
             return True
         return False
 

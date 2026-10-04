@@ -22,7 +22,6 @@ INDEX_TTL_SECONDS = 7 * 24 * 60 * 60
 def _get_cache_dir() -> Path:
     """Get the cache directory, creating if needed."""
     cache_dir = Path.home() / ".gms-mcp" / "doc_cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
     return cache_dir
 
 
@@ -79,7 +78,6 @@ class DocCache:
     def __init__(self, cache_dir: Optional[Path] = None):
         self.cache_dir = cache_dir or _get_cache_dir()
         self.functions_dir = self.cache_dir / "functions"
-        self.functions_dir.mkdir(parents=True, exist_ok=True)
         self._index: Optional[Dict[str, FunctionIndexEntry]] = None
         self._index_loaded_at: float = 0
 
@@ -122,6 +120,7 @@ class DocCache:
     def save_index(self, entries: Dict[str, FunctionIndexEntry]) -> None:
         """Save the function index to cache."""
         index_path = self._get_index_path()
+        index_path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "cached_at": time.time(),
             "entries": {name: entry.to_dict() for name, entry in entries.items()},
@@ -144,8 +143,7 @@ class DocCache:
 
             doc = CachedDoc.from_dict(data)
             if doc.is_expired():
-                # Remove expired entry
-                path.unlink(missing_ok=True)
+                # Reading stale cache data must not delete it implicitly.
                 return None
             return doc
         except (json.JSONDecodeError, KeyError, TypeError):
@@ -154,6 +152,7 @@ class DocCache:
     def save_function(self, doc: CachedDoc) -> None:
         """Save function documentation to cache."""
         path = self._get_function_path(doc.name)
+        path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("w", encoding="utf-8") as f:
             json.dump(doc.to_dict(), f, indent=2)
 

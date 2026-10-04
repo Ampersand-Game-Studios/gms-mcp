@@ -16,7 +16,7 @@ def run_pre_creation_maintenance(args: Any, operation: str) -> Any:
         return True
     print("[VALIDATE] Running pre-creation validation...")
     project_root = getattr(args, "project_root", ".")
-    pre_result = run_auto_maintenance(project_root, fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
+    pre_result = run_auto_maintenance(project_root, fix_issues=False, verbose=False)
     if not validate_asset_creation_safe(pre_result):
         return handle_maintenance_failure(operation, pre_result)
     return True
@@ -29,7 +29,7 @@ def run_post_creation_maintenance(args: Any, operation: str) -> bool:
     print("[MAINT] Running post-creation maintenance...")
     post_result = run_auto_maintenance(
         getattr(args, "project_root", "."),
-        fix_issues=not getattr(args, "no_auto_fix", False),
+        fix_issues=False,
         verbose=getattr(args, "maintenance_verbose", True),
     )
     if not post_result.has_errors:

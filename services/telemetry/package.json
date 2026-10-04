@@ -1,0 +1,15 @@
+{
+  "name": "gms-mcp-telemetry-service",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "test": "node --test test/*.test.js",
+    "check": "biome check src test",
+    "format": "biome format --write src test",
+    "deploy": "wrangler deploy --config wrangler.jsonc"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "2.5.15",
+    "wrangler": "4.147.0"
+  }
+}

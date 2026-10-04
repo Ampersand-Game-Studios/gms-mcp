@@ -37,6 +37,7 @@ if str(SRC_ROOT) not in sys.path:
 from gms_helpers.asset_types import ObjectAsset, RoomAsset, ScriptAsset, SpriteAsset
 from gms_helpers.bridge_server import get_bridge_server, stop_bridge_server
 from gms_helpers.synthetic_project import create_synthetic_project
+from gms_helpers.operation_policy import operation_succeeded
 from gms_helpers.utils import load_json_loose, update_yyp_file
 from gms_mcp.gamemaker_mcp_server import build_server
 from gms_mcp.server.results import unwrap_call_tool_result
@@ -47,24 +48,86 @@ def _sanitize_tool_name(name: str) -> str:
 
 
 def _is_ok(result: Any) -> bool:
-    if isinstance(result, bool):
-        return result
-    if isinstance(result, dict):
-        if "ok" in result:
-            return bool(result.get("ok"))
-        if "success" in result:
-            return bool(result.get("success"))
-        return True
-    return True
+    return operation_succeeded(result)
+
+
+_SECRET_FIELD = re.compile(
+    r"authorization|cookie|password|passwd|secret|token|credential|api[_-]?key|access[_-]?key|private[_-]?key", re.I
+)
+_SECRET_ASSIGNMENT = re.compile(
+    r"(?i)((?:--)?[\w-]*(?:password|passwd|secret|token|credential|api[_-]?key|access[_-]?key|private[_-]?key)[\w-]*"
+    r"[\"']?\s*(?:[:=]\s*|\s+))(?:\"[^\"]*\"|'[^']*'|[^\s,;]+)"
+)
+_DIAGNOSTIC_KEYS = frozenset(
+    {"error", "errors", "message", "reason", "cause", "exception", "stderr", "stdout", "traceback"}
+)
+_DIAGNOSTIC_LIMIT = 12000
+
+
+def _redact_diagnostic_text(value: str) -> str:
+    value = re.sub(
+        r"(?im)(\b(?:authorization|proxy-authorization|cookie|set-cookie)\s*:\s*)[^\r\n]+", r"\1[REDACTED]", value
+    )
+    value = _SECRET_ASSIGNMENT.sub(r"\1[REDACTED]", value)
+    value = re.sub(r"(\b[a-z][a-z0-9+.-]*://)[^/\s@]+@", r"\1[REDACTED]@", value, flags=re.I)
+    return re.sub(r"-----BEGIN [^-]*PRIVATE KEY-----.*?-----END [^-]*PRIVATE KEY-----", "[REDACTED]", value, flags=re.S)
+
+
+def _safe_report_value(value: Any) -> Any:
+    """Retain useful report structure, never publish secret fields or stream credentials."""
+    if isinstance(value, dict):
+        return {
+            str(key): "[REDACTED]" if _SECRET_FIELD.search(str(key)) else _safe_report_value(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        sanitized = []
+        redact_next = False
+        for item in value:
+            sanitized.append("[REDACTED]" if redact_next else _safe_report_value(item))
+            redact_next = (
+                isinstance(item, str) and item.startswith("--") and "=" not in item and bool(_SECRET_FIELD.search(item))
+            )
+        return sanitized
+    return _redact_diagnostic_text(value) if isinstance(value, str) else value
 
 
 def _error_text(result: Any) -> str:
-    if isinstance(result, dict):
-        for key in ("error", "message", "stderr", "stdout"):
-            value = result.get(key)
-            if isinstance(value, str) and value.strip():
-                return value.strip()
-    return str(result)
+    """Keep nested typed causes and both worker streams instead of only the first error."""
+    diagnostics: list[str] = []
+    seen: set[str] = set()
+
+    def collect(value: Any, *, label: str = "", depth: int = 0) -> None:
+        if depth > 12:
+            return
+        if isinstance(value, str) and value.strip():
+            text = _redact_diagnostic_text(value.strip())
+            if text not in seen:
+                seen.add(text)
+                diagnostics.append(f"{label}: {text}" if label else text)
+        elif isinstance(value, dict):
+            for key, item in value.items():
+                if _SECRET_FIELD.search(str(key)):
+                    continue
+                if key in _DIAGNOSTIC_KEYS:
+                    collect(item, label=str(key), depth=depth + 1)
+                elif isinstance(item, dict):
+                    collect(item, depth=depth + 1)
+                elif isinstance(item, (list, tuple)):
+                    for nested in item:
+                        if isinstance(nested, (dict, list, tuple)):
+                            collect(nested, depth=depth + 1)
+        elif isinstance(value, (list, tuple)):
+            for item in value:
+                collect(item, label=label, depth=depth + 1)
+
+    collect(result)
+    text = "\n".join(diagnostics) or "Operation failed (no diagnostic text returned)."
+    if len(text) > _DIAGNOSTIC_LIMIT:
+        marker = "\n[diagnostics truncated]\n"
+        keep = (_DIAGNOSTIC_LIMIT - len(marker)) // 2
+        text = text[:keep] + marker + text[-keep:]
+    return text
 
 
 def _write_minimal_png(path: Path) -> None:
@@ -342,7 +405,7 @@ class MCPToolSmokeRunner:
                     error = _error_text(result)
             except Exception as exc:  # noqa: BLE001 - capture for report
                 ok = False
-                error = f"{type(exc).__name__}: {exc}"
+                error = _redact_diagnostic_text(f"{type(exc).__name__}: {exc}")
             finally:
                 try:
                     await self._best_effort_stop_run(workspace)
@@ -448,6 +511,8 @@ class MCPToolSmokeRunner:
             raise RuntimeError(f"Smoke runner missing scenario coverage for required-arg tools:\n{joined}")
 
     async def _call_tool(self, tool_name: str, args: Dict[str, Any]) -> Any:
+        if self.mcp is None:
+            raise RuntimeError("Smoke server has not been initialized")
         raw = await self.mcp.call_tool(tool_name, args)
         return unwrap_call_tool_result(raw)
 
@@ -1057,7 +1122,7 @@ class MCPToolSmokeRunner:
             "fail_count": len(failed),
             "results": [asdict(r) for r in self.records],
         }
-        self.output_path.write_text(json.dumps(report, indent=2), encoding="utf-8")
+        self.output_path.write_text(json.dumps(_safe_report_value(report), indent=2), encoding="utf-8")
 
 
 def parse_args() -> argparse.Namespace:

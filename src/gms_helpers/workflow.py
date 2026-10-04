@@ -47,7 +47,6 @@ from .exceptions import (
 )
 from .results import OperationResult, AssetResult, MaintenanceResult
 from .transactions import (
-    mark_transaction_tree_owned,
     transaction_is_active,
     transactional_copy2,
     transactional_copytree,
@@ -511,7 +510,7 @@ def duplicate_asset(project_root: Path, asset_path: str, new_name: str, *, yes: 
         )
         save_pretty_json_gm(yyp_path, yyp_data)
     except Exception:
-        if not transaction_is_active():
+        if not transaction_is_active(project_root):
             transactional_rmtree(dst_folder, ignore_errors=True)
         raise
 
@@ -624,7 +623,6 @@ def rename_asset(project_root: Path, asset_path: str, new_name: str) -> AssetRes
         key=lambda entry: str(entry.get("id", {}).get("name", "")).lower() if isinstance(entry, dict) else ""
     )
     save_pretty_json_gm(yyp_path, yyp_data)
-    mark_transaction_tree_owned(dst_folder)
 
     message = f"[OK] Renamed {old_name} -> {new_name}"
     print(_c(message, "green"))
