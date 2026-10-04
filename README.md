@@ -183,7 +183,7 @@ The generated client configurations use **stdio**, with the client starting a lo
 
 **AI clients:** installer support means configuration generation and repository tests, not certification of every client release. Optional dashboard rendering, resource subscriptions, and Resolve choices depend on negotiated client capabilities. The dashboard also returns text and structured data without MCP Apps support.
 
-**MCP:** the package pins Python SDK `mcp` and `mcp-types` to `2.2.0`. Compatibility tests cover protocol `2026-07-28` and legacy `2025-11-25`; SDK/package version numbers are distinct from protocol revision dates. Modern-mode features include cache hints, live resource updates after mutations or external edits, URI templates, and multi-round Resolve choices for exceptional mutations. See the [runtime capability contract](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/documentation/CLIENT_SUPPORT_MATRIX.md#runtime-capability-contract).
+**MCP:** the package pins Python SDK `mcp` and `mcp-types` to `2.3.0`. Compatibility tests cover protocol `2026-07-28` and legacy `2025-11-25`, including real stdio and authenticated local HTTP calls, header-routed project selection, and omitted legacy request metadata. SDK/package version numbers are distinct from protocol revision dates. Modern-mode features include cache hints, live resource updates after mutations or external edits, URI templates, and multi-round Resolve choices for exceptional mutations. See the [runtime capability contract](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/documentation/CLIENT_SUPPORT_MATRIX.md#runtime-capability-contract).
 
 <details>
 <summary>Optional official ResourceTool validation</summary>
