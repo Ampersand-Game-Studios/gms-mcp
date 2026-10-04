@@ -47,9 +47,9 @@ def duplicate_room(source_room: str, new_name: str) -> bool:
         print(f"[ERROR] Error duplicating room: {e}")
         return False
 
-    project_root = Path.cwd()
+    project_root = Path.cwd().resolve()
     try:
-        source_path = _find_room_file(source_room).relative_to(project_root).as_posix()
+        source_path = _find_room_file(source_room, project_root).relative_to(project_root).as_posix()
     except GMSError as exc:
         print(f"[ERROR] Room '{source_room}' not found or invalid: {exc}")
         return False
@@ -73,9 +73,9 @@ def rename_room(room_name: str, new_name: str) -> bool:
         print(f"[ERROR] Error renaming room: {e}")
         return False
 
-    project_root = Path.cwd()
+    project_root = Path.cwd().resolve()
     try:
-        asset_path = _find_room_file(room_name).relative_to(project_root).as_posix()
+        asset_path = _find_room_file(room_name, project_root).relative_to(project_root).as_posix()
     except GMSError as exc:
         print(f"[ERROR] Room '{room_name}' not found or invalid: {exc}")
         return False
@@ -102,9 +102,9 @@ def delete_room(room_name: str, dry_run: bool = False, *, force: bool = False) -
             data={"room_name": room_name, "dry_run": dry_run, "force": force},
         )
 
-    project_root = Path.cwd()
+    project_root = Path.cwd().resolve()
     try:
-        asset_path = _find_room_file(room_name).relative_to(project_root).as_posix()
+        asset_path = _find_room_file(room_name, project_root).relative_to(project_root).as_posix()
     except GMSError as exc:
         print(f"[ERROR] Room '{room_name}' not found or invalid: {exc}")
         return OperationResult.fail(

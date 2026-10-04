@@ -16,7 +16,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass, field
 from contextlib import contextmanager
-from pathlib import Path, PureWindowsPath
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Dict, Iterable, Iterator, List, TextIO, TypeVar
 
 from .exceptions import GMSError, ValidationError
@@ -826,12 +826,18 @@ def transactional_replace(
 def _valid_relative_path(relative_path: Any) -> bool:
     if not isinstance(relative_path, str):
         return False
+    # A Windows root without a drive (e.g. /tmp/outside) is not "absolute"
+    # according to pathlib, but joining it still discards the project root.
+    # Reject roots and drives in both flavours before any filesystem access.
+    posix_relative = PurePosixPath(relative_path)
+    windows_relative = PureWindowsPath(relative_path)
+    if posix_relative.root or windows_relative.root or windows_relative.drive:
+        return False
     relative = Path(relative_path)
     return bool(relative_path) and (
         relative_path == relative.as_posix()
         and relative_path != "."
         and not relative.is_absolute()
-        and not PureWindowsPath(relative_path).drive
         and "\\" not in relative_path
         and "\x00" not in relative_path
         and ".." not in relative.parts

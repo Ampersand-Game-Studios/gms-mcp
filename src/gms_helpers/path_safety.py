@@ -56,6 +56,7 @@ def project_relative_path(path: Any, *, project_root: Path, kind: str = "path") 
         not candidate
         or Path(candidate).is_absolute()
         or windows.drive
+        or windows.root
         or "\\" in candidate
         or ".." in Path(candidate).parts
         or "\x00" in candidate

@@ -484,6 +484,7 @@ def _validate_asset_path(value: Any, label: str, errors: ValidationErrorList, *,
         path.is_absolute()
         or windows_path.is_absolute()
         or bool(windows_path.drive)
+        or bool(windows_path.root)
         or any(part in {"", ".", ".."} for part in Path(candidate.replace("\\", "/")).parts)
     ):
         errors.append({"field": label, "message": "must be a safe project-relative path"})
@@ -746,7 +747,9 @@ def _validate_asset_identifiers(value: Any, errors: ValidationErrorList) -> None
             or Path(candidate).is_absolute()
             or windows_path.is_absolute()
             or bool(windows_path.drive)
+            or bool(windows_path.root)
             or ".." in Path(candidate).parts
+            or ".." in windows_path.parts
         ):
             errors.append({"field": f"asset_identifiers[{index}]", "message": "must be a safe resource name or path"})
 

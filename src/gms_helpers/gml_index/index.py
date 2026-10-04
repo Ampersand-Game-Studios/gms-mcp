@@ -3,7 +3,7 @@
 import hashlib
 import json
 import os
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Dict, List, Optional, Set
 
 from .symbols import Symbol, SymbolKind, SymbolLocation, SymbolReference
@@ -51,7 +51,15 @@ class GMLIndex:
     @staticmethod
     def _valid_relative_path(raw_path: str) -> bool:
         path = Path(raw_path)
-        return bool(raw_path) and not path.is_absolute() and ".." not in path.parts
+        windows_path = PureWindowsPath(raw_path)
+        return (
+            bool(raw_path)
+            and not path.is_absolute()
+            and not windows_path.root
+            and not windows_path.drive
+            and ".." not in path.parts
+            and ".." not in windows_path.parts
+        )
 
     def _remove_legacy_project_cache(self) -> None:
         legacy_path = self.project_root / self.CACHE_FILE
