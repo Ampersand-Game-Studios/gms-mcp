@@ -84,7 +84,7 @@ def handle_find_definition(args) -> dict:
         print(f"[SEARCH] Finding definition of '{symbol_name}'...")
 
         index = GMLIndex(project_root)
-        index.build()
+        index.build(persist=False)
 
         definitions = index.find_definition(symbol_name)
 
@@ -148,7 +148,7 @@ def handle_find_references(args) -> dict:
         print(f"[SEARCH] Finding references to '{symbol_name}'...")
 
         index = GMLIndex(project_root)
-        index.build()
+        index.build(persist=False)
 
         references = index.find_references(symbol_name)
 
@@ -214,7 +214,7 @@ def handle_list_symbols(args) -> dict:
                 print(f"[WARN] Unknown symbol kind '{kind_filter}', ignoring filter")
 
         index = GMLIndex(project_root)
-        index.build()
+        index.build(persist=False)
 
         symbols = index.list_symbols(
             kind=kind_enum,

@@ -79,8 +79,14 @@ class TestAssetsComprehensive(unittest.TestCase):
             "resourceVersion": "2.0",
         }
 
-        with open(test_folder_path, "w") as f:
-            json.dump(test_folder_data, f, indent=2)
+        yyp_path = self.project_root / "TestProject.yyp"
+        yyp_data = load_json_loose(yyp_path) if yyp_path.exists() else {"resources": [], "Folders": []}
+        folders = yyp_data.setdefault("Folders", yyp_data.pop("folders", []))
+        if not any(folder.get("folderPath") == "folders/TestFolder.yy" for folder in folders):
+            folders.append(test_folder_data)
+        from gms_helpers.utils import save_pretty_json_gm
+
+        save_pretty_json_gm(yyp_path, yyp_data)
 
         return "folders/TestFolder.yy"
 
@@ -935,11 +941,8 @@ class TestErrorConditions(TestAssetsComprehensive):
         room_asset = RoomAsset()
         parent_path = self._create_test_folder_structure()
 
-        yy_data = room_asset.create_yy_data("r_test", parent_path, width=0, height=-100)
-
-        # Room accepts any values passed in kwargs, no validation
-        self.assertEqual(yy_data["roomSettings"]["Width"], 0)  # Accepts invalid value
-        self.assertEqual(yy_data["roomSettings"]["Height"], -100)  # Accepts invalid value
+        with self.assertRaises(ValueError):
+            room_asset.create_yy_data("r_test", parent_path, width=0, height=-100)
 
 
 class TestAssetIntegrationScenarios(TestAssetsComprehensive):
@@ -953,6 +956,12 @@ class TestAssetIntegrationScenarios(TestAssetsComprehensive):
         sprite_asset = SpriteAsset()
         with patch("builtins.print"):
             sprite_path = sprite_asset.create_files(self.project_root, "spr_player", parent_path)
+        from gms_helpers.utils import save_pretty_json_gm
+
+        yyp_path = self.project_root / "TestProject.yyp"
+        yyp_data = load_json_loose(yyp_path)
+        yyp_data["resources"].append({"id": {"name": "spr_player", "path": sprite_path}})
+        save_pretty_json_gm(yyp_path, yyp_data)
 
         # Create object that uses the sprite
         object_asset = ObjectAsset()

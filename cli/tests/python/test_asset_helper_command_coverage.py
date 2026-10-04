@@ -660,6 +660,7 @@ class TestMaintenanceCommands(unittest.TestCase):
         save_json.assert_not_called()
 
         with patch("gms_helpers.asset_cli.maintenance.run_auto_maintenance") as run_maintenance:
+            run_maintenance.return_value = SimpleNamespace(has_errors=False)
             result, output = _capture_output(asset_helper.maint_fix_issues_command, SimpleNamespace(verbose=True))
         self.assertTrue(result)
         self.assertIn("Auto-maintenance completed successfully", output)
@@ -718,7 +719,7 @@ class TestMaintenanceCommands(unittest.TestCase):
                 asset_helper.maint_clean_orphans_command,
                 SimpleNamespace(delete=False, skip_types=["folder"]),
             )
-        self.assertTrue(result)
+        self.assertFalse(result)
         self.assertIn("Found 25 orphaned files to remove", output)
         self.assertIn("and 5 more files", output)
         self.assertIn("2 errors occurred", output)

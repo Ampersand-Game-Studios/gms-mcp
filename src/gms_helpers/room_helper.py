@@ -16,6 +16,7 @@ from .exceptions import GMSError, ProjectNotFoundError, AssetNotFoundError, Vali
 from .results import OperationResult
 from .workflow import duplicate_asset, rename_asset, delete_asset
 from .path_safety import validate_resource_name
+from .room_instance_helper import _find_room_file, _iter_layers
 
 # ------------------------------------------------------------------
 # Internal Helpers
@@ -46,11 +47,11 @@ def duplicate_room(source_room: str, new_name: str) -> bool:
         print(f"[ERROR] Error duplicating room: {e}")
         return False
 
-    project_root = Path(".")
-    source_path = f"rooms/{source_room}/{source_room}.yy"
-
-    if not (project_root / source_path).exists():
-        print(f"[ERROR] Room '{source_room}' not found")
+    project_root = Path.cwd().resolve()
+    try:
+        source_path = _find_room_file(source_room, project_root).relative_to(project_root).as_posix()
+    except GMSError as exc:
+        print(f"[ERROR] Room '{source_room}' not found or invalid: {exc}")
         return False
 
     result = duplicate_asset(project_root, source_path, new_name)
@@ -72,11 +73,11 @@ def rename_room(room_name: str, new_name: str) -> bool:
         print(f"[ERROR] Error renaming room: {e}")
         return False
 
-    project_root = Path(".")
-    asset_path = f"rooms/{room_name}/{room_name}.yy"
-
-    if not (project_root / asset_path).exists():
-        print(f"[ERROR] Room '{room_name}' not found")
+    project_root = Path.cwd().resolve()
+    try:
+        asset_path = _find_room_file(room_name, project_root).relative_to(project_root).as_posix()
+    except GMSError as exc:
+        print(f"[ERROR] Room '{room_name}' not found or invalid: {exc}")
         return False
 
     result = rename_asset(project_root, asset_path, new_name)
@@ -101,11 +102,11 @@ def delete_room(room_name: str, dry_run: bool = False, *, force: bool = False) -
             data={"room_name": room_name, "dry_run": dry_run, "force": force},
         )
 
-    project_root = Path(".")
-    asset_path = f"rooms/{room_name}/{room_name}.yy"
-
-    if not (project_root / asset_path).exists():
-        print(f"[ERROR] Room '{room_name}' not found")
+    project_root = Path.cwd().resolve()
+    try:
+        asset_path = _find_room_file(room_name, project_root).relative_to(project_root).as_posix()
+    except GMSError as exc:
+        print(f"[ERROR] Room '{room_name}' not found or invalid: {exc}")
         return OperationResult.fail(
             f"Room '{room_name}' not found",
             code="room_not_found",
@@ -132,21 +133,24 @@ def list_rooms(verbose: bool = False) -> List[Dict[str, Any]]:
     print(f"{'Room Name':<30} {'Size':<12} {'Layers'}")
     print("-" * 55)
 
-    room_folders = [d for d in rooms_dir.iterdir() if d.is_dir()]
-    if not room_folders:
+    project = load_json_loose(find_yyp(Path.cwd()))
+    if not isinstance(project, dict) or not isinstance(project.get("resources", []), list):
+        raise ValidationError("Malformed project resources")
+    room_refs = [
+        entry["id"]
+        for entry in project.get("resources", [])
+        if isinstance(entry, dict)
+        and isinstance(entry.get("id"), dict)
+        and str(entry["id"].get("path", "")).replace("\\", "/").startswith("rooms/")
+    ]
+    if not room_refs:
         print("No rooms found in project.")
         return []
 
-    for folder in sorted(room_folders):
-        name = folder.name
-        yy_file = folder / f"{name}.yy"
-
-        if not yy_file.exists():
-            print(f"{name:<30} {'NO .YY':<12} {'N/A'}")
-            results.append({"name": name, "error": "Missing .yy file"})
-            continue
-
+    for ref in sorted(room_refs, key=lambda ref: str(ref.get("name", ""))):
+        name = ref.get("name")
         try:
+            yy_file = _find_room_file(name)
             data = load_json_loose(yy_file)
             if not data:
                 print(f"{name:<30} {'ERROR':<12} {'N/A'}")
@@ -157,7 +161,7 @@ def list_rooms(verbose: bool = False) -> List[Dict[str, Any]]:
             height = data.get("roomSettings", {}).get("Height", "?")
             size = f"{width}x{height}"
 
-            layers = data.get("layers", [])
+            layers = list(_iter_layers(data.get("layers", [])))
             layer_count = len(layers)
 
             print(f"{name:<30} {size:<12} {layer_count}")

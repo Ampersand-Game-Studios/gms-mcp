@@ -113,7 +113,15 @@ def _safe_project_path(project_root: Path, raw_path: str | Path) -> Optional[Pat
     """Resolve one project-relative path without permitting traversal or symlink escape."""
     raw = str(raw_path).strip()
     windows_path = PureWindowsPath(raw)
-    if not raw or Path(raw).is_absolute() or windows_path.is_absolute() or windows_path.drive:
+    if (
+        not raw
+        or Path(raw).is_absolute()
+        or windows_path.is_absolute()
+        or windows_path.drive
+        or windows_path.root
+        or ".." in Path(raw).parts
+        or ".." in windows_path.parts
+    ):
         return None
     try:
         return project_child_path(

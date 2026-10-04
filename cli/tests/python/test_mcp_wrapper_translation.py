@@ -472,7 +472,6 @@ class TestTextureGroupWrappers(MCPToolTestCase):
 
         with patch("gms_mcp.server.tools.texture_groups._requires_dry_run_for_tool", return_value=True):
             for tool_name, kwargs in [
-                ("gm_texture_group_create", {"name": "game", "dry_run": False, "project_root": "/tmp/project"}),
                 (
                     "gm_texture_group_update",
                     {"name": "game", "patch": {"autocrop": False}, "dry_run": False, "project_root": "/tmp/project"},

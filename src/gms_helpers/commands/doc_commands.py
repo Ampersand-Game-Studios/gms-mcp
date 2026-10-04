@@ -87,7 +87,7 @@ def handle_doc_search(args) -> OperationResult:
 
     result = search(
         args.query,
-        category=getattr(args, "category", None),
+        category=getattr(args, "doc_category", None),
         limit=getattr(args, "limit", 20),
     )
 
@@ -120,7 +120,7 @@ def handle_doc_list(args) -> OperationResult:
     from gms_helpers.gml_docs import list_functions
 
     result = list_functions(
-        category=getattr(args, "category", None),
+        category=getattr(args, "doc_category", None),
         pattern=getattr(args, "pattern", None),
         limit=getattr(args, "limit", 100),
     )

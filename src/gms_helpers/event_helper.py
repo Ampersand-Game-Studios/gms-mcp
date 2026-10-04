@@ -47,7 +47,10 @@ def _object_dir(object_name: str, project_root: str | Path | None = None) -> tup
     """Return a validated object name and project-local object directory."""
     object_name = validate_resource_name(object_name, "object")
     root = Path(project_root).resolve() if project_root is not None else Path.cwd().resolve()
-    return object_name, project_child_path("objects", object_name, project_root=root, kind=f"object '{object_name}'")
+    from .project_validation import resolve_asset_reference
+
+    reference = resolve_asset_reference(root, object_name, "GMObject")
+    return object_name, project_child_path(reference["path"], project_root=root, kind=f"object '{object_name}'").parent
 
 
 # ------------------------------------------------------------------

@@ -11,7 +11,8 @@ from pathlib import Path
 import sys
 
 from ..utils import load_json_loose, find_yyp, resolve_project_directory
-from ..exceptions import ProjectNotFoundError, GMSError
+from ..exceptions import ProjectNotFoundError, GMSError, ValidationError
+from ..path_safety import assert_project_tree_contained, project_relative_path
 from ..transactions import transactional_rmtree, transactional_unlink
 
 
@@ -28,14 +29,31 @@ def collect_referenced_folders(yyp_data, asset_type):
 
 
 def clean_unused_folders(project_root, asset_type, do_delete=False):
-    project_root = Path(project_root)
+    project_root = assert_project_tree_contained(Path(project_root))
+    allowed_types = {
+        "objects",
+        "sprites",
+        "scripts",
+        "rooms",
+        "sounds",
+        "paths",
+        "fonts",
+        "shaders",
+        "animcurves",
+        "tilesets",
+        "timelines",
+        "sequences",
+        "notes",
+    }
+    if asset_type not in allowed_types:
+        raise ValidationError(f"Invalid asset directory type: {asset_type}")
     yyp_path = find_yyp(project_root)
     yyp_data = load_json_loose(yyp_path)
     if not yyp_data:
         return 0, 0
 
     referenced = collect_referenced_folders(yyp_data, asset_type)
-    asset_dir = project_root / asset_type
+    asset_dir = project_relative_path(asset_type, project_root=project_root, kind="asset directory")
     if not asset_dir.exists():
         print(f"[SKIP] {asset_type}/ directory does not exist.")
         return 0, 0
@@ -88,7 +106,7 @@ def clean_old_yy_files(project_root: str, do_delete: bool = False) -> tuple[int,
     """
     Find and optionally delete .old.yy files throughout the project.
     """
-    project_path = Path(project_root)
+    project_path = assert_project_tree_contained(Path(project_root))
     found = 0
     deleted = 0
 

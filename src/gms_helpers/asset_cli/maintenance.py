@@ -19,7 +19,7 @@ def maint_lint_command(args):
     print("[SCAN] Scanning project for issues...")
 
     try:
-        issues = lint_project(".")
+        issues = lint_project(getattr(args, "project_root", "."))
         print_lint_report(issues)
 
         # Return success/failure based on whether errors were found
@@ -38,7 +38,7 @@ def maint_validate_json_command(args):
     try:
         from ..maintenance.tidy_json import validate_project_json, print_json_validation_report
 
-        results = validate_project_json(".")
+        results = validate_project_json(getattr(args, "project_root", "."))
         print_json_validation_report(results)
 
         # Return success if all files are valid
@@ -55,8 +55,8 @@ def maint_list_orphans_command(args):
     print("[SCAN] Scanning project for orphaned and missing assets...")
 
     try:
-        orphaned_assets = find_orphaned_assets(".")
-        missing_assets = find_missing_assets(".")
+        orphaned_assets = find_orphaned_assets(getattr(args, "project_root", "."))
+        missing_assets = find_missing_assets(getattr(args, "project_root", "."))
         print_orphan_report(orphaned_assets, missing_assets)
 
         # Return success - this is informational
@@ -73,7 +73,7 @@ def maint_prune_missing_command(args):
     print(f"[MAINT] {action} missing asset references from project file...")
 
     try:
-        removed_entries = prune_missing_assets(".", args.dry_run)
+        removed_entries = prune_missing_assets(getattr(args, "project_root", "."), args.dry_run)
         print_prune_report(removed_entries, args.dry_run)
 
         # Return success - this is a maintenance operation
@@ -94,7 +94,9 @@ def maint_validate_paths_command(args):
     try:
         include_parent_folders = getattr(args, "include_parent_folders", False)
         issues = validate_folder_paths(
-            ".", strict_mode=strict_disk_check, include_parent_folders=include_parent_folders
+            getattr(args, "project_root", "."),
+            strict_mode=strict_disk_check,
+            include_parent_folders=include_parent_folders,
         )
         print_path_validation_report(issues, strict_mode=strict_disk_check)
 
@@ -164,7 +166,7 @@ def maint_sync_events_command(args):
             # Sync specific object
             import os
 
-            object_path = os.path.join(".", "objects", args.object)
+            object_path = os.path.join(getattr(args, "project_root", "."), "objects", args.object)
             if os.path.exists(object_path):
                 stats = sync_object_events(object_path, dry_run)
                 print(f"[OBJECT] {args.object}:")
@@ -181,7 +183,7 @@ def maint_sync_events_command(args):
                 return False
         else:
             # Sync all objects
-            stats = sync_all_object_events(".", dry_run)
+            stats = sync_all_object_events(getattr(args, "project_root", "."), dry_run)
 
             print(f"\n[SUMMARY] Summary:")
             print(f"  Objects processed: {stats['objects_processed']}")
@@ -207,7 +209,7 @@ def maint_clean_old_files_command(args):
     try:
         from ..maintenance.clean_unused_assets import clean_old_yy_files
 
-        found, deleted = clean_old_yy_files(".", do_delete=delete)
+        found, deleted = clean_old_yy_files(getattr(args, "project_root", "."), do_delete=delete)
 
         if found > 0:
             if delete:
@@ -235,7 +237,9 @@ def maint_clean_orphans_command(args):
         print("(DRY RUN - use --delete to actually remove files)")
 
     try:
-        cleanup_result = delete_orphan_files(".", fix_issues=delete, skip_types=skip_types)
+        cleanup_result = delete_orphan_files(
+            getattr(args, "project_root", "."), fix_issues=delete, skip_types=skip_types
+        )
 
         total_deleted = cleanup_result.get("total_deleted", 0)
         deleted_dirs = len(cleanup_result.get("deleted_directories", []))
@@ -270,7 +274,7 @@ def maint_clean_orphans_command(args):
                 if len(deleted_files) > 20:
                     print(f"  ... and {len(deleted_files) - 20} more files")
 
-        return True
+        return not errors
 
     except Exception as e:
         print(f"[ERROR] Error during orphan cleaning: {e}")
@@ -283,7 +287,10 @@ def maint_fix_issues_command(args):
     print("[MAINT] Running comprehensive auto-maintenance with fixes enabled...")
 
     try:
-        run_auto_maintenance(".", fix_issues=True, verbose=verbose)
+        result = run_auto_maintenance(getattr(args, "project_root", "."), fix_issues=True, verbose=verbose)
+        if result.has_errors:
+            print("[ERROR] Auto-maintenance completed with unresolved errors")
+            return False
         print("[OK] Auto-maintenance completed successfully!")
         return True
     except Exception as e:
