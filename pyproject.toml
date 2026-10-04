@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=77,<82", "setuptools-scm>=8,<9", "wheel>=0.45,<1"]
+requires = ["setuptools>=83,<84", "setuptools-scm>=8,<9", "wheel>=0.45,<1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -33,6 +33,9 @@ dependencies = [
 [project.optional-dependencies]
 dev = [
   "build>=1,<2",
+  "setuptools>=83,<84",
+  "setuptools-scm>=8,<9",
+  "wheel>=0.45,<1",
   "packaging>=25,<27",
   "pytest>=9,<10",
   "pytest-cov>=7,<8",
@@ -77,6 +80,7 @@ pythonpath = ["src", "."]
 
 [tool.coverage.run]
 source = ["src"]
+branch = true
 parallel = true
 patch = ["subprocess"]
 

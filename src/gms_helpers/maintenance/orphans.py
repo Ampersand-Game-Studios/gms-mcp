@@ -7,7 +7,8 @@ import glob
 from pathlib import Path
 from typing import List, Set, Tuple
 
-from ..utils import load_json, find_yyp_file
+from ..utils import load_json, find_yyp_file, find_yyp
+from ..path_safety import assert_project_tree_contained, project_relative_path
 
 
 def find_orphaned_assets(project_root: str = ".") -> List[Tuple[str, str]]:
@@ -17,6 +18,11 @@ def find_orphaned_assets(project_root: str = ".") -> List[Tuple[str, str]]:
     Returns:
         List of (asset_path, asset_type) tuples for orphaned assets
     """
+    if not project_root or project_root == ".":
+        from ..utils import resolve_project_directory
+
+        project_root = str(resolve_project_directory())
+    project_root = str(assert_project_tree_contained(Path(project_root)))
     orphans = []
 
     try:
@@ -81,7 +87,11 @@ def find_orphaned_assets(project_root: str = ".") -> List[Tuple[str, str]]:
                 # Check if this asset is referenced in the .yyp (case-insensitive comparison)
                 if relative_path not in referenced_paths:
                     asset_type = _get_asset_type_from_path(relative_path)
-                    orphans.append((relative_path, asset_type))
+                    # Compare case-insensitively, but retain the real spelling
+                    # for cleanup on case-sensitive filesystems.
+                    actual_path = Path(asset_file).relative_to(project_root).as_posix()
+                    project_relative_path(actual_path, project_root=Path(project_root), kind="orphan path")
+                    orphans.append((actual_path, asset_type))
 
         return orphans
 
@@ -123,11 +133,12 @@ def find_missing_assets(project_root: str = ".") -> List[Tuple[str, str]]:
     Returns:
         List of (asset_path, asset_type) tuples for missing assets
     """
+    root = assert_project_tree_contained(Path(project_root))
     missing = []
 
     try:
         # Load .yyp file
-        yyp_path = find_yyp_file()
+        yyp_path = str(find_yyp(root))
         yyp_data = load_json(yyp_path)
 
         resources = yyp_data.get("resources", [])
@@ -147,7 +158,7 @@ def find_missing_assets(project_root: str = ".") -> List[Tuple[str, str]]:
                     continue  # Never treat folders as missing
 
                 # Check if file exists
-                if not os.path.exists(path):
+                if not project_relative_path(path, project_root=root, kind="resource path").exists():
                     missing.append((path, asset_type))
 
         return missing

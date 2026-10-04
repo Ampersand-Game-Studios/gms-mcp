@@ -67,5 +67,5 @@ class UpdateStatus:
         }
 
 
-def get_update_status(*, force_refresh: bool = False) -> UpdateStatus:
-    return UpdateStatus.from_payload(check_for_updates(force_refresh=force_refresh))
+def get_update_status(*, force_refresh: bool = False, persist: bool = True) -> UpdateStatus:
+    return UpdateStatus.from_payload(check_for_updates(force_refresh=force_refresh, persist=persist))

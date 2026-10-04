@@ -181,7 +181,7 @@ class TestMCPValidationModels(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
             resources = []
-            for object_name in ("o_enemy", "o_wall"):
+            for object_name in ("o_player", "o_enemy", "o_wall"):
                 object_dir = project_root / "objects" / object_name
                 object_dir.mkdir(parents=True)
                 (object_dir / f"{object_name}.yy").write_text(

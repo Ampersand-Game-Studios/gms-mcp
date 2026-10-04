@@ -2,6 +2,8 @@
   "include": [
     "src",
     "scripts/ci_version.py",
+    "scripts/build_release.py",
+    "scripts/generate_quality_reports.py",
     "scripts/run_real_gamemaker_smoke.py",
     "scripts/verify_release_certification.py"
   ],

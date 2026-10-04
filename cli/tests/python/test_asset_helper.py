@@ -369,6 +369,10 @@ class TestAssetCreation(unittest.TestCase):
         self.assertIn("Create Event for o_test_object", create_content)
 
         # Test object creation with parent object
+        yyp_path = self.project_root / "test.yyp"
+        yyp_data = load_json_loose(yyp_path)
+        yyp_data["resources"].append({"id": {"name": "o_test_object", "path": rel_path}})
+        save_pretty_json(yyp_path, yyp_data)
         child_rel_path = obj.create_files(
             self.project_root, "o_child_object", "folders/Scripts.yy", parent_object="o_test_object"
         )
@@ -473,6 +477,8 @@ class TestAssetCreation(unittest.TestCase):
         self.assertIn("folders/TestFolder.yy", folder_paths)
 
         # Test nested folder creation with parent_path
+        folder.create_files(self.project_root, "Parent")
+        folder.create_files(self.project_root, "Child", "folders/Parent.yy")
         nested_rel_path = folder.create_files(self.project_root, "NestedFolder", "folders/Parent/Child/NestedFolder.yy")
 
         # Check nested return path

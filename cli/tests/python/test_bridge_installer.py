@@ -201,6 +201,8 @@ class TestBridgeInstallerUninstall(unittest.TestCase):
 
         room_data = {
             "name": "r_test",
+            "resourceType": "GMRoom",
+            "parent": {"name": "Rooms", "path": "folders/Rooms.yy"},
             "instanceCreationOrder": [
                 {"name": self.bridge_instance_id, "path": "rooms/r_test/r_test.yy"},
             ],
@@ -212,6 +214,7 @@ class TestBridgeInstallerUninstall(unittest.TestCase):
                         {
                             "name": self.bridge_instance_id,
                             "%Name": self.bridge_instance_id,
+                            "resourceType": "GMRInstance",
                             "objectId": {
                                 "name": BRIDGE_OBJECT_NAME,
                                 "path": f"objects/{BRIDGE_OBJECT_NAME}/{BRIDGE_OBJECT_NAME}.yy",
@@ -231,7 +234,7 @@ class TestBridgeInstallerUninstall(unittest.TestCase):
             "resources": [
                 {"id": {"name": "r_test", "path": "rooms/r_test/r_test.yy"}},
             ],
-            "Folders": [],
+            "Folders": [{"name": "Rooms", "folderPath": "folders/Rooms.yy"}],
         }
         self.yyp_path.write_text(json.dumps(self.yyp_data))
 

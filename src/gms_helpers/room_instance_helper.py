@@ -25,22 +25,19 @@ def _find_room_file(room_name: str, project_root: str | Path | None = None) -> P
     """Find the .yy file for a room."""
     room_name = validate_resource_name(room_name, "room")
     root = Path(project_root).resolve() if project_root is not None else Path.cwd().resolve()
-    room_path = project_child_path(
-        "rooms",
-        room_name,
-        f"{room_name}.yy",
-        project_root=root,
-        kind=f"room '{room_name}'",
-    )
-    if not room_path.exists():
-        raise AssetNotFoundError(f"Room file not found: {room_path}")
-    return room_path
+    from .project_validation import resolve_asset_reference
+
+    try:
+        reference = resolve_asset_reference(root, room_name, "GMRoom")
+    except ValidationError as exc:
+        raise AssetNotFoundError(f"Room '{room_name}' is not a registered valid room: {exc}") from exc
+    return project_child_path(reference["path"], project_root=root, kind=f"room '{room_name}'")
 
 
 def _load_room_data(room_path: Path) -> Dict[str, Any]:
     """Load room JSON data."""
     data = load_json_loose(room_path)
-    if data is None:
+    if not isinstance(data, dict) or data.get("resourceType") != "GMRoom":
         raise GMSError(f"Failed to load room data from {room_path}")
     return data
 
@@ -91,6 +88,11 @@ def add_instance(
     room_path = _find_room_file(room_name, project_root)
     room_data = _load_room_data(room_path)
 
+    from .project_validation import resolve_asset_reference
+
+    root = Path(project_root).resolve() if project_root is not None else Path.cwd().resolve()
+    object_reference = resolve_asset_reference(root, object_name, "GMObject")
+
     layer = _find_layer_by_name(room_data, layer_name)
     if layer.get("resourceType") != "GMRInstanceLayer":
         raise ValidationError(f"Layer '{layer_name}' is not an instance layer (type: {layer.get('resourceType')})")
@@ -115,7 +117,7 @@ def add_instance(
         "inheritItemSettings": False,
         "isDnd": False,
         "name": instance_id,
-        "objectId": {"name": object_name, "path": f"objects/{object_name}/{object_name}.yy"},
+        "objectId": object_reference,
         "properties": [],
         "resourceType": "GMRInstance",
         "resourceVersion": "2.0",
@@ -152,7 +154,7 @@ def add_instance(
             creation_order.append(
                 {
                     "name": instance_id,
-                    "path": f"rooms/{room_name}/{room_name}.yy",
+                    "path": room_path.relative_to(root).as_posix(),
                 }
             )
 
@@ -196,7 +198,7 @@ def remove_instance(room_name: str, instance_id: str):
         room_data["instanceCreationOrder"] = [e for e in creation_order if _keep(e)]
 
     # Check for and remove creation code file if it exists
-    creation_code_path = project_child_path("rooms", room_name, f"{instance_id}.gml", kind="creation code path")
+    creation_code_path = project_child_path(room_path.parent, f"{instance_id}.gml", kind="creation code path")
     if creation_code_path.exists():
         transactional_unlink(creation_code_path)
         print(f"[OK] Removed creation code file: {creation_code_path}")
@@ -232,7 +234,7 @@ def list_instances(room_name: str, layer_name: Optional[str] = None) -> List[Dic
             print("-" * 90)
 
             for inst in instances:
-                obj_name = inst.get("objectId", {}).get("name", "Unknown")
+                obj_name = (inst.get("objectId") or {}).get("name", "Unknown")
                 pos = f"({inst.get('x')}, {inst.get('y')})"
                 scale = f"({inst.get('scaleX')}, {inst.get('scaleY')})"
                 rot = inst.get("rotation")
@@ -294,7 +296,9 @@ def modify_instance(room_name: str, instance_id: str, **kwargs):
         found_inst["rotation"] = float(kwargs["rotation"])
     if "object_name" in kwargs:
         obj_name = validate_resource_name(kwargs["object_name"], "object")
-        found_inst["objectId"] = {"name": obj_name, "path": f"objects/{obj_name}/{obj_name}.yy"}
+        from .project_validation import resolve_asset_reference
+
+        found_inst["objectId"] = resolve_asset_reference(Path.cwd(), obj_name, "GMObject")
 
     _save_room_data(room_path, room_data)
     print(f"[OK] Modified instance '{instance_id}' in room '{room_name}'")
@@ -322,7 +326,7 @@ def set_creation_code(room_name: str, instance_id: str, code: str):
         raise AssetNotFoundError(f"Instance '{instance_id}' not found in room '{room_name}'")
 
     # Create the code file
-    code_path = project_child_path("rooms", room_name, f"{instance_id}.gml", kind="creation code path")
+    code_path = project_child_path(room_path.parent, f"{instance_id}.gml", kind="creation code path")
     atomic_write_text(code_path, code)
 
     # Update instance to indicate it has code

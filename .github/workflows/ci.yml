@@ -55,7 +55,7 @@ jobs:
         run: uv sync --frozen --all-extras --python ${{ matrix.python-version }}
 
       - name: Build package
-        run: uv run --frozen python -m build
+        run: uv run --frozen python scripts/build_release.py --output-dir dist
 
       - name: Verify package privacy boundary
         run: uv run --frozen python scripts/verify_package_artifacts.py dist
@@ -64,10 +64,20 @@ jobs:
         env:
           GMS_MCP_POST_MUTATION_VERIFY: "off"
           GMS_MCP_TOOLSETS: "all"
+          # These projects are disposable CI fixtures, not users' projects.
+          GMS_MCP_EXPOSE_HOST_DIAGNOSTICS: "1"
         run: uv run --frozen python scripts/run_mcp_tool_smoke.py --init-minimal-base --base-project build/mcp-smoke/base-project --work-root build/mcp-smoke/work --output build/reports/mcp_tool_smoke_report.json --tools gm_safe_delete gm_create_object gm_event_add gm_maintenance_validate_json gm_room_instance_add gm_room_layer_add gm_verification_status gm_list_assets gm_project_info gm_search_references gm_workflow_duplicate gm_sprite_frame_count
 
       - name: Run tests
         run: uv run --frozen python -m pytest -q
+
+      - name: Upload MCP smoke diagnostics
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: mcp-tool-smoke-${{ matrix.os }}-py${{ matrix.python-version }}
+          path: build/reports/mcp_tool_smoke_report.json
+          if-no-files-found: warn
 
       - name: Verify generated compatibility matrix
         run: uv run --frozen python scripts/generate_compatibility_matrix.py --check
@@ -92,7 +102,7 @@ jobs:
         run: uv sync --frozen --all-extras --python 3.12
 
       - name: Build package
-        run: uv run --frozen python -m build
+        run: uv run --frozen python scripts/build_release.py --output-dir dist
 
       - name: Verify package privacy boundary
         run: uv run --frozen python scripts/verify_package_artifacts.py dist
@@ -101,6 +111,8 @@ jobs:
         env:
           GMS_MCP_POST_MUTATION_VERIFY: "off"
           GMS_MCP_TOOLSETS: "all"
+          # These projects are disposable CI fixtures, not users' projects.
+          GMS_MCP_EXPOSE_HOST_DIAGNOSTICS: "1"
         run: uv run --frozen python scripts/run_mcp_tool_smoke.py --init-minimal-base --base-project build/mcp-smoke/base-project --work-root build/mcp-smoke/work --output build/reports/mcp_tool_smoke_report.json --tools gm_safe_delete gm_create_object gm_event_add gm_maintenance_validate_json gm_room_instance_add gm_room_layer_add gm_verification_status gm_list_assets gm_project_info gm_search_references gm_workflow_duplicate gm_sprite_frame_count
 
       - name: Generate quality reports
@@ -177,10 +189,33 @@ jobs:
         run: uv sync --frozen --extra dev --python 3.12
 
       - name: Audit every locked dependency
+        shell: bash
         run: >-
           uv export --frozen --all-extras --format requirements-txt --no-emit-project |
           uv run --frozen pip-audit --requirement /dev/stdin --no-deps --disable-pip
           --strict --progress-spinner off
+
+  telemetry_service:
+    name: Telemetry service privacy/retention
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/telemetry
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+      - uses: actions/setup-node@395ad3262231945c25e8478fd5baf05154b1d79f # v6.1.0
+        with:
+          node-version: "22.22.0"
+          cache: npm
+          cache-dependency-path: services/telemetry/package-lock.json
+      - name: Install locked service tooling
+        run: npm ci --ignore-scripts
+      - name: Check service and closed-schema retention/retry cases
+        run: |
+          npm run check
+          npm test
+          npm audit --audit-level=low
+          npx wrangler deploy --dry-run --config wrangler.jsonc
 
   mcp_conformance:
     name: MCP 2026-07-28 Conformance
@@ -365,18 +400,8 @@ jobs:
       - name: Install dependencies
         run: uv sync --frozen --all-extras --python ${{ matrix.python-version }}
 
-      - name: Run runner/session tests
-        run: |
-          uv run --frozen python -m pytest -q \
-            cli/tests/python/test_run_session.py \
-            cli/tests/python/test_runner_session_integration.py \
-            cli/tests/python/test_runtime_manager.py
-
-      - name: Run install parity tests
-        run: |
-          uv run --frozen python -m pytest -q \
-            cli/tests/python/test_install_polish.py \
-            cli/tests/python/test_install_parity.py
+      - name: Run full macOS suite including safety and recovery
+        run: uv run --frozen python3 cli/tests/python/run_all_tests.py
 
   real_gamemaker_smoke:
     name: Real GameMaker Smoke (${{ matrix.host_platform }}, ${{ matrix.fixture_name }})
@@ -467,7 +492,7 @@ jobs:
   ci:
     name: ci
     runs-on: ubuntu-latest
-    needs: [test, quality, lint_and_types, dependency_audit, mcp_conformance, mac_runner_session, real_gamemaker_smoke]
+    needs: [test, quality, lint_and_types, dependency_audit, telemetry_service, mcp_conformance, mac_runner_session, real_gamemaker_smoke]
     if: always()
     steps:
       - name: Check test results
@@ -491,6 +516,10 @@ jobs:
           fi
           if [ "${{ needs.dependency_audit.result }}" != "success" ]; then
             echo "Dependency audit failed or was cancelled"
+            exit 1
+          fi
+          if [ "${{ needs.telemetry_service.result }}" != "success" ]; then
+            echo "Telemetry service privacy/retention tests failed or were cancelled"
             exit 1
           fi
           if [ "${{ needs.mcp_conformance.result }}" != "success" ]; then

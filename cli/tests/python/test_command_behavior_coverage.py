@@ -125,7 +125,7 @@ class TestDocCommandBehavior(unittest.TestCase):
         ):
             search_result, search_output = _capture_output(
                 handle_doc_search,
-                SimpleNamespace(query="draw", category="Drawing", limit=5),
+                SimpleNamespace(query="draw", doc_category="Drawing", limit=5),
             )
         self.assertTrue(search_result)
         self.assertIn("Search results for 'draw'", search_output)
@@ -147,7 +147,7 @@ class TestDocCommandBehavior(unittest.TestCase):
         ):
             list_result, list_output = _capture_output(
                 handle_doc_list,
-                SimpleNamespace(category="Drawing", pattern="^draw_", limit=10),
+                SimpleNamespace(doc_category="Drawing", pattern="^draw_", limit=10),
             )
         self.assertTrue(list_result)
         self.assertIn("GML Functions", list_output)

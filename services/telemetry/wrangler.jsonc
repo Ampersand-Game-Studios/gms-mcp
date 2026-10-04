@@ -1,0 +1,19 @@
+{
+  "$schema": "./node_modules/wrangler/config-schema.json",
+  "name": "gms-mcp-telemetry-ingest",
+  "account_id": "d64cf4ae4c65526f1c6428babed3c56e",
+  "main": "src/index.js",
+  "compatibility_date": "2026-03-20",
+  "workers_dev": false,
+  "preview_urls": false,
+  "keep_vars": true,
+  "observability": { "enabled": false },
+  "routes": [{ "pattern": "gms-mcp-telemetry.ampersandgamestudios.com", "custom_domain": true }],
+  "vars": { "RAW_RETENTION_DAYS": "90", "AGGREGATE_RETENTION_MONTHS": "24" },
+  "r2_buckets": [{ "binding": "TELEMETRY_BUCKET", "bucket_name": "gms-mcp-telemetry-prod" }],
+  "queues": {
+    "producers": [{ "binding": "TELEMETRY_QUEUE", "queue": "gms-mcp-telemetry-events" }],
+    "consumers": [{ "queue": "gms-mcp-telemetry-events", "max_batch_size": 50, "max_batch_timeout": 5, "max_retries": 3 }]
+  },
+  "triggers": { "crons": ["15 2 * * *"] }
+}
