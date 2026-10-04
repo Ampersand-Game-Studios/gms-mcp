@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Iterator
+from contextlib import contextmanager
 from importlib.metadata import version
 import json
 import os
 from pathlib import Path
+import signal
 import socket
 import sys
 from tempfile import TemporaryDirectory
@@ -25,6 +28,14 @@ from gms_mcp.server.results import unwrap_call_tool_result
 
 
 HTTP_TOKEN = "sdk-compatibility-test-token-2026-10-05"
+
+
+class LoopbackTestServer(uvicorn.Server):
+    @contextmanager
+    def capture_signals(self) -> Iterator[None]:
+        # The fixture owns shutdown. Process-wide signal handlers let SSE's
+        # drain watcher mistake fixture teardown for shutdown of all tests.
+        yield
 
 
 class MCPSDKCompatibilityTests(unittest.IsolatedAsyncioTestCase):
@@ -112,7 +123,10 @@ class MCPSDKCompatibilityTests(unittest.IsolatedAsyncioTestCase):
                 project_headers.append(dict(scope["headers"]).get(b"mcp-param-project-root"))
             await app(scope, receive, send)
 
-        server = uvicorn.Server(uvicorn.Config(record_project_header, host="127.0.0.1", port=port, log_level="error"))
+        original_signal_handler = signal.getsignal(signal.SIGTERM)
+        server = LoopbackTestServer(
+            uvicorn.Config(record_project_header, host="127.0.0.1", port=port, log_level="error")
+        )
         task = asyncio.create_task(server.serve())
         try:
             for _ in range(100):
@@ -120,6 +134,7 @@ class MCPSDKCompatibilityTests(unittest.IsolatedAsyncioTestCase):
                     break
                 await asyncio.sleep(0.01)
             self.assertTrue(server.started, "authenticated loopback fixture did not start")
+            self.assertIs(signal.getsignal(signal.SIGTERM), original_signal_handler)
             for mode, event_limit in (("2026-07-28", 1024 * 1024), ("2026-07-28", None), ("legacy", 1024 * 1024)):
                 with self.subTest(mode=mode, max_sse_event_size=event_limit):
                     parameters = StreamableHttpParameters(
