@@ -31,6 +31,9 @@ def aliased_project(tmp_path, monkeypatch, request):
     # POSIX getcwd normally erases symlink aliases. Model the Windows filesystem
     # boundary returning an alternate spelling of the actual working directory.
     monkeypatch.setattr(os, "getcwd", lambda: str(alias))
+    # Python 3.10 caches os.getcwd in pathlib's filesystem accessor. Patch the
+    # public boundary too so every supported interpreter sees the same alias.
+    monkeypatch.setattr(Path, "cwd", classmethod(lambda _cls: alias))
     assert Path.cwd() == alias
     return root, alias
 
