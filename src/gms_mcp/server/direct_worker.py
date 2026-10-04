@@ -64,20 +64,12 @@ def _capture_output(callable_to_run: Callable[[], Any]) -> Tuple[bool, str, str,
     system_exit_code: Any | None = None
 
     from gms_helpers.exceptions import GMSError
+    from gms_helpers.operation_policy import operation_succeeded
 
     with contextlib.redirect_stdout(stdout_buffer), contextlib.redirect_stderr(stderr_buffer):
         try:
             result_value = callable_to_run()
-            if hasattr(result_value, "success"):
-                ok = bool(result_value.success)
-            elif isinstance(result_value, bool):
-                ok = result_value
-            elif isinstance(result_value, dict):
-                from gms_helpers.results import result_dict_is_ok
-
-                ok = result_dict_is_ok(result_value)
-            else:
-                ok = True
+            ok = operation_succeeded(result_value)
         except GMSError as exc:
             ok = False
             error_text = f"{type(exc).__name__}: {exc.message}"
@@ -110,6 +102,8 @@ def _capture_output(callable_to_run: Callable[[], Any]) -> Tuple[bool, str, str,
             pieces.append("stderr:\n" + stderr_text)
         error_text = "\n".join(pieces)
 
+    if system_exit_code is None and not ok:
+        system_exit_code = 1
     return ok, stdout_text, stderr_text, result_value, error_text, system_exit_code
 
 
@@ -158,18 +152,16 @@ def _run_request(request: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def _write_response(path: Path, payload: dict[str, Any]) -> None:
-    path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
+def _write_response(payload: dict[str, Any]) -> None:
+    sys.stdout.write(json.dumps(payload, ensure_ascii=False))
+    sys.stdout.flush()
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(add_help=False)
-    parser.add_argument("request_path")
-    parser.add_argument("response_path")
-    options = parser.parse_args(argv)
-    response_path = Path(options.response_path)
+    parser.parse_args(argv)
     try:
-        request = json.loads(Path(options.request_path).read_text(encoding="utf-8"))
+        request = json.load(sys.stdin)
         if not isinstance(request, dict):
             raise TypeError("Direct worker request must be an object")
         payload = _run_request(request)
@@ -183,7 +175,7 @@ def main(argv: list[str] | None = None) -> int:
             "exit_code": 1,
         }
     try:
-        _write_response(response_path, payload)
+        _write_response(payload)
         return 0
     except Exception:
         fallback = {
@@ -194,7 +186,7 @@ def main(argv: list[str] | None = None) -> int:
             "error": traceback.format_exc(),
             "exit_code": 1,
         }
-        _write_response(response_path, fallback)
+        _write_response(fallback)
         return 1
 
 

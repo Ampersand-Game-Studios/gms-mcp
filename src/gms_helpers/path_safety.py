@@ -23,6 +23,11 @@ def validate_resource_name(name: Any, kind: str) -> str:
         or windows_path.drive
         or "/" in candidate
         or "\\" in candidate
+        or any(character in candidate for character in '\x00<>:"|?*')
+        or any(ord(character) < 32 for character in candidate)
+        or candidate.endswith(".")
+        or candidate.split(".", 1)[0].casefold()
+        in {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)), *(f"lpt{i}" for i in range(1, 10))}
         or candidate in {".", ".."}
     ):
         raise ValidationError(f"Invalid {kind} name: {name}")
@@ -41,6 +46,23 @@ def project_child_path(*parts: Any, project_root: Path | None = None, kind: str 
         raise ValidationError(f"Invalid {kind}: resolved path escapes the project root")
 
     return target
+
+
+def project_relative_path(path: Any, *, project_root: Path, kind: str = "path") -> Path:
+    """Validate an untrusted project-relative path on POSIX and Windows."""
+    candidate = str(path)
+    windows = PureWindowsPath(candidate)
+    if (
+        not candidate
+        or Path(candidate).is_absolute()
+        or windows.drive
+        or "\\" in candidate
+        or ".." in Path(candidate).parts
+        or "\x00" in candidate
+        or ":" in candidate
+    ):
+        raise ValidationError(f"Invalid {kind}: expected a project-relative path without traversal")
+    return project_child_path(candidate, project_root=project_root, kind=kind)
 
 
 def assert_project_tree_contained(project_root: Path) -> Path:
@@ -62,6 +84,10 @@ def assert_project_tree_contained(project_root: Path) -> Path:
         for name in file_names:
             candidate = directory_path / name
             if not candidate.is_symlink():
+                if candidate.stat().st_nlink > 1:
+                    raise ValidationError(
+                        "Project contains a multiply-linked file; external write confinement cannot be proven"
+                    )
                 continue
             try:
                 target = candidate.resolve(strict=False)

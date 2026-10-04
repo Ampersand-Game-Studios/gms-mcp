@@ -25,7 +25,6 @@ from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
-from .server.debug import _dbg
 from .server.http_security import local_bearer_auth, validate_local_bearer_token
 from .server.mcp_v2 import MCP_CACHE_HINTS, MCPV2Runtime, MutationSerializationMiddleware
 from .server.project import ProjectAccessError, ProjectAccessPolicy
@@ -48,99 +47,8 @@ from .telemetry import (
 )
 
 
-_TRANSACTIONAL_TOOL_PREFIXES = (
-    "gm_create_",
-    "gm_event_",
-    "gm_room_layer_",
-    "gm_room_instance_",
-    "gm_sprite_",
-    "gm_texture_group_",
-    "gm_workflow_",
-)
-_TRANSACTIONAL_TOOL_NAMES = {
-    "gm_bridge_install",
-    "gm_bridge_uninstall",
-    "gm_bridge_enable_one_shot",
-    "gm_maintenance_auto",
-    "gm_maintenance_lint",
-    "gm_maintenance_prune_missing",
-    "gm_maintenance_dedupe_resources",
-    "gm_maintenance_sync_events",
-    "gm_maintenance_normalize_names",
-    "gm_maintenance_clean_old_files",
-    "gm_maintenance_clean_orphans",
-    "gm_maintenance_fix_issues",
-    "gm_room_ops_duplicate",
-    "gm_room_ops_rename",
-    "gm_room_ops_delete",
-    "gm_safe_delete",
-}
-_NON_TRANSACTIONAL_TOOL_NAMES = {
-    "gm_event_list",
-    "gm_event_validate",
-    "gm_room_layer_list",
-    "gm_room_instance_list",
-    "gm_room_ops_list",
-    "gm_texture_group_list",
-    "gm_texture_group_read",
-    "gm_texture_group_members",
-    "gm_texture_group_scan",
-    "gm_sprite_frame_count",
-}
-_READ_ONLY_TOOL_NAMES = {
-    "gm_bridge_status",
-    "gm_capabilities",
-    "gm_check_updates",
-    "gm_diagnostics",
-    "gm_doc_cache_stats",
-    "gm_doc_categories",
-    "gm_doc_list",
-    "gm_doc_lookup",
-    "gm_doc_search",
-    "gm_event_list",
-    "gm_event_validate",
-    "gm_find_definition",
-    "gm_find_references",
-    "gm_get_asset_graph",
-    "gm_get_project_stats",
-    "gm_list_assets",
-    "gm_list_symbols",
-    "gm_maintenance_list_orphans",
-    "gm_maintenance_validate_json",
-    "gm_maintenance_validate_paths",
-    "gm_mcp_health",
-    "gm_project_info",
-    "gm_project_dashboard",
-    "gm_read_asset",
-    "gm_room_instance_list",
-    "gm_room_layer_list",
-    "gm_room_ops_list",
-    "gm_run_logs",
-    "gm_run_status",
-    "gm_runtime_list",
-    "gm_runtime_verify",
-    "gm_search_references",
-    "gm_sprite_frame_count",
-    "gm_texture_group_list",
-    "gm_texture_group_members",
-    "gm_texture_group_read",
-    "gm_texture_group_scan",
-    "gm_verification_status",
-}
-_DESTRUCTIVE_TOOL_MARKERS = (
-    "_clean_",
-    "_dedupe_",
-    "_delete",
-    "_fix",
-    "_normalize_",
-    "_prune_",
-    "_remove",
-    "_rename",
-    "_stop",
-    "_swap_",
-    "_sync_",
-    "_uninstall",
-)
+from gms_helpers.operation_policy import is_project_mutation, is_real_destructive_operation, operation_scope
+
 _HTTP_AUTH_ENV_NAME = "GMS_MCP_HTTP_BEARER_TOKEN"
 _HTTP_MAX_REQUEST_BODY_BYTES = 1 * 1024 * 1024
 
@@ -177,6 +85,8 @@ def _record_mcp_event(
     error_family: str | None = None,
     execution_mode: str | None = None,
 ) -> None:
+    if os.environ.get("GMS_MCP_READ_ONLY", "").strip() == "1" or operation_scope(tool_name) in {"read", "cache"}:
+        return
     state = resolve_state()
     if not queue_event(
         state=state,
@@ -195,9 +105,9 @@ def _record_mcp_event(
 
 
 def _result_from_value(value) -> str:
-    if isinstance(value, dict) and value.get("ok") is False:
-        return "error"
-    return "ok"
+    from gms_helpers.operation_policy import operation_succeeded
+
+    return "ok" if operation_succeeded(value) else "error"
 
 
 def _is_committed_mutation_result(value: Any) -> bool:
@@ -206,7 +116,7 @@ def _is_committed_mutation_result(value: Any) -> bool:
     )
     if isinstance(structured_content, dict):
         value = structured_content.get("result", structured_content)
-    if not isinstance(value, dict) or value.get("ok") is False:
+    if not isinstance(value, dict) or _result_from_value(value) == "error":
         return False
     transaction = value.get("transaction")
     return isinstance(transaction, dict) and transaction.get("committed") is True
@@ -228,39 +138,10 @@ def _bind_tool_call(
     return dict(bound.arguments), bound.args, bound.kwargs
 
 
-def _tool_call_is_dry_run(arguments: dict[str, Any]) -> bool:
-    return bool(arguments.get("dry_run")) or (
-        arguments.get("fix") is False
-        and arguments.get("delete") is False
-        and any(name in arguments for name in ("fix", "delete"))
-    )
-
-
 def _tool_should_use_transaction(tool_name: str, arguments: dict[str, Any]) -> bool:
-    if tool_name in _NON_TRANSACTIONAL_TOOL_NAMES:
-        return False
-    if _tool_call_is_dry_run(arguments):
-        return False
-    if tool_name.startswith("gm_maintenance_"):
-        if tool_name == "gm_maintenance_fix_issues":
-            return True
-        if "dry_run" in arguments:
-            return not bool(arguments.get("dry_run"))
-        if "fix" in arguments:
-            return bool(arguments.get("fix"))
-        if "delete" in arguments:
-            return bool(arguments.get("delete"))
-        return False
-    if tool_name.startswith("gm_texture_group_") and tool_name not in _TRANSACTIONAL_TOOL_NAMES:
-        if tool_name in {
-            "gm_texture_group_list",
-            "gm_texture_group_read",
-            "gm_texture_group_members",
-            "gm_texture_group_scan",
-        }:
-            return False
-        return True
-    return tool_name in _TRANSACTIONAL_TOOL_NAMES or tool_name.startswith(_TRANSACTIONAL_TOOL_PREFIXES)
+    from gms_helpers.operation_policy import is_project_mutation
+
+    return is_project_mutation(tool_name, arguments)
 
 
 def _resolve_transaction_project_root(arguments: dict[str, Any]) -> Path:
@@ -270,9 +151,13 @@ def _resolve_transaction_project_root(arguments: dict[str, Any]) -> Path:
 
 
 def _annotate_transaction_result(result: Any, transaction: dict[str, Any]) -> Any:
+    from gms_helpers.results import OperationResult
+
+    if isinstance(result, OperationResult):
+        result = result.to_dict()
     if isinstance(result, dict):
-        if not result.get("transaction"):
-            result["transaction"] = transaction
+        result["ok"] = _result_from_value(result) == "ok"
+        result["transaction"] = transaction
         return result
     return {"ok": _result_from_value(result) == "ok", "result": result, "transaction": transaction}
 
@@ -314,8 +199,10 @@ def _apply_verification_decision(
 
 def _run_transactional_sync(tool_name: str, arguments: dict[str, Any], call):
     from gms_helpers.transactions import GameMakerProjectTransaction
+    from gms_helpers.operation_policy import validate_project_operation
 
     project_root = _resolve_transaction_project_root(arguments)
+    validate_project_operation(project_root, arguments)
     decision = decide_mutation_verification(tool_name)
     tx = GameMakerProjectTransaction(project_root, tool_name)
     tx.begin()
@@ -325,18 +212,21 @@ def _run_transactional_sync(tool_name: str, arguments: dict[str, Any], call):
         if _result_from_value(result) == "error":
             tx.rollback()
             return _annotate_transaction_result(result, tx.to_dict())
-        transaction = tx.commit(verify_compile=decision.action == "compile")
-        transaction = _apply_verification_decision(
-            project_root=project_root,
-            tool_name=tool_name,
-            decision=decision,
-            transaction=transaction,
+        transaction = tx.commit(
+            verify_compile=decision.action == "compile",
+            before_commit=lambda state: _apply_verification_decision(
+                project_root=project_root,
+                tool_name=tool_name,
+                decision=decision,
+                transaction=state,
+            ),
         )
         return _annotate_transaction_result(result, transaction)
-    except Exception:
+    except BaseException as exc:
         if not tx.committed:
             tx.capture_mutation_state()
             tx.rollback()
+        setattr(exc, "details", {**(getattr(exc, "details", {}) or {}), "transaction": tx.to_dict()})
         raise
     finally:
         tx.cleanup()
@@ -344,8 +234,10 @@ def _run_transactional_sync(tool_name: str, arguments: dict[str, Any], call):
 
 async def _run_transactional_async(tool_name: str, arguments: dict[str, Any], call):
     from gms_helpers.transactions import GameMakerProjectTransaction
+    from gms_helpers.operation_policy import validate_project_operation
 
     project_root = _resolve_transaction_project_root(arguments)
+    validate_project_operation(project_root, arguments)
     decision = decide_mutation_verification(tool_name)
     tx = GameMakerProjectTransaction(project_root, tool_name)
     await tx.begin_async()
@@ -355,18 +247,21 @@ async def _run_transactional_async(tool_name: str, arguments: dict[str, Any], ca
         if _result_from_value(result) == "error":
             await tx.rollback_async()
             return _annotate_transaction_result(result, tx.to_dict())
-        transaction = await tx.commit_async(verify_compile=decision.action == "compile")
-        transaction = _apply_verification_decision(
-            project_root=project_root,
-            tool_name=tool_name,
-            decision=decision,
-            transaction=transaction,
+        transaction = await tx.commit_async(
+            verify_compile=decision.action == "compile",
+            before_commit=lambda state: _apply_verification_decision(
+                project_root=project_root,
+                tool_name=tool_name,
+                decision=decision,
+                transaction=state,
+            ),
         )
         return _annotate_transaction_result(result, transaction)
-    except BaseException:
+    except BaseException as exc:
         if not tx.committed:
             await tx.capture_mutation_state_async()
             await tx.rollback_async()
+        setattr(exc, "details", {**(getattr(exc, "details", {}) or {}), "transaction": tx.to_dict()})
         raise
     finally:
         await tx.cleanup_async()
@@ -393,10 +288,28 @@ def _wrap_tool_registration(
     original_tool = mcp.tool
 
     def _instrument_callable(func, tool_name: str, tool_family: str):
+        def call_event_recorder(args, kwargs):
+            try:
+                bound = inspect.signature(func).bind_partial(*args, **kwargs)
+                bound.apply_defaults()
+                arguments = dict(bound.arguments)
+                suppressed = bool(arguments.get("dry_run")) or (
+                    operation_scope(tool_name) == "project" and not is_project_mutation(tool_name, arguments)
+                )
+            except TypeError:
+                suppressed = True
+
+            def record_event(**event):
+                if not suppressed:
+                    _record_mcp_event(**event)
+
+            return record_event
+
         if inspect.iscoroutinefunction(func):
 
             @functools.wraps(func)
             async def async_wrapped(*args, **kwargs):
+                record_event = call_event_recorder(args, kwargs)
                 reset_tool_execution_context()
                 start = time.monotonic()
                 try:
@@ -407,8 +320,13 @@ def _wrap_tool_registration(
                         project_access_policy,
                     )
                     validation_errors = validate_mcp_tool_arguments(tool_name, arguments)
+                    from gms_mcp.server.dry_run_policy import destructive_policy_preflight
+
+                    policy_error = destructive_policy_preflight(tool_name, arguments)
                     if validation_errors:
                         result = invalid_arguments_result(tool_name, validation_errors)
+                    elif policy_error is not None:
+                        result = policy_error
                     elif _tool_should_use_transaction(tool_name, arguments):
                         result = await _run_transactional_async(
                             tool_name,
@@ -419,7 +337,7 @@ def _wrap_tool_registration(
                         result = await func(*call_args, **call_kwargs)
                     duration_ms = int((time.monotonic() - start) * 1000)
                     execution = get_tool_execution_context() or {}
-                    _record_mcp_event(
+                    record_event(
                         event_type="mcp.tool",
                         action=tool_name,
                         tool_name=tool_name,
@@ -438,7 +356,7 @@ def _wrap_tool_registration(
                     if isinstance(exc, ProjectAccessError):
                         result = _project_access_error_result(tool_name)
                         duration_ms = int((time.monotonic() - start) * 1000)
-                        _record_mcp_event(
+                        record_event(
                             event_type="mcp.tool",
                             action=tool_name,
                             tool_name=tool_name,
@@ -456,7 +374,7 @@ def _wrap_tool_registration(
                     if type(exc).__name__ == "TransactionValidationError":
                         result = _transaction_error_result(tool_name, exc)
                         duration_ms = int((time.monotonic() - start) * 1000)
-                        _record_mcp_event(
+                        record_event(
                             event_type="mcp.tool",
                             action=tool_name,
                             tool_name=tool_name,
@@ -472,7 +390,7 @@ def _wrap_tool_registration(
                             expose_host_diagnostics=expose_host_diagnostics,
                         )
                     duration_ms = int((time.monotonic() - start) * 1000)
-                    _record_mcp_event(
+                    record_event(
                         event_type="mcp.tool",
                         action=tool_name,
                         tool_name=tool_name,
@@ -501,6 +419,7 @@ def _wrap_tool_registration(
 
         @functools.wraps(func)
         def sync_wrapped(*args, **kwargs):
+            record_event = call_event_recorder(args, kwargs)
             reset_tool_execution_context()
             start = time.monotonic()
             try:
@@ -511,8 +430,13 @@ def _wrap_tool_registration(
                     project_access_policy,
                 )
                 validation_errors = validate_mcp_tool_arguments(tool_name, arguments)
+                from gms_mcp.server.dry_run_policy import destructive_policy_preflight
+
+                policy_error = destructive_policy_preflight(tool_name, arguments)
                 if validation_errors:
                     result = invalid_arguments_result(tool_name, validation_errors)
+                elif policy_error is not None:
+                    result = policy_error
                 elif _tool_should_use_transaction(tool_name, arguments):
                     result = _run_transactional_sync(
                         tool_name,
@@ -523,7 +447,7 @@ def _wrap_tool_registration(
                     result = func(*call_args, **call_kwargs)
                 duration_ms = int((time.monotonic() - start) * 1000)
                 execution = get_tool_execution_context() or {}
-                _record_mcp_event(
+                record_event(
                     event_type="mcp.tool",
                     action=tool_name,
                     tool_name=tool_name,
@@ -542,7 +466,7 @@ def _wrap_tool_registration(
                 if isinstance(exc, ProjectAccessError):
                     result = _project_access_error_result(tool_name)
                     duration_ms = int((time.monotonic() - start) * 1000)
-                    _record_mcp_event(
+                    record_event(
                         event_type="mcp.tool",
                         action=tool_name,
                         tool_name=tool_name,
@@ -560,7 +484,7 @@ def _wrap_tool_registration(
                 if type(exc).__name__ == "TransactionValidationError":
                     result = _transaction_error_result(tool_name, exc)
                     duration_ms = int((time.monotonic() - start) * 1000)
-                    _record_mcp_event(
+                    record_event(
                         event_type="mcp.tool",
                         action=tool_name,
                         tool_name=tool_name,
@@ -576,7 +500,7 @@ def _wrap_tool_registration(
                         expose_host_diagnostics=expose_host_diagnostics,
                     )
                 duration_ms = int((time.monotonic() - start) * 1000)
-                _record_mcp_event(
+                record_event(
                     event_type="mcp.tool",
                     action=tool_name,
                     tool_name=tool_name,
@@ -612,11 +536,11 @@ def _wrap_tool_registration(
             if "annotations" not in registration_kwargs:
                 from mcp.types import ToolAnnotations
 
-                is_read_only = tool_name in _READ_ONLY_TOOL_NAMES
+                is_read_only = operation_scope(tool_name) == "read"
                 registration_kwargs["annotations"] = ToolAnnotations(
                     read_only_hint=is_read_only,
                     destructive_hint=(
-                        not is_read_only and any(marker in tool_name for marker in _DESTRUCTIVE_TOOL_MARKERS)
+                        is_real_destructive_operation(tool_name, {"fix": True, "delete": True, "apply": True})
                     ),
                     idempotent_hint=is_read_only,
                 )
@@ -635,15 +559,6 @@ def build_server(*, http_auth_value: str | None = None, http_auth_issuer_url: st
     Kept in a function so importing this module doesn't require MCP installed.
     """
     from mcp.server.mcpserver import Context, MCPServer
-
-    # region agent log
-    _dbg(
-        "H2",
-        "src/gms_mcp/gamemaker_mcp_server.py:build_server:entry",
-        "build_server entry",
-        {"pid": os.getpid(), "exe": sys.executable, "cwd": os.getcwd(), "py_path_head": sys.path[:5]},
-    )
-    # endregion
 
     # MCPServer evaluates annotation strings at runtime. Keep Context available
     # in this module's globals for compatibility.
@@ -676,7 +591,7 @@ def build_server(*, http_auth_value: str | None = None, http_auth_issuer_url: st
         middleware=[
             MutationSerializationMiddleware(
                 runtime,
-                lambda name: name in _READ_ONLY_TOOL_NAMES,
+                lambda name: operation_scope(name) == "read",
                 _is_committed_mutation_result,
             )
         ],
@@ -695,14 +610,6 @@ def build_server(*, http_auth_value: str | None = None, http_auth_issuer_url: st
         resolution_runtime=runtime.resolution,
     )
 
-    # region agent log
-    _dbg(
-        "H2",
-        "src/gms_mcp/gamemaker_mcp_server.py:build_server:exit",
-        "build_server returning MCPServer instance",
-        {"pid": os.getpid()},
-    )
-    # endregion
     return mcp
 
 
@@ -776,21 +683,6 @@ def main(argv: list[str] | None = None) -> int:
     if server_args is None:
         return argument_exit_code
 
-    # region agent log
-    _dbg(
-        "H1",
-        "src/gms_mcp/gamemaker_mcp_server.py:main:entry",
-        "server main entry",
-        {
-            "pid": os.getpid(),
-            "exe": sys.executable,
-            "argv": argv if argv is not None else sys.argv,
-            "cwd": os.getcwd(),
-            "stdin_isatty": bool(getattr(sys.stdin, "isatty", lambda: False)()),
-            "stdout_isatty": bool(getattr(sys.stdout, "isatty", lambda: False)()),
-        },
-    )
-    # endregion
     try:
         if server_args.transport == "streamable-http":
             http_auth_value = _http_auth_value_from_environment()
@@ -836,14 +728,6 @@ def main(argv: list[str] | None = None) -> int:
             sys.stderr.write(f"Details: {exc}\n")
         return 1
 
-    # region agent log
-    _dbg(
-        "H1",
-        "src/gms_mcp/gamemaker_mcp_server.py:main:before_run",
-        "calling server.run()",
-        {"pid": os.getpid()},
-    )
-    # endregion
     try:
         if server_args.transport == "stdio":
             server.run()

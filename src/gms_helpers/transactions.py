@@ -16,7 +16,7 @@ import threading
 import time
 from dataclasses import asdict, dataclass, field
 from contextlib import contextmanager
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from typing import Any, Callable, Dict, Iterable, Iterator, List, TextIO, TypeVar
 
 from .exceptions import GMSError, ValidationError
@@ -264,7 +264,17 @@ def _append_journal_path(
             raise RuntimeError(f"Cannot safely snapshot transaction path before mutation: {relative}")
         context.seen_paths.add(relative)
         with context.journal_path.open("a", encoding="utf-8") as journal:
-            journal.write(json.dumps({"event": event, "path": relative}, sort_keys=True) + "\n")
+            backup = _safe_backup_path(context.backup_root, relative)
+            if backup is None:
+                raise ValidationError(f"Unsafe transaction backup: {relative}")
+            journal.write(
+                json.dumps(
+                    {"event": event, "path": relative, "original": list(_path_fingerprint(backup))}, sort_keys=True
+                )
+                + "\n"
+            )
+            journal.flush()
+            os.fsync(journal.fileno())
 
 
 def _append_journal_tree(
@@ -414,14 +424,10 @@ def transaction_subprocess_environment() -> Dict[str, str]:
     }
 
 
-def transaction_is_active() -> bool:
-    """Return whether this call is already inside a parent project transaction."""
-    if _ACTIVE_TRANSACTION.get() is not None:
-        return True
-    return all(
-        os.environ.get(name, "").strip()
-        for name in (_TRANSACTION_ROOT_ENV, _TRANSACTION_JOURNAL_ENV, _TRANSACTION_BACKUP_ENV)
-    )
+def transaction_is_active(project_root: str | Path | None = None) -> bool:
+    """Trust only a context established while owning the project/participant lock."""
+    context = _ACTIVE_TRANSACTION.get()
+    return context is not None and (project_root is None or context.project_root == Path(project_root).resolve())
 
 
 def journaled_gms_cli_command(cli_arguments: List[str]) -> List[str]:
@@ -448,25 +454,40 @@ def inherited_transaction_context() -> Iterator[None]:
     if not all(configured):
         raise RuntimeError("Inherited transaction environment is incomplete")
 
-    _ensure_transaction_audit_hook()
-    context = _TransactionJournalContext(
-        Path(root_raw).resolve(),
-        Path(journal_raw).resolve(),
-        Path(backup_raw).resolve(),
-    )
-    token = _ACTIVE_TRANSACTION.set(context)
-    try:
-        yield
-    finally:
-        _ACTIVE_TRANSACTION.reset(token)
+    root = Path(root_raw).resolve()
+    journal = Path(journal_raw)
+    backup = Path(backup_raw)
+    recovery_dir = journal.parent
+    if (
+        recovery_dir.parent != root / ".gms_mcp" / "transactions"
+        or not recovery_dir.name.startswith("tx-")
+        or journal.name != "writes.jsonl"
+        or backup != recovery_dir / "project"
+    ):
+        raise ValidationError("Inherited transaction journal is outside its approved recovery directory")
+    for path in (journal, backup, recovery_dir / "state.json"):
+        _assert_plain_infrastructure(root, path)
+    # This independent OS lock survives a parent crash because the child owns
+    # its descriptor. A new parent must wait until every child finishes writes.
+    with _transaction_participant_lock(root, recovery_dir):
+        state = json.loads((recovery_dir / "state.json").read_text(encoding="utf-8"))
+        if state.get("status") != "active" or state.get("project_root") != str(root):
+            raise ValidationError("Inherited transaction is no longer active")
+        _load_journal_records(journal)
+        _ensure_transaction_audit_hook()
+        context = _TransactionJournalContext(root, journal, backup)
+        token = _ACTIVE_TRANSACTION.set(context)
+        try:
+            yield
+        finally:
+            _ACTIVE_TRANSACTION.reset(token)
 
 
 def run_journaled_cli() -> None:
     """Run the GMS CLI while journaling project writes for its parent transaction."""
-    if not transaction_is_active():
-        raise RuntimeError("Journaled CLI requires an active transaction environment")
-
     with inherited_transaction_context():
+        if not transaction_is_active():
+            raise RuntimeError("Journaled CLI requires an active transaction environment")
         from . import gms as gms_module
 
         try:
@@ -476,15 +497,7 @@ def run_journaled_cli() -> None:
             raise SystemExit(exc.exit_code) from exc
 
 
-@dataclass
-class ProjectValidationResult:
-    success: bool
-    errors: List[str] = field(default_factory=list)
-    warnings: List[str] = field(default_factory=list)
-    yyp: str | None = None
-
-    def to_dict(self) -> Dict[str, Any]:
-        return asdict(self)
+from .project_validation import ProjectValidationResult, validate_project_after_mutation
 
 
 class TransactionValidationError(ValidationError):
@@ -492,7 +505,16 @@ class TransactionValidationError(ValidationError):
 
 
 def _is_ignored_path(path: Path) -> bool:
-    return any(part in _IGNORED_DIR_NAMES for part in path.parts) or path.name in _IGNORED_FILE_NAMES
+    # Verification bookkeeping is part of the mutation, unlike locks/caches.
+    if path.parent == Path(".gms_mcp") and any(
+        filename in path.name for filename in ("verification_state.json", "runtime.json")
+    ):
+        return False
+    # Only project-root infrastructure is excluded. An asset named "output"
+    # (scripts/output/output.yy) must not silently escape rollback coverage.
+    return bool(path.parts) and (
+        path.parts[0] in _IGNORED_DIR_NAMES or (len(path.parts) == 1 and path.name in _IGNORED_FILE_NAMES)
+    )
 
 
 def _iter_project_paths(project_root: Path) -> Iterable[Path]:
@@ -543,6 +565,43 @@ def _path_exists(path: Path) -> bool:
     return os.path.lexists(path)
 
 
+def _fsync_directory(path: Path) -> None:
+    """Make journal creation/renames durable as well as their file contents."""
+    if os.name == "nt":
+        return  # Windows does not expose POSIX directory fsync.
+    descriptor = os.open(path, os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def _assert_plain_infrastructure(project_root: Path, path: Path) -> None:
+    """Never follow links for locks, journals, state or backup directories."""
+    relative = path.relative_to(project_root)
+    candidate = project_root
+    for part in relative.parts:
+        candidate /= part
+        if candidate.is_symlink() or candidate.resolve(strict=False) != candidate:
+            raise ValidationError(f"Unsafe transaction infrastructure: {candidate}")
+        if candidate.exists() and candidate.is_file() and candidate.stat().st_nlink != 1:
+            raise ValidationError(f"Unsafe linked transaction infrastructure: {candidate}")
+
+
+@contextmanager
+def _transaction_participant_lock(project_root: Path, recovery_dir: Path) -> Iterator[None]:
+    lock_path = recovery_dir / "participants.lock"
+    _assert_plain_infrastructure(project_root, lock_path)
+    lock = _ProjectMutationLock(project_root, "transaction-participant")
+    lock._lock_file = lock_path.open("a+", encoding="utf-8")
+    try:
+        lock._acquire_os_lock(lock._lock_file)
+        lock._acquired = True
+        yield
+    finally:
+        lock.release()
+
+
 def _path_fingerprint(path: Path) -> tuple[Any, ...]:
     """Fingerprint one path without following symlinks."""
     try:
@@ -553,7 +612,7 @@ def _path_fingerprint(path: Path) -> tuple[Any, ...]:
         if path.is_symlink():
             return ("symlink", os.readlink(path), *metadata)
         if path.is_dir():
-            return ("directory", *metadata)
+            return ("directory", stat_result.st_mode)
         if path.is_file():
             return ("file", _hash_file(path), *metadata)
         return ("other", *metadata)
@@ -563,40 +622,46 @@ def _path_fingerprint(path: Path) -> tuple[Any, ...]:
         return ("unavailable", type(exc).__name__, str(exc))
 
 
-def _load_journal_paths(journal_path: Path | None) -> set[str]:
+def _load_journal_records(journal_path: Path | None) -> list[dict[str, Any]]:
     if journal_path is None or not journal_path.exists():
-        return set()
-    paths: set[str] = set()
-    for line in journal_path.read_text(encoding="utf-8", errors="replace").splitlines():
+        return []
+    if journal_path.is_symlink() or not journal_path.is_file() or journal_path.stat().st_nlink != 1:
+        raise ValidationError("Unsafe transaction journal")
+    records = []
+    for line in journal_path.read_text(encoding="utf-8").splitlines():
         try:
             record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if isinstance(record, dict) and isinstance(record.get("path"), str):
-            paths.add(record["path"])
-    return paths
+        except json.JSONDecodeError as exc:
+            raise ValidationError("Transaction journal is incomplete or corrupt") from exc
+        if not isinstance(record, dict) or not _valid_relative_path(record.get("path")):
+            raise ValidationError("Unsafe transaction journal path")
+        if not isinstance(record.get("event"), str):
+            raise ValidationError("Transaction journal event is missing")
+        fingerprint_key = "fingerprint" if record["event"] == "owned" else "original"
+        fingerprint = record.get(fingerprint_key)
+        if (
+            not isinstance(fingerprint, list)
+            or not fingerprint
+            or fingerprint[0] not in {"absent", "file", "directory", "symlink", "other"}
+        ):
+            raise ValidationError("Transaction journal fingerprint is missing or corrupt")
+        records.append(record)
+    return records
+
+
+def _load_journal_paths(journal_path: Path | None) -> set[str]:
+    return {record["path"] for record in _load_journal_records(journal_path)}
 
 
 def _load_journal_owned_states(journal_path: Path | None) -> Dict[str, tuple[Any, ...]]:
-    if journal_path is None or not journal_path.exists():
-        return {}
     owned: Dict[str, tuple[Any, ...]] = {}
-    for line in journal_path.read_text(encoding="utf-8", errors="replace").splitlines():
-        try:
-            record = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-        if (
-            isinstance(record, dict)
-            and record.get("event") == "owned"
-            and isinstance(record.get("path"), str)
-            and isinstance(record.get("fingerprint"), list)
-        ):
+    for record in _load_journal_records(journal_path):
+        if record["event"] == "owned":
             owned[record["path"]] = tuple(record["fingerprint"])
     return owned
 
 
-def mark_transaction_path_owned(path: str | Path) -> None:
+def mark_transaction_path_owned(path: str | Path, *, expected_fingerprint: tuple[Any, ...] | None = None) -> None:
     """Record the exact post-mutation state produced by transaction code."""
     context = _ACTIVE_TRANSACTION.get()
     if context is None:
@@ -607,7 +672,7 @@ def mark_transaction_path_owned(path: str | Path) -> None:
     target = _safe_relative_path(context.project_root, relative)
     if target is None:
         return
-    fingerprint = _path_fingerprint(target)
+    fingerprint = expected_fingerprint if expected_fingerprint is not None else _path_fingerprint(target)
     with _JOURNAL_WRITE_GUARD:
         with context.journal_path.open("a", encoding="utf-8") as journal:
             journal.write(
@@ -617,9 +682,11 @@ def mark_transaction_path_owned(path: str | Path) -> None:
                 )
                 + "\n"
             )
+            journal.flush()
+            os.fsync(journal.fileno())
 
 
-def mark_transaction_tree_owned(path: str | Path) -> None:
+def mark_transaction_tree_owned(path: str | Path, *, expected_states: Dict[str, tuple[Any, ...]] | None = None) -> None:
     """Record every already-journaled path at or below a mutated tree."""
     context = _ACTIVE_TRANSACTION.get()
     if context is None:
@@ -629,20 +696,67 @@ def mark_transaction_tree_owned(path: str | Path) -> None:
         return
     for relative in sorted(_load_journal_paths(context.journal_path)):
         if relative == relative_root or relative.startswith(f"{relative_root}/"):
-            mark_transaction_path_owned(context.project_root / relative)
+            suffix = relative[len(relative_root) :].lstrip("/") or "."
+            expected = expected_states.get(suffix, ("absent",)) if expected_states is not None else None
+            mark_transaction_path_owned(context.project_root / relative, expected_fingerprint=expected)
+
+
+def _tree_output_fingerprints(path: Path, *, follow_links: bool = False) -> Dict[str, tuple[Any, ...]]:
+    """Predict a tree operation's output before any destination can be edited."""
+    states = {}
+
+    def visit(source: Path, suffix: str, ancestors: set[tuple[int, int]]) -> None:
+        physical = source.resolve() if follow_links else source
+        fingerprint = _path_fingerprint(physical)
+        states[suffix] = fingerprint
+        if fingerprint[0] != "directory":
+            return
+        stat_result = physical.stat()
+        identity = (stat_result.st_dev, stat_result.st_ino)
+        if identity in ancestors:
+            raise ValidationError("Cannot transactionally copy a cyclic filesystem tree")
+        for child in source.iterdir():
+            child_suffix = child.name if suffix == "." else f"{suffix}/{child.name}"
+            visit(child, child_suffix, ancestors | {identity})
+
+    visit(path, ".", set())
+    return states
 
 
 def transactional_copy2(source: str | Path, destination: str | Path, **kwargs: Any) -> str:
     """Copy one file and record the destination's exact transaction-owned state."""
-    copied = shutil.copy2(source, destination, **kwargs)
-    mark_transaction_path_owned(destination)
-    return str(copied)
+    source_path = Path(source)
+    destination_path = Path(destination)
+    if destination_path.is_dir():
+        destination_path /= source_path.name
+    if kwargs.get("follow_symlinks", True):
+        source_path = source_path.resolve()
+    if source_path.resolve() == destination_path.resolve():
+        raise shutil.SameFileError(source, destination, "Source and destination are the same file")
+    expected = _path_fingerprint(source_path)
+    fd, temporary_name = tempfile.mkstemp(prefix=f".{destination_path.name}.copy-", dir=destination_path.parent)
+    os.close(fd)
+    temporary = Path(temporary_name)
+    try:
+        shutil.copy2(source, temporary, **kwargs)
+        mark_transaction_path_owned(temporary, expected_fingerprint=expected)
+        transactional_replace(temporary, destination_path, expected_fingerprint=expected)
+        return str(destination_path)
+    finally:
+        if temporary.exists() or temporary.is_symlink():
+            transactional_unlink(temporary)
 
 
 def transactional_copytree(source: str | Path, destination: str | Path, **kwargs: Any) -> str:
     """Copy a tree and record every resulting destination path as transaction-owned."""
-    copied = shutil.copytree(source, destination, **kwargs)
-    mark_transaction_tree_owned(destination)
+    expected = _tree_output_fingerprints(Path(source), follow_links=not kwargs.get("symlinks", False))
+    kwargs.setdefault("copy_function", transactional_copy2)
+    try:
+        copied = shutil.copytree(source, destination, **kwargs)
+    finally:
+        # A tree copy may fail after producing several complete files/directories.
+        # The known source outputs remain safe ownership proof for those paths.
+        mark_transaction_tree_owned(destination, expected_states=expected)
     return str(copied)
 
 
@@ -650,47 +764,82 @@ def transactional_unlink(path: str | Path, *, missing_ok: bool = False) -> None:
     """Unlink one path and record its resulting absence as transaction-owned."""
     target = Path(path)
     target.unlink(missing_ok=missing_ok)
-    mark_transaction_path_owned(target)
+    mark_transaction_path_owned(target, expected_fingerprint=("absent",))
 
 
 def transactional_rmdir(path: str | Path) -> None:
     """Remove an empty directory and record its resulting absence."""
     target = Path(path)
     target.rmdir()
-    mark_transaction_path_owned(target)
+    mark_transaction_path_owned(target, expected_fingerprint=("absent",))
 
 
 def transactional_rmtree(path: str | Path, **kwargs: Any) -> None:
     """Remove a tree and record every deleted path as transaction-owned."""
     target = Path(path)
-    shutil.rmtree(target, **kwargs)
-    mark_transaction_tree_owned(target)
+    if kwargs.get("ignore_errors") or kwargs.get("onerror") or kwargs.get("onexc"):
+        raise ValueError("Transactional deletion cannot suppress cleanup failures")
+    # Use individually journaled removals: a partial deletion must retain
+    # ownership evidence for each successful removal, even if the next fails.
+    for child in list(target.iterdir()):
+        if child.is_dir() and not child.is_symlink():
+            transactional_rmtree(child, **kwargs)
+        else:
+            transactional_unlink(child)
+    transactional_rmdir(target)
 
 
 def transactional_rename(source: str | Path, destination: str | Path) -> Path:
     """Rename a path and record both source and destination trees."""
     source_path = Path(source)
     destination_path = Path(destination)
+    expected = _tree_output_fingerprints(source_path)
     renamed = source_path.rename(destination_path)
-    mark_transaction_tree_owned(source_path)
-    mark_transaction_tree_owned(destination_path)
+    mark_transaction_tree_owned(source_path, expected_states={})
+    mark_transaction_tree_owned(destination_path, expected_states=expected)
     return renamed
 
 
-def transactional_replace(source: str | Path, destination: str | Path) -> Path:
+def transactional_replace(
+    source: str | Path, destination: str | Path, *, expected_fingerprint: tuple[Any, ...] | None = None
+) -> Path:
     """Atomically replace a path and record both resulting path states."""
     source_path = Path(source)
     destination_path = Path(destination)
+    expected = _path_fingerprint(source_path) if expected_fingerprint is None else expected_fingerprint
+    if _path_fingerprint(source_path) != expected:
+        raise ValidationError("Replacement source changed before its transaction-owned output could be written")
     replaced = source_path.replace(destination_path)
-    mark_transaction_path_owned(source_path)
-    mark_transaction_path_owned(destination_path)
+    mark_transaction_path_owned(source_path, expected_fingerprint=("absent",))
+    mark_transaction_path_owned(destination_path, expected_fingerprint=expected)
     return replaced
 
 
+def _valid_relative_path(relative_path: Any) -> bool:
+    if not isinstance(relative_path, str):
+        return False
+    relative = Path(relative_path)
+    return bool(relative_path) and (
+        relative_path == relative.as_posix()
+        and relative_path != "."
+        and not relative.is_absolute()
+        and not PureWindowsPath(relative_path).drive
+        and "\\" not in relative_path
+        and "\x00" not in relative_path
+        and ".." not in relative.parts
+        and not _is_ignored_path(relative)
+    )
+
+
 def _safe_backup_path(backup_root: Path, relative_path: str) -> Path | None:
-    if not relative_path or Path(relative_path).is_absolute() or ".." in Path(relative_path).parts:
+    if not _valid_relative_path(relative_path):
         return None
-    return backup_root / relative_path
+    candidate = backup_root / relative_path
+    # Parents must remain at their original lexical locations. Following an
+    # attacker-replaced internal symlink is as unsafe as leaving the root.
+    if backup_root.is_symlink() or candidate.parent.resolve() != candidate.parent:
+        return None
+    return candidate
 
 
 def _capture_original_path(context: _TransactionJournalContext, relative: str) -> bool:
@@ -700,6 +849,7 @@ def _capture_original_path(context: _TransactionJournalContext, relative: str) -
     if source is None or backup is None:
         return False
     try:
+        initial_source = _path_fingerprint(source)
         if not _path_exists(source):
             return True
         backup.parent.mkdir(parents=True, exist_ok=True)
@@ -710,8 +860,16 @@ def _capture_original_path(context: _TransactionJournalContext, relative: str) -
             shutil.copystat(source, backup, follow_symlinks=False)
         elif source.is_file():
             shutil.copy2(source, backup, follow_symlinks=False)
+            with backup.open("rb") as stream:
+                os.fsync(stream.fileno())
         else:
             return False
+        if _path_fingerprint(source) != initial_source:
+            return False  # The snapshot raced an external editor's save.
+        for directory in (backup.parent, *backup.parent.parents):
+            _fsync_directory(directory)
+            if directory == context.backup_root:
+                break
         return True
     except OSError:
         return False
@@ -729,9 +887,12 @@ def _restore_file_atomically(backup_path: Path, target_path: Path, expected: tup
             temporary_path.symlink_to(os.readlink(backup_path))
         else:
             shutil.copy2(backup_path, temporary_path, follow_symlinks=False)
+            with temporary_path.open("rb") as stream:
+                os.fsync(stream.fileno())
         if _path_fingerprint(target_path) != expected:
             return False
         os.replace(temporary_path, target_path)
+        _fsync_directory(target_path.parent)
         return True
     finally:
         if _path_exists(temporary_path):
@@ -745,7 +906,11 @@ def _rollback_entry_matches(backup_path: Path, target_path: Path) -> bool:
     if backup_path.is_symlink():
         return target_path.is_symlink() and os.readlink(target_path) == os.readlink(backup_path)
     if backup_path.is_dir():
-        return target_path.is_dir() and not target_path.is_symlink()
+        return (
+            target_path.is_dir()
+            and not target_path.is_symlink()
+            and target_path.stat().st_mode == backup_path.stat().st_mode
+        )
     if backup_path.is_file():
         return (
             target_path.is_file()
@@ -782,128 +947,16 @@ def _changed_project_paths(before: Dict[str, str], after: Dict[str, str]) -> set
 def _safe_relative_path(project_root: Path, relative_path: str) -> Path | None:
     try:
         relative = Path(relative_path)
-        if not relative_path or relative.is_absolute() or ".." in relative.parts:
+        if not _valid_relative_path(relative_path):
             return None
         raw_candidate = project_root / relative
         candidate = raw_candidate.parent.resolve(strict=False) / raw_candidate.name
         candidate.relative_to(project_root.resolve())
+        if candidate != raw_candidate:
+            return None
         return candidate
     except (OSError, ValueError):
         return None
-
-
-def validate_project_after_mutation(project_root: str | Path) -> ProjectValidationResult:
-    """Validate JSON structure, resource paths, and parent-folder links after a mutation."""
-    root = Path(project_root).resolve()
-    result = ProjectValidationResult(success=True)
-
-    yyp_files = sorted(root.glob("*.yyp"))
-    if not yyp_files:
-        result.errors.append(f"No .yyp file found in {root}")
-        result.success = False
-        return result
-    if len(yyp_files) > 1:
-        result.warnings.append(f"Multiple .yyp files found; validating {yyp_files[0].name}")
-
-    yyp_path = yyp_files[0]
-    result.yyp = yyp_path.name
-    yyp_data = load_json_loose(yyp_path)
-    if not isinstance(yyp_data, dict):
-        result.errors.append(f"Invalid project JSON: {yyp_path.name}")
-        result.success = False
-        return result
-
-    for json_path in sorted([*root.rglob("*.yyp"), *root.rglob("*.yy")]):
-        rel = json_path.relative_to(root)
-        packed_platform_option = (
-            bool(rel.parts)
-            and rel.parts[0].casefold() == "options"
-            and json_path.name.endswith((".desktop.yy", ".android.yy"))
-        )
-        if _is_ignored_path(rel) or json_path.name.endswith(".inherited.yy") or packed_platform_option:
-            continue
-        if load_json_loose(json_path) is None:
-            result.errors.append(f"Invalid JSON: {rel.as_posix()}")
-
-    folders = yyp_data.get("Folders", []) or []
-    defined_folders = {folder.get("folderPath") for folder in folders if isinstance(folder, dict)}
-    resources = yyp_data.get("resources", []) or []
-
-    for resource in resources:
-        if not isinstance(resource, dict):
-            result.errors.append("Malformed .yyp resource entry")
-            continue
-        resource_id = resource.get("id", {})
-        if not isinstance(resource_id, dict):
-            result.errors.append("Malformed .yyp resource id")
-            continue
-
-        name = resource_id.get("name")
-        path_value = resource_id.get("path")
-        if not isinstance(name, str) or not isinstance(path_value, str):
-            result.errors.append(f"Malformed .yyp resource entry: {resource_id!r}")
-            continue
-
-        asset_path = _safe_relative_path(root, path_value)
-        if asset_path is None:
-            result.errors.append(f"Resource '{name}' has unsafe path '{path_value}'")
-            continue
-        if not asset_path.exists():
-            result.errors.append(f"Resource '{name}' points to missing file '{path_value}'")
-            continue
-
-        asset_data = load_json_loose(asset_path)
-        if not isinstance(asset_data, dict):
-            continue
-        if asset_data.get("resourceType") == "GMObject" or "$GMObject" in asset_data:
-            from .event_model import EVENT_TYPE_IDS, event_filename_from_entry, parse_event_filename
-
-            expected_event_files: set[str] = set()
-            for event in asset_data.get("eventList", []) or []:
-                if not isinstance(event, dict):
-                    result.errors.append(f"Object '{name}' has a malformed event entry")
-                    continue
-                try:
-                    filename = event_filename_from_entry(event)
-                except (TypeError, ValueError, ValidationError) as exc:
-                    result.errors.append(f"Object '{name}' has invalid event metadata: {exc}")
-                    continue
-                expected_event_files.add(filename)
-                event_file_exists = (asset_path.parent / filename).is_file()
-                metadata_only = (
-                    event.get("eventType") != EVENT_TYPE_IDS["collision"]
-                    and event.get("%Name") in (None, "")
-                    and event.get("name") in (None, "")
-                )
-                if not event_file_exists and not metadata_only:
-                    result.errors.append(f"Object '{name}' event file is missing: {filename}")
-                elif not event_file_exists:
-                    result.warnings.append(f"Object '{name}' has metadata-only empty event: {filename}")
-                if event.get("eventType") == EVENT_TYPE_IDS["collision"]:
-                    identity = filename.removesuffix(".gml")
-                    if event.get("%Name") != identity or event.get("name") != identity:
-                        result.errors.append(
-                            f"Object '{name}' collision event identity does not match filename '{filename}'"
-                        )
-            for gml_path in asset_path.parent.glob("*.gml"):
-                try:
-                    parse_event_filename(gml_path.name)
-                except ValidationError:
-                    continue
-                if gml_path.name not in expected_event_files:
-                    result.errors.append(f"Object '{name}' has orphaned event file: {gml_path.name}")
-        parent = asset_data.get("parent", {})
-        parent_path = parent.get("path") if isinstance(parent, dict) else None
-        if not parent_path:
-            result.warnings.append(f"Resource '{name}' has no parent path")
-            continue
-        if isinstance(parent_path, str) and parent_path.lower().endswith(".yyp"):
-            continue
-        if parent_path not in defined_folders:
-            result.errors.append(f"Resource '{name}' references missing parent folder '{parent_path}'")
-
-    result.success = not result.errors
-    return result
 
 
 def _env_truthy(name: str) -> bool:
@@ -1280,6 +1333,82 @@ class GameMakerProjectTransaction:
         self._rollback_attempted = False
         self.rolled_back = False
         self.committed = False
+        self.bookkeeping: Dict[str, Any] = {}
+
+    def _persist_status(self, status: str) -> None:
+        if self._tmp_dir is None:
+            return
+        payload = {
+            "version": 2,
+            "status": status,
+            "project_root": str(self.project_root),
+            "tool": self.tool_name,
+            "before_state": self._before_state,
+        }
+        temporary = self._tmp_dir / "state.tmp"
+        with temporary.open("w", encoding="utf-8") as stream:
+            json.dump(payload, stream, sort_keys=True)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(temporary, self._tmp_dir / "state.json")
+        _fsync_directory(self._tmp_dir)
+
+    def _recover_interrupted_locked(self) -> None:
+        directory = self.project_root / ".gms_mcp" / "transactions"
+        _assert_plain_infrastructure(self.project_root, directory)
+        if not directory.exists():
+            return
+        for recovery_dir in sorted(directory.iterdir()):
+            if not recovery_dir.is_dir() or recovery_dir.is_symlink():
+                raise ValidationError(f"Unsafe transaction recovery entry: {recovery_dir}")
+            with _transaction_participant_lock(self.project_root, recovery_dir):
+                self._recover_one_locked(recovery_dir)
+            # Close the lock handle before deletion (required on Windows).
+            # Completed status prevents a queued child from activating writes.
+            shutil.rmtree(recovery_dir)
+
+    def _recover_one_locked(self, recovery_dir: Path) -> None:
+        state_file = recovery_dir / "state.json"
+        for path in (state_file, recovery_dir / "writes.jsonl", recovery_dir / "project"):
+            _assert_plain_infrastructure(self.project_root, path)
+        if not state_file.exists():
+            # A crash during initialization precedes activation and cannot
+            # have modified project data. Do not trust an unexplained journal.
+            journal = recovery_dir / "writes.jsonl"
+            if journal.exists() and journal.stat().st_size:
+                raise ValidationError(f"Transaction recovery metadata missing: {recovery_dir}")
+            return
+        try:
+            state = json.loads(state_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError) as exc:
+            raise ValidationError(f"Transaction recovery metadata is corrupt: {recovery_dir}") from exc
+        if not isinstance(state, dict) or state.get("project_root") != str(self.project_root):
+            raise ValidationError(f"Transaction recovery root mismatch: {recovery_dir}")
+        if state.get("version") != 2 or state.get("status") not in {"active", "committed", "rolled_back"}:
+            raise ValidationError(f"Transaction recovery metadata is unsupported: {recovery_dir}")
+        if state.get("status") in {"committed", "rolled_back"}:
+            return
+        recovery = GameMakerProjectTransaction(self.project_root, str(state.get("tool", "recovery")))
+        recovery._tmp_dir = recovery_dir
+        recovery._backup_root = recovery_dir / "project"
+        recovery._journal_path = recovery_dir / "writes.jsonl"
+        recovery._before_state = state.get("before_state", {})
+        if (
+            not recovery._backup_root.is_dir()
+            or not recovery._journal_path.is_file()
+            or not isinstance(recovery._before_state, dict)
+            or any(
+                not _valid_relative_path(path) or not isinstance(value, str)
+                for path, value in recovery._before_state.items()
+            )
+        ):
+            raise ValidationError(f"Transaction recovery snapshot is invalid: {recovery_dir}")
+        recovery.capture_mutation_state()
+        if not recovery.rollback():
+            raise TransactionValidationError(
+                "Interrupted mutation requires recovery; external or unproven changes were preserved.",
+                details={"transaction": recovery.to_dict()},
+            )
 
     def _begin_locked(self) -> None:
         from .path_safety import assert_project_tree_contained
@@ -1289,17 +1418,30 @@ class GameMakerProjectTransaction:
         if self._project_lock is not None:
             raise ValidationError("Transaction has already started")
         assert_project_tree_contained(self.project_root)
+        for path in (
+            self.project_root / ".gms_mcp" / "locks" / "project-mutation.lock",
+            self.project_root / ".gms_mcp" / "transactions",
+        ):
+            _assert_plain_infrastructure(self.project_root, path)
 
         project_lock = _ProjectMutationLock(self.project_root, self.tool_name)
         self._project_lock = project_lock
         try:
             project_lock.acquire()
+            # An editor may have replaced a boundary while this process waited.
+            assert_project_tree_contained(self.project_root)
+            _assert_plain_infrastructure(self.project_root, self.project_root / ".gms_mcp" / "transactions")
+            self._recover_interrupted_locked()
             self._before_state = _snapshot_state(self.project_root)
-            self._tmp_dir = Path(tempfile.mkdtemp(prefix="gms-mcp-tx-"))
+            recovery_root = self.project_root / ".gms_mcp" / "transactions"
+            recovery_root.mkdir(parents=True, exist_ok=True)
+            self._tmp_dir = Path(tempfile.mkdtemp(prefix="tx-", dir=recovery_root))
             self._backup_root = self._tmp_dir / "project"
             self._backup_root.mkdir()
             self._journal_path = self._tmp_dir / "writes.jsonl"
             self._journal_path.write_text("", encoding="utf-8")
+            self._persist_status("active")
+            _fsync_directory(recovery_root)
         except Exception:
             self._cleanup_locked()
             raise
@@ -1339,12 +1481,35 @@ class GameMakerProjectTransaction:
     def _add_rollback_conflict(self, relative: str, reason: str) -> None:
         self.rollback_conflicts.append({"path": relative, "reason": reason})
 
+    def _sync_mutated_paths(self) -> None:
+        """Persist project data before making a terminal journal status durable."""
+        directories = set()
+        for relative in _load_journal_paths(self._journal_path):
+            target = _safe_relative_path(self.project_root, relative)
+            if target is None:
+                raise ValidationError(f"Unsafe transaction path before commit: {relative}")
+            if target.is_file() and not target.is_symlink():
+                with target.open("rb") as stream:
+                    os.fsync(stream.fileno())
+            for parent in target.parents:
+                if parent.is_dir():
+                    directories.add(parent)
+                if parent == self.project_root:
+                    break
+        for directory in sorted(directories, key=lambda path: len(path.parts), reverse=True):
+            _fsync_directory(directory)
+
     def capture_mutation_state(self) -> None:
         """Checkpoint transaction-owned path state before validation or rollback."""
         if self._mutation_state_captured:
             return
         journal_paths = _load_journal_paths(self._journal_path)
         recorded_owned = _load_journal_owned_states(self._journal_path)
+        original_states = {
+            record["path"]: tuple(record["original"])
+            for record in _load_journal_records(self._journal_path)
+            if record["event"] != "owned"
+        }
         owned_state: Dict[str, tuple[Any, ...]] = {}
         unproven: set[str] = set()
         for relative in journal_paths:
@@ -1353,12 +1518,20 @@ class GameMakerProjectTransaction:
                 current = _path_fingerprint(target)
                 recorded = recorded_owned.get(relative)
                 backup = _safe_backup_path(self._backup_root, relative) if self._backup_root is not None else None
+                if backup is None or _path_fingerprint(backup) != original_states.get(relative):
+                    owned_state[relative] = current
+                    unproven.add(relative)
+                    continue
+                if backup is not None and _rollback_entry_matches(backup, target):
+                    # A crash during recovery may have already restored this path.
+                    owned_state[relative] = current
+                    continue
                 if recorded is not None:
                     owned_state[relative] = recorded
                 else:
                     owned_state[relative] = current
                     original_exists = backup is not None and _path_exists(backup)
-                    safely_structural = current[0] == "directory" or (not original_exists and current[0] == "absent")
+                    safely_structural = not original_exists and current[0] in {"directory", "absent"}
                     if not safely_structural:
                         unproven.add(relative)
         self._owned_mutation_state = owned_state
@@ -1507,14 +1680,26 @@ class GameMakerProjectTransaction:
                 self._add_rollback_conflict(relative, "post-rollback verification did not match original content")
 
         self.rollback_complete = not self.rollback_conflicts
-        self.rolled_back = self.rollback_complete
         self._after_state = _snapshot_state(self.project_root)
+        if self.rollback_complete:
+            try:
+                self._sync_mutated_paths()
+                self._persist_status("rolled_back")
+            except (OSError, ValidationError) as exc:
+                self._add_rollback_conflict("<recovery-state>", f"rollback durability checkpoint failed: {exc}")
+                self.rollback_complete = False
+        self.rolled_back = self.rollback_complete
         return self.rollback_complete
 
     async def rollback_async(self) -> bool:
         return await _run_thread_shielded(self.rollback)
 
-    def commit(self, *, verify_compile: bool = False) -> Dict[str, Any]:
+    def commit(
+        self,
+        *,
+        verify_compile: bool = False,
+        before_commit: Callable[[Dict[str, Any]], Dict[str, Any] | None] | None = None,
+    ) -> Dict[str, Any]:
         if not self._mutation_state_captured:
             self.capture_mutation_state()
         self.validation = validate_project_after_mutation(self.project_root)
@@ -1530,7 +1715,13 @@ class GameMakerProjectTransaction:
             )
 
         if verify_compile:
-            self.compile_verification = compile_verify_project(self.project_root)
+            try:
+                self.compile_verification = compile_verify_project(self.project_root)
+            finally:
+                # Compile helpers can themselves write project files. Include
+                # their exact owned states even when verification fails.
+                self._mutation_state_captured = False
+                self.capture_mutation_state()
             if not self.compile_verification.get("ok"):
                 rollback_complete = self.rollback()
                 raise TransactionValidationError(
@@ -1547,18 +1738,37 @@ class GameMakerProjectTransaction:
                 )
 
         self._after_state = _snapshot_state(self.project_root)
+        try:
+            if before_commit is not None:
+                try:
+                    self.bookkeeping = before_commit(self.to_dict()) or {}
+                finally:
+                    # A partially written marker belongs to the same atomic
+                    # mutation as the asset writes preceding it.
+                    self._mutation_state_captured = False
+                    self.capture_mutation_state()
+                    self._after_state = _snapshot_state(self.project_root)
+            self._sync_mutated_paths()
+            self._persist_status("committed")
+        except BaseException:
+            self.rollback()
+            raise
         self.committed = True
         return self.to_dict()
 
-    async def commit_async(self, *, verify_compile: bool = False) -> Dict[str, Any]:
-        return await _run_thread_shielded(lambda: self.commit(verify_compile=verify_compile))
+    async def commit_async(
+        self,
+        *,
+        verify_compile: bool = False,
+        before_commit: Callable[[Dict[str, Any]], Dict[str, Any] | None] | None = None,
+    ) -> Dict[str, Any]:
+        return await _run_thread_shielded(
+            lambda: self.commit(verify_compile=verify_compile, before_commit=before_commit)
+        )
 
     def _cleanup_locked(self) -> None:
-        if self._tmp_dir and self._tmp_dir.exists():
+        if self._tmp_dir and self._tmp_dir.exists() and (self.committed or self.rolled_back):
             shutil.rmtree(self._tmp_dir, ignore_errors=True)
-        self._tmp_dir = None
-        self._backup_root = None
-        self._journal_path = None
         project_lock = self._project_lock
         self._project_lock = None
         if project_lock is not None:
@@ -1575,10 +1785,12 @@ class GameMakerProjectTransaction:
     def to_dict(self) -> Dict[str, Any]:
         after_state = self._after_state or _snapshot_state(self.project_root)
         return {
+            **self.bookkeeping,
             "enabled": True,
             "tool": self.tool_name,
             "project_root": str(self.project_root),
             "committed": self.committed,
+            "recovery_path": str(self._tmp_dir) if self._tmp_dir and not (self.committed or self.rolled_back) else None,
             "rolled_back": self.rolled_back,
             "rollback_complete": self.rollback_complete,
             "rollback_conflicts": self.rollback_conflicts,

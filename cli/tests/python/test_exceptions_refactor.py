@@ -67,7 +67,7 @@ class TestCaptureOutputWithGMSError(unittest.TestCase):
         ok, out, err, result, error_text, exit_code = _capture_output(_fn)
 
         self.assertFalse(ok)
-        self.assertIsNone(exit_code)  # exit_code is only set for GMSError or SystemExit
+        self.assertEqual(exit_code, 1)  # Every failed worker call has a failing exit status.
         self.assertIn("ValueError", error_text)
 
 

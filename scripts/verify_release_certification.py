@@ -21,6 +21,10 @@ REQUIRED_CHECKS = {
     "collision_target_rename_compiled",
     "room_order_duplicate_delete_schema",
     "room_order_changes_compiled",
+    "resolve_cancel_left_existing_asset",
+    "resolve_alternative_name_compiled",
+    "resolve_texture_reassignment_compiled",
+    "resolve_dependency_delete_cancelled",
 }
 EXPECTED_RUNTIME_PREFIXES = {
     "gm-2024": "2024.",
@@ -63,7 +67,9 @@ def _is_sha256(value: str) -> bool:
     return len(value) == 64 and all(character in string.hexdigits for character in value)
 
 
-def verify_reports(root: Path, expected_certifications: list[str]) -> list[str]:
+def verify_reports(
+    root: Path, expected_certifications: list[str], *, expected_revision: str | None = None
+) -> list[str]:
     errors: list[str] = []
     reports: dict[str, dict[str, Any]] = {}
     source_yyp_hashes: dict[str, dict[str, str]] = {}
@@ -107,6 +113,11 @@ def verify_reports(root: Path, expected_certifications: list[str]) -> list[str]:
         fixture = raw_fixture if isinstance(raw_fixture, dict) else {}
         name = str(fixture.get("name") or "")
         host_platform = str(fixture.get("host_platform") or "")
+        if expected_revision is not None:
+            if fixture.get("source_revision") != expected_revision:
+                errors.append(f"Real GameMaker certification {certification_id} belongs to a different source revision")
+            if fixture.get("source_dirty") is not False:
+                errors.append(f"Real GameMaker certification {certification_id} was not built from a clean checkout")
         if payload.get("ok") is not True or payload.get("status") != "passed":
             errors.append(
                 f"Real GameMaker certification {certification_id} did not pass: {payload.get('status', 'unknown')}"
@@ -183,12 +194,18 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("root", type=Path, help="Directory containing downloaded real-smoke artifacts")
     parser.add_argument("--expected", nargs="+", required=True, help="Required platform-fixture certification IDs")
+    parser.add_argument("--expected-revision", required=True, help="Exact Git commit certified by this release")
     return parser.parse_args()
 
 
 def main() -> int:
     args = parse_args()
-    errors = verify_reports(args.root, args.expected)
+    if len(args.expected_revision) != 40 or any(
+        character not in string.hexdigits for character in args.expected_revision
+    ):
+        print("[ERROR] Expected revision must be a full Git commit SHA.")
+        return 1
+    errors = verify_reports(args.root, args.expected, expected_revision=args.expected_revision)
     if errors:
         for error in errors:
             print(f"[ERROR] {error}")

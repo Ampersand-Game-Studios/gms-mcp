@@ -55,6 +55,7 @@ class TestRoomLayerHelper(unittest.TestCase):
             "$GMRoom": "v1",
             "%Name": "r_test",
             "name": "r_test",
+            "parent": {"name": "Rooms", "path": "folders/Rooms.yy"},
             "layers": [
                 {
                     "__type": "GMRInstanceLayer",
@@ -74,6 +75,10 @@ class TestRoomLayerHelper(unittest.TestCase):
         room_path = Path("rooms/r_test/r_test.yy")
         room_path.parent.mkdir(parents=True, exist_ok=True)
         save_pretty_json(room_path, self.basic_room_data)
+        yyp_path = self.project_dir / "test.yyp"
+        yyp_data = load_json_loose(yyp_path)
+        yyp_data["resources"] = [{"id": {"name": "r_test", "path": "rooms/r_test/r_test.yy"}}]
+        save_pretty_json(yyp_path, yyp_data)
 
     def tearDown(self):
         """Clean up test environment."""

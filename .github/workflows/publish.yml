@@ -59,6 +59,7 @@ jobs:
           linux-gm-2024 linux-gm-2026-lts
           windows-gm-2024 windows-gm-2026-lts
           macos-gm-2024 macos-gm-2026-lts
+          --expected-revision "${{ github.event.workflow_run.head_sha }}"
       - name: Compute version
         id: ver
         env:
@@ -92,7 +93,7 @@ jobs:
       - name: Build
         env:
           SETUPTOOLS_SCM_PRETEND_VERSION: ${{ needs.compute.outputs.version }}
-        run: uv run --frozen python -m build
+        run: uv run --frozen python3 scripts/build_release.py --output-dir dist
       - name: Verify package privacy boundary
         run: uv run --frozen python scripts/verify_package_artifacts.py dist
       - name: Upload build artifacts

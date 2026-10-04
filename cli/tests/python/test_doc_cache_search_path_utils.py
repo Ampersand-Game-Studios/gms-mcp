@@ -96,9 +96,9 @@ class TestDocCache(unittest.TestCase):
 
             expired = _sample_doc(cached_at=time.time() - 120, ttl=1)
             function_path = cache._get_function_path(expired.name)
-            function_path.write_text(json.dumps(expired.to_dict()), encoding="utf-8")
+            cache.save_function(expired)
             self.assertIsNone(cache.get_function(expired.name))
-            self.assertFalse(function_path.exists())
+            self.assertTrue(function_path.exists())
 
             cache._get_index_path().write_text("{not-json}", encoding="utf-8")
             self.assertIsNone(cache.get_index())

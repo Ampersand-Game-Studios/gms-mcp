@@ -1,11 +1,12 @@
 """Sprite import utilities for strip/sheet conversion."""
 
 from pathlib import Path
+from io import BytesIO
 from typing import Literal, Tuple, List, Optional, TYPE_CHECKING
 
-from .transactions import mark_transaction_path_owned
-from .utils import generate_uuid, ensure_directory, load_json_loose, save_pretty_json
+from .utils import atomic_write_bytes, generate_uuid, ensure_directory, load_json_loose, save_pretty_json
 from .exceptions import ValidationError
+from .path_safety import assert_project_tree_contained, project_relative_path, validate_resource_name
 
 # Pillow is optional - import lazily
 if TYPE_CHECKING:
@@ -157,7 +158,8 @@ def import_strip_to_sprite(
     from .asset_types import SpriteAsset
     from .utils import update_yyp_file, validate_parent_path_for_project
 
-    project_root = Path(project_root)
+    project_root = assert_project_tree_contained(Path(project_root))
+    sprite_name = validate_resource_name(sprite_name, "sprite")
     source_path = Path(source_path)
 
     if not source_path.exists():
@@ -185,27 +187,29 @@ def import_strip_to_sprite(
     if yy_data is None:
         raise ValidationError(f"Failed to load created sprite: {yy_path}")
 
-    layer_uuid = yy_data["layers"][0]["name"]
+    layer_uuid = validate_resource_name(yy_data["layers"][0]["name"], "sprite layer identifier")
 
     # Replace dummy PNGs with actual frame images
     for i, frame_image in enumerate(frame_images):
-        frame_uuid = yy_data["frames"][i]["name"]
+        frame_uuid = validate_resource_name(yy_data["frames"][i]["name"], "sprite frame identifier")
 
         # Save main PNG
         main_png = sprite_folder / f"{frame_uuid}.png"
-        frame_image.save(main_png, "PNG")
-        mark_transaction_path_owned(main_png)
+        with BytesIO() as output:
+            frame_image.save(output, "PNG")
+            frame_bytes = output.getvalue()
+        atomic_write_bytes(main_png, frame_bytes)
 
         # Save layer PNG
         layer_dir = sprite_folder / "layers" / frame_uuid
         ensure_directory(layer_dir)
         layer_png = layer_dir / f"{layer_uuid}.png"
-        frame_image.save(layer_png, "PNG")
-        mark_transaction_path_owned(layer_png)
+        atomic_write_bytes(layer_png, frame_bytes)
 
     # Update .yyp file
     resource_entry = {"id": {"name": sprite_name, "path": relative_path}}
-    update_yyp_file(resource_entry, project_root=project_root)
+    if not update_yyp_file(resource_entry, project_root=project_root):
+        raise ValidationError("Failed to register the imported sprite in the project")
 
     return {
         "success": True,
@@ -245,8 +249,9 @@ def import_frames_to_existing_sprite(
     """
     from .sprite_frames import add_frame, remove_frame, get_frame_count
 
-    Image = _get_pillow()
-    project_root = Path(project_root)
+    _get_pillow()
+    project_root = assert_project_tree_contained(Path(project_root))
+    project_relative_path(sprite_path, project_root=project_root, kind="sprite path")
     source_path = Path(source_path)
 
     if not source_path.exists():
@@ -256,12 +261,11 @@ def import_frames_to_existing_sprite(
     frame_images = split_strip(source_path, frame_width, frame_height, layout, columns)
     imported_count = len(frame_images)
 
+    existing_count = get_frame_count(project_root, sprite_path)
     if replace:
-        # Remove existing frames first
-        existing_count = get_frame_count(project_root, sprite_path)
-        for _ in range(existing_count - 1, -1, -1):  # Remove from end to start
-            remove_frame(project_root, sprite_path, 0)
-        start_position = 0
+        # Append valid new frames first, then remove old ones. A sprite must
+        # always retain at least one frame, even during replacement.
+        start_position = -1
 
     # Create a temp directory for the frame images
     import tempfile
@@ -276,5 +280,9 @@ def import_frames_to_existing_sprite(
 
             pos = start_position + i if start_position >= 0 else -1
             add_frame(project_root, sprite_path, position=pos, source_png=temp_png)
+
+    if replace:
+        for _ in range(existing_count):
+            remove_frame(project_root, sprite_path, 0)
 
     return {"success": True, "imported_frames": imported_count, "sprite_path": sprite_path}

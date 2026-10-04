@@ -142,11 +142,6 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     ) -> Dict[str, Any]:
         """Create a new texture group by cloning an existing template group."""
         _ = ctx
-        if not dry_run and _requires_dry_run_for_tool("gm_texture_group_create"):
-            return _dry_run_policy_blocked_result(
-                "gm_texture_group_create",
-                "Use dry_run=true, add gm_texture_group_create to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
-            )
         project_directory = _resolve_project_directory(project_root)
         from gms_helpers.texture_group.mutations import texture_group_create
         from gms_helpers.texture_group.project import load_project_yyp

@@ -477,9 +477,14 @@ class TestEventHelperCoverage(unittest.TestCase):
         self.old_cwd = os.getcwd()
         os.chdir(self.project_root)
         (self.project_root / "objects" / "o_test").mkdir(parents=True)
-        (self.project_root / "TestGame.yyp").write_text("{}", encoding="utf-8")
+        (self.project_root / "TestGame.yyp").write_text(
+            json.dumps({"resources": [{"id": {"name": "o_test", "path": "objects/o_test/o_test.yy"}}]}),
+            encoding="utf-8",
+        )
         self.yy_path = self.project_root / "objects" / "o_test" / "o_test.yy"
-        self.yy_path.write_text(json.dumps({"name": "o_test", "eventList": []}), encoding="utf-8")
+        self.yy_path.write_text(
+            json.dumps({"name": "o_test", "resourceType": "GMObject", "eventList": []}), encoding="utf-8"
+        )
 
     def tearDown(self):
         os.chdir(self.old_cwd)
@@ -521,14 +526,14 @@ class TestEventHelperCoverage(unittest.TestCase):
         self.assertFalse(remove_event("o_test", "step"))
 
         # Duplicate from a source file that exists only on disk creates the new event entry.
-        create_path = self.project_root / "objects" / "o_test" / "Create_0.gml"
-        create_path.write_text("// create\n", encoding="utf-8")
-        self.assertTrue(duplicate_event("o_test", "create", "create:1"))
-        duplicated = self.project_root / "objects" / "o_test" / "Create_1.gml"
+        create_path = self.project_root / "objects" / "o_test" / "Step_0.gml"
+        create_path.write_text("// step\n", encoding="utf-8")
+        self.assertTrue(duplicate_event("o_test", "step:0", "step:1"))
+        duplicated = self.project_root / "objects" / "o_test" / "Step_1.gml"
         self.assertTrue(duplicated.exists())
 
         # Existing target is treated as success.
-        self.assertTrue(duplicate_event("o_test", "create", "create:1"))
+        self.assertTrue(duplicate_event("o_test", "step:0", "step:1"))
 
         # Missing source raises validation error.
         with self.assertRaises(ValidationError):

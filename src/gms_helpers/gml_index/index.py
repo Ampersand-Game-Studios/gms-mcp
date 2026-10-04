@@ -60,16 +60,17 @@ class GMLIndex:
         except OSError:
             pass
 
-    def build(self, force: bool = False) -> dict:
+    def build(self, force: bool = False, *, persist: bool = True) -> dict:
         """Build or rebuild the symbol index.
 
         Args:
             force: If True, rebuild from scratch. If False, use cache if valid.
+            persist: If False, index in memory without saving or removing any cache.
 
         Returns:
             Dict with build statistics
         """
-        read_only = os.environ.get("GMS_MCP_READ_ONLY", "").strip() == "1"
+        read_only = not persist or os.environ.get("GMS_MCP_READ_ONLY", "").strip() == "1"
         if not read_only:
             self._remove_legacy_project_cache()
         cache_path = self.cache_path
@@ -217,7 +218,7 @@ class GMLIndex:
             List of Symbol objects (empty if not found)
         """
         if not self._is_built:
-            self.build()
+            self.build(persist=False)
 
         return self.definitions.get(symbol_name, [])
 
@@ -231,7 +232,7 @@ class GMLIndex:
             List of SymbolReference objects
         """
         if not self._is_built:
-            self.build()
+            self.build(persist=False)
 
         return self.references.get(symbol_name, [])
 
@@ -252,7 +253,7 @@ class GMLIndex:
             List of matching Symbol objects
         """
         if not self._is_built:
-            self.build()
+            self.build(persist=False)
 
         results = []
 
@@ -285,7 +286,7 @@ class GMLIndex:
             List of Symbol objects defined in that file
         """
         if not self._is_built:
-            self.build()
+            self.build(persist=False)
 
         results = []
 

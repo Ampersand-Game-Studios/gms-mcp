@@ -14,6 +14,7 @@ from typing import Dict, List, Any, Optional
 from .utils import load_json_loose, save_json_loose, find_yyp, validate_working_directory
 from .exceptions import GMSError, ProjectNotFoundError, AssetNotFoundError, ValidationError
 from .path_safety import project_child_path, validate_resource_name
+from .room_instance_helper import _find_room_file, _iter_layers
 
 # Layer type constants
 LAYER_TYPES = {
@@ -30,26 +31,10 @@ LAYER_TYPES = {
 # ------------------------------------------------------------------
 
 
-def _find_room_file(room_name: str, project_root: str | Path | None = None) -> Path:
-    """Find the .yy file for a room."""
-    room_name = validate_resource_name(room_name, "room")
-    root = Path(project_root).resolve() if project_root is not None else Path.cwd().resolve()
-    room_path = project_child_path(
-        "rooms",
-        room_name,
-        f"{room_name}.yy",
-        project_root=root,
-        kind=f"room '{room_name}'",
-    )
-    if not room_path.exists():
-        raise AssetNotFoundError(f"Room file not found: {room_path}")
-    return room_path
-
-
 def _load_room_data(room_path: Path) -> Dict[str, Any]:
     """Load room JSON data."""
     data = load_json_loose(room_path)
-    if data is None:
+    if not isinstance(data, dict) or data.get("resourceType") != "GMRoom":
         raise GMSError(f"Failed to load room data from {room_path}")
     return data
 
@@ -177,7 +162,7 @@ def add_layer(
     room_data = _load_room_data(room_path)
 
     # Check if layer already exists
-    for layer in room_data.get("layers", []):
+    for layer in _iter_layers(room_data.get("layers", [])):
         if layer.get("name") == layer_name:
             raise ValidationError(f"Layer '{layer_name}' already exists in room '{room_name}'")
 
@@ -201,13 +186,28 @@ def remove_layer(room_name: str, layer_name: str) -> bool:
     room_path = _find_room_file(room_name)
     room_data = _load_room_data(room_path)
 
-    layers = room_data.get("layers", [])
-    new_layers = [l for l in layers if l.get("name") != layer_name]
+    removed = None
 
-    if len(new_layers) == len(layers):
+    def remove_nested(layers):
+        nonlocal removed
+        for index, layer in enumerate(layers):
+            if layer.get("name") == layer_name:
+                removed = layers.pop(index)
+                return True
+            if remove_nested(layer.get("layers", [])):
+                return True
+        return False
+
+    if not remove_nested(room_data.get("layers", [])):
         raise AssetNotFoundError(f"Layer '{layer_name}' not found in room '{room_name}'")
-
-    room_data["layers"] = new_layers
+    removed_instances = {
+        instance["name"] for layer in _iter_layers([removed]) for instance in layer.get("instances", [])
+    }
+    room_data["instanceCreationOrder"] = [
+        entry
+        for entry in room_data.get("instanceCreationOrder", [])
+        if (entry if isinstance(entry, str) else entry.get("name")) not in removed_instances
+    ]
     _save_room_data(room_path, room_data)
     print(f"[OK] Removed layer '{layer_name}' from room '{room_name}'")
     return True
@@ -223,7 +223,7 @@ def list_layers(room_name: str) -> List[Dict[str, Any]]:
     print(f"{'Name':<20} {'Type':<15} {'Depth':<10} {'Visible'}")
     print("-" * 55)
 
-    for layer in room_data.get("layers", []):
+    for layer in _iter_layers(room_data.get("layers", [])):
         name = layer.get("name")
         res_type = layer.get("resourceType", "Unknown")
         # Map back to simple type
@@ -248,7 +248,7 @@ def reorder_layer(room_name: str, layer_name: str, new_depth: int) -> bool:
     room_data = _load_room_data(room_path)
 
     found = False
-    for layer in room_data.get("layers", []):
+    for layer in _iter_layers(room_data.get("layers", [])):
         if layer.get("name") == layer_name:
             old_depth = layer.get("depth", 0)
             layer["depth"] = int(new_depth)

@@ -190,7 +190,6 @@ class TestEntrypoints(unittest.TestCase):
         with (
             patch.dict(sys.modules, {"mcp.server.mcpserver": fake_mcpserver_mod}),
             patch("gms_mcp.gamemaker_mcp_server.register_all") as register_all,
-            patch("gms_mcp.gamemaker_mcp_server._dbg"),
         ):
             server = gamemaker_mcp_server.build_server()
         self.assertEqual(server.name, "GameMaker MCP")
@@ -208,7 +207,6 @@ class TestEntrypoints(unittest.TestCase):
                 "gms_mcp.gamemaker_mcp_server.build_server",
                 return_value=SimpleNamespace(run=run_server),
             ),
-            patch("gms_mcp.gamemaker_mcp_server._dbg"),
         ):
             result = gamemaker_mcp_server.main()
         self.assertEqual(result, 0)
@@ -223,7 +221,6 @@ class TestEntrypoints(unittest.TestCase):
                 return_value=SimpleNamespace(run=run_server),
             ),
             patch.dict(os.environ, {"GMS_MCP_EXPOSE_HOST_DIAGNOSTICS": ""}, clear=False),
-            patch("gms_mcp.gamemaker_mcp_server._dbg"),
             redirect_stderr(stderr),
         ):
             result = gamemaker_mcp_server.main()

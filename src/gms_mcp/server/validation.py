@@ -751,7 +751,9 @@ def _validate_asset_identifiers(value: Any, errors: ValidationErrorList) -> None
             errors.append({"field": f"asset_identifiers[{index}]", "message": "must be a safe resource name or path"})
 
 
-def _validate_operation_model(model: OperationModel, arguments: Mapping[str, Any]) -> ValidationErrorList:
+def _validate_operation_model(
+    model: OperationModel, arguments: Mapping[str, Any], tool_name: str
+) -> ValidationErrorList:
     errors: ValidationErrorList = []
     project_root = arguments.get("project_root")
 
@@ -796,6 +798,26 @@ def _validate_operation_model(model: OperationModel, arguments: Mapping[str, Any
         if field_name in arguments:
             _validate_parent_path(arguments[field_name], field_name, errors, project_root=project_root)
 
+    if project_root not in (None, ""):
+        from gms_helpers.project_validation import ASSET_RESOURCE_TYPES, resolve_asset_reference
+
+        type_names = {asset_type: ASSET_RESOURCE_TYPES[prefix] for prefix, asset_type in _ASSET_PATH_TYPES.items()}
+        references = dict(model.asset_names)
+        for field_name, type_field in model.dynamic_asset_names.items():
+            references[field_name] = str(arguments.get(type_field) or "")
+        for field_name, asset_type in references.items():
+            # Destination names are checked for syntax/collisions by the creation
+            # contract, not resolved as pre-existing references.
+            if field_name == "new_name" or (
+                field_name == "name" and (tool_name.startswith("gm_create_") or tool_name == "gm_sprite_import_strip")
+            ):
+                continue
+            if arguments.get(field_name) and asset_type in type_names:
+                try:
+                    resolve_asset_reference(project_root, arguments[field_name], type_names[asset_type])
+                except Exception as exc:
+                    errors.append({"field": field_name, "message": str(exc)})
+
     for field_name in sorted(model.folder_paths):
         if field_name in arguments:
             _validate_folder_path(arguments[field_name], field_name, errors)
@@ -803,6 +825,22 @@ def _validate_operation_model(model: OperationModel, arguments: Mapping[str, Any
     for field_name, asset_type in model.asset_paths.items():
         if field_name in arguments:
             _validate_asset_path(arguments[field_name], field_name, errors, asset_type=asset_type)
+            if project_root not in (None, "") and not any(error["field"] == field_name for error in errors):
+                from gms_helpers.project_validation import ASSET_RESOURCE_TYPES, resolve_asset_reference
+
+                candidate = str(arguments[field_name]).replace("\\", "/")
+                try:
+                    expected_type = ASSET_RESOURCE_TYPES.get(candidate.split("/")[0])
+                    if expected_type is not None:
+                        resolved = resolve_asset_reference(project_root, Path(candidate).stem, expected_type)
+                        if resolved["path"] != candidate:
+                            raise ValidationError("must use the registered resource path")
+                    elif candidate.startswith("folders/"):
+                        from gms_helpers.utils import validate_parent_path_for_project
+
+                        validate_parent_path_for_project(project_root, candidate)
+                except Exception as exc:
+                    errors.append({"field": field_name, "message": str(exc)})
 
     for field_name in sorted(model.png_paths):
         if field_name in arguments:
@@ -878,7 +916,7 @@ def validate_mcp_tool_arguments(tool_name: str, arguments: Mapping[str, Any]) ->
     """Return MCP boundary validation errors for a tool call."""
     model = _OPERATION_MODELS.get(tool_name)
     if model is not None:
-        errors = _validate_operation_model(model, arguments)
+        errors = _validate_operation_model(model, arguments, tool_name)
     else:
         errors = _validate_legacy_generic(tool_name, arguments)
 

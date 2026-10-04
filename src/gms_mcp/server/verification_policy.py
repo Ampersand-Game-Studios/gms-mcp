@@ -202,7 +202,43 @@ def flush_pending_compile_verification(
     runtime: str | None = None,
     timeout_seconds: int | None = None,
 ) -> Dict[str, Any]:
+    """Verify and clear one batch while holding the project mutation lock."""
+    from gms_helpers.transactions import GameMakerProjectTransaction, transaction_is_active
+
     root = Path(project_root).resolve()
+    if transaction_is_active(root) or (not force and get_pending_compile_verification(root) is None):
+        return _flush_pending_compile_verification_locked(
+            root, force=force, platform=platform, runtime=runtime, timeout_seconds=timeout_seconds
+        )
+    tx = GameMakerProjectTransaction(root, "gm_verification_flush")
+    tx.begin()
+    try:
+        result = _flush_pending_compile_verification_locked(
+            root, force=force, platform=platform, runtime=runtime, timeout_seconds=timeout_seconds
+        )
+        tx.capture_mutation_state()
+        if result["ok"]:
+            result["transaction"] = tx.commit()
+        else:
+            tx.rollback()
+            result["transaction"] = tx.to_dict()
+        return result
+    except BaseException:
+        tx.capture_mutation_state()
+        tx.rollback()
+        raise
+    finally:
+        tx.cleanup()
+
+
+def _flush_pending_compile_verification_locked(
+    root: Path,
+    *,
+    force: bool,
+    platform: str | None,
+    runtime: str | None,
+    timeout_seconds: int | None,
+) -> Dict[str, Any]:
     pending = get_pending_compile_verification(root)
     if pending is None and not force:
         return {

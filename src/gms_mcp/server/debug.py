@@ -53,6 +53,8 @@ def _get_debug_log_path() -> Optional[Path]:
 
 def _dbg(hypothesis_id: str, location: str, message: str, data: dict) -> None:
     """Append one bounded, redacted NDJSON line to the private rotating debug log."""
+    if os.environ.get("GMS_MCP_READ_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
+        return
     try:
         log_path = _get_debug_log_path()
         if not log_path:

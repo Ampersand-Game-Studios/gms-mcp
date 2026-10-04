@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import shutil
 import subprocess
@@ -29,7 +30,16 @@ class TestGameMakerProjectTransactions(unittest.TestCase):
     def _project(self, parent: Path) -> Path:
         root = parent / "project"
         root.mkdir()
-        (root / "TestProject.yyp").write_text("{}", encoding="utf-8")
+        (root / "TestProject.yyp").write_text(
+            json.dumps(
+                {
+                    "name": "TestProject",
+                    "resources": [],
+                    "Folders": [{"name": name, "folderPath": f"folders/{name}.yy"} for name in ("Sprites", "Sounds")],
+                }
+            ),
+            encoding="utf-8",
+        )
         (root / "tracked.txt").write_text("before", encoding="utf-8")
         return root
 
@@ -124,13 +134,13 @@ class TestGameMakerProjectTransactions(unittest.TestCase):
             inherited_path.parent.mkdir(parents=True)
             inherited_path.write_text('1.0.0←id|{"option": true}', encoding="utf-8")
             (root / "TestProject.yyp").write_text(
-                '{"Folders":[{"folderPath":"folders/Objects.yy"}],'
+                '{"Folders":[{"name":"Objects","folderPath":"folders/Objects.yy"}],'
                 '"resources":[{"id":{"name":"o_empty","path":"objects/o_empty/o_empty.yy"}}]}',
                 encoding="utf-8",
             )
             object_path.write_text(
-                '{"$GMObject":"","resourceType":"GMObject",'
-                '"parent":{"path":"folders/Objects.yy"},'
+                '{"$GMObject":"","name":"o_empty","resourceType":"GMObject",'
+                '"parent":{"name":"Objects","path":"folders/Objects.yy"},'
                 '"eventList":[{"$GMEvent":"v1","%Name":"","name":"",'
                 '"eventNum":0,"eventType":3,"collisionObjectId":null}]}',
                 encoding="utf-8",
@@ -168,13 +178,13 @@ class TestGameMakerProjectTransactions(unittest.TestCase):
             object_path = root / "objects" / "o_broken" / "o_broken.yy"
             object_path.parent.mkdir(parents=True)
             (root / "TestProject.yyp").write_text(
-                '{"Folders":[{"folderPath":"folders/Objects.yy"}],'
+                '{"Folders":[{"name":"Objects","folderPath":"folders/Objects.yy"}],'
                 '"resources":[{"id":{"name":"o_broken","path":"objects/o_broken/o_broken.yy"}}]}',
                 encoding="utf-8",
             )
             object_path.write_text(
-                '{"$GMObject":"","resourceType":"GMObject",'
-                '"parent":{"path":"folders/Objects.yy"},'
+                '{"$GMObject":"","name":"o_broken","resourceType":"GMObject",'
+                '"parent":{"name":"Objects","path":"folders/Objects.yy"},'
                 '"eventList":[{"$GMEvent":"v1","%Name":"Step_0","name":"Step_0",'
                 '"eventNum":0,"eventType":3,"collisionObjectId":null}]}',
                 encoding="utf-8",
@@ -183,9 +193,9 @@ class TestGameMakerProjectTransactions(unittest.TestCase):
             validation = validate_project_after_mutation(root)
 
             self.assertFalse(validation.success)
-            self.assertIn("Object 'o_broken' event file is missing: Step_0.gml", validation.errors)
+            self.assertTrue(any("event file is missing: Step_0.gml" in error for error in validation.errors))
 
-    def test_transaction_active_guard_recognizes_inherited_journal_environment(self):
+    def test_transaction_active_guard_does_not_trust_unvalidated_inherited_environment(self):
         with patch.dict(
             os.environ,
             {
@@ -195,7 +205,7 @@ class TestGameMakerProjectTransactions(unittest.TestCase):
             },
             clear=False,
         ):
-            self.assertTrue(transaction_is_active())
+            self.assertFalse(transaction_is_active())
 
     def test_threaded_transactions_serialize_until_cleanup(self):
         with tempfile.TemporaryDirectory() as temp_dir:

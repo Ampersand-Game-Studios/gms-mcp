@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Optional
 
 from .exceptions import ValidationError
+from .path_safety import assert_project_tree_contained, project_relative_path, validate_resource_name
 from .transactions import transactional_copy2, transactional_rmtree, transactional_unlink
 from .utils import create_dummy_png, ensure_directory, generate_uuid, load_json_loose, save_pretty_json
 
@@ -25,8 +26,8 @@ def add_frame(
 
     Returns: Operation result dict with success, sprite_name, frame_uuid, position, new_frame_count
     """
-    project_root = Path(project_root)
-    sprite_yy = project_root / sprite_path
+    project_root = assert_project_tree_contained(Path(project_root))
+    sprite_yy = project_relative_path(sprite_path, project_root=project_root, kind="sprite path")
 
     if not sprite_yy.exists():
         raise FileNotFoundError(f"Sprite file not found: {sprite_yy}")
@@ -37,7 +38,7 @@ def add_frame(
 
     sprite_folder = sprite_yy.parent
     sprite_name = yy_data["name"]
-    layer_uuid = yy_data["layers"][0]["name"]
+    layer_uuid = validate_resource_name(yy_data["layers"][0]["name"], "sprite layer identifier")
     current_frame_count = len(yy_data["frames"])
 
     # Determine insert position
@@ -142,8 +143,8 @@ def remove_frame(
 
     Returns: Operation result dict with success, sprite_name, removed_frame_uuid, removed_position, new_frame_count
     """
-    project_root = Path(project_root)
-    sprite_yy = project_root / sprite_path
+    project_root = assert_project_tree_contained(Path(project_root))
+    sprite_yy = project_relative_path(sprite_path, project_root=project_root, kind="sprite path")
 
     if not sprite_yy.exists():
         raise FileNotFoundError(f"Sprite file not found: {sprite_yy}")
@@ -166,7 +167,7 @@ def remove_frame(
         )
 
     # Get frame UUID before removal
-    removed_frame_uuid = yy_data["frames"][position]["name"]
+    removed_frame_uuid = validate_resource_name(yy_data["frames"][position]["name"], "sprite frame identifier")
 
     # Remove frame entry
     yy_data["frames"].pop(position)
@@ -223,8 +224,8 @@ def duplicate_frame(
 
     Returns: Operation result dict
     """
-    project_root = Path(project_root)
-    sprite_yy = project_root / sprite_path
+    project_root = assert_project_tree_contained(Path(project_root))
+    sprite_yy = project_relative_path(sprite_path, project_root=project_root, kind="sprite path")
 
     if not sprite_yy.exists():
         raise FileNotFoundError(f"Sprite file not found: {sprite_yy}")
@@ -243,7 +244,7 @@ def duplicate_frame(
         target_position = source_position + 1
 
     # Get source frame's PNG
-    source_uuid = yy_data["frames"][source_position]["name"]
+    source_uuid = validate_resource_name(yy_data["frames"][source_position]["name"], "sprite frame identifier")
     source_png = sprite_folder / f"{source_uuid}.png"
 
     # Use add_frame with the source PNG
@@ -252,8 +253,8 @@ def duplicate_frame(
 
 def get_frame_count(project_root: Path, sprite_path: str) -> int:
     """Get the number of frames in a sprite."""
-    project_root = Path(project_root)
-    sprite_yy = project_root / sprite_path
+    project_root = Path(project_root).resolve()
+    sprite_yy = project_relative_path(sprite_path, project_root=project_root, kind="sprite path")
 
     if not sprite_yy.exists():
         raise FileNotFoundError(f"Sprite file not found: {sprite_yy}")

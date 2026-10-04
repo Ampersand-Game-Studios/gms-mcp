@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import List, Dict, Any, Optional
 
 from ...transactions import transactional_rename
+from ...exceptions import ValidationError
+from ...path_safety import assert_project_tree_contained, project_relative_path, validate_resource_name
 from ...utils import atomic_write_text
 
 
@@ -24,10 +26,21 @@ def move_to_trash(project_root: str, files_to_move: List[str], trash_name: Optio
     Returns:
         Dictionary with statistics and manifest of moved files
     """
-    project_root_path = Path(project_root)
+    project_root_path = assert_project_tree_contained(Path(project_root))
     timestamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    trash_folder_name = f"trash_{timestamp}" if not trash_name else trash_name
+    trash_folder_name = validate_resource_name(trash_name or f"trash_{timestamp}", "trash folder")
     trash_root = project_root_path / ".maintenance_trash" / trash_folder_name
+
+    # Validate the entire batch before even creating the trash directory.
+    moves = []
+    for rel_path in files_to_move:
+        src = project_relative_path(rel_path, project_root=project_root_path, kind="trash source")
+        if src == project_root_path or src.is_relative_to(project_root_path / ".maintenance_trash"):
+            raise ValidationError("Cannot trash the project root or its recovery directory")
+        dst = project_relative_path(rel_path, project_root=trash_root, kind="trash destination")
+        if dst.exists():
+            raise ValidationError("Trash destination already exists; use a new trash folder")
+        moves.append((rel_path, src, dst))
 
     os.makedirs(trash_root, exist_ok=True)
 
@@ -35,12 +48,10 @@ def move_to_trash(project_root: str, files_to_move: List[str], trash_name: Optio
     errors = []
     manifest = []
 
-    for rel_path in files_to_move:
-        src = project_root_path / rel_path
+    for rel_path, src, dst in moves:
         if not src.exists():
             continue
 
-        dst = trash_root / rel_path
         os.makedirs(dst.parent, exist_ok=True)
 
         try:

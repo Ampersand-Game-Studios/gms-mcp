@@ -84,6 +84,7 @@ class TestCaptureOutputSystemExit(unittest.TestCase):
         def _fn():
             print("x" * 64, end="")
             sys.stderr.buffer.write(b"y" * 64)
+            return True
 
         with patch("gms_mcp.server.direct_worker.DIRECT_CAPTURE_MAX_BYTES", 32):
             ok, out, err, _result, error_text, _exit_code = _capture_output(_fn)
@@ -155,7 +156,7 @@ class TestDirectResultNormalization(unittest.TestCase):
     def test_timed_out_macos_runner_invokes_parent_owned_cleanup(self):
         project_root = self._project_root()
         process = MagicMock(pid=77, returncode=-15)
-        process.wait.side_effect = subprocess.TimeoutExpired(["worker"], 1)
+        process.communicate.side_effect = subprocess.TimeoutExpired(["worker"], 1)
         with (
             patch("gms_mcp.server.direct.subprocess.Popen", return_value=process),
             patch("gms_mcp.server.subprocess_runner._terminate_process_tree", return_value=True),
@@ -317,7 +318,7 @@ class TestRunWithFallbackDefaults(unittest.TestCase):
                         server._run_with_fallback(
                             direct_handler=lambda _args: True,
                             direct_args=argparse.Namespace(),
-                            cli_args=["unknown", "tool"],
+                            cli_args=["event", "list", "o_player"],
                             project_root=".",
                             prefer_cli=False,
                             output_mode="full",
@@ -347,7 +348,7 @@ class TestRunWithFallbackDefaults(unittest.TestCase):
                             server._run_with_fallback(
                                 direct_handler=lambda _args: True,
                                 direct_args=argparse.Namespace(),
-                                cli_args=["unknown", "tool"],
+                                cli_args=["event", "list", "o_player"],
                                 project_root=".",
                                 prefer_cli=False,
                                 output_mode="full",

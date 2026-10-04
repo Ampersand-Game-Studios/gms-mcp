@@ -483,11 +483,16 @@ class TestRoomHelperCoverage(unittest.TestCase):
         self.original_cwd = Path.cwd()
         os.chdir(self.temp_dir)
         (self.temp_dir / "rooms").mkdir()
-        (self.temp_dir / "game.yyp").touch()
+        (self.temp_dir / "game.yyp").write_text(json.dumps({"resources": []}), encoding="utf-8")
 
     def tearDown(self):
         os.chdir(self.original_cwd)
         shutil.rmtree(self.temp_dir, ignore_errors=True)
+
+    def _register_room_reference(self, name):
+        project = load_json_loose(self.temp_dir / "game.yyp")
+        project["resources"].append({"id": {"name": name, "path": f"rooms/{name}/{name}.yy"}})
+        (self.temp_dir / "game.yyp").write_text(json.dumps(project), encoding="utf-8")
 
     def test_room_helper_branches(self):
         with patch("gms_helpers.room_helper.validate_name", side_effect=ValueError("bad name")):
@@ -501,7 +506,8 @@ class TestRoomHelperCoverage(unittest.TestCase):
 
         room_dir = self.temp_dir / "rooms" / "r_old"
         room_dir.mkdir()
-        (room_dir / "r_old.yy").touch()
+        (room_dir / "r_old.yy").write_text(json.dumps({"name": "r_old", "resourceType": "GMRoom"}), encoding="utf-8")
+        self._register_room_reference("r_old")
         with patch(
             "gms_helpers.room_helper.duplicate_asset",
             return_value=SimpleNamespace(success=False, message="duplicate failed"),
@@ -531,7 +537,10 @@ class TestRoomHelperCoverage(unittest.TestCase):
         with patch("gms_helpers.room_helper.delete_asset", return_value=OperationResult.fail("nope")):
             room_dir = self.temp_dir / "rooms" / "r_delete"
             room_dir.mkdir()
-            (room_dir / "r_delete.yy").touch()
+            (room_dir / "r_delete.yy").write_text(
+                json.dumps({"name": "r_delete", "resourceType": "GMRoom"}), encoding="utf-8"
+            )
+            self._register_room_reference("r_delete")
             result, output = _capture_output(room_helper.delete_room, "r_delete")
         self.assertFalse(result)
         self.assertIn("Failed to delete room", output)
@@ -565,34 +574,51 @@ class TestRoomHelperCoverage(unittest.TestCase):
         self.assertIn("No rooms directory found", output)
 
         (self.temp_dir / "rooms").mkdir()
+        (self.temp_dir / "game.yyp").write_text(json.dumps({"resources": []}), encoding="utf-8")
         result, output = _capture_output(room_helper.list_rooms)
         self.assertEqual(result, [])
         self.assertIn("No rooms found in project", output)
 
         broken = self.temp_dir / "rooms" / "r_broken"
         broken.mkdir()
+        self._register_room_reference("r_broken")
         result, output = _capture_output(room_helper.list_rooms)
-        self.assertEqual(result[0]["error"], "Missing .yy file")
-        self.assertIn("NO .YY", output)
+        self.assertIn("missing", result[0]["error"])
+        self.assertIn("ERROR", output)
 
         yy_room = self.temp_dir / "rooms" / "r_bad"
         yy_room.mkdir()
         (yy_room / "r_bad.yy").write_text("{bad json", encoding="utf-8")
+        self._register_room_reference("r_bad")
         result, output = _capture_output(room_helper.list_rooms)
-        self.assertTrue(any(item["name"] == "r_bad" and item["error"] == "Invalid JSON" for item in result))
+        self.assertTrue(any(item["name"] == "r_bad" and "error" in item for item in result))
         self.assertIn("ERROR", output)
 
         good = self.temp_dir / "rooms" / "r_good"
         good.mkdir()
         (good / "r_good.yy").write_text(
-            json.dumps({"roomSettings": {"Width": 10, "Height": 20}, "layers": [{"name": "Instances"}]}),
+            json.dumps(
+                {
+                    "name": "r_good",
+                    "resourceType": "GMRoom",
+                    "roomSettings": {"Width": 10, "Height": 20},
+                    "layers": [{"name": "Instances", "resourceType": "GMRInstanceLayer"}],
+                }
+            ),
             encoding="utf-8",
         )
+        self._register_room_reference("r_good")
         result, output = _capture_output(room_helper.list_rooms, True)
         self.assertTrue(any(item["name"] == "r_good" for item in result))
         self.assertIn("Layers: Instances", output)
 
-        with patch("gms_helpers.room_helper.load_json_loose", side_effect=RuntimeError("boom")):
+        with patch(
+            "gms_helpers.room_helper.load_json_loose",
+            side_effect=[
+                {"resources": [{"id": {"name": "r_good", "path": "rooms/r_good/r_good.yy"}}]},
+                RuntimeError("boom"),
+            ],
+        ):
             result, output = _capture_output(room_helper.list_rooms, True)
         self.assertTrue(any(item["error"] == "boom" for item in result))
         self.assertIn("Error: boom", output)
@@ -687,7 +713,17 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
         self.temp_dir = Path(tempfile.mkdtemp())
         self.original_cwd = Path.cwd()
         os.chdir(self.temp_dir)
-        (self.temp_dir / "game.yyp").touch()
+        (self.temp_dir / "game.yyp").write_text(
+            json.dumps(
+                {
+                    "resources": [
+                        {"id": {"name": "r_test", "path": "rooms/r_test/r_test.yy"}},
+                        {"id": {"name": "o_test", "path": "objects/o_test/o_test.yy"}},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
         room_dir = self.temp_dir / "rooms" / "r_test"
         room_dir.mkdir(parents=True)
         self.room_path = room_dir / "r_test.yy"
@@ -695,6 +731,7 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
             json.dumps(
                 {
                     "name": "r_test",
+                    "resourceType": "GMRoom",
                     "layers": [{"name": "Instances", "resourceType": "GMRInstanceLayer", "instances": []}],
                     "instanceCreationOrder": ["inst_existing"],
                 }
@@ -726,10 +763,21 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
         shutil.rmtree(self.temp_dir, ignore_errors=True)
 
     def test_room_instance_helper_branches(self):
+        project = load_json_loose(self.temp_dir / "game.yyp")
+        for name in ("o_player", "o_new"):
+            folder = self.temp_dir / "objects" / name
+            folder.mkdir(parents=True)
+            (folder / f"{name}.yy").write_text(json.dumps({"name": name, "resourceType": "GMObject"}), encoding="utf-8")
+            project["resources"].append({"id": {"name": name, "path": f"objects/{name}/{name}.yy"}})
+        (self.temp_dir / "game.yyp").write_text(json.dumps(project), encoding="utf-8")
         with self.assertRaises(GMSError):
             room_instance_helper._load_room_data(self.temp_dir / "missing.yy")
 
-        data = {"layers": [{"name": "Background", "resourceType": "GMRBackgroundLayer"}]}
+        data = {
+            "name": "r_test",
+            "resourceType": "GMRoom",
+            "layers": [{"name": "Background", "resourceType": "GMRBackgroundLayer"}],
+        }
         self.room_path.write_text(json.dumps(data), encoding="utf-8")
         with self.assertRaises(ValidationError):
             room_instance_helper.add_instance("r_test", "o_player", 1, 2, "Background")
@@ -737,8 +785,10 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
         self.room_path.write_text(
             json.dumps(
                 {
+                    "name": "r_test",
+                    "resourceType": "GMRoom",
                     "layers": [{"name": "Instances", "resourceType": "GMRInstanceLayer"}],
-                    "instanceCreationOrder": ["inst_existing"],
+                    "instanceCreationOrder": [],
                 }
             ),
             encoding="utf-8",
@@ -748,7 +798,7 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
         self.assertEqual(instance_id, "inst_abc123")
         saved = load_json_loose(self.room_path)
         self.assertIn("instances", saved["layers"][0])
-        self.assertIn("inst_abc123", saved["instanceCreationOrder"])
+        self.assertIn("inst_abc123", [entry["name"] for entry in saved["instanceCreationOrder"]])
 
         code_file = self.temp_dir / "rooms" / "r_test" / "inst_abc123.gml"
         code_file.write_text("// init", encoding="utf-8")
@@ -768,6 +818,8 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
         self.room_path.write_text(
             json.dumps(
                 {
+                    "name": "r_test",
+                    "resourceType": "GMRoom",
                     "layers": [
                         {
                             "name": "Instances",
@@ -784,7 +836,7 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
                                 }
                             ],
                         }
-                    ]
+                    ],
                 }
             ),
             encoding="utf-8",

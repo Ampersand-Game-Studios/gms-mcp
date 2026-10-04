@@ -47,7 +47,7 @@ def _run_transactional_workflow(
 ) -> _WorkflowResult:
     """Run one standalone CLI mutation transaction, reusing any active parent."""
 
-    if transaction_is_active():
+    if transaction_is_active(project_root):
         return operation()
 
     transaction = GameMakerProjectTransaction(project_root, tool_name)
