@@ -115,11 +115,9 @@ _ResultT = TypeVar("_ResultT", bound=OperationResult)
 
 def result_dict_is_ok(result: Dict[str, Any]) -> bool:
     """Interpret legacy dict status fields consistently."""
-    if result.get("ok") is False or result.get("success") is False:
-        return False
-    if "error" in result and "ok" not in result and "success" not in result:
-        return False
-    return True
+    from .operation_policy import operation_succeeded
+
+    return operation_succeeded(result)
 
 
 def _coerce_warnings(value: Any) -> List[str]:

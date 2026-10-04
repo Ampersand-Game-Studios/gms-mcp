@@ -36,7 +36,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         """
         _ = ctx
         project_directory = _resolve_project_directory_no_deps(project_root)
-        update_info = get_update_status().to_dict()
+        update_info = get_update_status(persist=False).to_dict()
 
         return {
             "project_directory": str(project_directory),
@@ -109,4 +109,4 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     def gm_check_updates() -> Dict[str, Any]:
         """Check for newer versions of gms-mcp on PyPI."""
-        return get_update_status().to_dict()
+        return get_update_status(persist=False).to_dict()

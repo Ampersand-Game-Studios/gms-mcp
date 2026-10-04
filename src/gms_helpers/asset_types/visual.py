@@ -259,7 +259,7 @@ class FontAsset(BaseAsset):
             "bold": bold,
             "canGenerateBitmap": True,
             "charset": charset,
-            "ConfigValues": {"desktop": {"textureGroupId": '{ "name":"fonts", "path":"texturegroups/fonts" }'}},
+            "ConfigValues": {},
             "first": 0,
             "fontName": font_name,
             "glyphOperations": 0,

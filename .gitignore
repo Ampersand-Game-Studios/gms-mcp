@@ -38,7 +38,7 @@ docs/codex-goals/
 documentation/planned_features/
 cli/reports/
 ops/
-RELEASING.md
+/RELEASING.md
 
 # Local environment (API keys, secrets)
 .env

@@ -26,6 +26,12 @@ from gms_mcp.telemetry import (
 # Import utilities for directory validation
 from .utils import validate_working_directory, resolve_project_directory
 from .exceptions import GMSError
+from .operation_policy import (
+    is_project_mutation,
+    is_write_free_operation,
+    operation_succeeded,
+    validate_project_operation,
+)
 
 
 def _default_runner_platform() -> str:
@@ -180,13 +186,13 @@ def setup_doc_commands(subparsers):
     # Search command
     search_parser = doc_subparsers.add_parser("search", help="Search for GML functions")
     search_parser.add_argument("query", help="Search query")
-    search_parser.add_argument("--category", help="Filter by category (e.g., Drawing, Strings)")
+    search_parser.add_argument("--category", dest="doc_category", help="Filter by category (e.g., Drawing, Strings)")
     search_parser.add_argument("--limit", type=int, default=20, help="Maximum results (default: 20)")
     search_parser.set_defaults(func=handle_doc_search)
 
     # List command
     list_parser = doc_subparsers.add_parser("list", help="List GML functions")
-    list_parser.add_argument("--category", help="Filter by category")
+    list_parser.add_argument("--category", dest="doc_category", help="Filter by category")
     list_parser.add_argument("--pattern", help="Filter by regex pattern")
     list_parser.add_argument("--limit", type=int, default=100, help="Maximum results (default: 100)")
     list_parser.set_defaults(func=handle_doc_list)
@@ -1213,12 +1219,12 @@ _CLI_NAME_KEYS = [
     "asset_type",
     "event_action",
     "workflow_action",
-    "texture_action",
+    "tg_action",
     "sprite_action",
-    "room_action",
-    "room_layer_action",
-    "room_ops_action",
-    "room_instance_action",
+    "room_category",
+    "layer_action",
+    "ops_action",
+    "instance_action",
     "maintenance_action",
     "runner_action",
     "symbol_action",
@@ -1255,6 +1261,8 @@ def _is_non_project_command(argv: list[str]) -> bool:
 def _cli_command_name(args: argparse.Namespace) -> str:
     parts: list[str] = []
     for key in _CLI_NAME_KEYS:
+        if key == "asset_type" and getattr(args, "category", None) != "asset":
+            continue
         value = getattr(args, key, None)
         if not value:
             continue
@@ -1262,6 +1270,50 @@ def _cli_command_name(args: argparse.Namespace) -> str:
         if text not in parts:
             parts.append(text)
     return ".".join(parts) if parts else "cli"
+
+
+def _execute_project_command(args: argparse.Namespace):
+    """Enforce identical policy and atomic failure handling for every CLI writer."""
+    from gms_mcp.server.dry_run_policy import destructive_policy_preflight
+    from .transactions import GameMakerProjectTransaction, TransactionValidationError, transaction_is_active
+
+    tool_name = _cli_command_name(args)
+    blocked = destructive_policy_preflight(tool_name, args)
+    if blocked is not None:
+        print(f"[ERROR] {blocked['error']}")
+        return blocked
+    if not is_project_mutation(tool_name, args):
+        return args.func(args)
+    root = validate_project_operation(args.project_root, args)
+    # MCP CLI fallback already owns the same project lock and write journal.
+    # Reuse it instead of attempting to recursively acquire that lock.
+    if transaction_is_active(root):
+        return args.func(args)
+    tx = GameMakerProjectTransaction(root, tool_name)
+    tx.begin()
+    try:
+        result = args.func(args)
+        tx.capture_mutation_state()
+        if not operation_succeeded(result):
+            if not tx.rollback():
+                raise TransactionValidationError(
+                    "CLI operation failed and safe rollback could not restore every journaled path.",
+                    details={"transaction": tx.to_dict()},
+                )
+            return result
+        tx.commit()
+        return result
+    except BaseException as exc:
+        if not tx.committed:
+            tx.capture_mutation_state()
+            if not tx.rollback():
+                raise TransactionValidationError(
+                    "CLI operation raised and safe rollback could not restore every journaled path.",
+                    details={"transaction": tx.to_dict()},
+                ) from exc
+        raise
+    finally:
+        tx.cleanup()
 
 
 def _cli_tool_family(args: argparse.Namespace) -> str:
@@ -1280,8 +1332,13 @@ def _queue_cli_event(
     duration_ms: int,
     error_family: str | None = None,
     execution_mode: str = "inline",
+    arguments: argparse.Namespace | None = None,
 ) -> None:
-    if cli_telemetry_suppressed():
+    if (
+        cli_telemetry_suppressed()
+        or os.environ.get("GMS_MCP_READ_ONLY", "").strip() == "1"
+        or is_write_free_operation(tool_name, arguments or {})
+    ):
         return
     state = resolve_state(telemetry_override)
     if not queue_event(
@@ -1301,7 +1358,7 @@ def _queue_cli_event(
 
 
 def _maybe_prompt_after_cli(*, telemetry_override: str, allow_prompt: bool) -> None:
-    if cli_telemetry_suppressed():
+    if cli_telemetry_suppressed() or os.environ.get("GMS_MCP_READ_ONLY", "").strip() == "1":
         return
     if not should_prompt_for_consent(cli_override=telemetry_override, allow_prompt=allow_prompt):
         return
@@ -1353,23 +1410,22 @@ def main():
         tool_name = _cli_command_name(args)
         tool_family = _cli_tool_family(args)
         try:
-            result = args.func(args)
+            result = _execute_project_command(args)
             duration_ms = int((time.monotonic() - start) * 1000)
             if getattr(args, "category", None) != "telemetry":
                 _queue_cli_event(
                     telemetry_override=telemetry_override,
                     tool_name=tool_name,
                     tool_family=tool_family,
-                    result="ok" if not isinstance(result, dict) else ("ok" if result.get("success", True) else "error"),
+                    result="ok" if operation_succeeded(result) else "error",
                     duration_ms=duration_ms,
+                    arguments=args,
                 )
                 _maybe_prompt_after_cli(
                     telemetry_override=telemetry_override,
-                    allow_prompt=bool(result if not isinstance(result, dict) else result.get("success", True)),
+                    allow_prompt=operation_succeeded(result) and not is_write_free_operation(tool_name, args),
                 )
-            if isinstance(result, dict):
-                return result.get("success", True)
-            return result
+            return operation_succeeded(result)
         except Exception as e:
             duration_ms = int((time.monotonic() - start) * 1000)
             _queue_cli_event(
@@ -1379,6 +1435,7 @@ def main():
                 result="error",
                 error_family=classify_error_family(e),
                 duration_ms=duration_ms,
+                arguments=args,
             )
             print(f"[ERROR] {e}")
             return False
@@ -1418,28 +1475,24 @@ def main():
 
         # Route to appropriate handler
         try:
-            result = args.func(args)
+            result = _execute_project_command(args)
             duration_ms = int((time.monotonic() - start) * 1000)
-            ok = (
-                result.success
-                if hasattr(result, "success")
-                else (result.get("success", True) if isinstance(result, dict) else bool(result))
-            )
+            ok = operation_succeeded(result)
             _queue_cli_event(
                 telemetry_override=telemetry_override,
                 tool_name=tool_name,
                 tool_family=tool_family,
                 result="ok" if ok else "error",
                 duration_ms=duration_ms,
+                arguments=args,
             )
             _maybe_prompt_after_cli(
                 telemetry_override=telemetry_override,
-                allow_prompt=ok and getattr(args, "category", None) != "telemetry",
+                allow_prompt=ok
+                and getattr(args, "category", None) != "telemetry"
+                and not is_write_free_operation(tool_name, args),
             )
-            result_success = getattr(result, "success", None)
-            if isinstance(result_success, bool):
-                return result_success
-            return result
+            return ok
         except GMSError as e:
             duration_ms = int((time.monotonic() - start) * 1000)
             _queue_cli_event(
@@ -1449,6 +1502,7 @@ def main():
                 result="error",
                 error_family=classify_error_family(e),
                 duration_ms=duration_ms,
+                arguments=args,
             )
             print(f"[ERROR] {e.message}")
             raise
@@ -1461,6 +1515,7 @@ def main():
                 result="cancelled",
                 error_family="cancelled",
                 duration_ms=duration_ms,
+                arguments=args,
             )
             print("\n[WARN]  Operation cancelled by user")
             return False
@@ -1473,6 +1528,7 @@ def main():
                 result="error",
                 error_family=classify_error_family(e),
                 duration_ms=duration_ms,
+                arguments=args,
             )
             print(f"[ERROR] Unexpected error: {e}")
             import traceback

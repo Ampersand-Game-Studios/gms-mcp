@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 from typing import Any, Callable, Dict, List
+from gms_helpers.operation_policy import is_write_free_operation
 
 from ..telemetry import note_tool_execution
 from ..execution_policy import ExecutionMode, policy_manager
@@ -63,19 +64,11 @@ async def _run_with_fallback(
 ) -> Dict[str, Any]:
     derived_tool_name = tool_name
     if not derived_tool_name:
-        # Derive a stable tool identifier from the CLI args.
-        # We intentionally ignore flags/values so policies like "run-compile"
-        # keep applying even when the CLI invocation includes options.
-        head: List[str] = []
-        for token in cli_args or []:
-            if not token:
-                continue
-            if token.startswith("-"):
-                break
-            head.append(token)
-            if len(head) >= 3:
-                break
-        derived_tool_name = "-".join(head) if head else "tool"
+        # The real parser distinguishes command words from resource values.
+        # A positional object name must never become part of the policy key.
+        from gms_helpers.gms import _cli_command_name, create_parser
+
+        derived_tool_name = _cli_command_name(create_parser().parse_args(cli_args)).replace(".", "-")
 
     # Get execution policy for this tool
     policy = policy_manager.get_policy(derived_tool_name)
@@ -84,6 +77,7 @@ async def _run_with_fallback(
     if effective_timeout is None:
         effective_timeout = _default_timeout_seconds_for_cli_args(cli_args)
     destructive_cli_disabled = is_real_destructive_cli_workflow(derived_tool_name, direct_args)
+    persist_logs = not is_write_free_operation(derived_tool_name, direct_args)
 
     # Respect manual override via prefer_cli
     if prefer_cli:
@@ -121,6 +115,7 @@ async def _run_with_fallback(
                     timeout_seconds=effective_timeout,
                     tool_name=derived_tool_name,
                     ctx=ctx,
+                    persist_logs=persist_logs,
                 )
             ).as_dict(),
             output_mode=output_mode,
@@ -210,6 +205,7 @@ async def _run_with_fallback(
         timeout_seconds=effective_timeout,
         tool_name=derived_tool_name,
         ctx=ctx,
+        persist_logs=persist_logs,
     )
     cli_result.direct_error = direct_result.error or "Direct call failed"
     result = _apply_output_mode(

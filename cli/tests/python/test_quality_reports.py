@@ -73,11 +73,11 @@ class TestQualityReportParsing(unittest.TestCase):
     def test_main_writes_non_zero_tests_to_summary(self):
         junit_xml = """<?xml version="1.0" encoding="utf-8"?>
 <testsuites>
-  <testsuite name="pytest" tests="7" failures="0" errors="0" skipped="1" time="4.2"></testsuite>
+  <testsuite name="pytest" tests="7" failures="0" errors="0" skipped="1" time="4.2"><testcase name="passed" /></testsuite>
 </testsuites>
 """
         coverage_xml = """<?xml version="1.0" ?>
-<coverage line-rate="0.5">
+<coverage line-rate="0.5" branch-rate="0.8" branches-valid="10">
   <packages>
     <package name="pkg">
       <classes>

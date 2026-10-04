@@ -368,7 +368,9 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                 handler = stack.enter_context(
                     patch("gms_helpers.asset_cli.delete.handle_maintenance_failure", return_value="delete-post-failed")
                 )
-                stack.enter_context(patch("shutil.rmtree", side_effect=OSError("unlink failed")))
+                stack.enter_context(
+                    patch("gms_helpers.transactions.transactional_rmtree", side_effect=OSError("unlink failed"))
+                )
                 cwd_before = Path.cwd()
                 os.chdir(project_root)
                 try:
@@ -522,7 +524,7 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
             },
         ):
             result, output = _capture_output(asset_helper.maint_clean_orphans_command, _create_args("orphans"))
-        self.assertTrue(result)
+        self.assertFalse(result)
         self.assertIn("No orphaned files found", output)
         self.assertIn("... and 1 more errors", output)
 

@@ -889,6 +889,9 @@ class TestWorkflowEnhanced(unittest.TestCase):
             sprite_asset = SpriteAsset()
             sprite_name = "spr_test_button"
             parent_path = "folders/UI.yy"
+            from gms_helpers.assets import FolderAsset
+
+            FolderAsset().create_files(project.dir, "UI")
 
             # Create the sprite
             sprite_asset.create_files(project.dir, sprite_name, parent_path)
@@ -987,6 +990,9 @@ class TestWorkflowEnhanced(unittest.TestCase):
             sprite_asset = SpriteAsset()
             sprite_name = "spr_test_layer_structure"
             parent_path = "folders/UI.yy"
+            from gms_helpers.assets import FolderAsset
+
+            FolderAsset().create_files(project.dir, "UI")
 
             # Create the sprite
             sprite_asset.create_files(project.dir, sprite_name, parent_path)

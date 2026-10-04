@@ -1,6 +1,5 @@
 import os
 import platform
-import tempfile
 from functools import lru_cache
 from pathlib import Path
 from typing import Set, Dict, List, Optional
@@ -13,11 +12,11 @@ def _is_macos_case_sensitive() -> bool:
         return False
 
     try:
-        with tempfile.TemporaryDirectory() as tmpdir:
-            lower = Path(tmpdir) / "gms_case_probe"
-            upper = Path(tmpdir) / "GMS_CASE_PROBE"
-            lower.write_text("probe")
-            return not upper.exists()
+        # Use an existing known file; read-only diagnostics must not create a
+        # temporary probe simply to inspect case sensitivity.
+        current = Path(__file__).resolve()
+        alternate = current.with_name(current.name.swapcase())
+        return not alternate.exists() or not alternate.samefile(current)
     except Exception:
         # Conservative fallback: assume case-insensitive for compatibility
         return False

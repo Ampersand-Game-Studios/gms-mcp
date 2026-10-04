@@ -12,6 +12,7 @@ import os
 import platform
 import re
 import shutil
+import subprocess
 import sys
 import tempfile
 from contextlib import redirect_stderr, redirect_stdout
@@ -124,6 +125,16 @@ def _source_project_provenance(project_root: Path) -> Dict[str, str]:
         "source_yyp_sha256": hashlib.sha256(yyp_path.read_bytes()).hexdigest(),
         "source_ide_version": ide_version,
     }
+
+
+def _repository_provenance() -> Dict[str, Any]:
+    revision = subprocess.run(
+        ["git", "rev-parse", "HEAD"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    dirty = subprocess.run(
+        ["git", "status", "--porcelain"], cwd=REPO_ROOT, capture_output=True, text=True, check=True
+    ).stdout.strip()
+    return {"source_revision": revision, "source_dirty": bool(dirty)}
 
 
 def _copy_ignore(_directory: str, names: list[str]) -> set[str]:
@@ -689,6 +700,7 @@ def _run(args: argparse.Namespace) -> int:
         "host_platform": host_platform,
         "expected_runtime_version": expected_runtime_version,
     }
+    fixture.update(_repository_provenance())
     synthetic_config = _SYNTHETIC_FIXTURES[args.fixture_name]
     source_context = tempfile.TemporaryDirectory(prefix="gms-mcp-synthetic-source-")
     try:

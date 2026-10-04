@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import contextlib
 import inspect
 import json
 import os
@@ -118,6 +119,7 @@ def _worker_environment(module_root: Path | None) -> dict[str, str]:
 
     environment = _with_cli_pythonpath(os.environ.copy())
     environment[SUPPRESS_CLI_TELEMETRY_ENV_VAR] = "1"
+    environment["PYTHONDONTWRITEBYTECODE"] = "1"
     environment.update(transaction_subprocess_environment())
     if module_root is not None:
         current = [part for part in environment.get("PYTHONPATH", "").split(os.pathsep) if part]
@@ -144,36 +146,36 @@ def _run_direct(
         "project_root": str(project_directory),
     }
     started = time.monotonic()
-    with tempfile.TemporaryDirectory(prefix="gms-mcp-direct-") as temp_dir:
-        request_path = Path(temp_dir) / "request.json"
-        response_path = Path(temp_dir) / "response.json"
-        ownership_manifest_path = Path(temp_dir) / "macos-runner-ownership.json"
-        request_path.write_text(json.dumps(request, ensure_ascii=False), encoding="utf-8")
+    with contextlib.ExitStack() as resources:
+        ownership_manifest_path = None
         command = [
             sys.executable,
             "-u",
             "-m",
             "gms_mcp.server.direct_worker",
-            str(request_path),
-            str(response_path),
         ]
         worker_environment = _worker_environment(module_root)
         if getattr(handler, "__name__", "") in {"handle_runner_compile", "handle_runner_run"}:
             from .macos_runner_timeout import MACOS_OWNERSHIP_MANIFEST_ENV
 
+            temp_dir = resources.enter_context(tempfile.TemporaryDirectory(prefix="gms-mcp-direct-runner-"))
+            ownership_manifest_path = Path(temp_dir) / "macos-runner-ownership.json"
             worker_environment[MACOS_OWNERSHIP_MANIFEST_ENV] = str(ownership_manifest_path)
         process = subprocess.Popen(
             command,
             cwd=project_directory,
             env=worker_environment,
-            stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdin=subprocess.PIPE,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             start_new_session=os.name != "nt",
             creationflags=(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200) if os.name == "nt" else 0),
         )
         try:
-            process.wait(timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None)
+            response, worker_stderr = process.communicate(
+                json.dumps(request, ensure_ascii=False).encode("utf-8"),
+                timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
+            )
         except subprocess.TimeoutExpired:
             from .subprocess_runner import _terminate_process_tree
             from .macos_runner_timeout import cleanup_macos_ownership_manifest
@@ -198,14 +200,14 @@ def _run_direct(
             )
 
         elapsed = time.monotonic() - started
-        if not response_path.exists():
+        if not response:
             from .macos_runner_timeout import cleanup_macos_ownership_manifest
 
             cleanup_macos_ownership_manifest(ownership_manifest_path)
             return ToolRunResult(
                 ok=False,
                 stdout="",
-                stderr="",
+                stderr=worker_stderr.decode("utf-8", errors="replace"),
                 direct_used=True,
                 exit_code=process.returncode,
                 error=f"Direct worker exited without a response (exit {process.returncode})",
@@ -217,8 +219,10 @@ def _run_direct(
             )
 
         try:
-            payload = json.loads(response_path.read_text(encoding="utf-8"))
-        except (OSError, json.JSONDecodeError) as exc:
+            payload = json.loads(response)
+            if not isinstance(payload, dict):
+                raise ValueError("expected an object")
+        except (OSError, ValueError) as exc:
             from .macos_runner_timeout import cleanup_macos_ownership_manifest
 
             cleanup_macos_ownership_manifest(ownership_manifest_path)
@@ -254,7 +258,7 @@ def _run_direct(
     return ToolRunResult(
         ok=ok,
         stdout=str(payload.get("stdout") or ""),
-        stderr=str(payload.get("stderr") or ""),
+        stderr=str(payload.get("stderr") or "") + worker_stderr.decode("utf-8", errors="replace"),
         direct_used=True,
         exit_code=payload.get("exit_code") if payload.get("exit_code") is not None else process.returncode,
         error=str(error_text) if error_text else None,
