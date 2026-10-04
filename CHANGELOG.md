@@ -10,7 +10,7 @@ All notable changes to this project will be documented in this file.
 
 ### Fixed
 - **Unified Operation Safety**: CLI and MCP now share fail-closed operation classification, destructive-write policy, honest no-write previews, and consistent failure results. Read-only tools no longer create caches, diagnostic logs, telemetry, or IPC files; asset creation no longer runs implicit cleanup.
-- **Durable Project Recovery**: Atomic mutations and deferred verification use validated, fsynced recovery journals and ownership fingerprints, preserve conflicting external saves, and recover interrupted subprocess mutations without trusting arbitrary transaction environment variables.
+- **Durable Project Recovery**: Atomic mutations and deferred verification use validated, fsynced recovery journals and ownership fingerprints, preserve conflicting external saves, and recover interrupted subprocess mutations without trusting arbitrary transaction environment variables. Windows flushes use non-truncating writable handles; CI smoke failures retain bounded, redacted diagnostics.
 - **Complete Project Preflight**: Validate registered and embedded references, logical folders, room order, events, nested room layers, and asset/file boundaries before mutations while preserving GameMaker 2024 and 2026 LTS formats.
 - **First Trusted PyPI Publish**: Removed the incorrect package-existence preflight so a configured pending trusted publisher can create `gms-mcp` during its first OIDC upload.
 - **Current GameMaker Sound Schema**: Sound creation now emits the current `GMSound` fields and ordering required by GameMaker 2024 and 2026 LTS compilers.

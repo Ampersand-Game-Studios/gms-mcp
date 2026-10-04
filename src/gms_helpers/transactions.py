@@ -576,6 +576,14 @@ def _fsync_directory(path: Path) -> None:
         os.close(descriptor)
 
 
+def _fsync_file(path: Path) -> None:
+    """Flush existing bytes without truncation, using Windows-required write access."""
+    # CPython's Windows fsync uses _commit/FlushFileBuffers. A read-only
+    # descriptor cannot flush there; POSIX still permits read-only descriptors.
+    with path.open("r+b" if sys.platform == "win32" else "rb") as stream:
+        os.fsync(stream.fileno())
+
+
 def _assert_plain_infrastructure(project_root: Path, path: Path) -> None:
     """Never follow links for locks, journals, state or backup directories."""
     relative = path.relative_to(project_root)
@@ -860,8 +868,7 @@ def _capture_original_path(context: _TransactionJournalContext, relative: str) -
             shutil.copystat(source, backup, follow_symlinks=False)
         elif source.is_file():
             shutil.copy2(source, backup, follow_symlinks=False)
-            with backup.open("rb") as stream:
-                os.fsync(stream.fileno())
+            _fsync_file(backup)
         else:
             return False
         if _path_fingerprint(source) != initial_source:
@@ -887,8 +894,7 @@ def _restore_file_atomically(backup_path: Path, target_path: Path, expected: tup
             temporary_path.symlink_to(os.readlink(backup_path))
         else:
             shutil.copy2(backup_path, temporary_path, follow_symlinks=False)
-            with temporary_path.open("rb") as stream:
-                os.fsync(stream.fileno())
+            _fsync_file(temporary_path)
         if _path_fingerprint(target_path) != expected:
             return False
         os.replace(temporary_path, target_path)
@@ -1489,8 +1495,7 @@ class GameMakerProjectTransaction:
             if target is None:
                 raise ValidationError(f"Unsafe transaction path before commit: {relative}")
             if target.is_file() and not target.is_symlink():
-                with target.open("rb") as stream:
-                    os.fsync(stream.fileno())
+                _fsync_file(target)
             for parent in target.parents:
                 if parent.is_dir():
                     directories.add(parent)
