@@ -24,7 +24,10 @@ def preflight_asset_destination(
     collision must obtain a replacement name and run this preflight again.
     """
     root = Path(project_root).resolve()
-    asset_folder = root / folder_prefix / name.lower()
+    from .path_safety import project_child_path, validate_resource_name
+
+    name = validate_resource_name(name, asset_type)
+    asset_folder = project_child_path(folder_prefix, name.lower(), project_root=root, kind="asset destination")
     yy_path = asset_folder / f"{name}.yy"
     relative_path = yy_path.relative_to(root).as_posix()
     collisions: list[Dict[str, str]] = []
@@ -41,6 +44,11 @@ def preflight_asset_destination(
 
     try:
         yyp_path = find_yyp(root)
+        from .exceptions import ValidationError
+        from .project_validation import safe_project_path
+
+        if safe_project_path(root, yyp_path.name) is None:
+            raise ValidationError("Unsafe project file path")
         yyp_data = load_json_loose(yyp_path)
     except ProjectNotFoundError:
         # BaseAsset is also a low-level file factory used by isolated tests and
@@ -170,12 +178,39 @@ class BaseAsset(ABC):
             operation="create",
         )
 
+        from .project_validation import (
+            resolve_asset_reference,
+            resolve_parent_reference,
+            validate_asset_metadata_references,
+        )
+        from .utils import validate_parent_path_for_project
+
+        resolved_references = {}
+        for argument, field, expected in (
+            ("sprite_id", "spriteId", "GMSprite"),
+            ("parent_object", "parentObjectId", "GMObject"),
+        ):
+            if kwargs.get(argument):
+                resolved_references[field] = resolve_asset_reference(project_root, kwargs[argument], expected)
+        if parent_path:
+            validate_parent_path_for_project(project_root, parent_path)
+
+        # Build/validate argument-dependent metadata before creating even a default
+        # logical folder. In particular invalid dimensions must not leave folders.
+        yy_data = self.create_yy_data(name, parent_path, **kwargs)
+        yy_data.update(resolved_references)
+        relative_path = (
+            self.get_yy_path(self.get_folder_path(project_root, name), name).relative_to(project_root).as_posix()
+        )
+        validate_asset_metadata_references(project_root, relative_path, yy_data)
+
         # Omitted parents are resolved to a logical folder before any asset files
         # are written. GameMaker project roots are never used as implicit parents.
         if not parent_path:
             from .utils import ensure_default_asset_parent
 
             parent_path = ensure_default_asset_parent(project_root, self.kind, self.folder_prefix)
+        yy_data["parent"] = resolve_parent_reference(project_root, parent_path)
 
         # Create the asset folder
         asset_folder = self.get_folder_path(project_root, name)
@@ -183,7 +218,6 @@ class BaseAsset(ABC):
 
         # Create the .yy file
         yy_path = self.get_yy_path(asset_folder, name)
-        yy_data = self.create_yy_data(name, parent_path, **kwargs)
 
         # Match existing project conventions for $GM* version strings.
         # Many projects use "" or "v1" depending on the GameMaker version / migration history.

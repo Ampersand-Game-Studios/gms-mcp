@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import datetime as _dt
 import os
 import re
@@ -83,12 +84,14 @@ class _BoundedLogWriter:
 
     _TRUNCATION_MARKER = b"\n[gms-mcp] LOG TRUNCATED; further output omitted\n"
 
-    def __init__(self, path: Path, limit: int):
+    def __init__(self, path: Path | None, limit: int):
         self.path = path
         self.limit = max(0, limit)
         self._written = 0
         self._truncated = False
         self._lock = threading.Lock()
+        if path is None:
+            return
         try:
             secure_private_file(path)
             path.write_bytes(b"")
@@ -96,6 +99,8 @@ class _BoundedLogWriter:
             pass
 
     def append(self, value: str | bytes) -> None:
+        if self.path is None:
+            return
         encoded = value.encode("utf-8", errors="replace") if isinstance(value, str) else value
         with self._lock:
             if self._truncated or self._written >= self.limit:
@@ -293,7 +298,9 @@ def _mark_log_active(log_path: Path) -> None:
         pass
 
 
-def _finalize_log(log_path: Path) -> None:
+def _finalize_log(log_path: Path | None) -> None:
+    if log_path is None:
+        return
     try:
         _active_marker_path(log_path).unlink(missing_ok=True)
     except OSError:
@@ -387,12 +394,13 @@ async def _run_cli_async(
     heartbeat_seconds: float = 5.0,
     tool_name: str | None = None,
     ctx: Any | None = None,
+    persist_logs: bool = True,
 ) -> ToolRunResult:
     """
     Run the CLI in a subprocess with:
     - stdout/stderr drained concurrently to prevent subprocess pipe deadlocks
     - a generous, category-aware max runtime timeout (overrideable)
-    - always writes a local log file for post-mortems
+    - optional local post-mortem logs, disabled for reads and previews
     """
     project_directory = _resolve_project_directory(project_root)
     project_root_value = str(project_directory)
@@ -424,6 +432,7 @@ async def _run_cli_async(
         execution_mode = "subprocess:python-module"
     nested_cli_env = _with_cli_pythonpath(os.environ.copy())
     nested_cli_env[SUPPRESS_CLI_TELEMETRY_ENV_VAR] = "1"
+    nested_cli_env["PYTHONDONTWRITEBYTECODE"] = "1"
     nested_cli_env.update(transaction_env)
 
     effective_timeout = timeout_seconds
@@ -437,11 +446,13 @@ async def _run_cli_async(
     if action in {"compile", "start", "background-start"}:
         runner_action = True
 
-    with tempfile.TemporaryDirectory(prefix="gms-mcp-cli-") as temp_dir:
-        ownership_manifest_path = Path(temp_dir) / "macos-runner-ownership.json"
+    with contextlib.ExitStack() as resources:
+        ownership_manifest_path = None
         if runner_action:
             from .macos_runner_timeout import MACOS_OWNERSHIP_MANIFEST_ENV
 
+            temp_dir = resources.enter_context(tempfile.TemporaryDirectory(prefix="gms-mcp-cli-runner-"))
+            ownership_manifest_path = Path(temp_dir) / "macos-runner-ownership.json"
             nested_cli_env[MACOS_OWNERSHIP_MANIFEST_ENV] = str(ownership_manifest_path)
         return await _run_subprocess_async(
             cmd,
@@ -454,6 +465,7 @@ async def _run_cli_async(
             execution_mode=execution_mode,
             candidates=gms_candidates,
             ownership_manifest_path=ownership_manifest_path if runner_action else None,
+            persist_logs=persist_logs,
         )
 
 
@@ -469,6 +481,7 @@ async def _run_subprocess_async(
     execution_mode: str | None = None,
     candidates: List[str] | None = None,
     ownership_manifest_path: Path | None = None,
+    persist_logs: bool = True,
 ) -> ToolRunResult:
     """
     Generic subprocess runner with safe stdout/stderr draining + timeout + cancellation.
@@ -477,26 +490,28 @@ async def _run_subprocess_async(
     Do NOT call `ctx.log()` (or emit any MCP notifications) while a subprocess is running.
     Cursor's MCP transport shares stdio; attempting to stream logs can deadlock the server
     if the client applies backpressure or stops consuming notifications.
-    Instead, we write a complete local log file and return stdout/stderr when finished.
+    Persistent logs are optional; stdout/stderr remain available in the result.
     """
     safe_command = _redact_command(cmd)
     # region agent log
-    _dbg(
-        "H3",
-        "src/gms_mcp/gamemaker_mcp_server.py:_run_subprocess_async:entry",
-        "subprocess runner entry",
-        {
-            "tool_name": tool_name,
-            "cwd": str(cwd),
-            "timeout_seconds": timeout_seconds,
-            "heartbeat_seconds": heartbeat_seconds,
-            "execution_mode": execution_mode,
-            "cmd_head": safe_command[:6],
-        },
-    )
+    if persist_logs:
+        _dbg(
+            "H3",
+            "src/gms_mcp/gamemaker_mcp_server.py:_run_subprocess_async:entry",
+            "subprocess runner entry",
+            {
+                "tool_name": tool_name,
+                "cwd": str(cwd),
+                "timeout_seconds": timeout_seconds,
+                "heartbeat_seconds": heartbeat_seconds,
+                "execution_mode": execution_mode,
+                "cmd_head": safe_command[:6],
+            },
+        )
     # endregion
-    log_path = _new_log_path(cwd, tool_name)
-    _mark_log_active(log_path)
+    log_path = _new_log_path(cwd, tool_name) if persist_logs else None
+    if log_path is not None:
+        _mark_log_active(log_path)
     start = time.monotonic()
 
     stdout_capture = _BoundedByteCapture(SUBPROCESS_CAPTURE_MAX_BYTES)
@@ -542,18 +557,19 @@ async def _run_subprocess_async(
             timed_out=False,
             command=safe_command,
             cwd=str(cwd),
-            log_file=str(log_path),
+            log_file=str(log_path) if log_path is not None else None,
             execution_mode=execution_mode,
         )
         _finalize_log(log_path)
         return result
     # region agent log
-    _dbg(
-        "H3",
-        "src/gms_mcp/gamemaker_mcp_server.py:_run_subprocess_async:popen_ok",
-        "subprocess Popen ok",
-        {"pid": getattr(proc, "pid", None), "tool_name": tool_name, "mode": execution_mode},
-    )
+    if persist_logs:
+        _dbg(
+            "H3",
+            "src/gms_mcp/gamemaker_mcp_server.py:_run_subprocess_async:popen_ok",
+            "subprocess Popen ok",
+            {"pid": getattr(proc, "pid", None), "tool_name": tool_name, "mode": execution_mode},
+        )
     # endregion
 
     def _append_and_log(stream: str, chunk: str | bytes) -> None:
@@ -663,6 +679,6 @@ async def _run_subprocess_async(
         timed_out=timed_out,
         command=safe_command,
         cwd=str(cwd),
-        log_file=str(log_path),
+        log_file=str(log_path) if log_path is not None else None,
         execution_mode=execution_mode,
     )

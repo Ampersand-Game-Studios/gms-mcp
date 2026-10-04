@@ -51,6 +51,16 @@ _EVENT_LABEL_TO_ID = {label.lower(): event_type for event_type, label in EVENT_T
 _EVENT_ID_TO_SPEC = {event_type: type_name for type_name, event_type in EVENT_TYPE_IDS.items()}
 
 
+def validate_event_numbers(event_type: int, event_num: int) -> None:
+    """Validate stable event ranges shared by supported GameMaker releases."""
+    if type(event_type) is not int or event_type not in EVENT_TYPE_NAMES or type(event_num) is not int:
+        raise ValidationError("Event type and subtype must be valid integers")
+    if event_num < 0 or (event_type in {-1, 0, 1, 4, 12} and event_num != 0):
+        raise ValidationError("Invalid event subtype")
+    if (event_type == 2 and event_num > 11) or (event_type == 3 and event_num > 2):
+        raise ValidationError("Invalid alarm or step subtype")
+
+
 @dataclass(frozen=True)
 class EventSpec:
     """A validated event specification."""
@@ -98,6 +108,7 @@ def parse_event_spec(value: Any) -> EventSpec:
         except ValueError as exc:
             raise ValidationError(f"Invalid event number in spec: {candidate}") from exc
 
+    validate_event_numbers(EVENT_TYPE_IDS[type_name], event_num)
     return EventSpec(type_name, EVENT_TYPE_IDS[type_name], event_num=event_num)
 
 
@@ -123,6 +134,7 @@ def parse_event_filename(filename: str) -> EventSpec:
         event_num = int(number)
     except ValueError as exc:
         raise ValidationError(f"Invalid event filename number: {filename}") from exc
+    validate_event_numbers(event_type, event_num)
     return EventSpec(_EVENT_ID_TO_SPEC[event_type], event_type, event_num=event_num)
 
 
@@ -136,6 +148,7 @@ def collision_object_name(reference: Any) -> str | None:
 
 def event_filename(event_type: int, event_num: int, collision_object_id: Any = None) -> str:
     """Return the GameMaker filename for an event entry."""
+    validate_event_numbers(event_type, event_num)
     type_label = EVENT_TYPE_NAMES.get(event_type)
     if type_label is None:
         raise ValidationError(f"Unknown event type id: {event_type}")
@@ -143,6 +156,7 @@ def event_filename(event_type: int, event_num: int, collision_object_id: Any = N
         object_name = collision_object_name(collision_object_id)
         if object_name is None:
             raise ValidationError("Collision event is missing a valid collisionObjectId reference")
+        validate_resource_name(object_name, "collision object")
         return f"Collision_{object_name}.gml"
     return f"{type_label}_{event_num}.gml"
 
@@ -230,30 +244,16 @@ def resolve_collision_object_reference(project_root: str | Path, object_name: st
     if not isinstance(project_data, dict):
         raise GMSError(f"Failed to load GameMaker project: {yyp_path}")
 
-    resource_path: str | None = None
-    for resource in project_data.get("resources", []) or []:
-        resource_id = resource.get("id") if isinstance(resource, dict) else None
-        if not isinstance(resource_id, dict) or resource_id.get("name") != object_name:
-            continue
-        candidate = resource_id.get("path")
-        if isinstance(candidate, str) and candidate.replace("\\", "/").startswith("objects/"):
-            resource_path = candidate.replace("\\", "/")
-            break
-
-    if resource_path is None:
+    resources = project_data.get("resources", [])
+    if not isinstance(resources, list):
+        raise ValidationError("Malformed project resources")
+    if not any(
+        isinstance(resource, dict)
+        and isinstance(resource.get("id"), dict)
+        and resource["id"].get("name") == object_name
+        for resource in resources
+    ):
         raise AssetNotFoundError(f"Collision target object '{object_name}' is not registered in the project")
+    from .project_validation import resolve_asset_reference
 
-    parts = Path(resource_path).parts
-    if len(parts) != 3 or parts[0] != "objects" or not resource_path.endswith(".yy"):
-        raise ValidationError(f"Collision target object '{object_name}' has an invalid project path: {resource_path}")
-    object_path = project_child_path(*parts, project_root=root, kind=f"collision object '{object_name}'")
-    if not object_path.is_file():
-        raise AssetNotFoundError(
-            f"Collision target object '{object_name}' points to a missing asset file: {resource_path}"
-        )
-
-    object_data = load_json_loose(object_path)
-    if not isinstance(object_data, dict) or object_data.get("resourceType") != "GMObject":
-        raise ValidationError(f"Collision target '{object_name}' is not a valid GameMaker object asset")
-
-    return {"name": object_name, "path": resource_path}
+    return resolve_asset_reference(root, object_name, "GMObject")

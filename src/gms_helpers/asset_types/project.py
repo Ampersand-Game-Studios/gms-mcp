@@ -19,6 +19,8 @@ class RoomAsset(BaseAsset):
     def create_yy_data(self, name: str, parent_path: str, **kwargs) -> Dict[str, Any]:
         width = kwargs.get("width", 1024)
         height = kwargs.get("height", 768)
+        if type(width) is not int or type(height) is not int or width <= 0 or height <= 0:
+            raise ValueError("Room width and height must be positive integers")
 
         # GameMaker expects 8 view entries, each with a complete schema (even when disabled).
         # Using partial dicts (e.g. {"inherit": false, "visible": false}) causes IDE load failures.
@@ -186,7 +188,7 @@ class FolderAsset(BaseAsset):
                 folder_path = parent_path.rstrip()
             else:
                 # For parent_path like "folders/UI.yy", create nested path "folders/UI/name.yy"
-                parent_dir = parent_path.rstrip().rstrip(".yy")
+                parent_dir = parent_path.rstrip().removesuffix(".yy")
                 folder_path = f"{parent_dir}/{name}.yy"
         else:
             # Treat as logical directory path
@@ -220,6 +222,8 @@ class FolderAsset(BaseAsset):
         except ImportError:
             from ..utils import load_json_loose, save_pretty_json, insert_into_folders
 
+        project_root = Path(project_root).resolve()
+
         # Determine the folder path for the .yyp entry
         if not parent_path:
             folder_path = f"folders/{name}.yy"
@@ -230,7 +234,7 @@ class FolderAsset(BaseAsset):
                 folder_path = parent_path.rstrip()
             else:
                 # For parent_path like "folders/UI.yy", create nested path "folders/UI/name.yy"
-                parent_dir = parent_path.rstrip().rstrip(".yy")
+                parent_dir = parent_path.rstrip().removesuffix(".yy")
                 folder_path = f"{parent_dir}/{name}.yy"
         else:
             # Treat as logical directory path
@@ -240,13 +244,15 @@ class FolderAsset(BaseAsset):
             folder_path = f"{clean_parent}/{name}.yy"
 
         # Load the .yyp file
-        from pathlib import Path
-
         yyp_files = list(project_root.glob("*.yyp"))
         if not yyp_files:
             raise FileNotFoundError("No .yyp file found in project root")
 
         yyp_file = yyp_files[0]
+        from ..project_validation import safe_project_path
+
+        if safe_project_path(project_root, yyp_file.name) is None:
+            raise ValueError("Unsafe project file path")
         project_data = load_json_loose(yyp_file)
         if project_data is None:
             raise ValueError(f"Could not load {yyp_file}")
@@ -255,6 +261,15 @@ class FolderAsset(BaseAsset):
         folders = project_data.get("Folders", project_data.get("folders", []))
         if not isinstance(folders, list):
             raise ValueError("Folders must be a list")
+        from ..project_validation import safe_project_path
+
+        if safe_project_path(project_root.resolve(), folder_path) is None or not folder_path.startswith("folders/"):
+            raise ValueError(f"Unsafe logical folder path: {folder_path}")
+        enclosing = Path(folder_path).parent.as_posix()
+        if enclosing != "folders" and not any(
+            isinstance(folder, dict) and folder.get("folderPath") == enclosing + ".yy" for folder in folders
+        ):
+            raise ValueError(f"Missing enclosing folder: {enclosing}.yy")
         from ..exceptions import AssetExistsError
 
         if any(

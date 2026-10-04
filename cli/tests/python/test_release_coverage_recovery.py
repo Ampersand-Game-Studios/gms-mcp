@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import io
 import json
 import os
 import subprocess
@@ -57,7 +58,7 @@ def test_journal_tree_and_rename_capture_every_implicit_path(tmp_path: Path) -> 
 
 def test_journal_helpers_reject_unsafe_paths_and_snapshot_failures(tmp_path: Path) -> None:
     context = _journal_context(tmp_path)
-    context.journal_path.write_text('{"event":"open","path":"seen.txt"}\n', encoding="utf-8")
+    context.journal_path.write_text('{"event":"open","path":"seen.txt","original":["absent"]}\n', encoding="utf-8")
 
     assert transactions._audit_absolute_path(object()) is None
     assert transactions._journal_relative_path(context, tmp_path.parent / "outside.txt") is None
@@ -149,8 +150,8 @@ def test_transactional_file_wrappers_record_resulting_ownership(tmp_path: Path) 
         replaced = transactions.transactional_replace(replacement_source, renamed)
 
     assert replaced.read_text(encoding="utf-8") == "replacement"
-    assert mark_path.call_count == 5
-    assert mark_tree.call_count == 4
+    assert mark_path.call_count == 12  # Atomic copies and each successful recursive deletion.
+    assert mark_tree.call_count == 3
 
 
 def test_subprocess_discovery_timeout_and_windows_rendering_branches(tmp_path: Path) -> None:
@@ -280,12 +281,9 @@ def test_direct_value_conversion_and_failure_messages() -> None:
 @pytest.mark.parametrize("response", [None, "not-json"])
 def test_direct_worker_fails_closed_for_missing_or_invalid_response(tmp_path: Path, response: str | None) -> None:
     process = Mock(pid=42, returncode=7)
-    process.wait.return_value = 7
+    process.communicate.return_value = ((response or "").encode(), b"")
 
     def popen(*_args: object, **_kwargs: object) -> Mock:
-        if response is not None:
-            response_path = Path(_args[0][-1])  # type: ignore[index]
-            response_path.write_text(response, encoding="utf-8")
         return process
 
     with (
@@ -304,7 +302,7 @@ def test_direct_worker_fails_closed_for_missing_or_invalid_response(tmp_path: Pa
 
 def test_direct_worker_timeout_reports_verified_termination(tmp_path: Path) -> None:
     process = Mock(pid=42, returncode=None)
-    process.wait.side_effect = subprocess.TimeoutExpired("worker", 1)
+    process.communicate.side_effect = subprocess.TimeoutExpired("worker", 1)
     with (
         patch.object(direct, "_resolve_project_directory", return_value=tmp_path),
         patch.object(direct, "_handler_reference", return_value=("module", "handler", None)),
@@ -349,27 +347,30 @@ def test_direct_worker_system_exit_and_request_validation(tmp_path: Path) -> Non
 
 
 def test_direct_worker_main_serializes_bad_requests_and_write_fallback(tmp_path: Path) -> None:
-    request_path = tmp_path / "request.json"
-    response_path = tmp_path / "response.json"
-    request_path.write_text("[]", encoding="utf-8")
-    assert direct_worker.main([str(request_path), str(response_path)]) == 0
-    payload = json.loads(response_path.read_text(encoding="utf-8"))
+    output = io.StringIO()
+    with patch.object(direct_worker.sys, "stdin", io.StringIO("[]")), patch.object(direct_worker.sys, "stdout", output):
+        assert direct_worker.main([]) == 0
+    payload = json.loads(output.getvalue())
     assert not payload["ok"]
     assert "request must be an object" in payload["error"]
 
-    request_path.write_text("{}", encoding="utf-8")
     real_write = direct_worker._write_response
     calls = 0
 
-    def fail_once(path: Path, payload: dict[str, object]) -> None:
+    def fail_once(payload: dict[str, object]) -> None:
         nonlocal calls
         calls += 1
         if calls == 1:
             raise OSError("first write failed")
-        real_write(path, payload)
+        real_write(payload)
 
-    with patch.object(direct_worker, "_write_response", side_effect=fail_once):
-        assert direct_worker.main([str(request_path), str(response_path)]) == 1
-    fallback = json.loads(response_path.read_text(encoding="utf-8"))
+    output = io.StringIO()
+    with (
+        patch.object(direct_worker, "_write_response", side_effect=fail_once),
+        patch.object(direct_worker.sys, "stdin", io.StringIO("{}")),
+        patch.object(direct_worker.sys, "stdout", output),
+    ):
+        assert direct_worker.main([]) == 1
+    fallback = json.loads(output.getvalue())
     assert fallback["exit_code"] == 1
     assert "first write failed" in fallback["error"]

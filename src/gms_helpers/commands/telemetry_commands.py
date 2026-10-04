@@ -26,8 +26,6 @@ def handle_telemetry_enable(args) -> OperationResult:
 
 def handle_telemetry_disable(args) -> OperationResult:
     previous_state = resolve_state(getattr(args, "telemetry", "inherit"))
-    if previous_state.enabled:
-        emit_consent_changed("disable")
     disable_telemetry()
     print("[OK] Telemetry disabled.")
     return OperationResult.ok("Telemetry disabled", data={"previously_enabled": previous_state.enabled})

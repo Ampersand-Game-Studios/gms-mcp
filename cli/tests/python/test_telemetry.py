@@ -166,7 +166,7 @@ class TestTelemetry(unittest.TestCase):
                 {"PYTEST_CURRENT_TEST": "", "GMS_TEST_SUITE": "", "CI": "", "GITHUB_ACTIONS": ""},
                 clear=False,
             ),
-            patch("urllib.request.urlopen", return_value=_FakeResponse()),
+            patch("urllib.request.OpenerDirector.open", return_value=_FakeResponse()),
         ):
             state = enable_telemetry(include_install_hash=False)
             queued = queue_event(
@@ -231,6 +231,8 @@ class TestTelemetry(unittest.TestCase):
 
     def test_gms_prompts_once_after_successful_interactive_run(self):
         fake_stdin = SimpleNamespace(isatty=lambda: True)
+        project_root = self.work_dir / "consent-project"
+        _create_basic_gamemaker_project(project_root)
         with (
             temporary_home(self.home_dir),
             patch.dict(
@@ -242,7 +244,7 @@ class TestTelemetry(unittest.TestCase):
             patch.object(
                 gms_module.sys,
                 "argv",
-                ["gms", "skills", "list"],
+                ["gms", "--project-root", str(project_root), "asset", "create", "script", "scr_consent_first"],
             ),
             patch("builtins.input", return_value="n") as prompt_mock,
             redirect_stdout(io.StringIO()),
@@ -265,7 +267,7 @@ class TestTelemetry(unittest.TestCase):
             patch.object(
                 gms_module.sys,
                 "argv",
-                ["gms", "skills", "list"],
+                ["gms", "--project-root", str(project_root), "asset", "create", "script", "scr_consent_second"],
             ),
             patch("builtins.input", side_effect=AssertionError("prompt should not repeat")),
             redirect_stdout(io.StringIO()),
@@ -388,7 +390,7 @@ class TestTelemetry(unittest.TestCase):
         self.assertIn("Flushed 3 event", output)
         self.assertIn("Cleared 4 queued", output)
         disable_mock.assert_called_once()
-        consent_mock.assert_called_once_with("disable")
+        consent_mock.assert_not_called()
 
     def test_telemetry_command_flush_reports_warning_on_failure(self):
         flush_result = SimpleNamespace(ok=False, sent_events=0, sent_batches=0, remaining_events=5, message="offline")

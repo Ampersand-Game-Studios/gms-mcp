@@ -11,6 +11,7 @@ from typing import List, Set, Dict, Any, Optional
 
 from .orphans import find_orphaned_assets
 from ..transactions import transactional_rmdir, transactional_unlink
+from ..path_safety import assert_project_tree_contained, project_relative_path
 
 
 def find_delete_candidates(project_root: str, skip_types: Optional[Set[str]] = None) -> List[str]:
@@ -206,6 +207,7 @@ def delete_orphan_files(
     Returns:
         Dictionary with deletion statistics and details
     """
+    project_root = str(assert_project_tree_contained(Path(project_root)))
     if skip_types is None:
         skip_types = {"folder"}
 
@@ -220,10 +222,14 @@ def delete_orphan_files(
     }
 
     candidates = find_delete_candidates(project_root, skip_types)
+    # Reject the full selection before any deletion; a compromised scanner
+    # result must not allow partial cleanup or an external destination.
+    for candidate in candidates:
+        project_relative_path(candidate, project_root=Path(project_root), kind="orphan candidate")
 
     for orphan_file in candidates:
         try:
-            orphan_path = Path(project_root) / orphan_file
+            orphan_path = project_relative_path(orphan_file, project_root=Path(project_root), kind="orphan candidate")
 
             if not orphan_path.exists():
                 result["skipped_files"].append(f"File not found: {orphan_file}")
@@ -246,7 +252,9 @@ def delete_orphan_files(
             if fix_issues:
                 # Actually delete the files
                 for file_to_delete in files_to_delete:
-                    file_path = Path(project_root) / file_to_delete
+                    file_path = project_relative_path(
+                        file_to_delete, project_root=Path(project_root), kind="orphan companion"
+                    )
                     if file_path.exists():
                         transactional_unlink(file_path)
                         result["deleted_files"].append(file_to_delete)

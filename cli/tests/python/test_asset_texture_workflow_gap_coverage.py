@@ -160,8 +160,7 @@ class TestAssetsGapCoverage(unittest.TestCase):
         yyp_path = self.project_root / "TestGame.yyp"
         save_pretty_json(yyp_path, {"Folders": []})
 
-        with patch("gms_helpers.utils.insert_into_folders", return_value=True):
-            rel_path = asset.create_files(self.project_root, "UI")
+        rel_path = asset.create_files(self.project_root, "UI")
         self.assertEqual(rel_path, "folders/UI.yy")
 
         with patch("gms_helpers.utils.insert_into_folders", return_value=False):
@@ -224,6 +223,7 @@ class TestAssetsGapCoverage(unittest.TestCase):
 
         timeline_dir = self.project_root / "timelines" / "tl_intro"
         timeline_dir.mkdir(parents=True)
+        save_pretty_json(timeline_dir / "tl_intro.yy", TimelineAsset().create_yy_data("tl_intro", self.parent_path))
         TimelineAsset().create_stub_files(timeline_dir, "tl_intro")
         self.assertTrue((timeline_dir / "moment_0.gml").exists())
 

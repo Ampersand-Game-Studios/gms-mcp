@@ -32,10 +32,13 @@ class TestEventHelper95Coverage(unittest.TestCase):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.project_root = Path(self.temp_dir.name)
         self.old_cwd = Path.cwd()
-        (self.project_root / "TestGame.yyp").write_text("{}", encoding="utf-8")
+        (self.project_root / "TestGame.yyp").write_text(
+            json.dumps({"resources": [{"id": {"name": "o_test", "path": "objects/o_test/o_test.yy"}}]}),
+            encoding="utf-8",
+        )
         (self.project_root / "objects" / "o_test").mkdir(parents=True)
         self.object_yy = self.project_root / "objects" / "o_test" / "o_test.yy"
-        self.object_yy.write_text(json.dumps({"name": "o_test"}), encoding="utf-8")
+        self.object_yy.write_text(json.dumps({"name": "o_test", "resourceType": "GMObject"}), encoding="utf-8")
         os_chdir = __import__("os").chdir
         os_chdir(self.project_root)
 

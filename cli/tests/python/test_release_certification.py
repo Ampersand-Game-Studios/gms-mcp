@@ -41,6 +41,10 @@ def _report(name: str, *, host_platform: str = "macos", status: str = "passed") 
             "collision_target_rename_compiled": passed,
             "room_order_duplicate_delete_schema": passed,
             "room_order_changes_compiled": passed,
+            "resolve_cancel_left_existing_asset": passed,
+            "resolve_alternative_name_compiled": passed,
+            "resolve_texture_reassignment_compiled": passed,
+            "resolve_dependency_delete_cancelled": passed,
         },
     }
 
