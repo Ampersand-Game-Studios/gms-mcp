@@ -47,6 +47,48 @@ EVENT_TYPE_NAMES = {
     -1: "PreCreate",
 }
 
+# Names the IDE shows for numbered sub-events, so callers need not memorise numbers.
+EVENT_ALIASES = {
+    "begin_step": "step:1",
+    "step_begin": "step:1",
+    "end_step": "step:2",
+    "step_end": "step:2",
+    "draw_gui": "draw:64",
+    "window_resize": "draw:65",
+    "draw_begin": "draw:72",
+    "draw_end": "draw:73",
+    "draw_gui_begin": "draw:74",
+    "draw_gui_end": "draw:75",
+    "pre_draw": "draw:76",
+    "post_draw": "draw:77",
+    "outside_room": "other:0",
+    "intersect_boundary": "other:1",
+    "game_start": "other:2",
+    "game_end": "other:3",
+    "room_start": "other:4",
+    "room_end": "other:5",
+    "animation_end": "other:7",
+    "path_ended": "other:8",
+    "animation_update": "other:58",
+    "animation_event": "other:59",
+    "async_image_loaded": "other:60",
+    "async_http": "other:62",
+    "async_dialog": "other:63",
+    "async_iap": "other:66",
+    "async_cloud": "other:67",
+    "async_networking": "other:68",
+    "async_steam": "other:69",
+    "async_social": "other:70",
+    "async_push_notification": "other:71",
+    "async_save_load": "other:72",
+    "async_audio_recording": "other:73",
+    "async_audio_playback": "other:74",
+    "async_system": "other:75",
+    "broadcast_message": "other:76",
+    "async_audio_playback_ended": "other:80",
+    **{f"user_event_{index}": f"other:{10 + index}" for index in range(16)},
+}
+
 _EVENT_LABEL_TO_ID = {label.lower(): event_type for event_type, label in EVENT_TYPE_NAMES.items()}
 _EVENT_ID_TO_SPEC = {event_type: type_name for type_name, event_type in EVENT_TYPE_IDS.items()}
 
@@ -83,13 +125,20 @@ def parse_event_spec(value: Any) -> EventSpec:
     if not candidate:
         raise ValidationError("Event specification cannot be empty")
 
+    candidate = EVENT_ALIASES.get(candidate.lower().replace(" ", "_").replace("-", "_"), candidate)
     parts = candidate.split(":")
     if len(parts) > 2:
         raise ValidationError(f"Invalid event specification: {candidate}")
 
     type_name = parts[0].strip().lower()
     if type_name not in EVENT_TYPE_IDS or type_name == "precreate":
-        raise ValidationError(f"Unknown event type: {type_name}")
+        raise ValidationError(
+            f"Unknown event type: {type_name}. Use <type>[:<number>] with a type from "
+            f"{', '.join(sorted(name for name in EVENT_TYPE_IDS if name != 'precreate'))}, "
+            "collision:<object_name>, or a named sub-event such as begin_step, end_step, draw_gui, "
+            "draw_gui_end, room_start, game_start, animation_end, async_http, async_networking, "
+            "async_steam, async_system, user_event_0."
+        )
 
     suffix = parts[1].strip() if len(parts) == 2 else ""
     if type_name == "collision":

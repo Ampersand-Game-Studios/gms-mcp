@@ -56,6 +56,15 @@ PROJECT_MUTATIONS = frozenset(
         "bridge-enable-one-shot",
         "runtime-pin",
         "runtime-unpin",
+        "yyp-register",
+        "yyp-unregister",
+        "yyp-normalize-order",
+        "asset-move",
+        "included-file-add",
+        "included-file-remove",
+        "config-add",
+        "audio-group-create",
+        "game-bridge-install",
     }
 )
 _FIX_OPERATIONS = frozenset(
@@ -70,6 +79,10 @@ _ADDITIVE_OPERATIONS = frozenset(
         "room-ops-duplicate",
         "sprite-import-strip",
         "texture-group-create",
+        "yyp-register",
+        "included-file-add",
+        "config-add",
+        "audio-group-create",
     }
 )
 
@@ -83,6 +96,18 @@ _OPERATION_SCOPES = {
     **dict.fromkeys("find-definition find-references list-symbols".split(), "read"),
     **dict.fromkeys("help version".split(), "read"),
     **dict.fromkeys("compile run run-stop run-command verification-flush resourcetool-validate".split(), "runtime"),
+    # Snapshot builds and live sessions run Igor and the game on throwaway copies; they
+    # never edit project resources.
+    **dict.fromkeys(
+        "snapshot-compile test-run game-start game-stop game-command game-screenshot live-reload-start live-reload-stop".split(),
+        "runtime",
+    ),
+    # Stages (and optionally commits) in git; the working tree's project files are untouched.
+    "vcs-stage": "vcs",
+    **dict.fromkeys(
+        "project-check included-file-list config-list audio-group-list lock-status run-log game-status game-log live-reload-status".split(),
+        "read",
+    ),
     **dict.fromkeys(
         "skills-install skills-uninstall telemetry-enable telemetry-disable telemetry-flush telemetry-clear".split(),
         "local-config",

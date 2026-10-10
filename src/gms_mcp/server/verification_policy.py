@@ -78,13 +78,7 @@ def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUE_VALUES
 
 
-def current_verification_mode() -> str:
-    """Return off, always, smart, or unknown for the active post-mutation policy."""
-    if _env_truthy("GMS_MCP_VERIFY_COMPILE_AFTER_MUTATION"):
-        return "always"
-    raw_value = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY")
-    if raw_value is None:
-        return "smart"
+def _mode_from_text(raw_value: str) -> str:
     raw = raw_value.strip().lower()
     if raw in _ALWAYS_VERIFY_VALUES:
         return "always"
@@ -93,6 +87,30 @@ def current_verification_mode() -> str:
     if raw in _OFF_VALUES:
         return "off"
     return "unknown"
+
+
+def current_verification_mode(project_root: str | Path | None = None) -> str:
+    """Return off, always, smart, or unknown for the active post-mutation policy.
+
+    The server environment wins. Without it, a project may choose its own default with
+    ``"verification": {"post_mutation": "off"}`` in ``.gms-mcp.json`` (large projects and
+    projects edited by several agents verify in batches instead of after every edit).
+    """
+    if _env_truthy("GMS_MCP_VERIFY_COMPILE_AFTER_MUTATION"):
+        return "always"
+    raw_value = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY")
+    if raw_value is not None:
+        return _mode_from_text(raw_value)
+    if project_root is not None:
+        from gms_helpers.project_config import configured_post_mutation_verification
+
+        try:
+            configured = configured_post_mutation_verification(project_root)
+        except (OSError, ValueError):
+            configured = None
+        if configured is not None:
+            return _mode_from_text(configured)
+    return "smart"
 
 
 def _matches_prefix(tool_name: str, prefixes: Iterable[str]) -> bool:
@@ -107,8 +125,10 @@ def _classify_risk(tool_name: str) -> tuple[str, str]:
     return "unknown", "unclassified transactional mutation"
 
 
-def decide_mutation_verification(tool_name: str) -> MutationVerificationDecision:
-    mode = current_verification_mode()
+def decide_mutation_verification(
+    tool_name: str, project_root: str | Path | None = None
+) -> MutationVerificationDecision:
+    mode = current_verification_mode(project_root)
     risk, reason = _classify_risk(tool_name)
 
     if mode == "always":

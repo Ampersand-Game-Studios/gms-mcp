@@ -23,7 +23,9 @@ GMS MCP is an independent, open-source project by Ampersand Game Studios, not an
 | Create and change game content | Create GameMaker assets, manage object events, place room instances, edit room layers, and organize audio/texture resources. |
 | Refactor and maintain a project | Use reference-aware rename/delete workflows, check naming and resource integrity, and find orphaned or missing references. |
 | Build and run | Compile and launch through GameMaker's Igor toolchain; select and pin installed runtimes; inspect and stop managed run sessions. |
-| Interact with a running game | Install the optional bridge, send supported commands, and collect logs emitted through `__mcp_log()`. |
+| Build and test in isolation | Compile and run a throwaway snapshot (the working tree, or a git revision plus only your files), inject a test script, and get a pass/fail verdict with screenshots; Igor's random loader crash is retried. |
+| Interact with a running game | Start a live session, send bridge commands (`state`, `console`, `screenshot`, `log_tail`), read the game log, or install the optional `__mcp_bridge` endpoint and collect logs emitted through `__mcp_log()`. |
+| Share one project between several agents | Minimal-diff `.yyp` edits in GameMaker's own layout, machine-wide build and run locks, and commits that contain only your registrations. |
 | Give the assistant reusable context | Expose MCP tools, project resources, five workflow prompts, and a project dashboard with optional MCP Apps rendering. |
 
 Availability depends on the selected [tool profile](#enable-editing-and-additional-tools), client capabilities, and installed GameMaker toolchain. The bridge is not a GML hot-reload system, and GMS MCP does not provide automatic synchronization with the GameMaker IDE.
@@ -110,7 +112,7 @@ To expose selected domains instead of everything:
 gms-mcp-init --client cursor --scope workspace --action app-setup --profile standard --toolsets core,assets,events,rooms
 ```
 
-Optional domains: `assets`, `bridge`, `docs`, `events`, `maintenance`, `resourcetool`, `rooms`, `runtime`, and `texture-groups`. Call `gm_capabilities` to see what is actually enabled. `safe` accepts only the read-only core surface; it cannot be combined with extra toolsets.
+Optional domains: `assets`, `bridge`, `docs`, `events`, `live-reload`, `maintenance`, `resourcetool`, `rooms`, `runtime`, and `texture-groups`. Call `gm_capabilities` to see what is actually enabled. `safe` accepts only the read-only core surface; it cannot be combined with extra toolsets.
 
 ## Try it with your assistant
 
@@ -202,7 +204,7 @@ GMS_MCP_RESOURCETOOL_ARGUMENTS_JSON=["resourcetool","eval","resource list","{pro
 
 These are configuration values, not a shell script. Do not enable them in the read-only `safe` profile.
 
-`gm_resourcetool_validate` requires the configured `gm-cli` executable to match its pinned SHA-256, rejects symlinks and private-file/content conventions, and copies only the `.yyp` descriptor into a task-owned temporary directory. It runs the fixed read-only command in an OS sandbox that blocks network access, live-project reads, and host writes; platforms without the required sandbox fail closed. Child output is suppressed, the minimal copy is checksummed before and after, and cleanup happens before returning. A rewrite, timeout, nonzero exit, ambiguous `.yyp`, identity mismatch, private data, or altered command contract fails closed. This validates ResourceTool project-list compatibility; it is not a mutation backend.
+`gm_resourcetool_validate` requires the configured `gm-cli` executable to match its pinned SHA-256, rejects symlinks and private-file/content conventions, and copies the complete project into a task-owned temporary directory. It runs the fixed `resource list` command in an OS sandbox that blocks network access, live-project reads, and host writes; platforms without the required sandbox fail closed. ResourceTool may normalize project metadata while loading even for this query, so the complete copy is checksummed before and after and any rewrite is reported as a failed validation. Child output is suppressed, and cleanup happens before returning. A rewrite, timeout, nonzero exit, ambiguous `.yyp`, identity mismatch, private data, or altered command contract fails closed. This validates ResourceTool project-list compatibility; it is not a mutation backend.
 
 </details>
 
