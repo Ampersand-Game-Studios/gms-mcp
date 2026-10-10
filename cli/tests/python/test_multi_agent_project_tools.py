@@ -883,7 +883,7 @@ def test_live_reload_is_driven_by_project_configuration(project: Path):
         json.dumps(
             {
                 "live_reload": {
-                    "start": [sys.executable, "-c", "print('started {project}')"],
+                    "start": [sys.executable, "-c", "print(r'started {project}')"],
                     "stop": [sys.executable, "-c", "print('stopped')"],
                     "status": [sys.executable, "-c", 'print(\'{"serving": true, "clients": 1}\')'],
                     "status_file": "status.json",
