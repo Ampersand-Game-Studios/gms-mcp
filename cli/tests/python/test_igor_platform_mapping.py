@@ -9,6 +9,7 @@ import os
 import sys
 import tempfile
 import unittest
+import zipfile
 from pathlib import Path
 from unittest.mock import patch, MagicMock
 
@@ -90,6 +91,15 @@ class TestRunnerCommandSelection(unittest.TestCase):
         proc.pid = 12345
         return proc
 
+    @staticmethod
+    def _write_android_package(path: Path, marker: str = "") -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        manifest_name = "AndroidManifest.xml" if path.suffix == ".apk" else "base/manifest/AndroidManifest.xml"
+        with zipfile.ZipFile(path, "w") as archive:
+            archive.writestr(manifest_name, "manifest")
+            if marker:
+                archive.writestr("assets/marker", marker)
+
     @patch.object(GameMakerRunner, "_wait_for_macos_main_loop", return_value=True)
     @patch.object(GameMakerRunner, "_wait_for_macos_runner_start", return_value=(20, {20}, set()))
     @patch.object(GameMakerRunner, "_stop_platform_process", return_value=True)
@@ -153,6 +163,37 @@ class TestRunnerCommandSelection(unittest.TestCase):
         self.assertNotIn("Tests", captured_cmd)
         self.assertTrue(any(str(arg).startswith("/of=") for arg in captured_cmd))
 
+    def test_html5_target_type_exception_succeeds_only_with_verified_artifact(self):
+        runner = GameMakerRunner(self.project_root)
+        system_temp = self.project_root / "temp"
+        package_root = system_temp / "GameMakerStudio2" / "test_project" / "html5game"
+        package_root.mkdir(parents=True)
+        (package_root / "index.html").write_text("<script src='game.js'></script>", encoding="utf-8")
+        (package_root / "game.js").write_text("window.game = true;", encoding="utf-8")
+        process = self._fake_process()
+        process.returncode = 1
+        output = [
+            "Final Compile finished",
+            "Saving IFF file",
+            "Igor complete.",
+            "The given key (targetType) was not present in the dictionary",
+        ]
+
+        with patch.object(runner, "find_project_file", return_value=self.project_root / "test_project.yyp"):
+            with patch.object(runner, "_system_temp_root", return_value=system_temp):
+                with patch.object(runner, "_build_platform_action_command", return_value=["igor", "PackageZip"]):
+                    with patch.object(runner, "_run_igor_command", return_value=process):
+                        with patch.object(runner, "_stream_igor_output", return_value=output):
+                            self.assertTrue(runner.compile_project(platform_target="HTML5"))
+
+        (package_root / "index.html").unlink()
+        with patch.object(runner, "find_project_file", return_value=self.project_root / "test_project.yyp"):
+            with patch.object(runner, "_system_temp_root", return_value=system_temp):
+                with patch.object(runner, "_build_platform_action_command", return_value=["igor", "PackageZip"]):
+                    with patch.object(runner, "_run_igor_command", return_value=process):
+                        with patch.object(runner, "_stream_igor_output", return_value=output):
+                            self.assertFalse(runner.compile_project(platform_target="HTML5"))
+
     def test_macos_temp_run_uses_local_run_without_tf(self):
         runner = GameMakerRunner(self.project_root)
         captured_cmd = []
@@ -199,20 +240,121 @@ class TestRunnerCommandSelection(unittest.TestCase):
     def test_compile_project_uses_package_on_android(self):
         runner = GameMakerRunner(self.project_root)
         captured_cmd = []
+        system_temp = self.project_root / "temp"
+        package_path = system_temp / "GameMakerStudio2" / "test_project" / "test_project.apk"
 
         def fake_run_igor(cmd, **_kwargs):
             captured_cmd[:] = cmd
+            self._write_android_package(package_path)
             return self._fake_process()
 
-        with patch.object(runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)):
-            with patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")):
-                with patch.object(runner, "get_prefabs_path", return_value=None):
-                    with patch.object(runner, "_run_igor_command", side_effect=fake_run_igor):
-                        ok = runner.compile_project(platform_target="Android", runtime_type="VM")
+        with patch.object(runner, "_system_temp_root", return_value=system_temp):
+            with patch.object(runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)):
+                with patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")):
+                    with patch.object(runner, "get_prefabs_path", return_value=None):
+                        with patch.object(runner, "_run_igor_command", side_effect=fake_run_igor):
+                            ok = runner.compile_project(platform_target="Android", runtime_type="VM")
 
         self.assertTrue(ok)
         self.assertIn("Package", captured_cmd)
         self.assertNotIn("PackageZip", captured_cmd)
+
+    def test_compile_project_rejects_android_package_without_apk_or_aab(self):
+        runner = GameMakerRunner(self.project_root)
+        process = self._fake_process()
+        system_temp = self.project_root / "temp"
+
+        with patch.object(runner, "_system_temp_root", return_value=system_temp):
+            with patch.object(runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)):
+                with patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")):
+                    with patch.object(runner, "get_prefabs_path", return_value=None):
+                        with patch.object(runner, "_run_igor_command", return_value=process):
+                            self.assertFalse(runner.compile_project(platform_target="Android", runtime_type="VM"))
+
+        self.assertIn("APK or AAB", runner.last_failure_message)
+
+    def test_compile_project_rejects_stale_android_package(self):
+        runner = GameMakerRunner(self.project_root)
+        process = self._fake_process()
+        system_temp = self.project_root / "temp"
+        package_path = system_temp / "GameMakerStudio2" / "test_project" / "test_project.aab"
+        self._write_android_package(package_path)
+
+        with patch.object(runner, "_system_temp_root", return_value=system_temp):
+            with patch.object(runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)):
+                with patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")):
+                    with patch.object(runner, "get_prefabs_path", return_value=None):
+                        with patch.object(runner, "_run_igor_command", return_value=process):
+                            self.assertFalse(runner.compile_project(platform_target="Android", runtime_type="VM"))
+
+        self.assertIn("new verified APK or AAB", runner.last_failure_message)
+
+    def test_compile_project_rejects_invalid_android_package_artifacts(self):
+        system_temp = self.project_root / "temp"
+        package_dir = system_temp / "GameMakerStudio2" / "test_project"
+        package_dir.mkdir(parents=True)
+
+        def write_empty(path: Path) -> None:
+            path.touch()
+
+        def write_corrupt(path: Path) -> None:
+            path.write_bytes(b"not a zip")
+
+        def write_missing_manifest(path: Path) -> None:
+            with zipfile.ZipFile(path, "w") as archive:
+                archive.writestr("assets/game.droid", "game")
+
+        for suffix, writer in ((".apk", write_empty), (".aab", write_corrupt), (".apk", write_missing_manifest)):
+            with self.subTest(suffix=suffix, writer=writer.__name__):
+                runner = GameMakerRunner(self.project_root)
+                package_path = package_dir / f"invalid-{writer.__name__}{suffix}"
+                writer(package_path)
+
+                with patch.object(runner, "_system_temp_root", return_value=system_temp):
+                    with patch.object(
+                        runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)
+                    ):
+                        with patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")):
+                            with patch.object(runner, "get_prefabs_path", return_value=None):
+                                with patch.object(runner, "_run_igor_command", return_value=self._fake_process()):
+                                    self.assertFalse(
+                                        runner.compile_project(platform_target="Android", runtime_type="VM")
+                                    )
+
+                self.assertIn("new verified APK or AAB", runner.last_failure_message)
+
+    def test_compile_project_accepts_fresh_valid_android_aab(self):
+        runner = GameMakerRunner(self.project_root)
+        system_temp = self.project_root / "temp"
+        package_path = system_temp / "GameMakerStudio2" / "test_project" / "test_project.aab"
+
+        def fake_run_igor(_cmd, **_kwargs):
+            self._write_android_package(package_path)
+            return self._fake_process()
+
+        with patch.object(runner, "_system_temp_root", return_value=system_temp):
+            with patch.object(runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)):
+                with patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")):
+                    with patch.object(runner, "get_prefabs_path", return_value=None):
+                        with patch.object(runner, "_run_igor_command", side_effect=fake_run_igor):
+                            self.assertTrue(runner.compile_project(platform_target="Android", runtime_type="VM"))
+
+    def test_compile_project_accepts_rewritten_android_package(self):
+        runner = GameMakerRunner(self.project_root)
+        system_temp = self.project_root / "temp"
+        package_path = system_temp / "GameMakerStudio2" / "test_project" / "test_project.apk"
+        self._write_android_package(package_path, marker="old")
+
+        def fake_run_igor(_cmd, **_kwargs):
+            self._write_android_package(package_path, marker="new")
+            return self._fake_process()
+
+        with patch.object(runner, "_system_temp_root", return_value=system_temp):
+            with patch.object(runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)):
+                with patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")):
+                    with patch.object(runner, "get_prefabs_path", return_value=None):
+                        with patch.object(runner, "_run_igor_command", side_effect=fake_run_igor):
+                            self.assertTrue(runner.compile_project(platform_target="Android", runtime_type="VM"))
 
     def test_compile_project_rejects_unknown_igor_command_with_zero_exit(self):
         runner = GameMakerRunner(self.project_root)

@@ -710,9 +710,9 @@ def test_safe_profile_exercises_every_reader_without_any_filesystem_write(
                 assert "WRITE_FREE_VIOLATION" not in json.dumps(result), (spec.name, result)
                 assert result.get("exit_code", 0) == 0, (spec.name, result)
             if toolsets == "core":
-                assert len(specs) == 14
+                assert len(specs) == 17
             else:
-                assert len(specs) == 34
+                assert len(specs) == 43
                 await client.read_resource("ui://gms-mcp/project-dashboard.html")
             assert "gm_resourcetool_validate" not in {spec.name for spec in specs}
 

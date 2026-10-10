@@ -88,11 +88,13 @@ def load_json_loose(path: Path) -> Dict[str, Any] | None:
     except FileNotFoundError:
         return None
 
+    from .gm_json import GMFloat
+
     try:
-        return json.loads(raw)
+        return json.loads(raw, parse_float=GMFloat)
     except json.JSONDecodeError:
         try:
-            return json.loads(strip_trailing_commas(raw))
+            return json.loads(strip_trailing_commas(raw), parse_float=GMFloat)
         except json.JSONDecodeError:
             return None
 
@@ -135,6 +137,22 @@ def _render_json_for_existing_path(
         original = _read_text_preserving_newlines(path)
     except FileNotFoundError:
         pass
+
+    # GameMaker's own layout is kept byte-for-byte: only the lines whose data changed
+    # differ afterwards. A hand-formatted file keeps the formatting it already had.
+    # The proof is on the bytes, so the .resource_order sidecar is covered as well.
+    from . import gm_json
+
+    try:
+        if original:
+            # A file with no trailing commas at all ("{}", strict JSON) proves nothing.
+            layout = gm_json.detect_layout(original) if _has_trailing_commas(original) else None
+            if layout is not None:
+                return gm_json.dumps(data, layout)
+        elif Path(path).suffix.lower() in {".yy", ".yyp"} and gm_json.looks_like_modern_resource(data):
+            return gm_json.dumps(data)
+    except (TypeError, ValueError):
+        pass  # Not representable natively; fall through to the generic renderer.
 
     indent: int | str = 2
     trailing_commas = default_trailing_commas
@@ -326,7 +344,11 @@ def ensure_default_asset_parent(project_root: Path, asset_kind: str, folder_pref
 # YYP Management
 # ------------------------------------------------------------------
 def insert_into_resources(resources: List[Dict], asset_name: str, asset_path: str):
-    """Insert a new resource into the resources array in alphabetical order."""
+    """Insert a new resource where the project's own ordering puts it.
+
+    Existing entries are never reordered: the .yyp is shared with the IDE and with
+    other tools that edit it line by line.
+    """
     # Check for duplicates (safely handle malformed entries)
     for r in resources:
         existing_name = r.get("id", {}).get("name") if isinstance(r.get("id"), dict) else None
@@ -334,16 +356,9 @@ def insert_into_resources(resources: List[Dict], asset_name: str, asset_path: st
             print(f"'{asset_name}' already present in .yyp - skipping insertion")
             return False
 
-    # Add new resource
-    resources.append({"id": {"name": asset_name, "path": asset_path}})
+    from .gm_order import RESOURCE_ORDERINGS, insert_ordered
 
-    # Sort alphabetically (case-insensitive), safely handle malformed entries
-    def get_sort_key(r):
-        if isinstance(r.get("id"), dict) and "name" in r["id"]:
-            return r["id"]["name"].lower()
-        return ""  # Put malformed entries at the beginning
-
-    resources.sort(key=get_sort_key)
+    insert_ordered(resources, {"id": {"name": asset_name, "path": asset_path}}, RESOURCE_ORDERINGS)
     return True
 
 
@@ -354,8 +369,11 @@ def insert_into_folders(folders: List[Dict], folder_name: str, folder_path: str)
         print(f"Folder '{folder_path}' already exists - skipping insertion")
         return False
 
-    # Add new folder
-    folders.append(
+    from .gm_order import FOLDER_ORDERINGS, insert_ordered
+
+    # Existing entries keep their positions; see insert_into_resources.
+    insert_ordered(
+        folders,
         {
             "$GMFolder": "",
             "%Name": folder_name,
@@ -363,20 +381,10 @@ def insert_into_folders(folders: List[Dict], folder_name: str, folder_path: str)
             "name": folder_name,
             "resourceType": "GMFolder",
             "resourceVersion": "2.0",
-        }
+        },
+        FOLDER_ORDERINGS,
     )
 
-    # Sort alphabetically by name (fallback to folderPath if name is missing)
-    def get_folder_name(f):
-        if "name" in f:
-            return f["name"].lower()
-        # Extract folder name from "folders/FolderName.yy" format
-        folder_path = f.get("folderPath", "")
-        if "/" in folder_path and folder_path.endswith(".yy"):
-            return folder_path.split("/")[-1][:-3].lower()  # Remove .yy extension
-        return folder_path.lower()
-
-    folders.sort(key=get_folder_name)
     return True
 
 
@@ -431,12 +439,14 @@ def load_json(file_path):
 
         # GameMaker JSON files often have trailing commas, which Python's json module doesn't like
         # We'll try to parse as-is first, then clean up trailing commas if needed
+        from .gm_json import GMFloat
+
         try:
-            return json.loads(content)
+            return json.loads(content, parse_float=GMFloat)
         except json.JSONDecodeError:
             # Try to fix trailing commas using the same logic as load_json_loose
             content = strip_trailing_commas(content)
-            return json.loads(content)
+            return json.loads(content, parse_float=GMFloat)
 
     except FileNotFoundError:
         raise FileNotFoundError(f"File not found: {file_path}")
@@ -785,19 +795,11 @@ def update_yyp_file(resource_entry, project_root: str | Path | None = None):
             print("[INFO] Suggestion: Use 'gms maintenance dedupe-resources' to clean up duplicates")
         return False
 
-    # Add the resource in alphabetical order
+    # Add the resource where the project's own ordering puts it.
+    from .gm_order import RESOURCE_ORDERINGS, insert_ordered
+
     resources = project_data.get("resources", [])
-
-    # Find the correct position to insert (alphabetical by name)
-    insert_pos = 0
-
-    for i, resource in enumerate(resources):
-        if resource["id"]["name"] > resource_name:
-            insert_pos = i
-            break
-        insert_pos = i + 1
-
-    resources.insert(insert_pos, resource_entry)
+    insert_ordered(resources, resource_entry, RESOURCE_ORDERINGS)
     project_data["resources"] = resources
 
     try:

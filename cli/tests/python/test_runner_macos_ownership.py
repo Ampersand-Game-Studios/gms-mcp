@@ -505,7 +505,11 @@ class TestMacOSRunnerOwnership(unittest.TestCase):
         process.poll.return_value = None
         process.wait.return_value = 0
         owned_processes = {
-            20: MacOSProcess(20, 77, f"/runtime/Mac_Runner -game {self.game_path}"),
+            20: MacOSProcess(
+                20,
+                77,
+                f"/runtime/Mac_Runner -game {self.game_path} -debugoutput {self.debug_log}",
+            ),
             21: MacOSProcess(
                 21,
                 1,

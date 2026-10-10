@@ -6,6 +6,7 @@ import os
 import shutil
 import subprocess
 import threading
+import zipfile
 from pathlib import Path
 from typing import List, Optional
 
@@ -41,6 +42,81 @@ class RunnerIgorMixin:
             returncode != 0
             and "System.AccessViolationException" in output
             and not self._compile_stage_succeeded(output_lines)
+        )
+
+    @staticmethod
+    def _android_package_fingerprint(path: Path) -> tuple[int, int]:
+        """Return the metadata needed to distinguish this build's package from a stale one."""
+        stat = path.stat()
+        return stat.st_mtime_ns, stat.st_size
+
+    @classmethod
+    def _verified_android_packages(cls, output_root: Path) -> dict[Path, tuple[int, int]]:
+        """Find structurally valid Android install/package artifacts below Igor's output root."""
+        packages: dict[Path, tuple[int, int]] = {}
+        for package_path in output_root.rglob("*"):
+            if not package_path.is_file() or package_path.suffix.lower() not in {".apk", ".aab"}:
+                continue
+            try:
+                if package_path.stat().st_size == 0:
+                    continue
+                with zipfile.ZipFile(package_path) as archive:
+                    names = set(archive.namelist())
+                    manifest_name = (
+                        "AndroidManifest.xml"
+                        if package_path.suffix.lower() == ".apk"
+                        else "base/manifest/AndroidManifest.xml"
+                    )
+                    if archive.testzip() is None and manifest_name in names:
+                        packages[package_path] = cls._android_package_fingerprint(package_path)
+            except (OSError, zipfile.BadZipFile):
+                continue
+        return packages
+
+    @classmethod
+    def _verified_new_android_package_exists(
+        cls,
+        output_root: Path,
+        baseline_packages: dict[Path, tuple[int, int]],
+    ) -> bool:
+        """Require a valid APK/AAB generated or updated by the current package invocation."""
+        packages = cls._verified_android_packages(output_root)
+        return any(baseline_packages.get(path) != fingerprint for path, fingerprint in packages.items())
+
+    @staticmethod
+    def _verified_html5_package_exists(output_root: Path) -> bool:
+        for index_path in output_root.rglob("index.html"):
+            if index_path.stat().st_size > 0 and any(
+                script.stat().st_size > 0 for script in index_path.parent.rglob("*.js")
+            ):
+                return True
+        for archive_path in output_root.rglob("*.zip"):
+            try:
+                with zipfile.ZipFile(archive_path) as archive:
+                    names = [name for name in archive.namelist() if not name.endswith("/")]
+                    if (
+                        archive.testzip() is None
+                        and any(name.endswith("index.html") for name in names)
+                        and any(name.endswith(".js") for name in names)
+                    ):
+                        return True
+            except (OSError, zipfile.BadZipFile):
+                continue
+        return False
+
+    @classmethod
+    def _is_verified_html5_target_type_false_failure(
+        cls,
+        returncode: int,
+        output_lines: List[str],
+        output_root: Path,
+    ) -> bool:
+        output = "\n".join(output_lines)
+        return (
+            returncode != 0
+            and "The given key (targetType) was not present in the dictionary" in output
+            and cls._compile_stage_succeeded(output_lines)
+            and cls._verified_html5_package_exists(output_root)
         )
 
     @staticmethod
@@ -347,9 +423,10 @@ class RunnerIgorMixin:
                     if runner_pid is not None:
                         runner_process = self._snapshot_macos_processes().get(runner_pid)
                         if runner_process is not None:
-                            game_path = self._macos_runner_game_path(runner_process.command) or game_path
-                            debug_log = self._macos_runner_debug_path(runner_process.command) or (
-                                game_path.parent / "debug.log"
+                            game_path, debug_log = self._macos_runner_artifact_paths(
+                                runner_process.command,
+                                game_path,
+                                debug_log,
                             )
                             start_offset = 0
                     reached_main_loop = self._wait_for_macos_main_loop(
@@ -422,6 +499,9 @@ class RunnerIgorMixin:
             project_name = project_file.stem
             ide_temp_dir = system_temp / "GameMakerStudio2" / project_name
             ide_temp_dir.mkdir(parents=True, exist_ok=True)
+            android_baseline_packages = (
+                self._verified_android_packages(ide_temp_dir) if platform_target == "Android" else {}
+            )
 
             compile_action = "Package" if platform_target in {"Android", "Linux"} else "PackageZip"
             output_args = [f"/of={ide_temp_dir / project_name}"]
@@ -439,7 +519,29 @@ class RunnerIgorMixin:
             process.wait()
 
             if process.returncode == 0 and not self._igor_rejected_command(output_lines):
+                if platform_target == "Android" and not self._verified_new_android_package_exists(
+                    ide_temp_dir,
+                    android_baseline_packages,
+                ):
+                    failure_message = (
+                        "Android package/export completed without producing a new verified APK or AAB artifact. "
+                        "Check Android SDK/JDK and packaging settings in GameMaker, then retry."
+                    )
+                    self._remember_failure(failure_message)
+                    print(f"[ERROR] {failure_message}")
+                    return False
                 print(f"[OK] {stage_label.capitalize()} completed successfully!")
+                return True
+
+            if platform_target == "HTML5" and self._is_verified_html5_target_type_false_failure(
+                process.returncode,
+                output_lines,
+                ide_temp_dir,
+            ):
+                print(
+                    "[OK] HTML5 package completed and the generated artifact was verified; "
+                    "ignoring Igor's post-package targetType exception."
+                )
                 return True
 
             failure_message = self._build_stage_failure_message(stage_label, process.returncode, output_lines)

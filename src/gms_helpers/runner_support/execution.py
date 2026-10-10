@@ -343,9 +343,10 @@ class RunnerExecutionMixin:
                 owned_processes = self._snapshot_macos_processes()
                 primary_runner = owned_processes.get(runner_pid)
                 if primary_runner is not None:
-                    macos_game_path = self._macos_runner_game_path(primary_runner.command) or macos_game_path
-                    macos_debug_log = self._macos_runner_debug_path(primary_runner.command) or (
-                        macos_game_path.parent / "debug.log"
+                    macos_game_path, macos_debug_log = self._macos_runner_artifact_paths(
+                        primary_runner.command,
+                        macos_game_path,
+                        macos_debug_log,
                     )
                 session_kwargs.update(
                     {
