@@ -36,7 +36,7 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from . import yyp_registry
-from .agent_locks import GAME_RUN_LOCK, BuildSlot, DirectoryLock
+from .agent_locks import GAME_RUN_LOCK, MOBILE_BUILD_LOCK, BuildSlot, DirectoryLock
 from .exceptions import ValidationError
 from .project_config import project_setting
 from .utils import find_yyp
@@ -259,6 +259,11 @@ def create_snapshot(
     yyp_name = find_yyp(root).name
 
     paths = [p for p in (isolate_paths or []) if str(p).strip()]
+    if base_only and (paths or [e for e in (yyp_entries or []) if str(e).strip()]):
+        raise SnapshotError(
+            "base_only builds the revision with nothing added, so it cannot be combined with "
+            "isolate_paths or yyp_entries. Drop base_only to add working-tree paths, or drop the paths."
+        )
     if not paths and not base_only:
         if yyp_entries:
             raise SnapshotError(
@@ -474,8 +479,10 @@ def compile_snapshot(
     cache_dir, temp_dir, out_dir = work / "cache", work / "temp", work / "out"
     for directory in (cache_dir, temp_dir, out_dir):
         directory.mkdir(parents=True, exist_ok=True)
-    log_path = build_log or (work / "build.log")
-    log_path.parent.mkdir(parents=True, exist_ok=True)
+    # Igor writes to a log inside this invocation's own work directory. The labelled run log
+    # (build_log) is shared by every process that uses the same label, so it is only published
+    # once this invocation has finished and its result has been read from its own log.
+    log_path = work / "build.log"
     project_file = find_yyp(Path(snapshot_root))
     command = igor_command(
         toolchain,
@@ -490,7 +497,8 @@ def compile_snapshot(
         action="PackageZip" if platform in {"Mac", "Windows", "HTML5"} else "Package",
     )
     runner = run_igor or _default_run_igor
-    result = BuildResult(ok=False, status="BUILD_FAILED", build_log=log_path)
+    result = BuildResult(ok=False, status="BUILD_FAILED", build_log=build_log or log_path)
+    mobile = str(platform).lower() in {"android", "ios"}
     attempt_limit = max(1, int(attempts))
     text = ""
     for attempt in range(1, attempt_limit + 1):
@@ -498,9 +506,16 @@ def compile_snapshot(
         slot = BuildSlot(max_parallel_builds, purpose=f"igor build {project_file.name}")
         slot.acquire(timeout_seconds=slot_timeout_seconds)
         result.waited_for_slot_seconds += slot.waited_seconds
+        # Mobile packaging shares Xcode/Gradle output folders and attached devices, so only one
+        # mobile build runs at a time, on top of the general capacity slot.
+        mobile_lock = DirectoryLock(MOBILE_BUILD_LOCK, purpose=f"mobile build {project_file.name}") if mobile else None
         try:
+            if mobile_lock is not None:
+                mobile_lock.acquire(timeout_seconds=slot_timeout_seconds)
             runner(command, log_path, igor_timeout_seconds)
         finally:
+            if mobile_lock is not None and mobile_lock.held:
+                mobile_lock.release()
             slot.release()
         text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
         result.errors, result.warnings, result.packaging_errors = classify_build_log(text)
@@ -509,6 +524,9 @@ def compile_snapshot(
         if ACCESS_VIOLATION_MARKER not in text or result.errors or attempt == attempt_limit:
             break
         result.access_violation_retries += 1
+    if build_log is not None and log_path.is_file() and Path(build_log) != log_path:
+        Path(build_log).parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(log_path, build_log)
     result.elapsed_seconds = round(time.monotonic() - started, 1)
     # Igor's final packaging step can fail on a shared staging folder after the game data
     # was written; the compiled game archive is what a run needs.

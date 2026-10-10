@@ -635,6 +635,37 @@ def test_igor_access_violation_is_retried_until_it_compiles(repo: Path, tmp_path
         assert mobile.calls[0][-3:] == ["--", platform, action]
 
 
+def test_snapshot_builds_keep_their_own_log_and_serialise_mobile_targets(repo: Path, tmp_path: Path, lock_dir: Path):
+    seen: dict[str, object] = {}
+    inner = _fake_igor(["ok"])
+
+    def watching(command, log_path, timeout_seconds):
+        seen["log"] = Path(log_path)
+        seen["mobile_locked"] = (lock_dir / agent_locks.MOBILE_BUILD_LOCK).exists()
+        return inner(command, log_path, timeout_seconds)
+
+    shared_log = tmp_path / "runs" / "compile" / "build.log"
+    work = tmp_path / "work_android"
+    result = snapshot_build.compile_snapshot(
+        repo, work, _toolchain(tmp_path), platform="Android", attempts=1, build_log=shared_log, run_igor=watching
+    )
+    # Igor wrote inside this invocation's work directory; the shared labelled log is a finished copy.
+    assert seen["log"] == work / "build.log" and seen["log"] != shared_log
+    assert shared_log.read_text() == (work / "build.log").read_text() and result.build_log == shared_log
+    assert seen["mobile_locked"] is True
+    assert not (lock_dir / agent_locks.MOBILE_BUILD_LOCK).exists()
+
+    snapshot_build.compile_snapshot(repo, tmp_path / "work_mac", _toolchain(tmp_path), attempts=1, run_igor=watching)
+    assert seen["mobile_locked"] is False
+
+
+def test_base_only_snapshot_rejects_working_tree_inputs(repo: Path, tmp_path: Path):
+    with pytest.raises(snapshot_build.SnapshotError, match="base_only"):
+        snapshot_build.create_snapshot(repo, tmp_path / "a", base_only=True, isolate_paths=["scripts/mine"])
+    with pytest.raises(snapshot_build.SnapshotError, match="base_only"):
+        snapshot_build.create_snapshot(repo, tmp_path / "b", base_only=True, yyp_entries=["scripts/mine/mine.yy"])
+
+
 def test_signing_errors_after_the_compile_do_not_fail_a_desktop_snapshot(repo: Path, tmp_path: Path, lock_dir: Path):
     def igor(command: list[str], log_path: Path, _timeout: float) -> int:
         out_dir = Path(next(a for a in command if a.startswith("/of=")).removeprefix("/of=")).parent
