@@ -83,13 +83,22 @@ class RunnerIgorMixin:
         packages = cls._verified_android_packages(output_root)
         return any(baseline_packages.get(path) != fingerprint for path, fingerprint in packages.items())
 
-    @staticmethod
-    def _verified_html5_package_exists(output_root: Path) -> bool:
+    @classmethod
+    def _verified_html5_artifacts(cls, output_root: Path) -> dict[Path, tuple[int, int]]:
+        """Find structurally valid HTML5 outputs (index.html with scripts, or a zip of them)."""
+        artifacts: dict[Path, tuple[int, int]] = {}
         for index_path in output_root.rglob("index.html"):
-            if index_path.stat().st_size > 0 and any(
-                script.stat().st_size > 0 for script in index_path.parent.rglob("*.js")
-            ):
-                return True
+            try:
+                if index_path.stat().st_size == 0:
+                    continue
+                scripts = [s for s in index_path.parent.rglob("*.js") if s.stat().st_size > 0]
+                if not scripts:
+                    continue
+                artifacts[index_path] = cls._android_package_fingerprint(index_path)
+                for script in scripts:
+                    artifacts[script] = cls._android_package_fingerprint(script)
+            except OSError:
+                continue
         for archive_path in output_root.rglob("*.zip"):
             try:
                 with zipfile.ZipFile(archive_path) as archive:
@@ -99,10 +108,20 @@ class RunnerIgorMixin:
                         and any(name.endswith("index.html") for name in names)
                         and any(name.endswith(".js") for name in names)
                     ):
-                        return True
+                        artifacts[archive_path] = cls._android_package_fingerprint(archive_path)
             except (OSError, zipfile.BadZipFile):
                 continue
-        return False
+        return artifacts
+
+    @classmethod
+    def _verified_html5_package_exists(
+        cls,
+        output_root: Path,
+        baseline_artifacts: dict[Path, tuple[int, int]],
+    ) -> bool:
+        """Require a valid HTML5 artifact generated or updated by the current package invocation."""
+        artifacts = cls._verified_html5_artifacts(output_root)
+        return any(baseline_artifacts.get(path) != fingerprint for path, fingerprint in artifacts.items())
 
     @classmethod
     def _is_verified_html5_target_type_false_failure(
@@ -110,13 +129,14 @@ class RunnerIgorMixin:
         returncode: int,
         output_lines: List[str],
         output_root: Path,
+        baseline_artifacts: dict[Path, tuple[int, int]],
     ) -> bool:
         output = "\n".join(output_lines)
         return (
             returncode != 0
             and "The given key (targetType) was not present in the dictionary" in output
             and cls._compile_stage_succeeded(output_lines)
-            and cls._verified_html5_package_exists(output_root)
+            and cls._verified_html5_package_exists(output_root, baseline_artifacts)
         )
 
     @staticmethod
@@ -502,6 +522,9 @@ class RunnerIgorMixin:
             android_baseline_packages = (
                 self._verified_android_packages(ide_temp_dir) if platform_target == "Android" else {}
             )
+            html5_baseline_artifacts = (
+                self._verified_html5_artifacts(ide_temp_dir) if platform_target == "HTML5" else {}
+            )
 
             compile_action = "Package" if platform_target in {"Android", "Linux"} else "PackageZip"
             output_args = [f"/of={ide_temp_dir / project_name}"]
@@ -537,6 +560,7 @@ class RunnerIgorMixin:
                 process.returncode,
                 output_lines,
                 ide_temp_dir,
+                html5_baseline_artifacts,
             ):
                 print(
                     "[OK] HTML5 package completed and the generated artifact was verified; "

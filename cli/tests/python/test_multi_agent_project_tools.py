@@ -494,6 +494,14 @@ def test_stale_locks_are_reclaimed(lock_dir: Path):
     assert not agent_locks.DirectoryLock("old.lock", stale_seconds=9000).try_acquire()
     assert agent_locks.DirectoryLock("old.lock", stale_seconds=100).try_acquire()
 
+    # A live owner on this host keeps its lock however old it is (a long build must not lose its slot).
+    (lock_dir / "live.lock").mkdir()
+    (lock_dir / "live.lock.owner").write_text(
+        json.dumps({"pid": os.getpid(), "host": socket.gethostname()}), encoding="utf-8"
+    )
+    os.utime(lock_dir / "live.lock", (time.time() - 5000, time.time() - 5000))
+    assert not agent_locks.DirectoryLock("live.lock", stale_seconds=100).try_acquire()
+
 
 def test_build_slots_count(lock_dir: Path):
     one = agent_locks.BuildSlot(2).acquire()
@@ -789,6 +797,35 @@ def test_stage_paths_commits_only_named_registrations(repo: Path, lock_dir: Path
         stage_paths(repo, ["../x"])
     whole = stage_paths(repo, ["game.yyp"])
     assert whole["yyp_mode"] == "whole file" and "theirs" in _git(repo, "show", ":game.yyp")
+
+
+def test_stage_paths_keeps_registrations_already_in_the_index(repo: Path, lock_dir: Path):
+    for name in ("mine", "theirs"):
+        _add_script(repo, name)
+    yyp_registry.register_assets(repo, ["scripts/mine/mine.yy", "scripts/theirs/theirs.yy"])
+
+    stage_paths(repo, ["scripts/theirs"])
+    stage_paths(repo, ["scripts/mine"])
+    index_yyp = _git(repo, "show", ":game.yyp")
+    assert "scripts/mine/mine.yy" in index_yyp and "scripts/theirs/theirs.yy" in index_yyp
+
+
+def test_stage_paths_refuses_to_commit_unrelated_staged_changes(repo: Path, lock_dir: Path):
+    from gms_helpers.vcs_stage import VcsError
+
+    for name in ("mine", "theirs"):
+        _add_script(repo, name)
+    yyp_registry.register_assets(repo, ["scripts/mine/mine.yy", "scripts/theirs/theirs.yy"])
+    head_before = _git(repo, "rev-parse", "HEAD").strip()
+
+    stage_paths(repo, ["scripts/theirs"])
+    with pytest.raises(VcsError, match="outside the given paths"):
+        stage_paths(repo, ["scripts/mine"], commit_message="Add mine")
+    assert _git(repo, "rev-parse", "HEAD").strip() == head_before
+    assert "scripts/mine/mine.yy" in _git(repo, "diff", "--cached", "--name-only")
+
+    committed = stage_paths(repo, ["scripts/mine", "scripts/theirs"], commit_message="Add both")
+    assert committed["committed"]
 
 
 # ----------------------------------------------------------------------

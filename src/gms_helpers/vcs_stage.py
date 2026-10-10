@@ -86,7 +86,12 @@ def stage_paths(
                     f"{yyp_repo_path} is not in HEAD yet, so there is no committed project file to build on. "
                     f"Include '{yyp_name}' in paths to stage the whole file for the first commit."
                 )
-            base_text = head.stdout.decode("utf-8")
+            # Build on the project file already in the index, so registrations another call staged
+            # earlier are kept. An untouched index entry is identical to HEAD.
+            indexed = subprocess.run(
+                ["git", "-C", str(repo), "show", f":{yyp_repo_path}"], capture_output=True, check=False
+            )
+            base_text = (indexed if indexed.returncode == 0 else head).stdout.decode("utf-8")
             staged_entries = [str(e) for e in (yyp_entries or []) if str(e).strip()]
             if not staged_entries:
                 staged_entries = yyp_registry.derive_yyp_entries(root, base_text, project_paths)
@@ -110,6 +115,20 @@ def stage_paths(
         if commit_message:
             if not staged:
                 raise VcsError("Nothing is staged, so there is nothing to commit. Check the paths.")
+            staged_names = [line for line in _git(repo, "diff", "--cached", "--name-only").splitlines() if line.strip()]
+            unrelated = [
+                name
+                for name in staged_names
+                if name != yyp_repo_path
+                and not any(name == path or name.startswith(path.rstrip("/") + "/") for path in repo_paths)
+            ]
+            if unrelated:
+                shown = ", ".join(unrelated[:8]) + (" ..." if len(unrelated) > 8 else "")
+                raise VcsError(
+                    "The index also holds staged changes outside the given paths, and committing would "
+                    f"include them: {shown}. Your paths are staged; nothing was committed. Unstage the "
+                    "other changes (git restore --staged <path>), add them to paths, or commit by hand."
+                )
             _git(repo, "commit", "-q", "-m", commit_message)
             result["committed"] = True
             result["commit"] = _git(repo, "log", "-1", "--format=%h %s").strip()

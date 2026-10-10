@@ -168,10 +168,14 @@ class TestRunnerCommandSelection(unittest.TestCase):
         system_temp = self.project_root / "temp"
         package_root = system_temp / "GameMakerStudio2" / "test_project" / "html5game"
         package_root.mkdir(parents=True)
-        (package_root / "index.html").write_text("<script src='game.js'></script>", encoding="utf-8")
-        (package_root / "game.js").write_text("window.game = true;", encoding="utf-8")
         process = self._fake_process()
         process.returncode = 1
+
+        def run_and_write_artifact(_cmd, **_kwargs):
+            (package_root / "index.html").write_text("<script src='game.js'></script>", encoding="utf-8")
+            (package_root / "game.js").write_text("window.game = true;", encoding="utf-8")
+            return process
+
         output = [
             "Final Compile finished",
             "Saving IFF file",
@@ -182,11 +186,11 @@ class TestRunnerCommandSelection(unittest.TestCase):
         with patch.object(runner, "find_project_file", return_value=self.project_root / "test_project.yyp"):
             with patch.object(runner, "_system_temp_root", return_value=system_temp):
                 with patch.object(runner, "_build_platform_action_command", return_value=["igor", "PackageZip"]):
-                    with patch.object(runner, "_run_igor_command", return_value=process):
+                    with patch.object(runner, "_run_igor_command", side_effect=run_and_write_artifact):
                         with patch.object(runner, "_stream_igor_output", return_value=output):
                             self.assertTrue(runner.compile_project(platform_target="HTML5"))
 
-        (package_root / "index.html").unlink()
+        # A second attempt that writes nothing must not pass on the artifact left by the first.
         with patch.object(runner, "find_project_file", return_value=self.project_root / "test_project.yyp"):
             with patch.object(runner, "_system_temp_root", return_value=system_temp):
                 with patch.object(runner, "_build_platform_action_command", return_value=["igor", "PackageZip"]):

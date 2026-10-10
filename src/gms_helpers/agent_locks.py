@@ -140,8 +140,9 @@ class DirectoryLock:
             return False
         owner = self.owner()
         if owner and owner.get("host") == socket.gethostname() and isinstance(owner.get("pid"), int):
-            if not _process_alive(owner["pid"]):
-                return True
+            # A local owner is judged by its process alone: alive keeps the lock however long the
+            # work takes, dead frees it at once. Age only decides for owners we cannot inspect.
+            return not _process_alive(owner["pid"])
         return age > self.stale_seconds
 
     # -- acquire / release ----------------------------------------------
