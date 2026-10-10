@@ -642,6 +642,7 @@ def test_snapshot_builds_keep_their_own_log_and_serialise_mobile_targets(repo: P
     def watching(command, log_path, timeout_seconds):
         seen["log"] = Path(log_path)
         seen["mobile_locked"] = (lock_dir / agent_locks.MOBILE_BUILD_LOCK).exists()
+        seen["slot_held"] = any(lock_dir.glob("build_slot_*"))
         return inner(command, log_path, timeout_seconds)
 
     shared_log = tmp_path / "runs" / "compile" / "build.log"
@@ -653,6 +654,25 @@ def test_snapshot_builds_keep_their_own_log_and_serialise_mobile_targets(repo: P
     assert seen["log"] == work / "build.log" and seen["log"] != shared_log
     assert shared_log.read_text() == (work / "build.log").read_text() and result.build_log == shared_log
     assert seen["mobile_locked"] is True
+    assert seen["slot_held"] is True
+
+    # A mobile build waiting for the mobile lock must not hold a capacity slot meanwhile.
+    holder = agent_locks.DirectoryLock(agent_locks.MOBILE_BUILD_LOCK, purpose="another mobile build")
+    assert holder.try_acquire()
+    try:
+        with pytest.raises(Exception):
+            snapshot_build.compile_snapshot(
+                repo,
+                tmp_path / "work_blocked",
+                _toolchain(tmp_path),
+                platform="Android",
+                attempts=1,
+                run_igor=watching,
+                slot_timeout_seconds=0.2,
+            )
+        assert not any(lock_dir.glob("build_slot_*"))
+    finally:
+        holder.release()
     assert not (lock_dir / agent_locks.MOBILE_BUILD_LOCK).exists()
 
     snapshot_build.compile_snapshot(repo, tmp_path / "work_mac", _toolchain(tmp_path), attempts=1, run_igor=watching)

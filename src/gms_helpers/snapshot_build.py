@@ -503,20 +503,23 @@ def compile_snapshot(
     text = ""
     for attempt in range(1, attempt_limit + 1):
         result.attempts = attempt
-        slot = BuildSlot(max_parallel_builds, purpose=f"igor build {project_file.name}")
-        slot.acquire(timeout_seconds=slot_timeout_seconds)
-        result.waited_for_slot_seconds += slot.waited_seconds
         # Mobile packaging shares Xcode/Gradle output folders and attached devices, so only one
-        # mobile build runs at a time, on top of the general capacity slot.
+        # mobile build runs at a time. Its lock is taken before a capacity slot: a mobile build
+        # waiting its turn must not sit on a slot that a desktop build could be using.
         mobile_lock = DirectoryLock(MOBILE_BUILD_LOCK, purpose=f"mobile build {project_file.name}") if mobile else None
+        slot = BuildSlot(max_parallel_builds, purpose=f"igor build {project_file.name}")
         try:
             if mobile_lock is not None:
                 mobile_lock.acquire(timeout_seconds=slot_timeout_seconds)
-            runner(command, log_path, igor_timeout_seconds)
+            slot.acquire(timeout_seconds=slot_timeout_seconds)
+            result.waited_for_slot_seconds += slot.waited_seconds
+            try:
+                runner(command, log_path, igor_timeout_seconds)
+            finally:
+                slot.release()
         finally:
             if mobile_lock is not None and mobile_lock.held:
                 mobile_lock.release()
-            slot.release()
         text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
         result.errors, result.warnings, result.packaging_errors = classify_build_log(text)
         # The crash can hit the project loader or a later packaging step; either way the
