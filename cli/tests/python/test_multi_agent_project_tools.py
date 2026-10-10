@@ -125,6 +125,8 @@ def _git(root: Path, *args: str) -> str:
 @pytest.fixture
 def repo(project: Path) -> Path:
     _git(project, "init", "-q")
+    _git(project, "config", "user.email", "t@example.com")
+    _git(project, "config", "user.name", "t")
     _git(project, "add", "-A")
     _git(project, "commit", "-q", "-m", "base")
     return project

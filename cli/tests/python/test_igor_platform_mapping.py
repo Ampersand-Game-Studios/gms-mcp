@@ -208,10 +208,13 @@ class TestRunnerCommandSelection(unittest.TestCase):
                     with patch.object(runner, "_run_igor_command", side_effect=fake_run_igor):
                         with patch.object(runner, "_reject_foreign_igor_after_launch"):
                             with patch.object(runner, "_collect_igor_output_async", return_value=([], MagicMock())):
-                                with patch.object(
-                                    runner,
-                                    "_wait_for_macos_runner_start",
-                                    return_value=(222, {222}, {333}),
+                                with (
+                                    patch.object(
+                                        runner,
+                                        "_wait_for_macos_runner_start",
+                                        return_value=(222, {222}, {333}),
+                                    ),
+                                    patch.object(runner, "_snapshot_macos_processes", return_value={}),
                                 ):
                                     result = runner.run_project_direct(
                                         platform_target="macOS",

@@ -149,7 +149,7 @@ def _render_json_for_existing_path(
             layout = gm_json.detect_layout(original) if _has_trailing_commas(original) else None
             if layout is not None:
                 return gm_json.dumps(data, layout)
-        elif Path(path).suffix.lower() in {".yy", ".yyp"} and gm_json.looks_like_modern_resource(data):
+        elif os.path.splitext(str(path))[1].lower() in {".yy", ".yyp"} and gm_json.looks_like_modern_resource(data):
             return gm_json.dumps(data)
     except (TypeError, ValueError):
         pass  # Not representable natively; fall through to the generic renderer.
