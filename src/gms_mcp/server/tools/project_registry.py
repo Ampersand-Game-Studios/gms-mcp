@@ -53,9 +53,7 @@ def register_core(mcp: Any, ContextType: Any) -> None:
 
         root = _resolve_project_directory(project_root)
         try:
-            return check_registry(
-                root, allow_root_assets=project_setting(root, "conventions.allow_root_assets", [])
-            )
+            return check_registry(root, allow_root_assets=project_setting(root, "conventions.allow_root_assets", []))
         except Exception as exc:  # noqa: BLE001 - reported to the caller with a remedy
             return _failure("gm_project_check", exc)
 
@@ -114,7 +112,9 @@ def register(mcp: Any, ContextType: Any) -> None:
         return _guard("gm_yyp_register", lambda: register_assets(_resolve_project_directory(project_root), asset_paths))
 
     @mcp.tool()
-    def gm_yyp_unregister(asset_paths: List[str], project_root: str = ".", ctx: Context | None = None) -> Dict[str, Any]:
+    def gm_yyp_unregister(
+        asset_paths: List[str], project_root: str = ".", ctx: Context | None = None
+    ) -> Dict[str, Any]:
         """
         Remove asset registrations from the project file. The files stay on disk.
 
@@ -124,7 +124,9 @@ def register(mcp: Any, ContextType: Any) -> None:
         _ = ctx
         from gms_helpers.yyp_registry import unregister_assets
 
-        return _guard("gm_yyp_unregister", lambda: unregister_assets(_resolve_project_directory(project_root), asset_paths))
+        return _guard(
+            "gm_yyp_unregister", lambda: unregister_assets(_resolve_project_directory(project_root), asset_paths)
+        )
 
     @mcp.tool()
     def gm_yyp_normalize_order(project_root: str = ".", ctx: Context | None = None) -> Dict[str, Any]:
@@ -154,7 +156,9 @@ def register(mcp: Any, ContextType: Any) -> None:
         _ = ctx
         from gms_helpers.yyp_registry import move_asset
 
-        return _guard("gm_asset_move", lambda: move_asset(_resolve_project_directory(project_root), asset_path, parent_path))
+        return _guard(
+            "gm_asset_move", lambda: move_asset(_resolve_project_directory(project_root), asset_path, parent_path)
+        )
 
     @mcp.tool()
     def gm_included_file_add(
@@ -174,10 +178,15 @@ def register(mcp: Any, ContextType: Any) -> None:
         _ = ctx
         from gms_helpers.yyp_registry import add_included_files
 
-        return _guard("gm_included_file_add", lambda: add_included_files(_resolve_project_directory(project_root), paths, copy_to_mask=copy_to_mask))
+        return _guard(
+            "gm_included_file_add",
+            lambda: add_included_files(_resolve_project_directory(project_root), paths, copy_to_mask=copy_to_mask),
+        )
 
     @mcp.tool()
-    def gm_included_file_remove(paths: List[str], project_root: str = ".", ctx: Context | None = None) -> Dict[str, Any]:
+    def gm_included_file_remove(
+        paths: List[str], project_root: str = ".", ctx: Context | None = None
+    ) -> Dict[str, Any]:
         """
         Unregister included files (a directory path unregisters everything below it).
 
@@ -186,7 +195,9 @@ def register(mcp: Any, ContextType: Any) -> None:
         _ = ctx
         from gms_helpers.yyp_registry import remove_included_files
 
-        return _guard("gm_included_file_remove", lambda: remove_included_files(_resolve_project_directory(project_root), paths))
+        return _guard(
+            "gm_included_file_remove", lambda: remove_included_files(_resolve_project_directory(project_root), paths)
+        )
 
     @mcp.tool()
     def gm_config_add(

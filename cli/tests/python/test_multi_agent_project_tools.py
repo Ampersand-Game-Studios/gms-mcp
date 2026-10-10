@@ -76,7 +76,14 @@ def _yyp(resources: list[str], included: list[str] = ()) -> str:
     lines += ['  "name":"game",', '  "resources":[']
     for name in resources:
         lines.append(f'    {{"id":{{"name":"{name}","path":"scripts/{name}/{name}.yy",}},}},')
-    lines += ["  ],", '  "resourceType":"GMProject",', '  "resourceVersion":"2.0",', '  "RoomOrderNodes":[],', '  "TextureGroups":[],', "}"]
+    lines += [
+        "  ],",
+        '  "resourceType":"GMProject",',
+        '  "resourceVersion":"2.0",',
+        '  "RoomOrderNodes":[],',
+        '  "TextureGroups":[],',
+        "}",
+    ]
     return "\n".join(lines)
 
 
@@ -204,7 +211,10 @@ def test_save_json_changes_only_the_inserted_lines(project: Path):
 def test_new_modern_resource_is_written_natively_and_old_format_is_left_alone(tmp_path: Path):
     target = tmp_path / "scripts" / "s.yy"
     save_json({"$GMScript": "v1", "name": "s", "parent": {"name": "A", "path": "folders/A.yy"}}, str(target))
-    assert target.read_text() == '{\n  "$GMScript":"v1",\n  "name":"s",\n  "parent":{\n    "name":"A",\n    "path":"folders/A.yy",\n  },\n}'
+    assert (
+        target.read_text()
+        == '{\n  "$GMScript":"v1",\n  "name":"s",\n  "parent":{\n    "name":"A",\n    "path":"folders/A.yy",\n  },\n}'
+    )
     legacy = tmp_path / "legacy.yy"
     legacy.write_text('{\n  "name": "a",\n  "list": [],\n}', encoding="utf-8")
     save_json({"name": "b", "list": []}, str(legacy))
@@ -267,7 +277,9 @@ def test_register_unregister_and_explained_refusals(project: Path):
     (project / "scripts/wrong/wrong.yy").write_text(_script_yy("other"), encoding="utf-8")
     with pytest.raises(ValidationError, match="name"):
         yyp_registry.register_assets(project, ["scripts/wrong/wrong.yy"])
-    (project / "scripts/wrong/wrong.yy").write_text(_script_yy("wrong", "folders/Missing.yy", "Missing"), encoding="utf-8")
+    (project / "scripts/wrong/wrong.yy").write_text(
+        _script_yy("wrong", "folders/Missing.yy", "Missing"), encoding="utf-8"
+    )
     with pytest.raises(ValidationError, match="parent folder"):
         yyp_registry.register_assets(project, ["scripts/wrong/wrong.yy"])
 
@@ -361,7 +373,11 @@ def test_compose_yyp_takes_only_named_registrations(project: Path):
     assert "mine" in composed and "theirs" not in composed and "mine.json" in composed
     assert gm_json.is_native_layout(composed)
     # An entry that no longer exists in the working copy is removed from the base.
-    without_alpha = yyp_registry.compose_yyp(base, base.replace('    {"id":{"name":"alpha","path":"scripts/alpha/alpha.yy",},},\n', ""), ["scripts/alpha/alpha.yy"])
+    without_alpha = yyp_registry.compose_yyp(
+        base,
+        base.replace('    {"id":{"name":"alpha","path":"scripts/alpha/alpha.yy",},},\n', ""),
+        ["scripts/alpha/alpha.yy"],
+    )
     assert "alpha" not in without_alpha
 
 
@@ -378,7 +394,15 @@ def test_introduced_errors_ignore_shifted_array_indices():
 def test_ide_written_values_are_not_validation_errors(project: Path):
     data = load_json_loose(project / "game.yyp")
     data["TextureGroups"] = [
-        {"$GMTextureGroup": "", "%Name": "Default", "ConfigValues": {"desktop": {"groupParent": "null"}}, "groupParent": None, "name": "Default", "resourceType": "GMTextureGroup", "resourceVersion": "2.0"}
+        {
+            "$GMTextureGroup": "",
+            "%Name": "Default",
+            "ConfigValues": {"desktop": {"groupParent": "null"}},
+            "groupParent": None,
+            "name": "Default",
+            "resourceType": "GMTextureGroup",
+            "resourceVersion": "2.0",
+        }
     ]
     save_json(data, str(project / "game.yyp"))
     assert validate_project_after_mutation(project).errors == []
@@ -615,7 +639,9 @@ def test_signing_errors_after_the_compile_do_not_fail_a_desktop_snapshot(repo: P
     desktop = snapshot_build.compile_snapshot(repo, tmp_path / "d", _toolchain(tmp_path), run_igor=igor)
     assert desktop.ok and desktop.errors == [] and len(desktop.packaging_errors) == 1
     assert "no distributable package" in desktop.message
-    mobile = snapshot_build.compile_snapshot(repo, tmp_path / "m", _toolchain(tmp_path), platform="Android", run_igor=igor)
+    mobile = snapshot_build.compile_snapshot(
+        repo, tmp_path / "m", _toolchain(tmp_path), platform="Android", run_igor=igor
+    )
     assert not mobile.ok and mobile.errors == desktop.packaging_errors
 
 
@@ -669,7 +695,7 @@ def test_run_log_verdicts():
 
 def test_run_test_pipeline_reports_pass_fail_and_build_failure(repo: Path, tmp_path: Path, lock_dir: Path, monkeypatch):
     monkeypatch.setenv("GMS_MCP_SNAPSHOT_WORK_DIR", str(tmp_path / "work"))
-    code = "function agent_test_step(_frame) { test_check(true, \"ok\"); test_end(); }"
+    code = 'function agent_test_step(_frame) { test_check(true, "ok"); test_end(); }'
     seen: dict = {}
 
     def run_game(archive: Path, _tools, *, label, run_dir: Path, **options):
@@ -680,11 +706,22 @@ def test_run_test_pipeline_reports_pass_fail_and_build_failure(repo: Path, tmp_p
         shot = run_dir / "shots" / "__agent_shot_a.png"
         shot.parent.mkdir(exist_ok=True)
         shot.write_bytes(b"png")
-        return {"timed_out": False, "waited_seconds": 1.0, "waited_for_lock_seconds": 0.0, "run_log": run_dir / "run.log", "screenshots": [shot]}
+        return {
+            "timed_out": False,
+            "waited_seconds": 1.0,
+            "waited_for_lock_seconds": 0.0,
+            "run_log": run_dir / "run.log",
+            "screenshots": [shot],
+        }
 
     (repo / ".gms-mcp.json").write_text(json.dumps({"test": {"timeout_seconds": 33}}))
     result = snapshot_build.run_test(
-        repo, test_code=code, label="unit test!", run_igor=_fake_igor(["crash", "ok"]), run_game=run_game, toolchain=_toolchain(tmp_path)
+        repo,
+        test_code=code,
+        label="unit test!",
+        run_igor=_fake_igor(["crash", "ok"]),
+        run_game=run_game,
+        toolchain=_toolchain(tmp_path),
     )
     assert result["status"] == "TEST_PASSED" and result["ok"] and result["igor_crash_retries"] == 1
     assert result["label"] == "unit_test" and seen == {"snapshot_has_test": True, "timeout": 33.0}
@@ -700,7 +737,12 @@ def test_run_test_pipeline_reports_pass_fail_and_build_failure(repo: Path, tmp_p
         snapshot_build.read_run_artifact(repo, "unit test!", "bogus")
 
     broken = snapshot_build.run_test(
-        repo, test_code=code, label="broken", run_igor=_fake_igor(["error"]), run_game=run_game, toolchain=_toolchain(tmp_path)
+        repo,
+        test_code=code,
+        label="broken",
+        run_igor=_fake_igor(["error"]),
+        run_game=run_game,
+        toolchain=_toolchain(tmp_path),
     )
     assert broken["status"] == "BUILD_FAILED" and not broken["ok"] and broken["errors"]
 
@@ -804,7 +846,7 @@ def test_live_reload_is_driven_by_project_configuration(project: Path):
                 "live_reload": {
                     "start": [sys.executable, "-c", "print('started {project}')"],
                     "stop": [sys.executable, "-c", "print('stopped')"],
-                    "status": [sys.executable, "-c", "print('{\"serving\": true, \"clients\": 1}')"],
+                    "status": [sys.executable, "-c", 'print(\'{"serving": true, "clients": 1}\')'],
                     "status_file": "status.json",
                 }
             }
@@ -829,7 +871,9 @@ def test_project_can_choose_its_verification_mode(project: Path, monkeypatch: py
     monkeypatch.delenv("GMS_MCP_POST_MUTATION_VERIFY", raising=False)
     monkeypatch.delenv("GMS_MCP_VERIFY_COMPILE_AFTER_MUTATION", raising=False)
     assert current_verification_mode(project) == "smart"
-    (project / ".gms-mcp.json").write_text(json.dumps({"verification": {"post_mutation": "off"}, "build": {"igor_attempts": 30}}))
+    (project / ".gms-mcp.json").write_text(
+        json.dumps({"verification": {"post_mutation": "off"}, "build": {"igor_attempts": 30}})
+    )
     assert current_verification_mode(project) == "off"
     assert decide_mutation_verification("gm_create_script", project).action == "skip"
     assert decide_mutation_verification("gm_create_script").action == "compile"
@@ -908,7 +952,12 @@ def test_live_session_start_command_screenshot_and_stop(repo: Path, tmp_path: Pa
         archive = work / "out" / "game.zip"
         archive.write_bytes(b"zip")
         build = snapshot_build.BuildResult(ok=options["label"] != "broken", status="COMPILE_OK", game_archive=archive)
-        public = {"ok": build.ok, "status": "COMPILE_OK" if build.ok else "BUILD_FAILED", "label": options["label"], "errors": []}
+        public = {
+            "ok": build.ok,
+            "status": "COMPILE_OK" if build.ok else "BUILD_FAILED",
+            "label": options["label"],
+            "errors": [],
+        }
         return public, build, work, _toolchain(tmp_path)
 
     def fake_launch(_runner, staging_dir, _game_file, run_dir, environment):
@@ -965,7 +1014,9 @@ def test_live_session_start_command_screenshot_and_stop(repo: Path, tmp_path: Pa
     assert live_session.status(repo)["running"] is False
 
 
-def test_live_session_reports_a_game_that_exits_or_never_connects(repo: Path, tmp_path: Path, lock_dir: Path, monkeypatch):
+def test_live_session_reports_a_game_that_exits_or_never_connects(
+    repo: Path, tmp_path: Path, lock_dir: Path, monkeypatch
+):
     process = _FakeProcess()
     staging = tmp_path / "staging"
 

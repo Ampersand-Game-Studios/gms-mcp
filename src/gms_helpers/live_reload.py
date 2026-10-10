@@ -82,7 +82,10 @@ def status(project_root: str | Path, timeout_seconds: float = 10.0) -> dict[str,
                 command, cwd=str(root), capture_output=True, timeout=timeout_seconds, check=False
             )
         except subprocess.TimeoutExpired:
-            return {"ok": False, "error": f"The live-reload status command did not answer within {int(timeout_seconds)}s."}
+            return {
+                "ok": False,
+                "error": f"The live-reload status command did not answer within {int(timeout_seconds)}s.",
+            }
         output = completed.stdout.decode("utf-8", "replace").strip()
         try:
             parsed = json.loads(output)
@@ -112,7 +115,12 @@ def start(project_root: str | Path) -> dict[str, Any]:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("ab") as log:
         process = subprocess.Popen(
-            command, cwd=str(root), stdout=log, stderr=subprocess.STDOUT, stdin=subprocess.DEVNULL, start_new_session=True
+            command,
+            cwd=str(root),
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            stdin=subprocess.DEVNULL,
+            start_new_session=True,
         )
     try:
         exit_code = process.wait(timeout=3.0)

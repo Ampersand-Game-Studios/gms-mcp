@@ -148,7 +148,9 @@ class DirectoryLock:
             pass
         return True
 
-    def acquire(self, timeout_seconds: float = 600.0, *, sleep: Callable[[float], None] = time.sleep) -> "DirectoryLock":
+    def acquire(
+        self, timeout_seconds: float = 600.0, *, sleep: Callable[[float], None] = time.sleep
+    ) -> "DirectoryLock":
         started = time.monotonic()
         while not self.try_acquire():
             self.waited_seconds = time.monotonic() - started
@@ -195,7 +197,9 @@ class DirectoryLock:
 class BuildSlot:
     """A counting semaphore made of ``build_slot_<n>`` directory locks."""
 
-    def __init__(self, slots: int = 4, *, directory: Path | None = None, purpose: str = "", stale_seconds: float = 1200.0):
+    def __init__(
+        self, slots: int = 4, *, directory: Path | None = None, purpose: str = "", stale_seconds: float = 1200.0
+    ):
         self.slots = max(1, int(slots))
         self.directory = directory
         self.purpose = purpose
@@ -241,7 +245,12 @@ class BuildSlot:
 def lock_status(slots: int = 4, *, directory: Path | None = None) -> dict:
     """Describe every shared lock so an agent can see why it is waiting."""
     base = Path(directory) if directory is not None else lock_directory()
-    names = [REPOSITORY_LOCK, GAME_RUN_LOCK, MOBILE_BUILD_LOCK, *(f"{BUILD_SLOT_PREFIX}{i}" for i in range(1, slots + 1))]
+    names = [
+        REPOSITORY_LOCK,
+        GAME_RUN_LOCK,
+        MOBILE_BUILD_LOCK,
+        *(f"{BUILD_SLOT_PREFIX}{i}" for i in range(1, slots + 1)),
+    ]
     return {
         "lock_directory": str(base),
         "locks": [DirectoryLock(name, directory=base).describe() for name in names],

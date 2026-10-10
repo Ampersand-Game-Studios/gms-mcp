@@ -146,9 +146,7 @@ def _runner_staging_root() -> Path:
     argument, so a project kept in a folder such as ``my-game`` makes it load the wrong file.
     """
     candidates = [
-        Path(os.environ["GMS_MCP_RUN_STAGING_DIR"]).expanduser()
-        if os.environ.get("GMS_MCP_RUN_STAGING_DIR")
-        else None,
+        Path(os.environ["GMS_MCP_RUN_STAGING_DIR"]).expanduser() if os.environ.get("GMS_MCP_RUN_STAGING_DIR") else None,
         Path(tempfile.gettempdir()) / "gmsmcp_runs",
         Path("/Users/Shared/GameMakerStudio2/gmsmcp_runs"),
         Path.home() / ".gmsmcp_runs",
@@ -529,7 +527,11 @@ def compile_snapshot(
         result.game_archive = archive
         result.message = (
             f"Compiled on attempt {result.attempts}"
-            + (f" after {result.access_violation_retries} Igor crash retries" if result.access_violation_retries else "")
+            + (
+                f" after {result.access_violation_retries} Igor crash retries"
+                if result.access_violation_retries
+                else ""
+            )
             + "."
             + (
                 " The packaging step after the compile reported errors (usually macOS signing); the game data "
@@ -828,9 +830,7 @@ def igor_platform(platform: str | None) -> str:
         return {"darwin": "Mac", "win32": "Windows"}.get(sys.platform, "Linux")
     key = str(platform).strip().lower()
     if key not in _IGOR_PLATFORMS:
-        raise SnapshotError(
-            f"Unknown platform '{platform}'. Use one of: macOS, Windows, Linux, Android, iOS, HTML5."
-        )
+        raise SnapshotError(f"Unknown platform '{platform}'. Use one of: macOS, Windows, Linux, Android, iOS, HTML5.")
     return _IGOR_PLATFORMS[key]
 
 
@@ -1038,5 +1038,5 @@ def read_run_artifact(
         "log": _relative(root, path),
         "total_lines": len(content),
         "lines": selected,
-        "screenshots": sorted(_relative(root, p) for p in (run_dir / "shots").glob("*.png")),
+        "screenshots": sorted(str(_relative(root, p)) for p in (run_dir / "shots").glob("*.png")),
     }

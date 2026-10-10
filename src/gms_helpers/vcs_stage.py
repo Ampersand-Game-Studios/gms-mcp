@@ -29,9 +29,7 @@ def _git(repo: Path, *args: str, input_text: str | None = None, check: bool = Tr
         check=False,
     )
     if check and completed.returncode != 0:
-        raise VcsError(
-            f"git {' '.join(args[:2])} failed: {completed.stderr.decode('utf-8', 'replace').strip()}"
-        )
+        raise VcsError(f"git {' '.join(args[:2])} failed: {completed.stderr.decode('utf-8', 'replace').strip()}")
     return completed.stdout.decode("utf-8", "replace")
 
 
@@ -104,7 +102,9 @@ def stage_paths(
             "staged": staged[:400],
             "staged_count": len(staged),
             "yyp_entries": staged_entries,
-            "yyp_mode": "whole file" if whole_yyp else ("HEAD plus named registrations" if staged_entries else "not staged"),
+            "yyp_mode": "whole file"
+            if whole_yyp
+            else ("HEAD plus named registrations" if staged_entries else "not staged"),
             "committed": False,
         }
         if commit_message:

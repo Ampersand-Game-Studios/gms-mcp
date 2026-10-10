@@ -62,6 +62,15 @@ def _resource_ref(entry: Any) -> dict[str, Any] | None:
     return ref if isinstance(ref, dict) and isinstance(ref.get("path"), str) else None
 
 
+def _resource_path(entry: Any) -> str:
+    """Normalised resource path of a registry entry ("" when the entry has none)."""
+    return _norm(str((_resource_ref(entry) or {}).get("path", "")))
+
+
+def _as_dict(value: Any) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
 def _included_key(entry: Any) -> str | None:
     if not isinstance(entry, dict) or not isinstance(entry.get("name"), str):
         return None
@@ -113,7 +122,7 @@ def register_assets(project_root: str | Path, asset_paths: Iterable[str]) -> dic
                 f"Cannot register '{path}': the file is named '{name}.yy' but its \"name\" is "
                 f"'{asset.get('name')}'. A copied asset must have name and %Name changed to match its file."
             )
-        parent = asset.get("parent") if isinstance(asset.get("parent"), dict) else {}
+        parent = _as_dict(asset.get("parent"))
         parent_path = _norm(str(parent.get("path", "")))
         if parent_path != yyp_path.name and parent_path not in folders:
             raise ValidationError(
@@ -122,7 +131,7 @@ def register_assets(project_root: str | Path, asset_paths: Iterable[str]) -> dic
                 "folder; gm_list_assets shows the folders in use."
             )
         existing = [entry for entry in resources if (_resource_ref(entry) or {}).get("name") == name]
-        if existing and all(_norm(_resource_ref(entry)["path"]) == path for entry in existing):
+        if existing and all(_resource_path(entry) == path for entry in existing):
             unchanged.append(path)
             continue
         for entry in existing:
@@ -144,9 +153,7 @@ def unregister_assets(project_root: str | Path, asset_paths: Iterable[str]) -> d
     resources = data.get("resources", [])
     kept = [entry for entry in resources if _norm((_resource_ref(entry) or {}).get("path", "")) not in wanted]
     removed = sorted(
-        _norm(_resource_ref(entry)["path"])
-        for entry in resources
-        if _norm((_resource_ref(entry) or {}).get("path", "")) in wanted
+        _resource_path(entry) for entry in resources if _norm((_resource_ref(entry) or {}).get("path", "")) in wanted
     )
     if removed:
         data["resources"] = kept
@@ -193,11 +200,7 @@ def move_asset(project_root: str | Path, asset_path: str, parent_path: str) -> d
         raise ValidationError(f"Cannot move '{path}': the asset file does not exist or is not valid JSON.")
     wanted = _norm(parent_path)
     folder = next(
-        (
-            f
-            for f in data.get("Folders", [])
-            if isinstance(f, dict) and _norm(str(f.get("folderPath", ""))) == wanted
-        ),
+        (f for f in data.get("Folders", []) if isinstance(f, dict) and _norm(str(f.get("folderPath", ""))) == wanted),
         None,
     )
     if folder is None:
@@ -205,7 +208,7 @@ def move_asset(project_root: str | Path, asset_path: str, parent_path: str) -> d
             f"Cannot move '{path}': folder '{wanted}' is not in the project. Folder paths look like "
             "folders/Parent/Child.yy; create it with gm_create_folder first."
         )
-    previous = asset.get("parent") if isinstance(asset.get("parent"), dict) else {}
+    previous = _as_dict(asset.get("parent"))
     if _norm(str(previous.get("path", ""))) == wanted and previous.get("name") == folder.get("name"):
         return {"ok": True, "moved": False, "asset": path, "parent": wanted, "message": "Already in that folder."}
     asset["parent"] = {"name": folder.get("name"), "path": wanted}
@@ -315,7 +318,7 @@ def remove_included_files(project_root: str | Path, paths: Iterable[str]) -> dic
     def matches(key: str | None) -> bool:
         return key is not None and any(key == path or key.startswith(path + "/") for path in wanted)
 
-    removed = sorted(key for key in (_included_key(entry) for entry in included) if matches(key))
+    removed = sorted(key for key in (_included_key(entry) for entry in included) if key is not None and matches(key))
     if removed:
         data["IncludedFiles"] = [entry for entry in included if not matches(_included_key(entry))]
         _save_yyp(yyp_path, data)
@@ -481,7 +484,7 @@ def check_registry(project_root: str | Path, *, allow_root_assets: Iterable[str]
                 f"Registered as '{name}' but the file says '{asset.get('name')}'.",
                 "Make name and %Name in the .yy match the file name.",
             )
-        parent = asset.get("parent") if isinstance(asset.get("parent"), dict) else {}
+        parent = _as_dict(asset.get("parent"))
         parent_path = _norm(str(parent.get("path", "")))
         if parent_path == yyp_path.name:
             if not any(fnmatch.fnmatch(name, pattern) for pattern in allowed_root):
@@ -558,7 +561,11 @@ def check_registry(project_root: str | Path, *, allow_root_assets: Iterable[str]
     ordering: dict[str, str | None] = {}
     for label, entries, candidates in (
         ("resources", [e for e in data.get("resources", []) if _resource_ref(e)], RESOURCE_ORDERINGS),
-        ("Folders", [f for f in data.get("Folders", []) if isinstance(f, dict) and "folderPath" in f], FOLDER_ORDERINGS),
+        (
+            "Folders",
+            [f for f in data.get("Folders", []) if isinstance(f, dict) and "folderPath" in f],
+            FOLDER_ORDERINGS,
+        ),
         (
             "IncludedFiles",
             [e for e in data.get("IncludedFiles", []) if _included_key(e)],
@@ -619,7 +626,9 @@ def normalize_order(project_root: str | Path) -> dict[str, Any]:
     if isinstance(data.get("resources"), list):
         data["resources"].sort(key=lambda e: ide_2026_key(_norm((_resource_ref(e) or {}).get("path", ""))))
     if isinstance(data.get("Folders"), list):
-        data["Folders"].sort(key=lambda f: ide_2026_key(_norm(str(f.get("folderPath", "")))) if isinstance(f, dict) else ide_2026_key(""))
+        data["Folders"].sort(
+            key=lambda f: ide_2026_key(_norm(str(f.get("folderPath", "")))) if isinstance(f, dict) else ide_2026_key("")
+        )
     if isinstance(data.get("IncludedFiles"), list):
         data["IncludedFiles"].sort(key=lambda e: ide_2026_key(_included_key(e) or ""))
     from .utils import atomic_write_text
@@ -653,10 +662,8 @@ def compose_yyp(base_text: str, working_text: str, entries: Iterable[str]) -> st
     base_resources = base.setdefault("resources", [])
     base_folders = base.setdefault("Folders", [])
     base_included = base.setdefault("IncludedFiles", [])
-    work_resources = {_norm(_resource_ref(e)["path"]): e for e in work.get("resources", []) if _resource_ref(e)}
-    work_folders = {
-        _norm(str(f.get("folderPath", ""))): f for f in work.get("Folders", []) if isinstance(f, dict)
-    }
+    work_resources = {_resource_path(e): e for e in work.get("resources", []) if _resource_ref(e)}
+    work_folders = {_norm(str(f.get("folderPath", ""))): f for f in work.get("Folders", []) if isinstance(f, dict)}
     work_included = {key: e for e in work.get("IncludedFiles", []) if (key := _included_key(e))}
 
     for raw in entries:
@@ -680,7 +687,8 @@ def compose_yyp(base_text: str, working_text: str, entries: Iterable[str]) -> st
             base_resources[:] = [
                 e
                 for e in base_resources
-                if _norm((_resource_ref(e) or {}).get("path", "")) != key and (_resource_ref(e) or {}).get("name") != name
+                if _norm((_resource_ref(e) or {}).get("path", "")) != key
+                and (_resource_ref(e) or {}).get("name") != name
             ]
             if key in work_resources:
                 insert_ordered(base_resources, copy.deepcopy(work_resources[key]), RESOURCE_ORDERINGS)
@@ -701,18 +709,10 @@ def derive_yyp_entries(project_root: str | Path, base_text: str, changed_paths: 
     root = Path(project_root).resolve()
     _yyp_path, work = load_yyp(root)
     base = gm_json.loads(base_text)
-    base_folders = {
-        _norm(str(f.get("folderPath", ""))) for f in base.get("Folders", []) if isinstance(f, dict)
-    }
-    work_folders = {
-        _norm(str(f.get("folderPath", ""))) for f in work.get("Folders", []) if isinstance(f, dict)
-    }
-    work_resources = {
-        _norm(_resource_ref(e)["path"]) for e in work.get("resources", []) if _resource_ref(e)
-    }
-    base_resources = {
-        _norm(_resource_ref(e)["path"]) for e in base.get("resources", []) if _resource_ref(e)
-    }
+    base_folders = {_norm(str(f.get("folderPath", ""))) for f in base.get("Folders", []) if isinstance(f, dict)}
+    work_folders = {_norm(str(f.get("folderPath", ""))) for f in work.get("Folders", []) if isinstance(f, dict)}
+    work_resources = {_resource_path(e) for e in work.get("resources", []) if _resource_ref(e)}
+    base_resources = {_resource_path(e) for e in base.get("resources", []) if _resource_ref(e)}
     work_included = {key for e in work.get("IncludedFiles", []) if (key := _included_key(e))}
     base_included = {key for e in base.get("IncludedFiles", []) if (key := _included_key(e))}
     entries: list[str] = []
@@ -741,7 +741,7 @@ def derive_yyp_entries(project_root: str | Path, base_text: str, changed_paths: 
             for candidate in candidates:
                 add(candidate)
                 asset = load_json_loose(root / candidate) if (root / candidate).is_file() else None
-                parent = asset.get("parent") if isinstance(asset, dict) and isinstance(asset.get("parent"), dict) else {}
+                parent = _as_dict(asset.get("parent")) if isinstance(asset, dict) else {}
                 parent_path = _norm(str(parent.get("path", "")))
                 if parent_path.startswith("folders/"):
                     add_folder_chain(parent_path)

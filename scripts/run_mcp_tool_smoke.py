@@ -700,7 +700,9 @@ class MCPToolSmokeRunner:
 
     async def _scenario_test_run(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
         code = 'function agent_test_step(_frame) { test_check(true, "booted"); test_end(); }'
-        args = self._with_project("gm_test_run", project_root, {"test_code": code, "label": "smoke", "timeout_seconds": 90})
+        args = self._with_project(
+            "gm_test_run", project_root, {"test_code": code, "label": "smoke", "timeout_seconds": 90}
+        )
         return args, await self._call_tool("gm_test_run", args)
 
     async def _scenario_game_start(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
@@ -1231,7 +1233,11 @@ class MCPToolSmokeRunner:
         args = self._with_project(
             "gm_workflow_swap_sprite",
             project_root,
-            {"asset_path": f"sprites/{sprite}/{sprite}.yy", "png": png.relative_to(project_root).as_posix(), "frame": 0},
+            {
+                "asset_path": f"sprites/{sprite}/{sprite}.yy",
+                "png": png.relative_to(project_root).as_posix(),
+                "frame": 0,
+            },
         )
         result = await self._call_tool("gm_workflow_swap_sprite", args)
         return args, result

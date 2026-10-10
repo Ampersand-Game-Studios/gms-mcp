@@ -223,7 +223,12 @@ def start(
 def status(project_root: str | Path) -> dict[str, Any]:
     session = get_session(project_root)
     if session is None:
-        return {"ok": True, "running": False, "connected": False, "message": "No live game. Start one with gm_game_start."}
+        return {
+            "ok": True,
+            "running": False,
+            "connected": False,
+            "message": "No live game. Start one with gm_game_start.",
+        }
     try:
         os.utime(session.lock.path, None)  # heartbeat: the run lock is still in use
     except OSError:
@@ -273,7 +278,8 @@ def screenshot(project_root: str | Path, name: str = "shot", timeout_seconds: fl
     answer = command(project_root, f"screenshot {safe}", timeout_seconds)
     if not answer.get("ok"):
         return answer
-    data = answer.get("data") if isinstance(answer.get("data"), dict) else {}
+    raw_data = answer.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     source = Path(str(data.get("file", ""))) if data.get("file") else None
     shots_dir = session.run_dir / "shots"
     shots_dir.mkdir(parents=True, exist_ok=True)
@@ -288,7 +294,7 @@ def screenshot(project_root: str | Path, name: str = "shot", timeout_seconds: fl
             "ok": False,
             "command": answer["command"],
             "error": "The game accepted the screenshot command but no image file appeared.",
-            "hint": "The endpoint must answer with JSON {\"file\": \"<absolute path>\"} after calling screen_save.",
+            "hint": 'The endpoint must answer with JSON {"file": "<absolute path>"} after calling screen_save.',
         }
     target = shots_dir / f"{safe}.png"
     shutil.move(str(source), str(target))
@@ -350,7 +356,7 @@ def stop(project_root: str | Path) -> dict[str, Any]:
         "exit_code": exit_code,
         "run_log": snapshot_build._relative(session.project_root, run_log),
         "screenshots": sorted(
-            snapshot_build._relative(session.project_root, shot)
+            str(snapshot_build._relative(session.project_root, shot))
             for shot in (session.run_dir / "shots").glob("*.png")
         ),
         "new_screenshots": len(shots),
