@@ -1062,3 +1062,15 @@ def test_live_session_reports_a_game_that_exits_or_never_connects(
     assert exited["status"] == "GAME_EXITED" and not exited["ok"] and exited["log_tail"] == ["ERROR in action number 1"]
     assert live_session.get_session(repo) is None and not (lock_dir / "gamerun.lock").exists()
     live_session.stop_all()
+
+
+def test_lock_liveness_never_signals_on_windows(monkeypatch):
+    """os.kill(pid, 0) is CTRL_C_EVENT on Windows and would interrupt the server itself."""
+    from gms_helpers import agent_locks
+
+    calls: list[int] = []
+    monkeypatch.setattr(agent_locks.os, "name", "nt")
+    monkeypatch.setattr(agent_locks.os, "kill", lambda *_args: (_ for _ in ()).throw(AssertionError("signalled")))
+    monkeypatch.setattr(agent_locks, "_windows_process_alive", lambda pid: calls.append(pid) or True)
+    assert agent_locks._process_alive(4321) is True
+    assert calls == [4321]

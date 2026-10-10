@@ -51,9 +51,35 @@ def lock_directory() -> Path:
     return Path.home() / ".gms-mcp" / "locks"
 
 
+def _windows_process_alive(pid: int) -> bool:
+    """Liveness check through the Win32 API.
+
+    ``os.kill(pid, 0)`` must never be used on Windows: signal 0 is CTRL_C_EVENT there, so the
+    call interrupts the console process group (including this process) instead of probing.
+    """
+    import ctypes
+
+    kernel32 = getattr(ctypes, "windll").kernel32
+    process_query_limited_information = 0x1000
+    still_active = 259
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        # Access denied means the process exists but belongs to someone else.
+        return kernel32.GetLastError() == 5
+    try:
+        exit_code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return True
+        return exit_code.value == still_active
+    finally:
+        kernel32.CloseHandle(handle)
+
+
 def _process_alive(pid: int) -> bool:
     if pid <= 0:
         return False
+    if os.name == "nt":
+        return _windows_process_alive(pid)
     try:
         os.kill(pid, 0)
     except ProcessLookupError:
