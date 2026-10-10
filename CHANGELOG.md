@@ -12,6 +12,8 @@ All notable changes to this project will be documented in this file.
 - **Old validation findings no longer block new work**: a mutation is rolled back only for validation errors it introduced. Errors that existed before the mutation are reported as `preexisting_errors` (first ten, with a count). Set `GMS_MCP_STRICT_PROJECT_VALIDATION=1` for the previous behaviour, where any error anywhere blocked every mutation.
 - **False validation errors on IDE-written data**: `ConfigValues` overrides that clear a texture group parent (`"groupParent":"null"`) and extension files with an empty `%Name`/`name` are accepted.
 - **GameMaker float spellings survive a rewrite** (`1E-05`, `100.0`).
+- **Created sounds load on runtime 2024.14**: `gm_create_sound` wrote an untagged `GMSound` record with `exportDir`, which the 2024.14 runtime rejects ("Field 'exportDir' already exists in GMRecord"). Sounds are now written as `GMSound` v2, the schema the 2024 and 2026 IDEs write.
+- **Desktop snapshot builds do not need a signing identity**: errors from Igor's packaging step after the compile are reported as `packaging_errors` and do not fail a macOS/Windows/Linux snapshot whose game data was built.
 
 #### Added
 - **Snapshot builds** (`gm_snapshot_compile`): compile a throwaway copy of the project, either the working tree or "git revision plus only these paths" with a `.yyp` holding only those paths' registrations. Igor's random `System.AccessViolationException` is retried (default 10 attempts, `build.igor_attempts`); compiler errors are returned as a list and never retried. Builds take one of `build.max_parallel_builds` machine-wide slots.

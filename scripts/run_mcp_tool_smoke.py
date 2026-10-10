@@ -1093,7 +1093,8 @@ class MCPToolSmokeRunner:
         args = self._with_project(
             "gm_sprite_import_strip",
             project_root,
-            {"name": "spr_strip_smoke", "source": str(source), "layout": "horizontal"},
+            # The server accepts only project-relative PNG inputs.
+            {"name": "spr_strip_smoke", "source": source.relative_to(project_root).as_posix(), "layout": "horizontal"},
         )
         result = await self._call_tool("gm_sprite_import_strip", args)
         return args, result
@@ -1230,7 +1231,7 @@ class MCPToolSmokeRunner:
         args = self._with_project(
             "gm_workflow_swap_sprite",
             project_root,
-            {"asset_path": f"sprites/{sprite}/{sprite}.yy", "png": str(png), "frame": 0},
+            {"asset_path": f"sprites/{sprite}/{sprite}.yy", "png": png.relative_to(project_root).as_posix(), "frame": 0},
         )
         result = await self._call_tool("gm_workflow_swap_sprite", args)
         return args, result
