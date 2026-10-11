@@ -503,6 +503,48 @@ def test_stale_locks_are_reclaimed(lock_dir: Path):
     assert not agent_locks.DirectoryLock("live.lock", stale_seconds=100).try_acquire()
 
 
+def test_reclaiming_a_stale_lock_clears_its_owner_record(lock_dir: Path):
+    lock_dir.mkdir()
+    (lock_dir / "repo.lock").mkdir()
+    (lock_dir / "repo.lock.owner").write_text(
+        json.dumps({"pid": 2**30, "host": socket.gethostname()}), encoding="utf-8"
+    )
+    first = agent_locks.DirectoryLock("repo.lock", purpose="first")
+    first._reclaim_stale()
+    assert not (lock_dir / "repo.lock").exists() and not (lock_dir / "repo.lock.owner").exists()
+    assert not (lock_dir / "repo.lock.reclaim").exists()
+
+    # While one contender reclaims, another must not remove anything.
+    (lock_dir / "repo.lock").mkdir()
+    (lock_dir / "repo.lock.owner").write_text(
+        json.dumps({"pid": 2**30, "host": socket.gethostname()}), encoding="utf-8"
+    )
+    (lock_dir / "repo.lock.reclaim").mkdir()
+    second = agent_locks.DirectoryLock("repo.lock", purpose="second")
+    assert not second.try_acquire()
+    assert (lock_dir / "repo.lock").exists()
+    (lock_dir / "repo.lock.reclaim").rmdir()
+    assert second.try_acquire()
+    assert json.loads((lock_dir / "repo.lock.owner").read_text())["pid"] == os.getpid()
+
+
+def test_snapshot_work_directories_are_unique_per_invocation(repo: Path, tmp_path: Path, lock_dir: Path, monkeypatch):
+    seen: list[Path] = []
+    real = snapshot_build.create_snapshot
+
+    def spy(project_root, destination, **kwargs):
+        seen.append(Path(destination).parent)
+        return real(project_root, destination, **kwargs)
+
+    monkeypatch.setattr(snapshot_build, "create_snapshot", spy)
+    monkeypatch.setattr(snapshot_build, "_work_root", lambda: tmp_path / "work_root")
+    for _ in range(2):
+        snapshot_build.snapshot_compile(
+            repo, label="same", toolchain=_toolchain(tmp_path), run_igor=_fake_igor(["ok"]), keep_work_dir=True
+        )
+    assert len(seen) == 2 and seen[0] != seen[1]
+
+
 def test_build_slots_count(lock_dir: Path):
     one = agent_locks.BuildSlot(2).acquire()
     two = agent_locks.BuildSlot(2).acquire()
@@ -859,6 +901,29 @@ def test_stage_paths_keeps_registrations_already_in_the_index(repo: Path, lock_d
     stage_paths(repo, ["scripts/mine"])
     index_yyp = _git(repo, "show", ":game.yyp")
     assert "scripts/mine/mine.yy" in index_yyp and "scripts/theirs/theirs.yy" in index_yyp
+
+
+def test_stage_paths_recomposes_the_project_file_when_a_folder_covers_it(repo: Path, lock_dir: Path):
+    for name in ("mine", "theirs"):
+        _add_script(repo, name)
+    yyp_registry.register_assets(repo, ["scripts/mine/mine.yy", "scripts/theirs/theirs.yy"])
+    working_before = (repo / "game.yyp").read_text()
+
+    # Staging "." adds every file, but the staged project file must be exactly what those files need.
+    staged = stage_paths(repo, ["."])
+    index_yyp = _git(repo, "show", ":game.yyp")
+    assert "scripts/mine/mine.yy" in index_yyp and "scripts/theirs/theirs.yy" in index_yyp
+    assert sorted(staged["yyp_entries"]) == ["scripts/mine/mine.yy", "scripts/theirs/theirs.yy"]
+    assert (repo / "game.yyp").read_text() == working_before
+
+    # A registration with no files behind it in this call (an unsaved asset another agent added to the
+    # working project file only) must not ride along.
+    _git(repo, "reset", "-q")
+    import shutil as _shutil
+
+    _shutil.rmtree(repo / "scripts" / "theirs")
+    stage_paths(repo, ["."])
+    assert "scripts/theirs/theirs.yy" not in _git(repo, "show", ":game.yyp")
 
 
 def test_stage_paths_refuses_to_commit_unrelated_staged_changes(repo: Path, lock_dir: Path):

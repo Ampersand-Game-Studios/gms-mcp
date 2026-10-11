@@ -30,6 +30,7 @@ import sys
 import tarfile
 import tempfile
 import time
+import uuid
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -886,7 +887,9 @@ def snapshot_compile(
     label = safe_label(label)
     run_dir = runs_directory(root, label)
     run_dir.mkdir(parents=True, exist_ok=True)
-    work = _work_root() / f"{safe_label(root.name)}_{label}_{os.getpid()}"
+    # Unique per invocation: tools run on threads, so two calls in one process can share a label,
+    # and two projects can share a folder name.
+    work = _work_root() / f"{safe_label(root.name)}_{label}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
