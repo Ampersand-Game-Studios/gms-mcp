@@ -99,26 +99,27 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         SDK/Xcode settings saved in the GameMaker IDE; they produce no runnable result here.
         """
         _ = ctx
-        from gms_helpers.snapshot_build import snapshot_compile
+        from gms_helpers.snapshot_build import label_pipeline, snapshot_compile
         import shutil
 
         root = _resolve_project_directory(project_root)
 
         def work() -> Dict[str, Any]:
-            public, _build, work_dir, _tools = snapshot_compile(
-                root,
-                label=label,
-                isolate_paths=isolate_paths,
-                yyp_entries=yyp_entries,
-                ref=ref,
-                base_only=base_only,
-                platform=platform,
-                runtime=runtime,
-                runtime_version=runtime_version,
-                attempts=attempts,
-            )
-            shutil.rmtree(work_dir, ignore_errors=True)
-            return public
+            with label_pipeline(root, label):
+                public, _build, work_dir, _tools = snapshot_compile(
+                    root,
+                    label=label,
+                    isolate_paths=isolate_paths,
+                    yyp_entries=yyp_entries,
+                    ref=ref,
+                    base_only=base_only,
+                    platform=platform,
+                    runtime=runtime,
+                    runtime_version=runtime_version,
+                    attempts=attempts,
+                )
+                shutil.rmtree(work_dir, ignore_errors=True)
+                return public
 
         try:
             return await asyncio.to_thread(work)

@@ -145,14 +145,44 @@ class DirectoryLock:
             return not _process_alive(owner["pid"])
         return age > self.stale_seconds
 
+    def _reclaim_stale(self) -> None:
+        """Remove a stale lock and its owner record, one contender at a time.
+
+        Without the mutex two contenders could both judge the old lock stale, and the slower one
+        would then remove the lock the faster one had just taken (reading the dead owner's record).
+        """
+        mutex = self.path.with_name(self.path.name + ".reclaim")
+        try:
+            mutex.mkdir()
+        except FileExistsError:
+            # Another contender is reclaiming. A crashed reclaimer must not block for ever.
+            try:
+                if time.time() - mutex.stat().st_mtime > 10.0:
+                    mutex.rmdir()
+            except OSError:
+                pass
+            return
+        try:
+            if self._is_stale():  # re-check now that nobody else can be reclaiming
+                try:
+                    self.owner_path.unlink()
+                except OSError:
+                    pass
+                try:
+                    self.path.rmdir()
+                except OSError:
+                    pass
+        finally:
+            try:
+                mutex.rmdir()
+            except OSError:
+                pass
+
     # -- acquire / release ----------------------------------------------
     def try_acquire(self) -> bool:
         self.directory.mkdir(parents=True, exist_ok=True)
         if self._is_stale():
-            try:
-                self.path.rmdir()
-            except OSError:
-                pass
+            self._reclaim_stale()
         try:
             self.path.mkdir()
         except FileExistsError:

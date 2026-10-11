@@ -119,6 +119,7 @@ def _git(root: Path, *args: str) -> str:
         capture_output=True,
         check=True,
         text=True,
+        encoding="utf-8",  # git writes UTF-8; the platform default (cp1252 on Windows) would garble names
     ).stdout
 
 
@@ -503,6 +504,48 @@ def test_stale_locks_are_reclaimed(lock_dir: Path):
     assert not agent_locks.DirectoryLock("live.lock", stale_seconds=100).try_acquire()
 
 
+def test_reclaiming_a_stale_lock_clears_its_owner_record(lock_dir: Path):
+    lock_dir.mkdir()
+    (lock_dir / "repo.lock").mkdir()
+    (lock_dir / "repo.lock.owner").write_text(
+        json.dumps({"pid": 2**30, "host": socket.gethostname()}), encoding="utf-8"
+    )
+    first = agent_locks.DirectoryLock("repo.lock", purpose="first")
+    first._reclaim_stale()
+    assert not (lock_dir / "repo.lock").exists() and not (lock_dir / "repo.lock.owner").exists()
+    assert not (lock_dir / "repo.lock.reclaim").exists()
+
+    # While one contender reclaims, another must not remove anything.
+    (lock_dir / "repo.lock").mkdir()
+    (lock_dir / "repo.lock.owner").write_text(
+        json.dumps({"pid": 2**30, "host": socket.gethostname()}), encoding="utf-8"
+    )
+    (lock_dir / "repo.lock.reclaim").mkdir()
+    second = agent_locks.DirectoryLock("repo.lock", purpose="second")
+    assert not second.try_acquire()
+    assert (lock_dir / "repo.lock").exists()
+    (lock_dir / "repo.lock.reclaim").rmdir()
+    assert second.try_acquire()
+    assert json.loads((lock_dir / "repo.lock.owner").read_text())["pid"] == os.getpid()
+
+
+def test_snapshot_work_directories_are_unique_per_invocation(repo: Path, tmp_path: Path, lock_dir: Path, monkeypatch):
+    seen: list[Path] = []
+    real = snapshot_build.create_snapshot
+
+    def spy(project_root, destination, **kwargs):
+        seen.append(Path(destination).parent)
+        return real(project_root, destination, **kwargs)
+
+    monkeypatch.setattr(snapshot_build, "create_snapshot", spy)
+    monkeypatch.setattr(snapshot_build, "_work_root", lambda: tmp_path / "work_root")
+    for _ in range(2):
+        snapshot_build.snapshot_compile(
+            repo, label="same", toolchain=_toolchain(tmp_path), run_igor=_fake_igor(["ok"]), keep_work_dir=True
+        )
+    assert len(seen) == 2 and seen[0] != seen[1]
+
+
 def test_build_slots_count(lock_dir: Path):
     one = agent_locks.BuildSlot(2).acquire()
     two = agent_locks.BuildSlot(2).acquire()
@@ -859,6 +902,80 @@ def test_stage_paths_keeps_registrations_already_in_the_index(repo: Path, lock_d
     stage_paths(repo, ["scripts/mine"])
     index_yyp = _git(repo, "show", ":game.yyp")
     assert "scripts/mine/mine.yy" in index_yyp and "scripts/theirs/theirs.yy" in index_yyp
+
+
+def test_stage_paths_recomposes_the_project_file_when_a_folder_covers_it(repo: Path, lock_dir: Path):
+    for name in ("mine", "theirs"):
+        _add_script(repo, name)
+    yyp_registry.register_assets(repo, ["scripts/mine/mine.yy", "scripts/theirs/theirs.yy"])
+    working_before = (repo / "game.yyp").read_text()
+
+    # Staging "." adds every file, but the staged project file must be exactly what those files need.
+    staged = stage_paths(repo, ["."])
+    index_yyp = _git(repo, "show", ":game.yyp")
+    assert "scripts/mine/mine.yy" in index_yyp and "scripts/theirs/theirs.yy" in index_yyp
+    assert sorted(staged["yyp_entries"]) == ["scripts/mine/mine.yy", "scripts/theirs/theirs.yy"]
+    assert (repo / "game.yyp").read_text() == working_before
+
+    # A registration with no files behind it in this call (an unsaved asset another agent added to the
+    # working project file only) must not ride along.
+    _git(repo, "reset", "-q")
+    import shutil as _shutil
+
+    _shutil.rmtree(repo / "scripts" / "theirs")
+    stage_paths(repo, ["."])
+    assert "scripts/theirs/theirs.yy" not in _git(repo, "show", ":game.yyp")
+
+
+def test_stage_paths_handles_non_ascii_asset_names(repo: Path, lock_dir: Path):
+    _add_script(repo, "café")
+    yyp_registry.register_assets(repo, ["scripts/café/café.yy"])
+    staged = stage_paths(repo, ["."])
+    assert staged["yyp_entries"] == ["scripts/café/café.yy"]
+    assert "scripts/café/café.yy" in _git(repo, "show", ":game.yyp")
+
+
+def test_stage_paths_drops_the_old_registration_of_a_renamed_asset(repo: Path, lock_dir: Path):
+    # Same .gml content under a new name, so git reports the move as a rename.
+    body = (repo / "scripts" / "zeta" / "zeta.gml").read_text(encoding="utf-8")
+    yyp_registry.unregister_assets(repo, ["scripts/zeta/zeta.yy"])
+    import shutil as _shutil
+
+    _shutil.rmtree(repo / "scripts" / "zeta")
+    _add_script(repo, "omega", body)
+    yyp_registry.register_assets(repo, ["scripts/omega/omega.yy"])
+
+    stage_paths(repo, ["."])
+    index_yyp = _git(repo, "show", ":game.yyp")
+    assert "scripts/omega/omega.yy" in index_yyp
+    assert "scripts/zeta/zeta.yy" not in index_yyp
+
+
+def test_same_label_pipelines_do_not_overlap(repo: Path, lock_dir: Path):
+    active = 0
+    overlaps = 0
+    guard = threading.Lock()
+
+    def pipeline():
+        nonlocal active, overlaps
+        with snapshot_build.label_pipeline(repo, "same"):
+            with guard:
+                active += 1
+                overlaps += active > 1
+            time.sleep(0.05)
+            with guard:
+                active -= 1
+
+    threads = [threading.Thread(target=pipeline) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert overlaps == 0 and not any(lock_dir.glob("runlabel_*.lock"))
+
+    # Different labels are independent.
+    with snapshot_build.label_pipeline(repo, "a"), snapshot_build.label_pipeline(repo, "b"):
+        pass
 
 
 def test_stage_paths_refuses_to_commit_unrelated_staged_changes(repo: Path, lock_dir: Path):
