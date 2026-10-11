@@ -8,6 +8,8 @@ project resources, even though GameMaker uses the same name/path wire format.
 from __future__ import annotations
 
 import json
+import re
+from collections import Counter
 from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
@@ -86,15 +88,51 @@ ASSET_FILE_FIELDS = {
 _IGNORED = {".git", ".gms_mcp", ".gms-mcp", "output", "__pycache__", ".pytest_cache"}
 
 
+_PREEXISTING_ERROR_SAMPLE = 10
+_ARRAY_INDEX = re.compile(r"\[\d+\]")
+
+
 @dataclass
 class ProjectValidationResult:
     success: bool
     errors: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
     yyp: str | None = None
+    # Errors that were already present before the mutation being validated.
+    # They never block a commit; they are reported so the project can be repaired.
+    preexisting_errors: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
-        return asdict(self)
+        data = asdict(self)
+        preexisting = data.pop("preexisting_errors")
+        if preexisting:
+            # A long-lived project can carry dozens of old findings. Agents need
+            # to know they exist, not to re-read all of them after every edit.
+            data["preexisting_error_count"] = len(preexisting)
+            data["preexisting_errors"] = preexisting[:_PREEXISTING_ERROR_SAMPLE]
+            if len(preexisting) > _PREEXISTING_ERROR_SAMPLE:
+                data["preexisting_errors_truncated"] = True
+        return data
+
+
+def _validation_error_key(error: str) -> str:
+    """Compare findings independent of array positions shifted by an insertion."""
+    return _ARRAY_INDEX.sub("[]", error)
+
+
+def errors_introduced_by_mutation(before: list[str], after: list[str]) -> tuple[list[str], list[str]]:
+    """Split post-mutation errors into (introduced, preexisting) against a baseline."""
+    remaining = Counter(_validation_error_key(error) for error in before)
+    introduced: list[str] = []
+    preexisting: list[str] = []
+    for error in after:
+        key = _validation_error_key(error)
+        if remaining[key] > 0:
+            remaining[key] -= 1
+            preexisting.append(error)
+        else:
+            introduced.append(error)
+    return introduced, preexisting
 
 
 def safe_project_path(root: Path, value: Any) -> Path | None:
@@ -393,7 +431,9 @@ class _ProjectGraph:
 
     def walk(self, value: Any, location: str, owner: str, key: str = "", track_type: str = "") -> None:
         if key == "groupParent" and isinstance(value, str):
-            if not value:
+            # ConfigValues store every override as a string; the IDE writes a
+            # cleared parent as the literal text "null".
+            if not value or value == "null":
                 return
             value = {"name": value, "path": f"texturegroups/{value}"}
         if isinstance(value, str) and key in REFERENCE_TYPES:
@@ -628,7 +668,8 @@ class _ProjectGraph:
                                 check_files=check_files and not configured_virtual,
                                 optional=False,
                             )
-                if item.get("name", filename) != filename or item.get("%Name", filename) != filename:
+                # GameMaker itself writes extension files with an empty identity.
+                if any(item.get(k, filename) not in ("", filename) for k in ("name", "%Name")):
                     self.error(location, "mismatched extension file identity")
                 for proxy_index, proxy in enumerate(self.array(item.get("ProxyFiles", []), location + ".ProxyFiles")):
                     proxy_location = f"{location}.ProxyFiles[{proxy_index}]"

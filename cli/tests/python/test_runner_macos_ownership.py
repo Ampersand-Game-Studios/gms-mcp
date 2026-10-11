@@ -117,8 +117,8 @@ class TestMacOSRunnerOwnership(unittest.TestCase):
         environment = dict(__import__("os").environ)
         environment["GMS_MCP_MACOS_LAUNCH_TOKEN"] = "launchservices-owned-token"
         subprocess.run(["/usr/bin/open", "-n", str(bundle)], check=True, env=environment)
-        for _ in range(20):
-            if result_path.exists():
+        for _ in range(100):
+            if result_path.exists() and result_path.read_text(encoding="utf-8").strip():
                 break
             __import__("time").sleep(0.1)
         pid_text, inherited_token = result_path.read_text(encoding="utf-8").strip().split()
@@ -505,7 +505,11 @@ class TestMacOSRunnerOwnership(unittest.TestCase):
         process.poll.return_value = None
         process.wait.return_value = 0
         owned_processes = {
-            20: MacOSProcess(20, 77, f"/runtime/Mac_Runner -game {self.game_path}"),
+            20: MacOSProcess(
+                20,
+                77,
+                f"/runtime/Mac_Runner -game {self.game_path} -debugoutput {self.debug_log}",
+            ),
             21: MacOSProcess(
                 21,
                 1,

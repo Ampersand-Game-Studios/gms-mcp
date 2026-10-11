@@ -406,3 +406,17 @@ Fix:
 
 - If you changed Python: restart MCP.
 - If you changed GML: restart the game via `gm_run`.
+
+## Runtime bridge protocol 2 and live sessions
+
+`gm_game_start` builds a throwaway snapshot of the project, starts it and waits for a bridge endpoint in the game to connect. It then serves `gm_game_command`, `gm_game_screenshot`, `gm_game_log`, `gm_game_status` and `gm_game_stop`. Each session listens on its own free port, so several agents can each have a server; one game runs at a time per machine (the `gamerun.lock`).
+
+A game takes part by implementing this contract. The installed `__mcp_bridge` asset (protocol 1, fixed port) keeps working with `gm_run` / `gm_run_command`.
+
+- **Transport**: TCP on `127.0.0.1`. The MCP server listens. The game connects out to the port in the `GMS_MCP_BRIDGE_PORT` environment variable. When the variable is not set the game must not open a socket.
+- **Framing**: UTF-8 lines ending in `\n`. NUL bytes are ignored.
+- **Game to server**: `HELLO:<json>` once after connecting (suggested fields: `protocol`, `game`, `version`, `commands`); `RSP:<id>|<answer>`; optionally `LOG:<ms>|<text>`.
+- **Server to game**: `CMD:<id>|<name> <arguments>`.
+- **Answers**: one line. Plain text, JSON when it starts with `{` or `[` (returned parsed in `data`), or `ERR:<code> <message>` (returned as `ok: false` with `error_code`).
+- **Standard commands**: `ping` (answers `pong`), `help`, `state`, `screenshot [name]` (answers `{"file": "<absolute path>"}` after `screen_save`), `log_tail [count]` (answers `{"lines": [...]}`), `console <command line>` (answers `{"ok": true, "output": [...]}`). `input ...` is reserved for input injection.
+- Enable the endpoint only in development builds.

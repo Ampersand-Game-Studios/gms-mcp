@@ -94,6 +94,7 @@ class _ProjectMutationLock:
         self._thread_lock: threading.Lock | None = None
         self._lock_file: TextIO | None = None
         self._acquired = False
+        self._shared_lock: Any = None
 
     def acquire(self) -> None:
         key = os.path.normcase(str(self.project_root.resolve()))
@@ -103,6 +104,14 @@ class _ProjectMutationLock:
         self._thread_lock = thread_lock
 
         try:
+            if os.environ.get("GMS_MCP_LOCK_DIR", "").strip():
+                # A team lock directory is configured: scripts that edit the project file
+                # take its repo.lock, so project mutations must take it too.
+                from .agent_locks import REPOSITORY_LOCK, DirectoryLock
+
+                shared_lock = DirectoryLock(REPOSITORY_LOCK, purpose=f"project mutation {self.tool_name}")
+                shared_lock.acquire(timeout_seconds=600.0)
+                self._shared_lock = shared_lock
             lock_dir = self.project_root / ".gms_mcp" / "locks"
             lock_dir.mkdir(parents=True, exist_ok=True)
             lock_path = lock_dir / "project-mutation.lock"
@@ -166,6 +175,10 @@ class _ProjectMutationLock:
                 lock_file.close()
 
         self._acquired = False
+        shared_lock = self._shared_lock
+        self._shared_lock = None
+        if shared_lock is not None:
+            shared_lock.release()
         thread_lock = self._thread_lock
         self._thread_lock = None
         if thread_lock is not None:
@@ -497,7 +510,14 @@ def run_journaled_cli() -> None:
             raise SystemExit(exc.exit_code) from exc
 
 
-from .project_validation import ProjectValidationResult, validate_project_after_mutation
+from .project_validation import (
+    ProjectValidationResult,
+    errors_introduced_by_mutation,
+    validate_project_after_mutation,
+)
+
+_STRICT_VALIDATION_ENV = "GMS_MCP_STRICT_PROJECT_VALIDATION"
+_VALIDATION_BASELINE_FILE = "validation-baseline.json"
 
 
 class TransactionValidationError(ValidationError):
@@ -1339,6 +1359,7 @@ class GameMakerProjectTransaction:
         self._unproven_owned_paths: set[str] = set()
         self._mutation_state_captured = False
         self.validation: ProjectValidationResult | None = None
+        self._baseline_errors: List[str] | None = None
         self.compile_verification: Dict[str, Any] | None = None
         self.rollback_conflicts: List[Dict[str, str]] = []
         self.rollback_complete: bool | None = None
@@ -1422,6 +1443,68 @@ class GameMakerProjectTransaction:
                 details={"transaction": recovery.to_dict()},
             )
 
+    # ------------------------------------------------------------------
+    # Differential validation
+    # ------------------------------------------------------------------
+    @staticmethod
+    def _strict_validation() -> bool:
+        """Old behaviour: any validation error blocks, including ones that predate the mutation."""
+        return _env_truthy(_STRICT_VALIDATION_ENV)
+
+    @staticmethod
+    def _state_digest(state: Dict[str, str]) -> str:
+        return hashlib.sha256(json.dumps(state, sort_keys=True, separators=(",", ":")).encode("utf-8")).hexdigest()
+
+    def _baseline_cache_path(self) -> Path:
+        return self.project_root / ".gms_mcp" / "cache" / _VALIDATION_BASELINE_FILE
+
+    def _load_baseline_errors(self) -> List[str]:
+        """Return the findings the project already had before this mutation started.
+
+        The result of the previous commit is reused while the project is byte-for-byte
+        unchanged; any external edit invalidates it and costs one extra validation.
+        """
+        digest = self._state_digest(self._before_state)
+        cache_path = self._baseline_cache_path()
+        try:
+            cached = json.loads(cache_path.read_text(encoding="utf-8"))
+            if (
+                isinstance(cached, dict)
+                and cached.get("state_digest") == digest
+                and isinstance(cached.get("errors"), list)
+                and all(isinstance(error, str) for error in cached["errors"])
+            ):
+                return list(cached["errors"])
+        except (OSError, ValueError):
+            pass
+        return list(validate_project_after_mutation(self.project_root).errors)
+
+    def _store_baseline_errors(self, state: Dict[str, str], errors: List[str]) -> None:
+        cache_path = self._baseline_cache_path()
+        try:
+            _assert_plain_infrastructure(self.project_root, cache_path.parent)
+            _assert_plain_infrastructure(self.project_root, cache_path)
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            temporary = cache_path.with_name(f".{cache_path.name}.{os.getpid()}.tmp")
+            temporary.write_text(
+                json.dumps({"state_digest": self._state_digest(state), "errors": errors}, sort_keys=True),
+                encoding="utf-8",
+            )
+            os.replace(temporary, cache_path)
+        except (OSError, ValidationError):
+            # The cache only saves time; a failure to write it must never fail a commit.
+            pass
+
+    def _validate_after_mutation(self) -> ProjectValidationResult:
+        validation = validate_project_after_mutation(self.project_root)
+        if validation.success or self._baseline_errors is None:
+            return validation
+        introduced, preexisting = errors_introduced_by_mutation(self._baseline_errors, validation.errors)
+        validation.errors = introduced
+        validation.preexisting_errors = preexisting
+        validation.success = not introduced
+        return validation
+
     def _begin_locked(self) -> None:
         from .path_safety import assert_project_tree_contained
 
@@ -1445,6 +1528,8 @@ class GameMakerProjectTransaction:
             _assert_plain_infrastructure(self.project_root, self.project_root / ".gms_mcp" / "transactions")
             self._recover_interrupted_locked()
             self._before_state = _snapshot_state(self.project_root)
+            if not self._strict_validation():
+                self._baseline_errors = self._load_baseline_errors()
             recovery_root = self.project_root / ".gms_mcp" / "transactions"
             recovery_root.mkdir(parents=True, exist_ok=True)
             self._tmp_dir = Path(tempfile.mkdtemp(prefix="tx-", dir=recovery_root))
@@ -1713,12 +1798,13 @@ class GameMakerProjectTransaction:
     ) -> Dict[str, Any]:
         if not self._mutation_state_captured:
             self.capture_mutation_state()
-        self.validation = validate_project_after_mutation(self.project_root)
+        self.validation = self._validate_after_mutation()
         if not self.validation.success:
             rollback_complete = self.rollback()
             raise TransactionValidationError(
                 (
-                    "Project validation failed after mutation; changes were rolled back."
+                    "Project validation failed after mutation; changes were rolled back. "
+                    "The listed errors were introduced by this operation: fix the inputs and retry."
                     if rollback_complete
                     else "Project validation failed and safe rollback could not restore every journaled path."
                 ),
@@ -1765,6 +1851,11 @@ class GameMakerProjectTransaction:
             self.rollback()
             raise
         self.committed = True
+        if self._baseline_errors is not None:
+            self._store_baseline_errors(
+                self._after_state,
+                [*self.validation.preexisting_errors, *self.validation.errors],
+            )
         return self.to_dict()
 
     async def commit_async(

@@ -192,6 +192,27 @@ class RunnerMacOSMixin:
     def _macos_runner_debug_path(self, command: str) -> Optional[Path]:
         return self._macos_runner_option_path(command, "-debugoutput")
 
+    def _macos_runner_artifact_paths(
+        self,
+        command: str,
+        expected_game_path: Path,
+        expected_debug_log_path: Path,
+    ) -> tuple[Path, Path]:
+        """Verify raw ``ps`` text against the exact launch contract and retain known paths."""
+
+        def command_references(option: str, expected_path: Path) -> bool:
+            pattern = re.compile(
+                rf"(?:^|\s){re.escape(option)}(?:=|\s+)[\"']?"
+                rf"{re.escape(str(expected_path))}[\"']?(?=\s|$)"
+            )
+            return pattern.search(command) is not None
+
+        if not command_references("-game", expected_game_path):
+            raise RuntimeError("Owned macOS runner did not reference the expected game artifact.")
+        if not command_references("-debugoutput", expected_debug_log_path):
+            raise RuntimeError("Owned macOS runner did not reference the expected debug log.")
+        return expected_game_path, expected_debug_log_path
+
     @staticmethod
     def _new_macos_launch_token() -> str:
         """Return an unguessable marker inherited only by one owned Igor launch."""

@@ -1070,6 +1070,8 @@ class TestSoundAndTimelineRegression(TestAssetsComprehensive):
 
         yy_data = sound_asset.create_yy_data("snd_test", self.parent_path)
 
+        # exportDir belongs to GMSound v2; an empty tag makes runtime 2024.14 reject the project.
+        self.assertEqual(yy_data["$GMSound"], "v2")
         self.assertEqual(
             list(yy_data),
             [

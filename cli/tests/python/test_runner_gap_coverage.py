@@ -435,6 +435,47 @@ class TestRunnerGapCoverage(unittest.TestCase):
 
         output_thread.join.assert_called_once_with(timeout=5)
 
+    def test_macos_runner_artifact_paths_reject_ps_truncation_at_spaces(self):
+        runner = self._make_runner()
+        output_root = self.project_root / "Project With Spaces" / "output" / "TestGame"
+        output_root.mkdir(parents=True)
+        expected_game_path = output_root / "game.ios"
+        expected_debug_log_path = output_root / "debug.log"
+        expected_game_path.write_bytes(b"game")
+        expected_debug_log_path.write_text("Entering main loop.\n", encoding="utf-8")
+        # Make the first whitespace-truncated token an existing file. Selection
+        # must still retain the exact known launch paths rather than accepting it.
+        truncated_prefix = self.project_root / "Project"
+        truncated_prefix.write_bytes(b"not the game")
+        for quote in ("", '"'):
+            with self.subTest(quoted=bool(quote)):
+                command = (
+                    "/Applications/YoYo Runner.app/Contents/MacOS/Mac_Runner "
+                    f"-game {quote}{expected_game_path}{quote} "
+                    f"-debugoutput {quote}{expected_debug_log_path}{quote}"
+                )
+
+                game_path, debug_log_path = runner._macos_runner_artifact_paths(
+                    command,
+                    expected_game_path,
+                    expected_debug_log_path,
+                )
+
+                self.assertEqual(game_path, expected_game_path)
+                self.assertEqual(debug_log_path, expected_debug_log_path)
+
+    def test_macos_runner_artifact_paths_reject_unexpected_owned_command_paths(self):
+        runner = self._make_runner()
+        expected_game_path = self.project_root / "output" / "TestGame" / "game.ios"
+        expected_debug_log_path = expected_game_path.parent / "debug.log"
+
+        with self.assertRaisesRegex(RuntimeError, "expected game artifact"):
+            runner._macos_runner_artifact_paths(
+                "/runtime/Mac_Runner -game /tmp/other/game.ios -debugoutput /tmp/other/debug.log",
+                expected_game_path,
+                expected_debug_log_path,
+            )
+
     def test_macos_compile_launch_timeout_is_configurable_and_bounded(self):
         runner = self._make_runner()
 
