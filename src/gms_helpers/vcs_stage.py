@@ -34,8 +34,12 @@ def _git(repo: Path, *args: str, input_text: str | None = None, check: bool = Tr
 
 
 def _staged_names(repo: Path) -> list[str]:
-    """Staged paths exactly as they are on disk (NUL-delimited, so git never quotes non-ASCII names)."""
-    return [name for name in _git(repo, "diff", "--cached", "--name-only", "-z").split("\0") if name]
+    """Staged paths exactly as they are on disk (NUL-delimited, so git never quotes non-ASCII names).
+
+    Rename detection is off: a renamed asset must report its old path too, or its old registration
+    would stay in the composed project file.
+    """
+    return [name for name in _git(repo, "diff", "--cached", "--name-only", "--no-renames", "-z").split("\0") if name]
 
 
 def stage_paths(

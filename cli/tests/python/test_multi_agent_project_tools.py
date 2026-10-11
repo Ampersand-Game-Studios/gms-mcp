@@ -935,6 +935,22 @@ def test_stage_paths_handles_non_ascii_asset_names(repo: Path, lock_dir: Path):
     assert "scripts/café/café.yy" in _git(repo, "show", ":game.yyp")
 
 
+def test_stage_paths_drops_the_old_registration_of_a_renamed_asset(repo: Path, lock_dir: Path):
+    # Same .gml content under a new name, so git reports the move as a rename.
+    body = (repo / "scripts" / "zeta" / "zeta.gml").read_text(encoding="utf-8")
+    yyp_registry.unregister_assets(repo, ["scripts/zeta/zeta.yy"])
+    import shutil as _shutil
+
+    _shutil.rmtree(repo / "scripts" / "zeta")
+    _add_script(repo, "omega", body)
+    yyp_registry.register_assets(repo, ["scripts/omega/omega.yy"])
+
+    stage_paths(repo, ["."])
+    index_yyp = _git(repo, "show", ":game.yyp")
+    assert "scripts/omega/omega.yy" in index_yyp
+    assert "scripts/zeta/zeta.yy" not in index_yyp
+
+
 def test_same_label_pipelines_do_not_overlap(repo: Path, lock_dir: Path):
     active = 0
     overlaps = 0
