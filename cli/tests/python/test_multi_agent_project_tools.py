@@ -119,6 +119,7 @@ def _git(root: Path, *args: str) -> str:
         capture_output=True,
         check=True,
         text=True,
+        encoding="utf-8",  # git writes UTF-8; the platform default (cp1252 on Windows) would garble names
     ).stdout
 
 
