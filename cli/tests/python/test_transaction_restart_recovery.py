@@ -68,6 +68,8 @@ def test_bogus_transaction_environment_cannot_bypass_standalone_cli_rollback(pro
         "GMS_MCP_TRANSACTION_ROOT": str(project),
         "GMS_MCP_TRANSACTION_JOURNAL": "bogus",
         "GMS_MCP_TRANSACTION_BACKUP_ROOT": "bogus",
+        # The broken file predates the mutation; strict mode makes it block the commit.
+        "GMS_MCP_STRICT_PROJECT_VALIDATION": "1",
     }
     command = [
         sys.executable,

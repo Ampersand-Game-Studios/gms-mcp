@@ -22,7 +22,7 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         root = Path(project_root).resolve()
         return {
             "ok": True,
-            "mode": current_verification_mode(),
+            "mode": current_verification_mode(root),
             "project_root": str(root),
             "pending_compile_verification": get_pending_compile_verification(root),
         }

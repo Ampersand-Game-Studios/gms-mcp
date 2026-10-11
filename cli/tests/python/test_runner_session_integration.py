@@ -460,12 +460,20 @@ class TestRunnerBackgroundMode(unittest.TestCase):
 
     def test_macos_background_run_tracks_runner_pid_in_session(self):
         """macOS background runs should persist the actual Mac_Runner PID, not Igor's PID."""
-        runner = GameMakerRunner(self.project_root)
+        spaced_project_root = self.project_root / "Project With Spaces"
+        spaced_project_root.mkdir()
+        (spaced_project_root / "test_project.yyp").write_text(
+            '{"name": "test_project", "resources": []}',
+            encoding="utf-8",
+        )
+        runner = GameMakerRunner(spaced_project_root)
         fake_process = MagicMock()
         fake_process.pid = 12345
         fake_process.poll.return_value = None
-        runner_command = f"/runtime/Mac_Runner -game {self.project_root / 'output' / 'test_project' / 'game.ios'}"
-        tail_command = f"tail -F {self.project_root / 'output' / 'test_project' / 'debug.log'}"
+        game_path = runner.project_root / "output" / "test_project" / "game.ios"
+        debug_log_path = game_path.parent / "debug.log"
+        runner_command = f"/runtime/Mac_Runner -game {game_path} -debugoutput {debug_log_path}"
+        tail_command = f"tail -F {debug_log_path}"
         owned_processes = {
             12345: MacOSProcess(12345, 1, "/runtime/Igor -- Mac Run"),
             222: MacOSProcess(222, 12345, runner_command),
@@ -494,12 +502,8 @@ class TestRunnerBackgroundMode(unittest.TestCase):
         session = runner._session_manager.get_current_session()
         self.assertIsNotNone(session)
         self.assertEqual(session.pid, 222)
-        self.assertEqual(
-            Path(session.exe_path).resolve(), (self.project_root / "output" / "test_project" / "game.ios").resolve()
-        )
-        self.assertEqual(
-            Path(session.log_file).resolve(), (self.project_root / "output" / "test_project" / "debug.log").resolve()
-        )
+        self.assertEqual(Path(session.exe_path).resolve(), game_path.resolve())
+        self.assertEqual(Path(session.log_file).resolve(), debug_log_path.resolve())
         self.assertEqual(session.macos_runner_commands, {"222": runner_command})
         self.assertEqual(session.macos_tail_commands, {"333": tail_command})
         self.assertEqual(session.macos_igor_pid, 12345)

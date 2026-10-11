@@ -203,7 +203,7 @@ def _run_transactional_sync(tool_name: str, arguments: dict[str, Any], call):
 
     project_root = _resolve_transaction_project_root(arguments)
     validate_project_operation(project_root, arguments)
-    decision = decide_mutation_verification(tool_name)
+    decision = decide_mutation_verification(tool_name, project_root)
     tx = GameMakerProjectTransaction(project_root, tool_name)
     tx.begin()
     try:
@@ -238,7 +238,7 @@ async def _run_transactional_async(tool_name: str, arguments: dict[str, Any], ca
 
     project_root = _resolve_transaction_project_root(arguments)
     validate_project_operation(project_root, arguments)
-    decision = decide_mutation_verification(tool_name)
+    decision = decide_mutation_verification(tool_name, project_root)
     tx = GameMakerProjectTransaction(project_root, tool_name)
     await tx.begin_async()
     try:

@@ -14,12 +14,16 @@ from .tools import (
     docs,
     events,
     introspection,
+    live_game,
+    live_reload,
     maintenance,
     project_health,
+    project_registry,
     rooms,
     runner,
     runtime,
     resourcetool,
+    snapshot,
     texture_groups,
     verification,
     workflow,
@@ -31,6 +35,7 @@ _OPTIONAL_TOOLSETS = {
     "bridge": bridge,
     "docs": docs,
     "events": events,
+    "live-reload": live_reload,
     "maintenance": maintenance,
     "rooms": rooms,
     "resourcetool": resourcetool,
@@ -69,6 +74,8 @@ def register_all(
     capabilities.register(mcp, Context, enabled=toolsets, optional=tuple(sorted(_OPTIONAL_TOOLSETS)))
     project_health.register(mcp, Context)
     runner.register(mcp, Context, read_only=read_only)
+    snapshot.register(mcp, Context, read_only=read_only)
+    project_registry.register_core(mcp, Context)
     verification.register(mcp, Context, read_only=read_only)
     if not read_only:
         workflow.register(mcp, Context, resolution_runtime)
@@ -79,10 +86,14 @@ def register_all(
         if module is not None:
             if module in {asset_creation, rooms, texture_groups}:
                 module.register(mcp, Context, resolution_runtime)
+                if module is asset_creation:
+                    project_registry.register(mcp, Context)
             elif module is resourcetool:
                 module.register(mcp, Context, project_access_policy=project_access_policy)
             else:
                 module.register(mcp, Context)
+                if module is bridge:
+                    live_game.register(mcp, Context)
     prompts.register(mcp, enabled_toolsets=toolsets, read_only=read_only)
     resources.register(
         mcp,

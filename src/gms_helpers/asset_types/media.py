@@ -72,7 +72,10 @@ class SoundAsset(BaseAsset):
         sound_file_ext = self._placeholder_extension(sound_format)
 
         return {
-            "$GMSound": "",
+            # The schema that carries exportDir is GMSound v2. With an empty tag the
+            # 2024.14 runtime upgrades the record, adds exportDir again and refuses to
+            # load the project ("Field 'exportDir' already exists in GMRecord").
+            "$GMSound": "v2",
             "%Name": name,
             "audioGroupId": {"name": "audiogroup_default", "path": "audiogroups/audiogroup_default"},
             "bitDepth": 1,

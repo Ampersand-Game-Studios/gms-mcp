@@ -619,9 +619,11 @@ def rename_asset(project_root: Path, asset_path: str, new_name: str) -> AssetRes
     source_entry = source_entries[0]["id"]
     source_entry["name"] = new_name
     source_entry["path"] = new_rel_path
-    yyp_data["resources"].sort(
-        key=lambda entry: str(entry.get("id", {}).get("name", "")).lower() if isinstance(entry, dict) else ""
-    )
+    # Move only the renamed entry; every other registration keeps its line.
+    from .gm_order import RESOURCE_ORDERINGS, insert_ordered
+
+    yyp_data["resources"].remove(source_entries[0])
+    insert_ordered(yyp_data["resources"], source_entries[0], RESOURCE_ORDERINGS)
     save_pretty_json_gm(yyp_path, yyp_data)
 
     message = f"[OK] Renamed {old_name} -> {new_name}"

@@ -37,6 +37,7 @@ SUPPORTED_TOOLSETS = (
     "core",
     "docs",
     "events",
+    "live-reload",
     "maintenance",
     "resourcetool",
     "rooms",
