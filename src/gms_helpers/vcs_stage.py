@@ -33,6 +33,11 @@ def _git(repo: Path, *args: str, input_text: str | None = None, check: bool = Tr
     return completed.stdout.decode("utf-8", "replace")
 
 
+def _staged_names(repo: Path) -> list[str]:
+    """Staged paths exactly as they are on disk (NUL-delimited, so git never quotes non-ASCII names)."""
+    return [name for name in _git(repo, "diff", "--cached", "--name-only", "-z").split("\0") if name]
+
+
 def stage_paths(
     project_root: str | Path,
     paths: Iterable[str],
@@ -71,9 +76,23 @@ def stage_paths(
         raise VcsError("No paths were given. Pass the files or folders that make up your change.")
     whole_yyp = yyp_repo_path in repo_paths
 
+    # A directory path that contains the project file ("." or the project folder) stages the working
+    # .yyp wholesale through `git add`; it must still be recomposed to this call's registrations.
+    def _covers(path: str) -> bool:
+        folder = path.rstrip("/")
+        if folder.endswith("/."):
+            folder = folder[:-2]
+        return folder in ("", ".") or yyp_repo_path.startswith(folder + "/")
+
+    covers_yyp = not whole_yyp and any(_covers(path) for path in repo_paths)
+
     lock = DirectoryLock(REPOSITORY_LOCK, purpose="gm_vcs_stage")
     lock.acquire(timeout_seconds=lock_timeout_seconds)
     try:
+        # The project file as it is in the index before this call (kept registrations from earlier calls).
+        indexed_before = subprocess.run(
+            ["git", "-C", str(repo), "show", f":{yyp_repo_path}"], capture_output=True, check=False
+        )
         for path in repo_paths:
             _git(repo, "add", "-A", "--", path)
         staged_entries: list[str] = []
@@ -86,22 +105,36 @@ def stage_paths(
                     f"{yyp_repo_path} is not in HEAD yet, so there is no committed project file to build on. "
                     f"Include '{yyp_name}' in paths to stage the whole file for the first commit."
                 )
-            # Build on the project file already in the index, so registrations another call staged
-            # earlier are kept. An untouched index entry is identical to HEAD.
-            indexed = subprocess.run(
-                ["git", "-C", str(repo), "show", f":{yyp_repo_path}"], capture_output=True, check=False
-            )
-            base_text = (indexed if indexed.returncode == 0 else head).stdout.decode("utf-8")
+            # Build on the project file that was in the index before this call, so registrations another
+            # call staged earlier are kept. An untouched index entry is identical to HEAD.
+            base_text = (indexed_before if indexed_before.returncode == 0 else head).stdout.decode("utf-8")
             staged_entries = [str(e) for e in (yyp_entries or []) if str(e).strip()]
             if not staged_entries:
-                staged_entries = yyp_registry.derive_yyp_entries(root, base_text, project_paths)
+                derive_from = project_paths
+                if covers_yyp:
+                    # Derive from what this call actually staged under the project.
+                    names = _staged_names(repo)
+                    derive_from = [
+                        (n[len(prefix) + 1 :] if prefix and n.startswith(prefix + "/") else n)
+                        for n in names
+                        if n != yyp_repo_path and (not prefix or n.startswith(prefix + "/"))
+                    ]
+                staged_entries = yyp_registry.derive_yyp_entries(root, base_text, derive_from)
             if staged_entries:
                 composed = yyp_registry.compose_yyp(
                     base_text, (root / yyp_name).read_text(encoding="utf-8"), staged_entries
                 )
                 blob = _git(repo, "hash-object", "-w", "--stdin", input_text=composed).strip()
                 _git(repo, "update-index", "--cacheinfo", f"100644,{blob},{yyp_repo_path}")
-        staged = [line for line in _git(repo, "diff", "--cached", "--name-status").splitlines() if line.strip()]
+            elif covers_yyp:
+                # Nothing of this call needs a registration: put the earlier project file back.
+                blob = _git(repo, "hash-object", "-w", "--stdin", input_text=base_text).strip()
+                _git(repo, "update-index", "--cacheinfo", f"100644,{blob},{yyp_repo_path}")
+        staged = [
+            line
+            for line in _git(repo, "-c", "core.quotePath=false", "diff", "--cached", "--name-status").splitlines()
+            if line.strip()
+        ]
         result: dict[str, Any] = {
             "ok": True,
             "staged": staged[:400],
@@ -115,7 +148,7 @@ def stage_paths(
         if commit_message:
             if not staged:
                 raise VcsError("Nothing is staged, so there is nothing to commit. Check the paths.")
-            staged_names = [line for line in _git(repo, "diff", "--cached", "--name-only").splitlines() if line.strip()]
+            staged_names = _staged_names(repo)
             unrelated = [
                 name
                 for name in staged_names
