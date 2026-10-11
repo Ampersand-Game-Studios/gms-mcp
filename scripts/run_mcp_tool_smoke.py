@@ -357,7 +357,24 @@ class MCPToolSmokeRunner:
             "gm_workflow_duplicate": self._scenario_workflow_duplicate,
             "gm_workflow_rename": self._scenario_workflow_rename,
             "gm_workflow_swap_sprite": self._scenario_workflow_swap_sprite,
+            "gm_asset_move": self._scenario_asset_move,
+            "gm_audio_group_create": self._scenario_static({"name": "audiogroup_tool_smoke"}),
+            "gm_config_add": self._scenario_static({"name": "tool_smoke"}),
+            "gm_game_command": self._scenario_game_without_session,
+            "gm_game_log": self._scenario_game_without_session,
+            "gm_game_screenshot": self._scenario_game_without_session,
+            "gm_game_start": self._scenario_game_start,
+            "gm_included_file_add": self._scenario_included_file_add,
+            "gm_included_file_remove": self._scenario_included_file_remove,
+            "gm_live_reload_start": self._scenario_live_reload,
+            "gm_live_reload_stop": self._scenario_live_reload,
+            "gm_run_log": self._scenario_run_log,
+            "gm_test_run": self._scenario_test_run,
+            "gm_vcs_stage": self._scenario_vcs_stage,
+            "gm_yyp_register": self._scenario_yyp_register,
+            "gm_yyp_unregister": self._scenario_yyp_unregister,
         }
+        self._current_tool = ""
 
     async def run(self) -> int:
         if self.init_minimal_base:
@@ -399,6 +416,7 @@ class MCPToolSmokeRunner:
             ok = False
 
             try:
+                self._current_tool = tool_name
                 args, result = await self._run_tool(tool_name, workspace)
                 ok = _is_ok(result)
                 if not ok:
@@ -579,6 +597,122 @@ class MCPToolSmokeRunner:
     # ------------------------------------------------------------------
     # Tool scenarios
     # ------------------------------------------------------------------
+
+    def _scenario_static(self, payload: Dict[str, Any]) -> Callable[[Path], Awaitable[tuple[Dict[str, Any], Any]]]:
+        async def scenario(project_root: Path) -> tuple[Dict[str, Any], Any]:
+            args = self._with_project(self._current_tool, project_root, dict(payload))
+            return args, await self._call_tool(self._current_tool, args)
+
+        return scenario
+
+    @staticmethod
+    def _expected_refusal(result: Any, needle: str) -> Any:
+        """A tool that correctly explains a missing precondition has behaved as designed."""
+        text = json.dumps(result, default=str)
+        if needle in text:
+            return {"ok": True, "expected_refusal": True, "result": result}
+        return result
+
+    @staticmethod
+    def _write_hand_made_script(project_root: Path, name: str) -> str:
+        folder = project_root / "scripts" / name
+        folder.mkdir(parents=True, exist_ok=True)
+        yyp_name = next(project_root.glob("*.yyp")).name
+        (folder / f"{name}.gml").write_text(f"function {name}() {{}}\n", encoding="utf-8")
+        (folder / f"{name}.yy").write_text(
+            json.dumps(
+                {
+                    "$GMScript": "v1",
+                    "%Name": name,
+                    "isCompatibility": False,
+                    "isDnD": False,
+                    "name": name,
+                    "parent": {"name": Path(yyp_name).stem, "path": yyp_name},
+                    "resourceType": "GMScript",
+                    "resourceVersion": "2.0",
+                }
+            ),
+            encoding="utf-8",
+        )
+        return f"scripts/{name}/{name}.yy"
+
+    async def _scenario_yyp_register(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
+        path = self._write_hand_made_script(project_root, "scr_hand_made")
+        args = self._with_project("gm_yyp_register", project_root, {"asset_paths": [path]})
+        return args, await self._call_tool("gm_yyp_register", args)
+
+    async def _scenario_yyp_unregister(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
+        await self._create_script(project_root, "scr_detach")
+        args = self._with_project(
+            "gm_yyp_unregister", project_root, {"asset_paths": ["scripts/scr_detach/scr_detach.yy"]}
+        )
+        return args, await self._call_tool("gm_yyp_unregister", args)
+
+    async def _scenario_asset_move(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
+        await self._create_script(project_root, "scr_move")
+        from gms_helpers.utils import find_yyp, insert_into_folders, load_json_loose, save_json
+
+        yyp_path = find_yyp(project_root)
+        data = load_json_loose(yyp_path)
+        insert_into_folders(data.setdefault("Folders", []), "Moved", "folders/Moved.yy")
+        save_json(data, str(yyp_path))
+        args = self._with_project(
+            "gm_asset_move",
+            project_root,
+            {"asset_path": "scripts/scr_move/scr_move.yy", "parent_path": "folders/Moved.yy"},
+        )
+        return args, await self._call_tool("gm_asset_move", args)
+
+    async def _scenario_included_file_add(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
+        (project_root / "datafiles").mkdir(exist_ok=True)
+        (project_root / "datafiles" / "smoke.json").write_text("{}", encoding="utf-8")
+        args = self._with_project("gm_included_file_add", project_root, {"paths": ["datafiles/smoke.json"]})
+        return args, await self._call_tool("gm_included_file_add", args)
+
+    async def _scenario_included_file_remove(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
+        await self._scenario_included_file_add(project_root)
+        args = self._with_project("gm_included_file_remove", project_root, {"paths": ["datafiles/smoke.json"]})
+        return args, await self._call_tool("gm_included_file_remove", args)
+
+    async def _scenario_vcs_stage(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
+        args = self._with_project("gm_vcs_stage", project_root, {"paths": ["scripts"]})
+        result = await self._call_tool("gm_vcs_stage", args)
+        # The smoke workspace is either outside git or inside an ignored build directory.
+        for refusal in ("not inside a git repository", "ignored by one of your .gitignore"):
+            result = self._expected_refusal(result, refusal)
+        return args, result
+
+    async def _scenario_run_log(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
+        args = self._with_project("gm_run_log", project_root, {"label": "none"})
+        result = await self._call_tool("gm_run_log", args)
+        return args, self._expected_refusal(result, "Labels with saved runs")
+
+    async def _scenario_game_without_session(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
+        payload = {"command": "ping"} if self._current_tool == "gm_game_command" else {}
+        args = self._with_project(self._current_tool, project_root, payload)
+        result = await self._call_tool(self._current_tool, args)
+        return args, self._expected_refusal(result, "gm_game_start")
+
+    async def _scenario_live_reload(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
+        args = self._with_project(self._current_tool, project_root, {})
+        result = await self._call_tool(self._current_tool, args)
+        return args, self._expected_refusal(result, "No live-reload")
+
+    async def _scenario_test_run(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
+        code = 'function agent_test_step(_frame) { test_check(true, "booted"); test_end(); }'
+        args = self._with_project(
+            "gm_test_run", project_root, {"test_code": code, "label": "smoke", "timeout_seconds": 90}
+        )
+        return args, await self._call_tool("gm_test_run", args)
+
+    async def _scenario_game_start(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
+        # The minimal project has no bridge endpoint: a running, unconnected game is the pass.
+        args = self._with_project("gm_game_start", project_root, {"label": "smoke", "connect_timeout_seconds": 5})
+        try:
+            result = await self._call_tool("gm_game_start", args)
+        finally:
+            await self._call_tool("gm_game_stop", self._with_project("gm_game_stop", project_root, {}))
+        return args, result
 
     async def _scenario_safe_delete(self, project_root: Path) -> tuple[Dict[str, Any], Any]:
         name = "scr_delete_smoke"
@@ -961,7 +1095,8 @@ class MCPToolSmokeRunner:
         args = self._with_project(
             "gm_sprite_import_strip",
             project_root,
-            {"name": "spr_strip_smoke", "source": str(source), "layout": "horizontal"},
+            # The server accepts only project-relative PNG inputs.
+            {"name": "spr_strip_smoke", "source": source.relative_to(project_root).as_posix(), "layout": "horizontal"},
         )
         result = await self._call_tool("gm_sprite_import_strip", args)
         return args, result
@@ -1098,7 +1233,11 @@ class MCPToolSmokeRunner:
         args = self._with_project(
             "gm_workflow_swap_sprite",
             project_root,
-            {"asset_path": f"sprites/{sprite}/{sprite}.yy", "png": str(png), "frame": 0},
+            {
+                "asset_path": f"sprites/{sprite}/{sprite}.yy",
+                "png": png.relative_to(project_root).as_posix(),
+                "frame": 0,
+            },
         )
         result = await self._call_tool("gm_workflow_swap_sprite", args)
         return args, result

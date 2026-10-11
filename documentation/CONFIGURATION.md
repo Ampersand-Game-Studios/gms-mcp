@@ -167,6 +167,51 @@ You only need to include the rules you want to override. Missing rules will use 
 
 This only changes object naming - sprites, scripts, etc. will still use default prefixes.
 
+## Project Settings
+
+The same `.gms-mcp.json` carries the project's own conventions for builds, tests and verification. Every key is optional.
+
+```json
+{
+  "verification": { "post_mutation": "off" },
+  "build": { "igor_attempts": 30, "max_parallel_builds": 4, "jobs": 4, "runtime_version": "2026.0.0.23" },
+  "test": { "timeout_seconds": 120, "prelude_file": null, "script_name": "__agent_test" },
+  "conventions": { "allow_root_assets": ["__agent_*"] },
+  "live_reload": {
+    "start": ["gms-fire", "start", "--project", "{project}"],
+    "stop": ["gms-fire", "stop", "--project", "{project}"],
+    "status": ["gms-fire", "status", "--json", "--project", "{project}"],
+    "status_file": null
+  }
+}
+```
+
+| Key | Default | Meaning |
+|-----|---------|---------|
+| `verification.post_mutation` | server default (`smart`) | `off`, `smart` or `always`: whether a mutation is followed by a compile. `GMS_MCP_POST_MUTATION_VERIFY` overrides it. Large or shared projects use `off` and verify with `gm_snapshot_compile` / `gm_test_run`. |
+| `build.igor_attempts` | `10` | Attempts when Igor aborts with `System.AccessViolationException` (snapshot builds). Env: `GMS_MCP_SNAPSHOT_IGOR_ATTEMPTS`. |
+| `build.max_parallel_builds` | `4` | Machine-wide Igor build slots. Env: `GMS_MCP_MAX_PARALLEL_BUILDS`. |
+| `build.jobs` | `4` | Igor `-j`. |
+| `build.runtime_version` | newest installed | Runtime used by snapshot builds. |
+| `test.timeout_seconds` | `120` | Default wait for a test's result line. |
+| `test.prelude_file` | built in | Project-relative GML file replacing the built-in test API; it must print the same marker lines. |
+| `test.result_marker`, `line_marker`, `started_marker`, `screenshot_prefix`, `runtime_error_patterns` | `[TEST_RESULT]`, `[TEST]`, `[TEST_SAVE_DIR]`, `__agent_shot_`, GameMaker's error banners | How a run log is read. |
+| `conventions.allow_root_assets` | `[]` | Name patterns `gm_project_check` accepts at the project root. |
+| `live_reload.*` | unset | Argument lists (never shell strings) for an external live-reload tool. `{project}` becomes the project directory. |
+
+### Shared locks
+
+Builds, game runs and commits are serialized across every process on the machine with `mkdir` locks in `~/.gms-mcp/locks` (`repo.lock`, `gamerun.lock`, `ios_build.lock`, `build_slot_<n>`). Set `GMS_MCP_LOCK_DIR` to use another directory; shell scripts take part with `mkdir "$DIR/gamerun.lock"` / `rmdir`. A lock is reclaimed when its recorded owner process has died or it is older than its stale timeout. `gm_lock_status` shows who holds what.
+
+### Other environment variables
+
+| Variable | Meaning |
+|----------|---------|
+| `GMS_MCP_STRICT_PROJECT_VALIDATION=1` | Any validation error blocks a mutation, including errors that predate it. |
+| `GMS_MCP_SNAPSHOT_WORK_DIR` | Where snapshots, Igor cache and output are staged (default: system temp). |
+| `GMS_MCP_RUN_STAGING_DIR` | Where a game is unpacked to run. Its path must not contain `-game`, which the macOS runner misreads. |
+| `GMS_MCP_BRIDGE_PORT` | Set by the server in the game's environment for live sessions; a game endpoint connects to it. |
+
 ## Configuration Resolution Order
 
 Configuration is loaded in this order, with later sources overriding earlier ones:

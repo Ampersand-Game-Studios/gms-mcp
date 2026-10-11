@@ -92,6 +92,9 @@ class BridgeServer:
         self._command_lock = threading.Lock()
         self._command_counter = 0
 
+        # Protocol 2 handshake sent by the game (HELLO:<json>); None for older endpoints.
+        self.hello: Optional[Dict[str, Any]] = None
+
         # Callbacks
         self._on_connect: Optional[Callable[[], None]] = None
         self._on_disconnect: Optional[Callable[[], None]] = None
@@ -134,6 +137,8 @@ class BridgeServer:
                 self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 self._server_socket.settimeout(self.SOCKET_TIMEOUT)
                 self._server_socket.bind((self.host, self.port))
+                # Port 0 asks the OS for a free port, so several servers can run at once.
+                self.port = int(self._server_socket.getsockname()[1])
                 self._server_socket.listen(1)
 
                 self._running = True
@@ -347,6 +352,14 @@ class BridgeServer:
                     except Exception:
                         pass
 
+            elif message.startswith("HELLO:"):
+                # Protocol 2 handshake: HELLO:<json describing the game endpoint>
+                try:
+                    hello = json.loads(message[6:])
+                    self.hello = hello if isinstance(hello, dict) else {"raw": message[6:]}
+                except ValueError:
+                    self.hello = {"raw": message[6:]}
+
             elif message.startswith("RSP:"):
                 # Command response: RSP:<cmd_id>|<result>
                 content = message[4:]
@@ -488,6 +501,7 @@ class BridgeServer:
             "port": self.port,
             "log_count": self.get_log_count(),
             "pending_commands": len(self._pending_commands),
+            "hello": self.hello,
         }
 
 
@@ -496,7 +510,7 @@ _bridge_servers: Dict[str, BridgeServer] = {}
 _servers_lock = threading.Lock()
 
 
-def get_bridge_server(project_root: str, create: bool = True) -> Optional[BridgeServer]:
+def get_bridge_server(project_root: str, create: bool = True, port: Optional[int] = None) -> Optional[BridgeServer]:
     """
     Get or create a bridge server for a project.
 
@@ -513,7 +527,7 @@ def get_bridge_server(project_root: str, create: bool = True) -> Optional[Bridge
 
     with _servers_lock:
         if key not in _bridge_servers and create:
-            _bridge_servers[key] = BridgeServer()
+            _bridge_servers[key] = BridgeServer() if port is None else BridgeServer(port=port)
         return _bridge_servers.get(key)
 
 

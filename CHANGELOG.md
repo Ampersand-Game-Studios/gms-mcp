@@ -4,6 +4,37 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Multi-agent projects and GameMaker LTS 2026
+
+#### Fixed
+- **Project files keep GameMaker's own layout**: `.yyp`, `.yy` and `.resource_order` files written by GameMaker 2023.x - LTS 2026 are now rewritten byte-for-byte in the IDE's compact layout, so adding one asset changes one line instead of every line. Previously any mutation re-rendered the whole `.yyp` as pretty-printed JSON. A file that is not in the native layout keeps the formatting it had. New `$GM...`-tagged resource files are written natively.
+- **Registry order is preserved**: resources, folders and included files are inserted where the project's own ordering puts them (the LTS 2026 IDE's path collation, or name order for projects that use it). Existing entries are never re-sorted. Rename moves only the renamed entry. Runtime 2026.0.0.23's Igor is sensitive to this order.
+- **Old validation findings no longer block new work**: a mutation is rolled back only for validation errors it introduced. Errors that existed before the mutation are reported as `preexisting_errors` (first ten, with a count). Set `GMS_MCP_STRICT_PROJECT_VALIDATION=1` for the previous behaviour, where any error anywhere blocked every mutation.
+- **False validation errors on IDE-written data**: `ConfigValues` overrides that clear a texture group parent (`"groupParent":"null"`) and extension files with an empty `%Name`/`name` are accepted.
+- **GameMaker float spellings survive a rewrite** (`1E-05`, `100.0`).
+- **Created sounds load on runtime 2024.14**: `gm_create_sound` wrote an untagged `GMSound` record with `exportDir`, which the 2024.14 runtime rejects ("Field 'exportDir' already exists in GMRecord"). Sounds are now written as `GMSound` v2, the schema the 2024 and 2026 IDEs write.
+- **Desktop snapshot builds do not need a signing identity**: errors from Igor's packaging step after the compile are reported as `packaging_errors` and do not fail a macOS/Windows/Linux snapshot whose game data was built.
+
+#### Added
+- **Snapshot builds** (`gm_snapshot_compile`): compile a throwaway copy of the project, either the working tree or "git revision plus only these paths" with a `.yyp` holding only those paths' registrations. Igor's random `System.AccessViolationException` is retried (default 10 attempts, `build.igor_attempts`); compiler errors are returned as a list and never retried. Builds take one of `build.max_parallel_builds` machine-wide slots.
+- **Scripted test runs** (`gm_test_run`, `gm_run_log`): inject a test script into a snapshot, run the game, and get `TEST_PASSED` / `TEST_FAILED` / `TEST_TIMEOUT` / `BUILD_FAILED` from the result line in the game log, with `[TEST]` lines, runtime-error blocks and screenshot paths. The test never exists in the project. Running needs a macOS host; compiling works everywhere. Logs and screenshots are kept in `.gms_mcp/runs/<label>/`.
+- **Live game sessions** (`gm_game_start`, `gm_game_command`, `gm_game_screenshot`, `gm_game_log`, `gm_game_status`, `gm_game_stop`, in the `bridge` toolset): start an isolated build connected over the runtime bridge and drive it. Each session uses its own free port.
+- **Runtime bridge protocol 2**: an optional `HELLO:<json>` handshake, JSON answers, `ERR:<code> <message>` failures and a standard command set (`ping`, `help`, `state`, `screenshot`, `log_tail`, `console`). The port reaches the game in the `GMS_MCP_BRIDGE_PORT` environment variable, so projects can ship their own endpoint. The installed `__mcp_bridge` endpoint and protocol 1 keep working.
+- **Registry tools**: `gm_project_check` (core; integrity report with the fixing tool for every finding), and in the `assets` toolset `gm_yyp_register`, `gm_yyp_unregister`, `gm_yyp_normalize_order`, `gm_asset_move`, `gm_included_file_add` / `_remove` / `_list`, `gm_config_add` / `_list`, `gm_audio_group_create` / `_list`.
+- **Partial commits** (`gm_vcs_stage`): stage named paths plus a `.yyp` that is `HEAD` plus only their registrations; optional commit; never pushes.
+- **Shared locks** (`gm_lock_status`): `mkdir`-based repository, game-run, mobile-build and build-slot locks in `~/.gms-mcp/locks` (or `GMS_MCP_LOCK_DIR`), usable from shell scripts. When `GMS_MCP_LOCK_DIR` is set, project mutations also hold its `repo.lock`.
+- **Project settings in `.gms-mcp.json`**: `verification.post_mutation` (`off` / `smart` / `always`; the environment variable still wins), `build.*`, `test.*`, `conventions.allow_root_assets`, `live_reload.*`.
+- **Live-reload control** (`gm_live_reload_start` / `_stop` / `_status`, new `live-reload` toolset): runs the commands a project configures for an external tool such as GMS Fire.
+- **Named object events**: `gm_event_add` and friends accept `begin_step`, `end_step`, `draw_gui`, `draw_gui_end`, `room_start`, `game_start`, `animation_end`, `async_http`, `async_networking`, `async_steam`, `user_event_0`... as well as `<type>:<number>`.
+
+#### Changed (visible to existing users)
+- The default `core` profile gains six tools: `gm_project_check`, `gm_lock_status`, `gm_run_log`, and (outside the read-only `safe` profile) `gm_snapshot_compile`, `gm_test_run`, `gm_vcs_stage`.
+- New entries in an empty or single-entry registry are ordered by resource path (the IDE's rule) rather than by name.
+- `gm_bridge_status` and bridge server status include `hello` (null for protocol 1 endpoints). `BridgeServer(port=0)` picks a free port.
+- Transaction results may include `validation.preexisting_error_count` / `preexisting_errors`.
+- A validation cache is written to `.gms_mcp/cache/validation-baseline.json` after committed mutations.
+
+
 ### Documentation
 - **Discoverable GameMaker Skill**: Expanded the public skill description and introduction with concrete game-development capabilities, package-versus-skill setup, supported client choices, access-profile boundaries, and live-game limitations for assistants and directory listings.
 - **User-Focused README**: Reorganized the introduction, capabilities, setup, example workflows, troubleshooting, and maintainer guidance. Clarified read-only versus editing profiles, live-game bridge limits, and client/provider privacy boundaries. Codex examples now target the supported project-scoped configuration file explicitly, with connection checks distinguished from installer readiness.

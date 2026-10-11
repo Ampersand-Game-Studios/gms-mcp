@@ -560,8 +560,9 @@ class TestIntegration(unittest.TestCase):
         self.assertIn("o_test_obj", resource_names)
         self.assertIn("spr_test_spr", resource_names)
 
-        # Check alphabetical order
-        self.assertEqual(resource_names, sorted(resource_names))
+        # GameMaker orders the registry by resource path (objects, scripts, sprites, ...).
+        resource_paths = [r["id"]["path"] for r in yyp_data["resources"]]
+        self.assertEqual(resource_paths, sorted(resource_paths))
 
         # Check all files exist
         self.assertTrue((self.project_root / "scripts" / "test_function" / "test_function.yy").exists())
