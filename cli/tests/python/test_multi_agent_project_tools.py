@@ -926,6 +926,41 @@ def test_stage_paths_recomposes_the_project_file_when_a_folder_covers_it(repo: P
     assert "scripts/theirs/theirs.yy" not in _git(repo, "show", ":game.yyp")
 
 
+def test_stage_paths_handles_non_ascii_asset_names(repo: Path, lock_dir: Path):
+    _add_script(repo, "café")
+    yyp_registry.register_assets(repo, ["scripts/café/café.yy"])
+    staged = stage_paths(repo, ["."])
+    assert staged["yyp_entries"] == ["scripts/café/café.yy"]
+    assert "scripts/café/café.yy" in _git(repo, "show", ":game.yyp")
+
+
+def test_same_label_pipelines_do_not_overlap(repo: Path, lock_dir: Path):
+    active = 0
+    overlaps = 0
+    guard = threading.Lock()
+
+    def pipeline():
+        nonlocal active, overlaps
+        with snapshot_build.label_pipeline(repo, "same"):
+            with guard:
+                active += 1
+                overlaps += active > 1
+            time.sleep(0.05)
+            with guard:
+                active -= 1
+
+    threads = [threading.Thread(target=pipeline) for _ in range(4)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    assert overlaps == 0 and not any(lock_dir.glob("runlabel_*.lock"))
+
+    # Different labels are independent.
+    with snapshot_build.label_pipeline(repo, "a"), snapshot_build.label_pipeline(repo, "b"):
+        pass
+
+
 def test_stage_paths_refuses_to_commit_unrelated_staged_changes(repo: Path, lock_dir: Path):
     from gms_helpers.vcs_stage import VcsError
 

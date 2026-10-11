@@ -21,6 +21,8 @@ The pipeline is ``snapshot -> (inject test) -> compile with Igor -> run -> colle
 
 from __future__ import annotations
 
+import contextlib
+import hashlib
 import io
 import os
 import re
@@ -29,6 +31,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import time
 import uuid
 import zipfile
@@ -128,6 +131,36 @@ class BuildResult:
 def safe_label(label: str) -> str:
     cleaned = _LABEL.sub("_", str(label or "default")).strip("_")
     return cleaned[:60] or "default"
+
+
+_LABEL_THREAD_LOCKS: dict[str, threading.Lock] = {}
+_LABEL_THREAD_LOCKS_GUARD = threading.Lock()
+
+
+@contextlib.contextmanager
+def label_pipeline(project_root: str | Path, label: str, timeout_seconds: float = 7200.0):
+    """Serialise whole build/run pipelines that publish to the same labelled run directory.
+
+    `.gms_mcp/runs/<label>` holds one invocation's build log, run log and screenshots; two
+    invocations with the same project and label must not interleave (threads in this process or
+    other processes), or one would read and return the other's results.
+    """
+    root = Path(project_root).resolve()
+    key = f"{root}|{safe_label(label)}"
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+    with _LABEL_THREAD_LOCKS_GUARD:
+        thread_lock = _LABEL_THREAD_LOCKS.setdefault(key, threading.Lock())
+    with thread_lock:
+        lock = DirectoryLock(
+            f"runlabel_{digest}.lock",
+            stale_seconds=timeout_seconds,
+            purpose=f"pipeline {root.name}:{safe_label(label)}",
+        )
+        lock.acquire(timeout_seconds=timeout_seconds)
+        try:
+            yield
+        finally:
+            lock.release()
 
 
 def runs_directory(project_root: str | Path, label: str) -> Path:
@@ -954,7 +987,7 @@ def snapshot_compile(
     return public, build, work, tools
 
 
-def run_test(
+def _run_test_pipeline(
     project_root: str | Path,
     *,
     test_code: str | None = None,
@@ -1064,3 +1097,44 @@ def read_run_artifact(
         "lines": selected,
         "screenshots": sorted(str(_relative(root, p)) for p in (run_dir / "shots").glob("*.png")),
     }
+
+
+def run_test(
+    project_root: str | Path,
+    *,
+    test_code: str | None = None,
+    test_file: str | None = None,
+    label: str = "test",
+    timeout_seconds: float | None = None,
+    isolate_paths: Iterable[str] | None = None,
+    yyp_entries: Iterable[str] | None = None,
+    ref: str = "HEAD",
+    base_only: bool = False,
+    runtime: str = "VM",
+    runtime_version: str | None = None,
+    attempts: int | None = None,
+    environment: dict[str, str] | None = None,
+    run_igor: Callable[[list[str], Path, float], int] | None = None,
+    run_game: Callable[..., dict[str, Any]] | None = None,
+    toolchain: Toolchain | None = None,
+) -> dict[str, Any]:
+    """Build and run a scripted test; same-label runs for one project are serialised end to end."""
+    with label_pipeline(project_root, label):
+        return _run_test_pipeline(
+            project_root,
+            test_code=test_code,
+            test_file=test_file,
+            label=label,
+            timeout_seconds=timeout_seconds,
+            isolate_paths=isolate_paths,
+            yyp_entries=yyp_entries,
+            ref=ref,
+            base_only=base_only,
+            runtime=runtime,
+            runtime_version=runtime_version,
+            attempts=attempts,
+            environment=environment,
+            run_igor=run_igor,
+            run_game=run_game,
+            toolchain=toolchain,
+        )

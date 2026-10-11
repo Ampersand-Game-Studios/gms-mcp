@@ -33,6 +33,11 @@ def _git(repo: Path, *args: str, input_text: str | None = None, check: bool = Tr
     return completed.stdout.decode("utf-8", "replace")
 
 
+def _staged_names(repo: Path) -> list[str]:
+    """Staged paths exactly as they are on disk (NUL-delimited, so git never quotes non-ASCII names)."""
+    return [name for name in _git(repo, "diff", "--cached", "--name-only", "-z").split("\0") if name]
+
+
 def stage_paths(
     project_root: str | Path,
     paths: Iterable[str],
@@ -108,7 +113,7 @@ def stage_paths(
                 derive_from = project_paths
                 if covers_yyp:
                     # Derive from what this call actually staged under the project.
-                    names = [n for n in _git(repo, "diff", "--cached", "--name-only").splitlines() if n.strip()]
+                    names = _staged_names(repo)
                     derive_from = [
                         (n[len(prefix) + 1 :] if prefix and n.startswith(prefix + "/") else n)
                         for n in names
@@ -125,7 +130,11 @@ def stage_paths(
                 # Nothing of this call needs a registration: put the earlier project file back.
                 blob = _git(repo, "hash-object", "-w", "--stdin", input_text=base_text).strip()
                 _git(repo, "update-index", "--cacheinfo", f"100644,{blob},{yyp_repo_path}")
-        staged = [line for line in _git(repo, "diff", "--cached", "--name-status").splitlines() if line.strip()]
+        staged = [
+            line
+            for line in _git(repo, "-c", "core.quotePath=false", "diff", "--cached", "--name-status").splitlines()
+            if line.strip()
+        ]
         result: dict[str, Any] = {
             "ok": True,
             "staged": staged[:400],
@@ -139,7 +148,7 @@ def stage_paths(
         if commit_message:
             if not staged:
                 raise VcsError("Nothing is staged, so there is nothing to commit. Check the paths.")
-            staged_names = [line for line in _git(repo, "diff", "--cached", "--name-only").splitlines() if line.strip()]
+            staged_names = _staged_names(repo)
             unrelated = [
                 name
                 for name in staged_names
