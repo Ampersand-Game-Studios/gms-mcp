@@ -35,7 +35,7 @@ import time
 import uuid
 import zipfile
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Iterable
 
 from . import yyp_registry
@@ -754,9 +754,10 @@ def stage_game_archive(game_archive: Path, staging: Path) -> tuple[Path, Path]:
         # The signed runner already lives here. Game assets cannot overwrite it,
         # and archive paths must remain literal descendants of the staging root.
         for item in archive.infolist():
-            path = Path(item.filename)
+            path = PurePosixPath(item.filename)
             if (
                 path.is_absolute()
+                or PureWindowsPath(item.filename).anchor
                 or ".." in path.parts
                 or "\\" in item.filename
                 or (path.parts and path.parts[0].casefold() == "runner.app")

@@ -476,7 +476,18 @@ def test_bundle_symlinks_never_write_into_original(tmp_path, monkeypatch):
     assert not (runtime.runner.parents[1] / "Info.plist").is_symlink()
 
 
-@pytest.mark.parametrize("path", ["../game.ios", "/game.ios", "Runner.app/Contents/Info.plist"])
+@pytest.mark.parametrize(
+    "path",
+    [
+        "../game.ios",
+        "/game.ios",
+        "C:game.ios",
+        "C:/game.ios",
+        "\\game.ios",
+        "//server/share/game.ios",
+        "Runner.app/Contents/Info.plist",
+    ],
+)
 def test_game_archive_cannot_overwrite_runner_or_escape(tmp_path, path):
     archive = tmp_path / "game.zip"
     with zipfile.ZipFile(archive, "w") as stream:
