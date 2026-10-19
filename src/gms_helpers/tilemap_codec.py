@@ -20,6 +20,14 @@ def tile_integer(value: Any, name: str = "tile") -> int:
     return value
 
 
+def raw_tile_integer(value: Any) -> int:
+    """Accept GameMaker's signed or unsigned 32-bit raw tile representation."""
+    value = tile_integer(value)
+    if not -(2**31) <= value < 2**32:
+        raise ValidationError("Raw tile must fit in 32 bits")
+    return value
+
+
 def is_empty_tile(raw: int) -> bool:
     return raw == TILE_EMPTY
 
@@ -75,12 +83,12 @@ def decompress_tile_data(stream: Sequence[int], expected_len: int | None = None)
         if count < 0:
             if i >= n:
                 raise ValidationError("Compressed tile stream ended inside a repeat run")
-            out.extend([tile_integer(stream[i])] * (-count))
+            out.extend([raw_tile_integer(stream[i])] * (-count))
             i += 1
             continue
         if i + count > n:
             raise ValidationError("Compressed tile stream ended inside a literal run")
-        out.extend(tile_integer(v) for v in stream[i : i + count])
+        out.extend(raw_tile_integer(v) for v in stream[i : i + count])
         i += count
     if expected_len is not None and len(out) != expected_len:
         raise ValidationError(f"Decompressed tile count {len(out)} != expected {expected_len}")
@@ -89,6 +97,9 @@ def decompress_tile_data(stream: Sequence[int], expected_len: int | None = None)
 
 def compress_tile_data(tiles: Sequence[int]) -> list[int]:
     """Encode tiles as GameMaker TileCompressedData (TileDataFormat 1)."""
+    # Validate every value, including repeats equal to an earlier valid integer.
+    for value in tiles:
+        raw_tile_integer(value)
     out: list[int] = []
     i = 0
     n = len(tiles)
@@ -115,6 +126,8 @@ def compress_tile_data(tiles: Sequence[int]) -> list[int]:
 
 def layer_tile_dimensions(tiles_obj: dict[str, Any]) -> tuple[int, int]:
     """Validate dimensions before any allocation or iteration, including empty layers."""
+    if not isinstance(tiles_obj, dict):
+        raise ValidationError("Tile layer tiles must be an object")
     width = tile_integer(tiles_obj.get("SerialiseWidth", 0), "SerialiseWidth")
     height = tile_integer(tiles_obj.get("SerialiseHeight", 0), "SerialiseHeight")
     if (
@@ -132,19 +145,19 @@ def layer_tile_stream(tiles_obj: dict[str, Any]) -> tuple[list[int], int]:
     width, height = layer_tile_dimensions(tiles_obj)
     expected = width * height
     fmt = tiles_obj.get("TileDataFormat", 1 if "TileCompressedData" in tiles_obj else 0)
-    if isinstance(fmt, bool) or fmt not in (0, 1):
+    if isinstance(fmt, bool) or not isinstance(fmt, int) or fmt not in (0, 1):
         raise ValidationError(f"Unsupported TileDataFormat: {fmt}")
     if fmt == 1:
-        stream = tiles_obj.get("TileCompressedData") or []
+        stream = tiles_obj.get("TileCompressedData", [])
         if not isinstance(stream, list):
             raise ValidationError("TileCompressedData must be a list")
         return decompress_tile_data(stream, expected), 1
-    serial = tiles_obj.get("TileSerialiseData") or []
+    serial = tiles_obj.get("TileSerialiseData", [])
     if not isinstance(serial, list):
         raise ValidationError("TileSerialiseData must be a list")
     if len(serial) != expected:
         raise ValidationError(f"TileSerialiseData length {len(serial)} != {expected}")
-    return [tile_integer(v) for v in serial], 0
+    return [raw_tile_integer(v) for v in serial], 0
 
 
 def write_layer_tiles(tiles_obj: dict[str, Any], tiles: Sequence[int], fmt: int | None = None) -> dict[str, Any]:
@@ -155,10 +168,11 @@ def write_layer_tiles(tiles_obj: dict[str, Any], tiles: Sequence[int], fmt: int 
         raise ValidationError(f"Cannot write {len(tiles)} tiles into {width}x{height} layer")
     use_fmt = fmt
     if use_fmt is None:
-        if "TileCompressedData" in tiles_obj or int(tiles_obj.get("TileDataFormat") or 0) == 1:
-            use_fmt = 1
-        else:
-            use_fmt = 0
+        use_fmt = tiles_obj.get("TileDataFormat", 1 if "TileCompressedData" in tiles_obj else 0)
+    if isinstance(use_fmt, bool) or not isinstance(use_fmt, int) or use_fmt not in (0, 1):
+        raise ValidationError(f"Unsupported TileDataFormat: {use_fmt}")
+    for value in tiles:
+        raw_tile_integer(value)
     if use_fmt == 1:
         stream = compress_tile_data(tiles)
         if decompress_tile_data(stream, len(tiles)) != list(tiles):

@@ -117,7 +117,10 @@ def handle_runner_run(args) -> Union[RunnerResult, Dict[str, Any]]:
         background = getattr(args, "background", False)
         output_location = getattr(args, "output_location", "temp")
 
-        result = runner.run_project_direct(platform, runtime, background, output_location)
+        bridge_options = {}
+        if getattr(args, "enable_bridge", None) is not None:
+            bridge_options["enable_bridge"] = args.enable_bridge
+        result = runner.run_project_direct(platform, runtime, background, output_location, **bridge_options)
 
         if isinstance(result, bool):
             if result:

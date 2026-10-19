@@ -21,6 +21,7 @@ from .tilemap_codec import (
     iter_cells,
     layer_tile_dimensions,
     layer_tile_stream,
+    raw_tile_integer,
     tile_flags,
     tile_index,
     tile_integer,
@@ -172,7 +173,7 @@ def _query_layer(
     include_empty: bool,
     budget: _QueryBudget,
 ) -> dict[str, Any]:
-    tiles_obj = layer.get("tiles") or {}
+    tiles_obj = layer.get("tiles", {})
     issues: list[dict[str, Any]] = []
     try:
         layer_w, layer_h = layer_tile_dimensions(tiles_obj)
@@ -276,7 +277,7 @@ def query_tilemap(
     total_cells = 0
     for layer in layers:
         try:
-            layer_w, layer_h = layer_tile_dimensions(layer.get("tiles") or {})
+            layer_w, layer_h = layer_tile_dimensions(layer.get("tiles", {}))
         except ValidationError:
             # Preserve per-layer decode diagnostics without expanding invalid dimensions.
             continue
@@ -314,9 +315,7 @@ def query_tilemap(
 def _coerce_tile(value: int, *, use_raw: bool) -> int:
     value = tile_integer(value)
     if use_raw:
-        if not -(2**31) <= value < 2**32:
-            raise ValidationError("Raw tile must fit in 32 bits")
-        return value
+        return raw_tile_integer(value)
     return encode_tile(value)
 
 
@@ -336,27 +335,34 @@ def _apply_patch(
     stamp: list[list[int | None]] | None,
     cells: list[dict[str, Any]] | None,
     use_raw: bool,
-) -> tuple[list[int], list[dict[str, Any]]]:
-    changed: list[dict[str, Any]] = []
+    tile_count: int | None,
+) -> tuple[list[int], int, list[dict[str, Any]]]:
+    changed_count = 0
+    samples: list[dict[str, Any]] = []
 
     def write_cell(col: int, row: int, new_raw: int) -> None:
+        nonlocal changed_count
         if col < 0 or row < 0 or col >= width or row >= height:
             raise ValidationError(f"Tile coordinate out of bounds: ({col},{row}) for {width}x{height}")
         idx = row * width + col
         old = tiles[idx]
         if old == new_raw:
             return
+        if tile_count is not None and not is_empty_tile(new_raw) and tile_index(new_raw) >= tile_count:
+            raise ValidationError("Patched tile index exceeds the tileset tile_count")
         tiles[idx] = new_raw
-        changed.append(
-            {
-                "col": col,
-                "row": row,
-                "from": old,
-                "to": new_raw,
-                "from_index": 0 if is_empty_tile(old) else tile_index(old),
-                "to_index": 0 if is_empty_tile(new_raw) else tile_index(new_raw),
-            }
-        )
+        changed_count += 1
+        if len(samples) < 50:
+            samples.append(
+                {
+                    "col": col,
+                    "row": row,
+                    "from": old,
+                    "to": new_raw,
+                    "from_index": 0 if is_empty_tile(old) else tile_index(old),
+                    "to_index": 0 if is_empty_tile(new_raw) else tile_index(new_raw),
+                }
+            )
 
     if op == "set":
         if cells is not None:
@@ -413,7 +419,7 @@ def _apply_patch(
                 write_cell(x + col_offset, y + row_offset, _coerce_tile(value, use_raw=use_raw))
     else:
         raise ValidationError(f"Unknown tilemap op: {op}")
-    return tiles, changed
+    return tiles, changed_count, samples
 
 
 def _patch_tilemap(
@@ -446,7 +452,7 @@ def _patch_tilemap(
     room_path = _find_room_file(room_name, root)
     room_data = _load_room_data(room_path)
     layer = _layer_by_name(room_data, layer_name)
-    tiles_obj = layer.get("tiles") or {}
+    tiles_obj = layer.get("tiles", {})
     layer_w, layer_h = layer_tile_dimensions(tiles_obj)
     tiles, fmt = layer_tile_stream(tiles_obj)
     try:
@@ -464,7 +470,10 @@ def _patch_tilemap(
         raise ValidationError("stamp_json is only supported by stamp")
     if op == "replace" and from_index is not None:
         encode_tile(from_index)
-    new_tiles, changed = _apply_patch(
+    tile_count = _tileset_info(root, layer).get("tile_count")
+    if not isinstance(tile_count, int) or isinstance(tile_count, bool) or tile_count <= 0:
+        tile_count = None
+    new_tiles, changed_count, samples = _apply_patch(
         list(tiles),
         layer_w,
         layer_h,
@@ -479,20 +488,17 @@ def _patch_tilemap(
         stamp=stamp,
         cells=cells,
         use_raw=use_raw,
+        tile_count=tile_count,
     )
     # Confirm the patched buffer still round-trips before touching disk.
     write_layer_tiles(dict(tiles_obj), new_tiles, fmt)
-    tile_count = _tileset_info(root, layer).get("tile_count")
-    if isinstance(tile_count, int) and tile_count > 0:
-        if any(not is_empty_tile(cell["to"]) and tile_index(cell["to"]) >= tile_count for cell in changed):
-            raise ValidationError("Patched tile index exceeds the tileset tile_count")
     result = {
         "ok": True,
         "dry_run": dry_run,
         "room": room_name,
         "layer": layer_name,
         "op": op,
-        "changes": {"count": len(changed), "samples": changed[:50]},
+        "changes": {"count": changed_count, "samples": samples},
         "issues": [],
     }
     if dry_run:
@@ -503,7 +509,7 @@ def _patch_tilemap(
     _save_room_data(room_path, room_data)
     reloaded = _load_room_data(room_path)
     relayer = _layer_by_name(reloaded, layer_name)
-    check, _ = layer_tile_stream(relayer.get("tiles") or {})
+    check, _ = layer_tile_stream(relayer.get("tiles", {}))
     if check != new_tiles:
         raise GMSError("Reloaded tilemap did not match patched buffer")
     result["written"] = True
@@ -577,18 +583,11 @@ def patch_tilemap(
 def _validate_layer(project_root: Path, room_name: str, layer: dict[str, Any]) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     name = layer.get("name") or layer.get("%Name")
-    tiles_obj = layer.get("tiles") or {}
-    width = int(tiles_obj.get("SerialiseWidth") or 0)
-    height = int(tiles_obj.get("SerialiseHeight") or 0)
-    if width <= 0 or height <= 0:
-        issues.append(
-            {
-                "code": "invalid_size",
-                "room": room_name,
-                "layer": name,
-                "message": f"Invalid SerialiseWidth/Height {width}x{height}",
-            }
-        )
+    tiles_obj = layer.get("tiles", {})
+    try:
+        width, height = layer_tile_dimensions(tiles_obj)
+    except ValidationError as exc:
+        issues.append({"code": "invalid_size", "room": room_name, "layer": name, "message": str(exc)})
         return issues
     try:
         tiles, _fmt = layer_tile_stream(tiles_obj)

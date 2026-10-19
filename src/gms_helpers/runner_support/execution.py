@@ -11,7 +11,12 @@ from .targets import ensure_igor_supported_runtime_type, normalize_platform_targ
 
 class RunnerExecutionMixin:
     def run_project_direct(
-        self, platform_target: Optional[str] = None, runtime_type="VM", background=False, output_location="temp"
+        self,
+        platform_target: Optional[str] = None,
+        runtime_type="VM",
+        background=False,
+        output_location="temp",
+        enable_bridge: bool | None = None,
     ):
         """
         Run the project directly.
@@ -35,6 +40,7 @@ class RunnerExecutionMixin:
                     runtime=runtime_type,
                     runtime_version=self.runtime_version,
                     connect_timeout_seconds=0.5,
+                    enable_bridge=enable_bridge,
                 )
                 if not result.get("running"):
                     self._remember_failure(result.get("message", "Game did not start"))
@@ -62,6 +68,12 @@ class RunnerExecutionMixin:
             except Exception as exc:
                 self._remember_failure(str(exc))
                 return {"ok": False, "background": True, "message": str(exc)} if background else False
+        if enable_bridge is True:
+            message = "A verified session-owned runtime bridge is currently supported only for macOS launches."
+            self._remember_failure(message)
+            return (
+                {"ok": False, "background": True, "bridge_enabled": False, "message": message} if background else False
+            )
         attempt_limit = self._infrastructure_attempt_limit()
         self.infrastructure_attempt_count = 0
         self.retried_infrastructure_failure = False
@@ -190,11 +202,16 @@ class RunnerExecutionMixin:
                 )
 
             # Step 2: Find the runnable artifact from PackageZip output.
-            launch_path = self._find_launch_target(ide_temp_dir, project_name, platform_target)
+            if platform_target == "Windows" and process.returncode != 0:
+                launch_path = self._find_launch_target(
+                    ide_temp_dir, project_name, platform_target, previous_executables=previous_executables
+                )
+            else:
+                launch_path = self._find_launch_target(ide_temp_dir, project_name, platform_target)
 
             if not launch_path:
                 failure_message = (
-                    "Package/export step failed to produce a runnable local artifact."
+                    "Packaging failed without creating a fresh executable; refusing to launch an old build."
                     if process.returncode != 0
                     else "Launch target not found after package/export completed."
                 )
@@ -208,15 +225,6 @@ class RunnerExecutionMixin:
                 for file in sorted(ide_temp_dir.iterdir()):
                     print(f"  - {file.name}")
                 return False
-
-            if platform_target == "Windows" and process.returncode != 0:
-                current = (launch_path.stat().st_mtime_ns, launch_path.stat().st_size)
-                if current == previous_executables.get(launch_path):
-                    self._remember_failure(
-                        "Packaging failed without creating a fresh executable; refusing to launch an old build."
-                    )
-                    print(f"[ERROR] {self.last_failure_message}")
-                    return False
 
             print(f"[OK] Game packaged successfully: {launch_path}")
 

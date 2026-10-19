@@ -941,6 +941,38 @@ def test_stage_paths_can_repeat_an_already_staged_deletion(repo: Path, lock_dir:
         stage_paths(repo, ["scripts/never-existed"])
 
 
+@pytest.mark.parametrize(
+    "paths",
+    [
+        ["scripts/alpha", "scripts/alpha"],
+        ["./scripts/alpha/", "scripts//alpha"],
+        ["scripts/alpha/alpha.yy", "scripts/alpha/alpha.yy"],
+        ["scripts/alpha", "scripts/alpha/alpha.yy"],
+        ["scripts/alpha/alpha.yy", "scripts/alpha"],
+        ["scripts", "scripts/alpha", "./scripts/alpha/alpha.yy"],
+    ],
+)
+def test_stage_paths_deduplicates_deleted_paths_and_overlaps(repo: Path, lock_dir: Path, paths: list[str]):
+    import shutil
+
+    shutil.rmtree(repo / "scripts" / "alpha")
+    yyp_registry.unregister_assets(repo, ["scripts/alpha/alpha.yy"])
+    _add_script(repo, "unfinished")
+    yyp_registry.register_assets(repo, ["scripts/unfinished/unfinished.yy"])
+
+    result = stage_paths(repo, paths)
+
+    assert result["ok"] and not result["committed"]
+    indexed_yyp = _git(repo, "show", ":game.yyp")
+    assert "scripts/alpha/alpha.yy" not in indexed_yyp
+    assert "scripts/beta/beta.yy" in indexed_yyp
+    assert "scripts/zeta/zeta.yy" in indexed_yyp
+    if "scripts" not in paths:
+        assert "scripts/unfinished/unfinished.yy" not in indexed_yyp
+    assert "scripts/unfinished/unfinished.yy" in (repo / "game.yyp").read_text()
+    assert "D\tscripts/alpha/alpha.yy" in _git(repo, "diff", "--cached", "--name-status", "--no-renames")
+
+
 def test_stage_paths_recomposes_the_project_file_when_a_folder_covers_it(repo: Path, lock_dir: Path):
     for name in ("mine", "theirs"):
         _add_script(repo, name)

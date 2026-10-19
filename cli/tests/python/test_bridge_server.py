@@ -11,6 +11,7 @@ Tests cover:
 
 import sys
 import socket
+import json
 import threading
 import time
 import unittest
@@ -427,6 +428,87 @@ class TestBridgeServerConnection(unittest.TestCase):
                 client.close()
             except Exception:
                 pass
+
+
+class TestOwnedBridgeIsolation(unittest.TestCase):
+    def _wait(self, predicate):
+        deadline = time.monotonic() + 3
+        while not predicate() and time.monotonic() < deadline:
+            time.sleep(0.01)
+        self.assertTrue(predicate())
+
+    def test_project_and_session_identity_gate_logs_commands_and_registry(self):
+        from types import SimpleNamespace
+        from unittest.mock import patch
+
+        servers = [
+            BridgeServer(port=0, expected_identity={"project_id": name, "session_id": "launch-" + name})
+            for name in ("A", "B")
+        ]
+        clients = []
+        try:
+            for server in servers:
+                self.assertTrue(server.start())
+            self.assertNotEqual(servers[0].port, servers[1].port)
+            # A game from another project, and an old game from the same
+            # project, must neither connect nor contribute logs.
+            for identity in (servers[1].expected_identity, {"project_id": "A", "session_id": "old"}, None):
+                with socket.create_connection(("127.0.0.1", servers[0].port), timeout=2) as wrong:
+                    message = "LOG:0|unverified" if identity is None else "HELLO:" + json.dumps(identity)
+                    wrong.sendall((message + "\n").encode())
+                    self.assertEqual(wrong.recv(1), b"")
+                self.assertFalse(servers[0].is_connected)
+                self.assertEqual(servers[0].get_logs(), [])
+
+            for server in servers:
+                client = socket.create_connection(("127.0.0.1", server.port), timeout=2)
+                clients.append(client)
+                client.sendall(("HELLO:" + json.dumps(server.expected_identity) + "\n").encode())
+                self._wait(lambda: server.is_connected)
+                name = server.expected_identity["project_id"]
+                client.sendall(("LOG:1|project-" + name + "\n").encode())
+                self._wait(lambda: server.get_log_count() == 1)
+
+            sessions = {name: SimpleNamespace(alive=True, bridge=server) for name, server in zip(("A", "B"), servers)}
+            with patch("gms_helpers.live_session.get_session", side_effect=lambda path: sessions.get(Path(path).name)):
+                for name, server, client in zip(("A", "B"), servers, clients):
+                    self.assertIs(get_bridge_server(name, create=False), server)
+
+                    def respond(sock=client, project=name):
+                        command = sock.recv(1024).decode()
+                        command_id = command.split("|", 1)[0].removeprefix("CMD:")
+                        sock.sendall(("RSP:" + command_id + "|project-" + project + "\n").encode())
+
+                    responder = threading.Thread(target=respond)
+                    responder.start()
+                    result = server.send_command("state", timeout=2)
+                    responder.join(timeout=2)
+                    self.assertTrue(result.success)
+                    self.assertEqual(result.result, "project-" + name)
+                    self.assertEqual(server.get_logs()[0]["message"], "project-" + name)
+                sessions["A"].alive = False
+                self.assertIsNone(get_bridge_server("A", create=False))
+                sessions["A"] = SimpleNamespace(alive=True, bridge=None)
+                self.assertIsNone(get_bridge_server("A", create=False))
+                # Restart resolves the replacement session, never the old port.
+                sessions["A"] = SimpleNamespace(alive=True, bridge=servers[1])
+                self.assertIs(get_bridge_server("A", create=False), servers[1])
+        finally:
+            for client in clients:
+                client.close()
+            for server in servers:
+                server.stop()
+
+    def test_bound_port_is_not_reused(self):
+        with socket.socket() as occupied:
+            occupied.bind(("127.0.0.1", 0))
+            occupied.listen()
+            server = BridgeServer(
+                port=occupied.getsockname()[1], expected_identity={"project_id": "A", "session_id": "s"}
+            )
+            self.assertFalse(server.start())
+            self.assertFalse(server.is_running)
+            server.stop()
 
 
 if __name__ == "__main__":

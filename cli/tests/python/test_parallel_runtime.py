@@ -332,7 +332,7 @@ def test_cleanup_preserves_replacement_session_even_with_same_pid(tmp_path, monk
     session = live_session.LiveSession(
         project_root=root,
         label="old",
-        process=SimpleNamespace(pid=4242),
+        process=SimpleNamespace(pid=4242, poll=lambda: 0),
         bridge=SimpleNamespace(stop=lambda: None),
         lock=lease,
         label_lock=label_lease,
@@ -756,3 +756,435 @@ def test_startup_rollback_closes_bridge_and_releases_both_leases(tmp_path, monke
     assert not mac_runtime.project_run_lock(root).path.exists()
     assert not snapshot_build.pipeline_lock(root, "rollback").path.exists()
     assert live_session.get_session(root) is None
+
+
+@pytest.mark.parametrize("name", ["build.log", "run.log", "runner_stderr.log", "shot.png", "build.zip"])
+def test_artifact_replacement_never_truncates_hardlinks(tmp_path, name):
+    sentinel = tmp_path / "sentinel"
+    sentinel.write_bytes(b"retain")
+    target = tmp_path / name
+    os.link(sentinel, target)
+    with snapshot_build.artifact_writer(target) as stream:
+        stream.write(b"new artifact")
+    assert sentinel.read_bytes() == b"retain"
+    assert target.read_bytes() == b"new artifact"
+    assert sentinel.stat().st_ino != target.stat().st_ino
+
+
+def test_cached_run_directory_replacement_cannot_redirect_artifacts(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    run = snapshot_build.runs_directory(root, "live")
+    run.mkdir(parents=True)
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    sentinel = foreign / "run.log"
+    sentinel.write_text("retain")
+    run.rmdir()
+    run.symlink_to(foreign, target_is_directory=True)
+    with pytest.raises(snapshot_build.SnapshotError, match="symlinks"):
+        with snapshot_build.artifact_writer(run / "run.log") as stream:
+            stream.write(b"overwrite")
+    with pytest.raises(snapshot_build.SnapshotError, match="symlinks"):
+        snapshot_build.collect_screenshots(run / "shots", "__agent_shot_", 0, tmp_path)
+    with pytest.raises(snapshot_build.SnapshotError, match="symlinks"):
+        snapshot_build.clear_artifact_directory(run / "shots")
+    assert sentinel.read_text() == "retain" and list(foreign.iterdir()) == [sentinel]
+
+
+def _exited_session_fixture(tmp_path, monkeypatch):
+    from gms_helpers.run_session import RunSessionManager
+
+    root = tmp_path / "project"
+    staging, work, save = root / "staging", root / "work", root / "save"
+    for directory in (staging, work, save):
+        directory.mkdir(parents=True)
+    log = staging / "debug.txt"
+    log.write_text("unique recovery log")
+    monkeypatch.setenv("GMS_MCP_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setattr(RunSessionManager, "_state_root", lambda self: tmp_path / "sessions")
+    manager = RunSessionManager(root)
+    persisted = manager.create_session(pid=4242, exe_path=str(staging / "game.ios"), isolated_runtime=True)
+    lease = mac_runtime.project_run_lock(root)
+    label = snapshot_build.pipeline_lock(root, "live")
+    lease.acquire()
+    label.acquire()
+    session = live_session.LiveSession(
+        project_root=root,
+        label="live",
+        process=SimpleNamespace(pid=4242, poll=lambda: 0),
+        bridge=None,
+        lock=lease,
+        label_lock=label,
+        save_dir=save,
+        staging=staging,
+        debug_log=log,
+        run_dir=snapshot_build.runs_directory(root, "live"),
+        work_dir=work,
+        run_id=persisted.run_id,
+    )
+    return session, manager
+
+
+@pytest.mark.parametrize("failure", ["copy", "screenshots", "ancestor"])
+def test_archive_failure_preserves_evidence_and_can_retry(tmp_path, monkeypatch, failure):
+    session, manager = _exited_session_fixture(tmp_path, monkeypatch)
+    original_log = session.debug_log
+    copier, collector = snapshot_build.copy_artifact, snapshot_build.collect_screenshots
+    if failure == "ancestor":
+        session.run_dir.parent.mkdir(parents=True)
+        foreign = tmp_path / "foreign"
+        foreign.mkdir()
+        session.run_dir.symlink_to(foreign, target_is_directory=True)
+    else:
+        method = "copy_artifact" if failure == "copy" else "collect_screenshots"
+        monkeypatch.setattr(snapshot_build, method, lambda *a, **kw: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises((OSError, snapshot_build.SnapshotError)):
+        live_session._cleanup(session)
+    assert original_log.read_text() == "unique recovery log"
+    assert session.staging.is_dir() and session.work_dir.is_dir() and not session.cleaned
+    assert manager.get_current_session().run_id == session.run_id
+    assert not session.lock.held and not session.label_lock.held
+    if failure == "ancestor":
+        assert not list(foreign.iterdir())
+        session.run_dir.unlink()
+    monkeypatch.setattr(snapshot_build, "copy_artifact", copier)
+    monkeypatch.setattr(snapshot_build, "collect_screenshots", collector)
+    live_session._cleanup(session)
+    assert session.cleaned and not session.staging.exists() and not session.work_dir.exists()
+    assert session.debug_log.read_text() == "unique recovery log"
+    assert manager.get_current_session() is None
+
+
+def test_cleanup_keeps_leases_until_runner_exits(tmp_path, monkeypatch):
+    session, manager = _exited_session_fixture(tmp_path, monkeypatch)
+    session.process.poll = lambda: None
+    try:
+        with pytest.raises(live_session.LiveSessionError, match="still running"):
+            live_session._cleanup(session)
+        assert session.lock.held and session.label_lock.held
+        assert session.staging.exists() and manager.get_current_session() is not None
+    finally:
+        session.process.poll = lambda: 0
+        live_session._cleanup(session)
+
+
+@pytest.mark.parametrize("failure", ["discovery", "config", "compile", "copy"])
+def test_compile_exception_cleans_untransferred_work_even_when_retention_requested(tmp_path, monkeypatch, failure):
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "game.yyp").write_text('{"name":"game","resources":[]}')
+    workroot = tmp_path / "snapshots"
+    monkeypatch.setattr(snapshot_build, "_work_root", lambda: workroot)
+    tools = snapshot_build.Toolchain(Path("igor"), Path("runtime"), Path("license"), None, "test")
+    monkeypatch.setattr(snapshot_build, "discover_toolchain", lambda *a: tools)
+
+    def fail(*args, **kwargs):
+        raise RuntimeError("fixture failure")
+
+    if failure == "discovery":
+        monkeypatch.setattr(snapshot_build, "discover_toolchain", fail)
+    elif failure == "config":
+        monkeypatch.setattr(snapshot_build, "project_setting", fail)
+    elif failure == "compile":
+        monkeypatch.setattr(snapshot_build, "compile_snapshot", fail)
+    else:
+
+        def failed_copy(source, destination):
+            destination.mkdir(parents=True)
+            (destination / "partial").write_text("partial copy")
+            fail()
+
+        monkeypatch.setattr(snapshot_build, "_copy_tree", failed_copy)
+    with pytest.raises(RuntimeError, match="fixture failure"):
+        snapshot_build.snapshot_compile(root, keep_work_dir=True)
+    assert not list(workroot.iterdir())
+    assert (root / "game.yyp").is_file()
+
+
+@pytest.mark.parametrize(
+    "exit_code,complete,artifacts,expected",
+    [
+        (-9, True, "fresh", False),
+        (1, True, "fresh", False),
+        (0, False, "fresh", False),
+        (0, True, "partial", False),
+        (0, True, "stale", False),
+        (0, True, "fresh", True),
+    ],
+)
+def test_html5_requires_export_success_and_fresh_complete_artifacts(
+    tmp_path, monkeypatch, exit_code, complete, artifacts, expected
+):
+    root, work = tmp_path / "project", tmp_path / "work"
+    root.mkdir()
+    (root / "game.yyp").write_text('{"name":"game","resources":[]}')
+    monkeypatch.setenv("GMS_MCP_LOCK_DIR", str(tmp_path / "locks"))
+    output = work / "html5"
+
+    def write_output():
+        output.mkdir(parents=True, exist_ok=True)
+        (output / "index.html").write_text("<script src='game.js'></script>")
+        if artifacts != "partial":
+            (output / "game.js").write_text("window.game=true;")
+
+    if artifacts == "stale":
+        write_output()
+
+    def igor(command, log, timeout):
+        log.write_text("Stats : GMA : Elapsed=2.0\n" + ("Igor complete.\n" if complete else ""))
+        if artifacts != "stale":
+            write_output()
+        return exit_code
+
+    tools = snapshot_build.Toolchain(Path("igor"), Path("runtime"), Path("license"), None, "test")
+    result = snapshot_build.compile_snapshot(root, work, tools, platform="HTML5", attempts=1, run_igor=igor)
+    assert result.ok is expected
+
+
+def test_failed_cleanup_retry_does_not_touch_replacement_screenshots_or_metadata(tmp_path, monkeypatch):
+    session, manager = _exited_session_fixture(tmp_path, monkeypatch)
+    copier = snapshot_build.copy_artifact
+    monkeypatch.setattr(snapshot_build, "copy_artifact", lambda *a: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(OSError):
+        live_session._cleanup(session)
+    replacement = manager.create_session(pid=4242, exe_path="replacement", isolated_runtime=True)
+    new_shot = session.save_dir / "__agent_shot_new.png"
+    new_shot.write_bytes(b"replacement")
+    monkeypatch.setattr(snapshot_build, "copy_artifact", copier)
+    live_session._cleanup(session)
+    assert manager.get_current_session().run_id == replacement.run_id
+    assert new_shot.read_bytes() == b"replacement"
+    assert session.debug_log.read_text() == "unique recovery log"
+    assert not session.cleaned and session.staging.is_dir() and session.work_dir.is_dir()
+
+
+def test_start_recovers_dead_session_before_acquiring_replacement_leases(tmp_path, monkeypatch):
+    session, manager = _exited_session_fixture(tmp_path, monkeypatch)
+    monkeypatch.setitem(live_session._SESSIONS, str(session.project_root.resolve()), session)
+    copier = snapshot_build.copy_artifact
+    monkeypatch.setattr(snapshot_build, "copy_artifact", lambda *a: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(OSError):
+        live_session.stop(session.project_root)
+    assert live_session.get_session(session.project_root) is session
+    monkeypatch.setattr(snapshot_build, "copy_artifact", copier)
+    monkeypatch.setattr(live_session, "_start", lambda *a, **kw: {"ok": True, "running": False})
+    result = live_session.start(session.project_root)
+    assert result["ok"] and session.cleaned
+    assert live_session.get_session(session.project_root) is None
+    assert manager.get_current_session() is None
+
+
+@pytest.mark.skipif(os.name == "nt", reason="Windows pins source ancestors against rename")
+def test_screenshot_move_copies_the_original_pinned_source_when_parent_changes(tmp_path, monkeypatch):
+    import contextlib
+
+    save, previous = tmp_path / "save", tmp_path / "previous"
+    save.mkdir()
+    source = save / "shot.png"
+    source.write_bytes(b"unique original")
+    destination = tmp_path / "shots/shot.png"
+    writer = snapshot_build.artifact_writer
+
+    @contextlib.contextmanager
+    def replace_parent(path):
+        save.rename(previous)
+        save.mkdir()
+        source.write_bytes(b"attacker replacement")
+        with writer(path) as stream:
+            yield stream
+
+    monkeypatch.setattr(snapshot_build, "artifact_writer", replace_parent)
+    snapshot_build.move_artifact(source, destination)
+    assert destination.read_bytes() == b"unique original"
+    assert source.read_bytes() == b"attacker replacement"
+    assert not (previous / "shot.png").exists()
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows pinned-handle artifact implementation")
+def test_windows_artifact_ancestors_are_pinned_until_publication(tmp_path):
+    root = tmp_path / "root"
+    root.mkdir()
+    moved = tmp_path / "moved"
+    with snapshot_build.artifact_writer(root / "run.log") as outgoing:
+        with pytest.raises(OSError):
+            root.rename(moved)
+        outgoing.write(b"normal output")
+    assert (root / "run.log").read_bytes() == b"normal output"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows pinned-handle artifact implementation")
+def test_windows_artifact_reader_prevents_source_replacement(tmp_path):
+    from gms_helpers.artifact_windows import read_source
+
+    source = tmp_path / "source.png"
+    source.write_bytes(b"source")
+    with read_source(source) as incoming:
+        with pytest.raises(OSError):
+            source.rename(tmp_path / "replacement.png")
+        assert incoming.read() == b"source"
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows pinned-handle artifact implementation")
+def test_windows_artifact_move_deletes_original_handle_after_publication(tmp_path):
+    source = tmp_path / "source.png"
+    destination = tmp_path / "shots/moved.png"
+    source.write_bytes(b"original")
+    snapshot_build.move_artifact(source, destination)
+    assert not source.exists() and destination.read_bytes() == b"original"
+
+
+@pytest.fixture
+def windows_kernel_handles(monkeypatch):
+    """Exercise Win32 decisions with real files/descriptors and an explicit API fake."""
+    import ctypes
+    import stat
+    from ctypes import wintypes
+    from gms_helpers import artifact_windows
+
+    if os.name == "nt":
+        pytest.skip("Native Windows checks exercise the real kernel handles")
+    active, calls, failure = {}, [], {}
+
+    def create(path, access, share, security, disposition, flags, template):
+        calls.append((str(path), access, share, flags))
+        try:
+            descriptor = os.open(path, os.O_RDONLY)
+        except OSError:
+            return ctypes.c_void_p(-1).value
+        active[descriptor] = str(path)
+        return descriptor
+
+    def close(handle):
+        os.close(handle)
+        active.pop(handle)
+        return True
+
+    def information(handle, kind, output, size):
+        if failure.get("information"):
+            return False
+        info = os.lstat(active[handle])
+        attributes = (0x10 if stat.S_ISDIR(info.st_mode) else 0) | (0x400 if stat.S_ISLNK(info.st_mode) else 0)
+        ctypes.cast(output, ctypes.POINTER(wintypes.DWORD))[0] = attributes
+        return True
+
+    def duplicate(process, handle, target, output, access, inherit, options):
+        if failure.get("duplicate"):
+            return False
+        duplicated = os.dup(handle)
+        ctypes.cast(output, ctypes.POINTER(wintypes.HANDLE))[0] = duplicated
+        return True
+
+    def dispose(handle, kind, information, size):
+        assert kind == 4 and size == 1
+        assert ctypes.cast(information, ctypes.POINTER(ctypes.c_ubyte))[0] == 1
+        if failure.get("disposition"):
+            return False
+        os.unlink(active[handle])
+        return True
+
+    def process():
+        return 1
+
+    def file_type(handle):
+        return 1
+
+    kernel = SimpleNamespace(
+        CreateFileW=create,
+        CloseHandle=close,
+        GetFileType=file_type,
+        GetFileInformationByHandleEx=information,
+        DuplicateHandle=duplicate,
+        GetCurrentProcess=process,
+        SetFileInformationByHandle=dispose,
+    )
+    monkeypatch.setattr(ctypes, "WinDLL", lambda *a, **kw: kernel, raising=False)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 2, raising=False)
+    monkeypatch.setattr(ctypes, "WinError", lambda error: FileNotFoundError("fake Win32 failure"), raising=False)
+    monkeypatch.setattr(os, "O_BINARY", getattr(os, "O_BINARY", 0), raising=False)
+    monkeypatch.setitem(sys.modules, "msvcrt", SimpleNamespace(open_osfhandle=lambda handle, flags: handle))
+    original_lstat = Path.lstat
+
+    class FileAttributes:
+        def __init__(self, original):
+            self.original = original
+            self.st_file_attributes = (0x10 if stat.S_ISDIR(original.st_mode) else 0) | (
+                0x400 if stat.S_ISLNK(original.st_mode) else 0
+            )
+
+        def __getattr__(self, name):
+            return getattr(self.original, name)
+
+    monkeypatch.setattr(Path, "lstat", lambda self: FileAttributes(original_lstat(self)))
+    yield artifact_windows, active, calls, failure
+    assert not active, "Every Windows-owned original handle must close, including error paths"
+
+
+def test_windows_helper_pins_real_ancestors_and_closes_owned_sources(tmp_path, windows_kernel_handles):
+    windows, active, calls, failure = windows_kernel_handles
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"original")
+    with windows.read_source(source) as incoming:
+        assert incoming.read() == b"original" and source.exists()
+    with windows.read_source(source, delete_on_success=True) as incoming:
+        assert incoming.read() == b"original" and source.exists()
+    assert not source.exists()
+    assert all(share == 3 and flags & 0x00200000 for _, _, share, flags in calls)
+    assert any(access & 0x10000 for _, access, _, _ in calls)
+
+
+@pytest.mark.parametrize("failure_name", ["information", "duplicate", "disposition"])
+def test_windows_helper_failure_preserves_source_and_releases_handles(tmp_path, windows_kernel_handles, failure_name):
+    windows, active, calls, failure = windows_kernel_handles
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"unique")
+    failure[failure_name] = True
+    with pytest.raises(OSError):
+        with windows.read_source(source, delete_on_success=True) as incoming:
+            assert incoming.read() == b"unique"
+    assert source.read_bytes() == b"unique"
+
+
+def test_windows_helper_failed_publication_preserves_source(tmp_path, windows_kernel_handles):
+    windows, active, calls, failure = windows_kernel_handles
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"unique")
+    with pytest.raises(RuntimeError, match="publication"):
+        with windows.read_source(source, delete_on_success=True):
+            raise RuntimeError("publication failed")
+    assert source.read_bytes() == b"unique"
+
+
+def test_windows_helper_rejects_reparse_points_and_wrong_file_kinds(tmp_path, windows_kernel_handles):
+    windows, active, calls, failure = windows_kernel_handles
+    file = tmp_path / "file"
+    file.write_bytes(b"retain")
+    directory = tmp_path / "directory"
+    directory.mkdir()
+    linked = tmp_path / "linked"
+    linked.symlink_to(directory, target_is_directory=True)
+    for path, is_directory in [(linked, True), (file, True), (directory, False)]:
+        with pytest.raises(OSError, match="reparse"):
+            with windows._pinned(path, directory=is_directory):
+                pytest.fail("Unsafe handle accepted")
+    with pytest.raises(OSError, match="reparse"):
+        with windows.pinned_parent(linked / "run.log"):
+            pytest.fail("Reparse ancestor accepted")
+    with pytest.raises(OSError, match="streams"):
+        with windows.pinned_parent(tmp_path / "file:stream"):
+            pytest.fail("Alternate stream accepted")
+    assert file.read_bytes() == b"retain"
+
+
+def test_windows_helper_creates_and_clears_literal_nested_directories(tmp_path, windows_kernel_handles):
+    windows, active, calls, failure = windows_kernel_handles
+    target = tmp_path / "runs/live/shots"
+    with windows.pinned_parent(target / "shot.png", create=True) as (descriptor, name):
+        assert descriptor is None and name == str(target / "shot.png")
+        (target / "shot.png").write_bytes(b"shot")
+    (target / "nested").mkdir()
+    (target / "nested/other.png").write_bytes(b"other")
+    windows.clear_directory(target)
+    assert not target.exists()
+    windows.clear_directory(target)
+    assert not target.exists()

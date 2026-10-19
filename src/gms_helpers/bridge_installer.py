@@ -493,7 +493,15 @@ function __mcp_send_response(_cmd_id, _result) {
 global.__mcp_socket = -1;
 global.__mcp_enabled = false;
 global.__mcp_buffer = "";
-global.__mcp_port = {port};
+global.__mcp_port = 0;
+
+// A bridge belongs to this launch. Never connect to a shared/default port.
+var _port_text = environment_get_variable("GMS_MCP_BRIDGE_PORT");
+var _project_id = environment_get_variable("GMS_MCP_BRIDGE_PROJECT_ID");
+var _session_id = environment_get_variable("GMS_MCP_BRIDGE_SESSION_ID");
+if (_port_text == "" || _project_id == "" || _session_id == "") exit;
+global.__mcp_port = real(_port_text);
+if (global.__mcp_port < 1 || global.__mcp_port > 65535) exit;
 
 // Try to connect to MCP bridge server
 var _socket = network_create_socket(network_socket_tcp);
@@ -502,6 +510,11 @@ var _result = network_connect_raw(_socket, "127.0.0.1", global.__mcp_port);
 if (_result >= 0) {{
     global.__mcp_socket = _socket;
     global.__mcp_enabled = true;
+    var _hello = "HELLO:" + json_stringify({{protocol: 2, project_id: _project_id, session_id: _session_id}}) + chr(10);
+    var _hello_buffer = buffer_create(string_byte_length(_hello) + 1, buffer_fixed, 1);
+    buffer_write(_hello_buffer, buffer_string, _hello);
+    network_send_raw(_socket, _hello_buffer, buffer_tell(_hello_buffer));
+    buffer_delete(_hello_buffer);
     __mcp_log("[MCP] Bridge connected on port " + string(global.__mcp_port));
 }} else {{
     // No bridge server running - that's fine, game runs normally

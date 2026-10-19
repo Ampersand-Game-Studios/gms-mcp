@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import socket
 import sys
 import tempfile
@@ -26,8 +27,9 @@ if str(SRC_ROOT) not in sys.path:
 
 
 class _BridgePeer:
-    def __init__(self, port: int):
+    def __init__(self, port: int, identity: dict[str, str]):
         self.port = port
+        self.identity = identity
         self._socket: socket.socket | None = None
         self._thread: threading.Thread | None = None
         self._stop = threading.Event()
@@ -36,7 +38,7 @@ class _BridgePeer:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(0.2)
         sock.connect(("127.0.0.1", self.port))
-        sock.sendall(b"LOG:1|hello from test\n")
+        sock.sendall(("HELLO:" + json.dumps(self.identity) + "\nLOG:1|hello from test\n").encode())
         self._socket = sock
         self._thread = threading.Thread(target=self._serve, daemon=True)
         self._thread.start()
@@ -98,10 +100,6 @@ class TestMCPStdioTransportRegression(unittest.TestCase):
             project_root = Path(temp_dir)
             (project_root / "TestProject.yyp").write_text('{"resources": []}', encoding="utf-8")
 
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as probe:
-                probe.bind(("127.0.0.1", 0))
-                bridge_port = probe.getsockname()[1]
-
             server_script = textwrap.dedent(
                 f"""
                 import sys
@@ -113,44 +111,49 @@ class TestMCPStdioTransportRegression(unittest.TestCase):
                 if str(src_root) not in sys.path:
                     sys.path.insert(0, str(src_root))
 
-                from gms_helpers.bridge_server import BridgeServer
-                from gms_mcp.server.results import ToolRunResult
+                import json
+                import subprocess
+                import zipfile
+                from types import SimpleNamespace
+                from gms_helpers import live_session, mac_runtime, snapshot_build
+                from gms_helpers.runner import GameMakerRunner
 
-                _servers = {{}}
+                root = Path({str(project_root)!r})
+                children = []
 
-                def _get_bridge_server(project_root, create=True):
-                    key = str(Path(project_root).resolve())
-                    if key not in _servers and create:
-                        _servers[key] = BridgeServer(port={bridge_port})
-                    return _servers.get(key)
+                def _compile(root, **options):
+                    work = root / "work"
+                    work.mkdir()
+                    archive = work / "game.zip"
+                    with zipfile.ZipFile(archive, "w") as stream:
+                        stream.writestr("game.ios", b"data")
+                    return ({{"ok": True, "label": options["label"]}},
+                        snapshot_build.BuildResult(True, "COMPILE_OK", game_archive=archive), work, None)
 
-                def _stop_bridge_server(project_root):
-                    key = str(Path(project_root).resolve())
-                    server = _servers.pop(key, None)
-                    if server:
-                        server.stop()
+                def _prepare(runner, root, label):
+                    save = root / "save"
+                    staging = save / "stage"
+                    staging.mkdir(parents=True)
+                    return mac_runtime.MacRuntime(runner, staging, save, "fixture")
+
+                def _launch(runner, staging, game_file, run_dir, environment):
+                    child = subprocess.Popen([sys.executable, "-c", "import sys; sys.stdin.buffer.read()"],
+                                             stdin=subprocess.PIPE)
+                    children.append(child)
+                    (root / "bridge-env.json").write_text(json.dumps(environment))
+                    log = staging / "debug.txt"
+                    log.write_text("fixture")
+                    return child, log
 
                 patches = [
-                    patch("gms_helpers.bridge_installer.is_bridge_installed", return_value=True),
                     patch("gms_helpers.bridge_installer.get_bridge_status", return_value={{"installed": True}}),
-                    patch("gms_helpers.bridge_server.get_bridge_server", side_effect=_get_bridge_server),
-                    patch("gms_helpers.bridge_server.stop_bridge_server", side_effect=_stop_bridge_server),
-                    patch(
-                        "gms_mcp.server.tools.runner._run_direct",
-                        return_value=ToolRunResult(
-                            ok=True,
-                            stdout="",
-                            stderr="",
-                            direct_used=True,
-                            result={{
-                                "ok": True,
-                                "background": True,
-                                "pid": 1234,
-                                "run_id": "run-test",
-                                "message": "Game started in background",
-                            }},
-                        ),
-                    ),
+                    patch("gms_helpers.snapshot_build.snapshot_compile", side_effect=_compile),
+                    patch("gms_helpers.snapshot_build.require_mac_runner", return_value=Path("runner")),
+                    patch("gms_helpers.live_session.prepare_mac_runtime", side_effect=_prepare),
+                    patch("gms_helpers.snapshot_build.launch_mac_runner", side_effect=_launch),
+                    patch.object(GameMakerRunner, "_snapshot_macos_processes",
+                        lambda self: {{child.pid: SimpleNamespace(command="fixture runner", started="fixture start")
+                                      for child in children}}),
                 ]
                 for active_patch in patches:
                     active_patch.start()
@@ -170,6 +173,7 @@ class TestMCPStdioTransportRegression(unittest.TestCase):
                         "PYTHONPATH": str(SRC_ROOT),
                         "GMS_MCP_TOOLSETS": "bridge",
                         "GM_PROJECT_ROOT": str(project_root),
+                        "GMS_MCP_LOCK_DIR": str(project_root / "locks"),
                     },
                 )
 
@@ -190,9 +194,15 @@ class TestMCPStdioTransportRegression(unittest.TestCase):
 
                     self.assertTrue(run_result["ok"])
                     self.assertTrue(run_result["bridge_enabled"])
-                    self.assertEqual(run_result["bridge_port"], bridge_port)
+                    bridge_port = run_result["bridge_port"]
+                    environment = json.loads((project_root / "bridge-env.json").read_text())
+                    self.assertEqual(bridge_port, int(environment["GMS_MCP_BRIDGE_PORT"]))
+                    identity = {
+                        "project_id": environment["GMS_MCP_BRIDGE_PROJECT_ID"],
+                        "session_id": environment["GMS_MCP_BRIDGE_SESSION_ID"],
+                    }
 
-                    peer = _BridgePeer(bridge_port)
+                    peer = _BridgePeer(bridge_port, identity)
                     peer.connect()
                     try:
                         latest_status = None
@@ -229,6 +239,10 @@ class TestMCPStdioTransportRegression(unittest.TestCase):
                         await client.call_tool("gm_bridge_status", {"project_root": str(project_root)})
                     )
                     self.assertTrue(post_disconnect_status["ok"])
+                    stopped = unwrap_call_tool_result(
+                        await client.call_tool("gm_game_stop", {"project_root": str(project_root)})
+                    )
+                    self.assertTrue(stopped["ok"])
 
             anyio.run(_exercise)
 

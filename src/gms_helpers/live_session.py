@@ -28,6 +28,7 @@ import shutil
 import subprocess
 import threading
 import time
+import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
@@ -52,7 +53,7 @@ class LiveSession:
     project_root: Path
     label: str
     process: subprocess.Popen
-    bridge: BridgeServer
+    bridge: BridgeServer | None
     lock: DirectoryLock
     label_lock: DirectoryLock
     save_dir: Path
@@ -117,6 +118,7 @@ def _start(
     runtime_version: str | None = None,
     attempts: int | None = None,
     connect_timeout_seconds: float = 60.0,
+    enable_bridge: bool | None = None,
     test_code: str | None = None,
     lock_timeout_seconds: float = 3600.0,
     lock: DirectoryLock,
@@ -150,37 +152,55 @@ def _start(
         public["connected"] = False
         return public
 
-    run_dir = snapshot_build.runs_directory(root, label)
-    screenshot_prefix = str(project_setting(root, "test.screenshot_prefix", "__agent_shot_"))
-    bridge = BridgeServer(port=0)
     process: subprocess.Popen | None = None
     staging: Path | None = None
+    bridge: BridgeServer | None = None
     try:
+        run_dir = snapshot_build.runs_directory(root, label)
+        screenshot_prefix = str(project_setting(root, "test.screenshot_prefix", "__agent_shot_"))
+        bridge_enabled = project_setting(root, "bridge.enabled", True) if enable_bridge is None else enable_bridge
+        bridge_identity = {"project_id": project_identity(root), "session_id": uuid.uuid4().hex}
+        bridge = BridgeServer(port=0, expected_identity=bridge_identity) if bridge_enabled else None
         runner = snapshot_build.require_mac_runner(tools)
-        if not bridge.start():
+        if bridge is not None and not bridge.start():
             raise LiveSessionError("Could not open a local TCP port for the runtime bridge.")
         owned_runtime = prepare_mac_runtime(runner, root, label)
         staging = owned_runtime.staging
         staging, game_file = snapshot_build.stage_game_archive(build.game_archive, staging)
         snapshot_build.clear_stale_screenshots(screenshot_prefix, owned_runtime.save_dir)
         shots = run_dir / "shots"
-        if shots.exists():
-            shutil.rmtree(shots)
+        snapshot_build.clear_artifact_directory(shots)
         process, debug_log = snapshot_build.launch_mac_runner(
-            owned_runtime.runner, staging, game_file, run_dir, {BRIDGE_PORT_ENVIRONMENT_VARIABLE: str(bridge.port)}
+            owned_runtime.runner,
+            staging,
+            game_file,
+            run_dir,
+            {
+                BRIDGE_PORT_ENVIRONMENT_VARIABLE: str(bridge.port),
+                "GMS_MCP_BRIDGE_PROJECT_ID": bridge_identity["project_id"],
+                "GMS_MCP_BRIDGE_SESSION_ID": bridge_identity["session_id"],
+            }
+            if bridge is not None
+            else {},
         )
         lock.bind_process(process.pid)
         label_lock.bind_process(process.pid)
         deadline = time.monotonic() + connect_timeout_seconds
-        while time.monotonic() < deadline and not bridge.is_connected and process.poll() is None:
+        while bridge is not None and time.monotonic() < deadline and not bridge.is_connected and process.poll() is None:
             time.sleep(0.2)
         # Give the endpoint a moment to send its handshake.
         handshake_deadline = time.monotonic() + 2.0
-        while bridge.is_connected and bridge.hello is None and time.monotonic() < handshake_deadline:
+        while (
+            bridge is not None
+            and bridge.is_connected
+            and bridge.hello is None
+            and time.monotonic() < handshake_deadline
+        ):
             time.sleep(0.05)
     except BaseException:
         snapshot_build.stop_process(process)
-        bridge.stop()
+        if bridge is not None:
+            bridge.stop()
         if staging is not None:
             shutil.rmtree(staging, ignore_errors=True)
         lock.release()
@@ -213,7 +233,7 @@ def _start(
             platform_target="macOS",
             runtime_type=runtime,
             log_file=str(debug_log),
-            bridge_port=bridge.port,
+            bridge_port=bridge.port if bridge is not None else None,
             isolated_runtime=True,
             runtime_label=session.label,
             runtime_work_dir=str(work),
@@ -234,9 +254,10 @@ def _start(
     public["run_id"] = session.run_id
     public["save_directory"] = str(owned_runtime.save_dir)
     public["bundle_id"] = owned_runtime.bundle_id
-    public["connected"] = bridge.is_connected
-    public["bridge_port"] = bridge.port
-    public["endpoint"] = bridge.hello
+    public["connected"] = bridge.is_connected if bridge is not None else False
+    public["bridge_enabled"] = bridge is not None
+    public["bridge_port"] = bridge.port if bridge is not None else None
+    public["endpoint"] = bridge.hello if bridge is not None else None
     public["running"] = session.alive
     if not session.alive:
         public["ok"] = False
@@ -247,6 +268,9 @@ def _start(
         )
         public["log_tail"] = snapshot_build.tail_lines(session.debug_log, 40)
         stop(root)
+    elif bridge is None:
+        public["status"] = "RUNNING"
+        public["message"] = "Game running with bridge disabled. Use gm_game_log and gm_game_stop."
     elif not bridge.is_connected:
         public["status"] = "RUNNING_NOT_CONNECTED"
         public["message"] = (
@@ -297,10 +321,11 @@ def status(project_root: str | Path) -> dict[str, Any]:
     return {
         "ok": True,
         "running": session.alive,
-        "connected": session.bridge.is_connected,
+        "connected": session.bridge.is_connected if session.bridge is not None else False,
+        "bridge_enabled": session.bridge is not None,
         "label": session.label,
-        "bridge_port": session.bridge.port,
-        "endpoint": session.bridge.hello,
+        "bridge_port": session.bridge.port if session.bridge is not None else None,
+        "endpoint": session.bridge.hello if session.bridge is not None else None,
         "uptime_seconds": round(time.time() - session.started_wall, 1),
         "exit_code": session.process.poll(),
         "pid": session.process.pid,
@@ -314,7 +339,7 @@ def command(project_root: str | Path, text: str, timeout_seconds: float = 5.0) -
         raise LiveSessionError(
             "The live game has exited. Read why with gm_game_log, then gm_game_stop and gm_game_start again."
         )
-    if not session.bridge.is_connected:
+    if session.bridge is None or not session.bridge.is_connected:
         raise LiveSessionError(
             "The game is running but its bridge endpoint is not connected, so it cannot receive commands. "
             "gm_game_log shows the game log; see gm_game_start's message for what the project needs."
@@ -351,7 +376,7 @@ def screenshot(project_root: str | Path, name: str = "shot", timeout_seconds: fl
     shots_dir = session.run_dir / "shots"
     if shots_dir.is_symlink():
         raise LiveSessionError("The screenshot destination must not be a symlink.")
-    shots_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_build.artifact_directory(shots_dir)
     deadline = time.monotonic() + timeout_seconds
     # screen_save writes at the end of the frame; wait for a complete file.
     while source is not None and time.monotonic() < deadline:
@@ -368,7 +393,7 @@ def screenshot(project_root: str | Path, name: str = "shot", timeout_seconds: fl
     target = shots_dir / f"{safe}.png"
     if source.is_symlink() or source.resolve().parent != session.save_dir.resolve() or target.is_symlink():
         raise LiveSessionError("Screenshot paths changed or contain a symlink; preserving the files.")
-    shutil.move(str(source), str(target))
+    snapshot_build.move_artifact(source, target)
     return {
         "ok": True,
         "screenshot": snapshot_build._relative(session.project_root, target),
@@ -401,7 +426,7 @@ def game_log(project_root: str | Path, lines: int = 100, pattern: str | None = N
 
 def stop(project_root: str | Path) -> dict[str, Any]:
     with _SESSIONS_GUARD:
-        session = _SESSIONS.pop(_key(project_root), None)
+        session = _SESSIONS.get(_key(project_root))
     if session is None:
         persisted = RunSessionManager(Path(project_root)).get_current_session()
         if persisted is not None and persisted.isolated_runtime:
@@ -410,6 +435,9 @@ def stop(project_root: str | Path) -> dict[str, Any]:
     exit_code = session.process.poll()
     snapshot_build.stop_process(session.process)
     shots = _cleanup(session)
+    with _SESSIONS_GUARD:
+        if _SESSIONS.get(_key(project_root)) is session:
+            _SESSIONS.pop(_key(project_root), None)
     run_log = session.run_dir / "run.log"
     return {
         "ok": True,
@@ -467,7 +495,7 @@ def _archive_persisted(project_root: str | Path, persisted: Any) -> None:
         return
     save_dir, staging, log, work = _persisted_paths(project_root, persisted)
     run_dir = snapshot_build.runs_directory(project_root, persisted.runtime_label or "run")
-    run_dir.mkdir(parents=True, exist_ok=True)
+    snapshot_build.artifact_directory(run_dir)
     if log is not None and log.is_file():
         destination = run_dir / "run.log"
         if destination.is_symlink():
@@ -511,36 +539,49 @@ def _persisted_paths(project_root: str | Path, persisted: Any) -> tuple[Path, Pa
 
 
 def _cleanup(session: LiveSession) -> list[Path]:
-    """Archive owned evidence and release leases once, including natural window closure."""
+    """Archive before deleting recovery evidence; failed archival can be retried."""
     with session.cleanup_guard:
         if session.cleaned:
             return []
-        session.bridge.stop()
-        shots: list[Path] = []
+        if session.alive:
+            raise LiveSessionError("The owned game is still running; preserving its files and leases.")
+        # A previous archival attempt may have released the exited runner's leases.
+        # Always take them in launcher order before retrying or touching shared saves.
+        if not session.label_lock.held:
+            session.label_lock.acquire(timeout_seconds=5)
         try:
-            session.run_dir.mkdir(parents=True, exist_ok=True)
-            if session.debug_log.is_symlink() or (session.run_dir / "run.log").is_symlink():
-                raise LiveSessionError("Refusing to archive a run-log symlink.")
-            if session.debug_log.is_file():
-                snapshot_build.copy_artifact(session.debug_log, session.run_dir / "run.log")
-                # Keep log access available after staging is removed.
-                session.debug_log = session.run_dir / "run.log"
-            shots = snapshot_build.collect_screenshots(
-                session.run_dir / "shots", session.screenshot_prefix, session.started_wall, session.save_dir
-            )
-        finally:
+            if not session.lock.held:
+                session.lock.acquire(timeout_seconds=5)
             try:
-                shutil.rmtree(session.staging, ignore_errors=True)
-                shutil.rmtree(session.work_dir, ignore_errors=True)
                 manager = RunSessionManager(session.project_root)
                 persisted = manager.get_current_session()
+                if session.bridge is not None:
+                    session.bridge.stop()
+                if persisted is not None and persisted.run_id != session.run_id:
+                    # A replacement owns the shared save directory. Leave all its
+                    # screenshots and metadata intact, and preserve our old evidence.
+                    return []
+                snapshot_build.artifact_directory(session.run_dir)
+                if session.debug_log.is_symlink():
+                    raise LiveSessionError("Refusing to archive a run-log symlink.")
+                if session.debug_log.is_file():
+                    snapshot_build.copy_artifact(session.debug_log, session.run_dir / "run.log")
+                shots = snapshot_build.collect_screenshots(
+                    session.run_dir / "shots", session.screenshot_prefix, session.started_wall, session.save_dir
+                )
+                # Only a fully archived session can surrender its recovery metadata.
+                shutil.rmtree(session.staging, ignore_errors=True)
+                shutil.rmtree(session.work_dir, ignore_errors=True)
                 if persisted is not None and persisted.run_id == session.run_id:
                     manager.clear_session()
+                if (session.run_dir / "run.log").is_file():
+                    session.debug_log = session.run_dir / "run.log"
+                session.cleaned = True
+                return shots
             finally:
                 session.lock.release()
-                session.label_lock.release()
-                session.cleaned = True
-        return shots
+        finally:
+            session.label_lock.release()
 
 
 def _watch_exit(session: LiveSession) -> None:
@@ -555,8 +596,11 @@ def start(project_root: str | Path, **options: Any) -> dict[str, Any]:
     existing = get_session(project_root)
     if existing is not None and existing.alive:
         raise LiveSessionError(f"A live game ('{existing.label}') is already running for this project.")
+    if existing is not None:
+        # Retry an exited predecessor before taking leases for its replacement.
+        stop(project_root)
     persisted = RunSessionManager(Path(project_root)).get_current_session()
-    if persisted is not None and persisted.isolated_runtime and existing is None:
+    if persisted is not None and persisted.isolated_runtime:
         current = status(project_root)
         if current.get("running"):
             raise LiveSessionError("An owned game is already running for this project. Use gm_game_stop first.")

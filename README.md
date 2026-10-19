@@ -143,11 +143,11 @@ The optional bridge connects the MCP server to GML code inside your game over lo
 
 1. Enable the `bridge` toolset and editing/build access.
 2. Install the bridge assets and ensure a `__mcp_bridge` instance is created in the startup room. `gm_bridge_enable_one_shot` combines asset installation and room placement; `gm_bridge_install` alone does not place an instance.
-3. Check the platform requirements in the [bridge guide](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/documentation/BRIDGE.md). Windows networking may require changing the GameMaker sandbox option; understand that change before applying it.
-4. Run with `gm_run(background=true, enable_bridge=true)`, check `gm_bridge_status`, then send `ping` through `gm_run_command`.
+3. Check the platform requirements in the [bridge guide](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/documentation/BRIDGE.md). Managed bridge launches currently support macOS.
+4. Run with `gm_run(background=true, enable_bridge=true)`, check `gm_bridge_status`, then send `ping` through `gm_run_command`. Managed bridge launches currently require macOS; each project/session gets a free port and verified identity handshake. `enable_bridge=false` disables the bridge entirely. Older fixed-port bridge assets must be explicitly reinstalled (and placed back in the startup room).
 5. Read `gm_run_logs` and stop the managed session with `gm_run_stop` when done.
 
-Bridge logs come from `__mcp_log(...)`; they are **not** a scrape of every `show_debug_message(...)` or IDE console message. Only one game should use the bridge port at a time. Treat the bridge and its installed assets as development instrumentation; review or remove them before distributing your game.
+Bridge logs come from `__mcp_log(...)`; they are **not** a scrape of every `show_debug_message(...)` or IDE console message. Different projects use separate session-owned ports. Treat the bridge and its installed assets as development instrumentation; review or remove them before distributing your game.
 
 ## Use the CLI without an AI client
 

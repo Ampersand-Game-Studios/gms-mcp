@@ -4,8 +4,8 @@
 
 Before running a game with the bridge, verify ALL of the following:
 
-- [ ] **STOP any running games FIRST**: Run `gm_run_stop()` before starting a new game. Only ONE game can connect to the bridge at a time (port 6502 conflict).
-- [ ] **Sandbox disabled (Windows)**: Set `option_windows_disable_sandbox: true` in `options_windows.yy`. **TCP networking WILL NOT WORK without this.** Verify by reading the file.
+- [ ] **Use the intended project**: Each macOS project has its own managed bridge port and game session. Stop the same project before restarting it; different projects may run concurrently.
+- [ ] **Supported launch**: Verified session-owned bridge launches currently support macOS. On other targets, explicit `enable_bridge=true` fails before launch; `enable_bridge=false` runs without a bridge.
 - [ ] **Correct project_root**: Run `gm_project_info()` first to confirm the `.yyp` location
 - [ ] **Bridge installed**: Run `gm_bridge_install()` if not already installed
 - [ ] **Bridge instance in room**: Use `gm_room_instance_add()` to add `__mcp_bridge` to your startup room
@@ -15,9 +15,9 @@ Before running a game with the bridge, verify ALL of the following:
 
 **Typical workflow**:
 ```
-1. gm_run_stop()                                         # STOP any running games first
+1. gm_run_stop(project_root="gamemaker")                 # Stop this project before restarting it
 2. gm_project_info(project_root="gamemaker")             # Verify project
-3. [Verify option_windows_disable_sandbox: true]         # CRITICAL for TCP
+3. [Use macOS for a verified session-owned bridge]
 4. gm_bridge_install(project_root="gamemaker")           # Install bridge (once)
 5. gm_room_instance_add(..., "__mcp_bridge", ...)        # Add to startup room (once)
 6. [Verify instanceCreationOrder in room .yy file]       # CRITICAL - see troubleshooting
@@ -49,36 +49,30 @@ The bridge is designed to be:
 
 These are common mistakes agents make when setting up or troubleshooting the bridge. **Read this section carefully before debugging.**
 
-### 1. Running multiple games simultaneously
+### 1. Starting two sessions for the same project
 
-**Mistake**: Starting a new game without stopping the previous one.
+**Mistake**: Starting another game for the same project without stopping its existing session.
 
-**Why it fails**: Port 6502 can only be used by one game at a time. If another game is already connected, the new game cannot connect.
-
-**Symptoms**:
-- `game_connected: false` even though bridge is installed and in room
-- No errors shown - the connection just silently fails
-
-**Fix**: Always run `gm_run_stop()` BEFORE starting a new game.
-
-### 2. Not checking if sandbox is disabled
-
-**Mistake**: Assuming TCP networking will work without verifying the sandbox setting.
-
-**Why it fails**: GameMaker's sandbox mode blocks TCP networking by default on Windows.
+**Why it fails**: A project owns one active game session. Different projects use separate free ports and may run concurrently.
 
 **Symptoms**:
-- `game_connected: false`
-- Game runs fine but never connects to bridge
-- No errors in game output
+- The launch is rejected because the project already owns a live session.
 
-**Fix**: Read `options/windows/options_windows.yy` and verify `option_windows_disable_sandbox: true`. If false, change it.
+**Fix**: Stop the same project with `gm_run_stop(project_root=...)` before restarting it.
+
+### 2. Using an unverified endpoint
+
+**Mistake**: Expecting an old fixed-port or custom endpoint to connect without the launch identity handshake.
+
+**Why it fails**: The server accepts logs and commands only after `HELLO` matches this project's active session.
+
+**Fix**: Reinstall an unmodified old bridge, or update a custom endpoint to the runtime protocol below. The bridge currently supports managed macOS launches.
 
 ### 3. Repeatedly recompiling when connection fails
 
 **Mistake**: Re-running `gm_run()` over and over hoping it will fix connection issues.
 
-**Why it fails**: If the connection setup is wrong (sandbox, port conflict, missing instance), recompiling won't help.
+**Why it fails**: If the connection setup is wrong (missing identity handshake or missing instance), recompiling won't help.
 
 **Better approach**:
 1. Stop the game
@@ -172,19 +166,13 @@ Run:
 
 Use the returned `.yyp` directory as `project_root` for everything below.
 
-### Step 0.5: Verify sandbox is disabled (Windows)
+### Step 0.5: Verify launch support
 
-Read `options/windows/options_windows.yy` and confirm:
-
-```json
-"option_windows_disable_sandbox": true
-```
-
-If it's `false`, TCP networking will NOT work. Change it to `true`.
+Use macOS for managed bridge launches. Other targets can run with `enable_bridge=false`; an explicitly requested bridge fails before launch.
 
 ### Step 1: Install the bridge (one-time per project)
 
-- `gm_bridge_install(project_root=..., port=6502)`
+- `gm_bridge_install(project_root=...)`
 - `gm_bridge_status(project_root=...)` should report `installed: true`
 
 If you see `[ERROR] No .yyp file found ...`, your `project_root` is wrong.
@@ -318,17 +306,17 @@ Fix:
 
 Most common causes:
 
-1. **Another game is already running** on port 6502. Run `gm_run_stop()` first.
-2. **Sandbox not disabled** (Windows). Verify `option_windows_disable_sandbox: true` in `options_windows.yy`.
+1. **An older or custom endpoint lacks the required project/session identity handshake**. Update it to the protocol below; an unverified connection is rejected.
+2. **Unsupported launch target**. Verified managed bridge launches currently require macOS.
 3. **`__mcp_bridge` is not instantiated in the running game** (not placed in a room).
 4. **The `instanceCreationOrder` array is empty** in the room's `.yy` file (see CRITICAL section below).
 5. The game is running from a different build/project than the one you think.
-6. Windows Firewall is blocking the connection (unlikely for localhost).
+6. The endpoint is connecting to a fixed port instead of its session environment port.
 
 Fix:
 
-- Run `gm_run_stop()` to ensure no other games are using the port.
-- Verify sandbox is disabled by reading `options_windows.yy`.
+- Run `gm_run_stop(project_root=...)` before restarting this project.
+- Verify the endpoint sends the launch project/session identity in its first `HELLO` line.
 - Place an instance of `__mcp_bridge` in your startup room (see workflow Step 2), then restart via `gm_run`.
 - **CRITICAL**: Verify the room's `instanceCreationOrder` includes the bridge instance (see below).
 
@@ -411,12 +399,16 @@ Fix:
 
 `gm_game_start` builds a throwaway snapshot of the project, starts it and waits for a bridge endpoint in the game to connect. It then serves `gm_game_command`, `gm_game_screenshot`, `gm_game_log`, `gm_game_status` and `gm_game_stop`. Each session listens on its own free port and owns a separate macOS bundle/save root, so different projects can run concurrently. A project lease protects its saves; a label lease protects its artifacts. Closing a game archives its evidence and releases both leases. Manual games survive server exit and remain discoverable through persisted process identity; a new server can inspect or stop them, but bridge commands belong to the launching server.
 
-A game takes part by implementing this contract. The installed `__mcp_bridge` asset (protocol 1, fixed port) keeps working with `gm_run` / `gm_run_command`.
+A game takes part by implementing this contract. Newly installed `__mcp_bridge` assets use the same session-owned transport and identity handshake as custom live endpoints. Existing fixed-port assets are rejected safely. To replace an unmodified older installation, uninstall and install the bridge again, restore its startup-room instance, then rebuild. Custom endpoints must be updated explicitly.
 
-- **Transport**: TCP on `127.0.0.1`. The MCP server listens. The game connects out to the port in the `GMS_MCP_BRIDGE_PORT` environment variable. When the variable is not set the game must not open a socket.
+`enable_bridge=false` creates no listener and supplies no bridge environment variables. `bridge_enabled` reports whether this session owns a listener; `connected`/`game_connected` reports whether the endpoint passed identity verification. A listener bind failure aborts launch. After an MCP restart, commands fail safely because the in-memory listener no longer exists; persisted process identity still supports status and stop.
+
+- **Transport**: TCP on `127.0.0.1`. The MCP server listens on a free port owned by this session. The game connects to `GMS_MCP_BRIDGE_PORT` and reads `GMS_MCP_BRIDGE_PROJECT_ID` and `GMS_MCP_BRIDGE_SESSION_ID`. If any variable is absent, it must not open a socket. Never fall back to a fixed port.
 - **Framing**: UTF-8 lines ending in `\n`. NUL bytes are ignored.
-- **Game to server**: `HELLO:<json>` once after connecting (suggested fields: `protocol`, `game`, `version`, `commands`); `RSP:<id>|<answer>`; optionally `LOG:<ms>|<text>`.
+- **Game to server**: The first line must be `HELLO:<json>` containing `project_id` and `session_id` equal to the launch environment values (plus optional `protocol`, `game`, `version`, `commands`). Missing or mismatched identity is rejected before logs or commands are exposed. Then send `RSP:<id>|<answer>` and optionally `LOG:<ms>|<text>`.
 - **Server to game**: `CMD:<id>|<name> <arguments>`.
 - **Answers**: one line. Plain text, JSON when it starts with `{` or `[` (returned parsed in `data`), or `ERR:<code> <message>` (returned as `ok: false` with `error_code`).
-- **Standard commands**: `ping` (answers `pong`), `help`, `state`, `screenshot [name]` (answers `{"file": "<absolute path>"}` after `screen_save`), `log_tail [count]` (answers `{"lines": [...]}`), `console <command line>` (answers `{"ok": true, "output": [...]}`). `input ...` is reserved for input injection.
+- **Custom live endpoint commands**: `ping` (answers `pong`), `help`, `state`, `screenshot [name]` (answers `{"file": "<absolute path>"}` after `screen_save`), `log_tail [count]` (answers `{"lines": [...]}`), `console <command line>` (answers `{"ok": true, "output": [...]}`). `input ...` is reserved for input injection.
 - Enable the endpoint only in development builds.
+
+The installed `__mcp_bridge` implements `ping`, `goto_room`, `get_var`, `set_var`, `spawn`, `room_info` and `instance_count`. It does not implement the custom live endpoint screenshot/state/help commands; tools return the endpoint's unsupported-command response for those requests.

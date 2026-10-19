@@ -8,7 +8,7 @@ a project file that is the committed version plus only the registrations those p
 from __future__ import annotations
 
 import subprocess
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any, Iterable
 
 from . import yyp_registry
@@ -69,16 +69,26 @@ def stage_paths(
         if ".." in text.split("/"):
             raise VcsError(f"'{raw}' leaves the repository; paths may not contain '..'.")
         if text.startswith("/"):
-            repo_paths.append(text.lstrip("/"))
+            repo_paths.append(str(PurePosixPath(text.lstrip("/"))))
         else:
-            relative = text.strip("/")
+            relative = str(PurePosixPath(text.strip("/")))
             if prefix and (relative == prefix or relative.startswith(prefix + "/")):
                 relative = relative[len(prefix) :].strip("/")
             project_paths.append(relative)
-            repo_paths.append(f"{prefix}/{relative}" if prefix else relative)
+            repo_paths.append(str(PurePosixPath(prefix, relative)))
     if not repo_paths:
         raise VcsError("No paths were given. Pass the files or folders that make up your change.")
     whole_yyp = yyp_repo_path in repo_paths
+
+    # Stage each path once. A containing directory already stages every descendant,
+    # including deletions; repeating a now-deleted descendant makes git add fail
+    # before the project's registrations can be composed.
+    unique_paths = list(dict.fromkeys(repo_paths))
+    repo_paths = [
+        path
+        for path in unique_paths
+        if not any(parent != path and (parent == "." or path.startswith(parent + "/")) for parent in unique_paths)
+    ]
 
     # A directory path that contains the project file ("." or the project folder) stages the working
     # .yyp wholesale through `git add`; it must still be recomposed to this call's registrations.

@@ -629,6 +629,31 @@ class TestWorkflowWrappers(MCPToolTestCase):
 class TestRunnerWrappers(MCPToolTestCase):
     module = runner
 
+    def test_macos_launch_keeps_runtime_owner_in_parent_for_both_modes(self):
+        for background in (True, False):
+            with (
+                self.subTest(background=background),
+                patch("gms_mcp.server.tools.runner._resolve_project_directory", return_value=Path("/tmp/project")),
+                patch("gms_mcp.server.tools.runner._run_direct") as isolated,
+                patch("gms_mcp.server.tools.runner._run_with_fallback", new=AsyncMock()) as fallback,
+                patch("gms_helpers.runner.GameMakerRunner") as runner_type,
+            ):
+                runner_type.return_value.run_project_direct.return_value = {"ok": True, "bridge_enabled": False}
+                result = self.call_tool(
+                    "gm_run",
+                    platform="macOS",
+                    background=background,
+                    enable_bridge=False,
+                    project_root="/tmp/project",
+                    prefer_cli=True,
+                )
+                self.assertTrue(result["ok"])
+                runner_type.return_value.run_project_direct.assert_called_once_with(
+                    "macOS", "VM", background, "temp", enable_bridge=False
+                )
+                isolated.assert_not_called()
+                fallback.assert_not_called()
+
     def test_compile_and_foreground_run_use_fallback(self):
         with patch(
             "gms_mcp.server.tools.runner._run_with_fallback",
@@ -636,7 +661,7 @@ class TestRunnerWrappers(MCPToolTestCase):
         ) as mock_fallback:
             compile_result = self.call_tool(
                 "gm_compile",
-                platform="macOS",
+                platform="Windows",
                 runtime="YYC",
                 runtime_version="2024.11",
                 project_root="/tmp/project",
@@ -644,12 +669,12 @@ class TestRunnerWrappers(MCPToolTestCase):
             self.assertTrue(compile_result["ok"])
             self.assertEqual(
                 mock_fallback.await_args_list[0].kwargs["cli_args"],
-                ["run", "compile", "--platform", "macOS", "--runtime", "YYC", "--runtime-version", "2024.11"],
+                ["run", "compile", "--platform", "Windows", "--runtime", "YYC", "--runtime-version", "2024.11"],
             )
 
             run_result = self.call_tool(
                 "gm_run",
-                platform="macOS",
+                platform="Windows",
                 runtime="VM",
                 background=False,
                 output_location="project",
@@ -658,7 +683,7 @@ class TestRunnerWrappers(MCPToolTestCase):
             self.assertTrue(run_result["ok"])
             self.assertEqual(
                 mock_fallback.await_args_list[1].kwargs["cli_args"],
-                ["run", "start", "--platform", "macOS", "--runtime", "VM", "--output-location", "project"],
+                ["run", "start", "--platform", "Windows", "--runtime", "VM", "--output-location", "project"],
             )
 
     def test_background_run_and_status_paths(self):
@@ -674,7 +699,7 @@ class TestRunnerWrappers(MCPToolTestCase):
                     stdout="",
                     stderr="",
                     direct_used=True,
-                    result={"ok": True, "message": "Game launched"},
+                    result={"ok": True, "message": "Game launched", "bridge_enabled": True, "bridge_port": 43127},
                 ),
             ) as background_direct,
             patch(
@@ -689,14 +714,15 @@ class TestRunnerWrappers(MCPToolTestCase):
         ):
             result = self.call_tool(
                 "gm_run",
-                platform="macOS",
+                platform="Windows",
                 runtime="VM",
                 background=True,
                 project_root="/tmp/project",
             )
         self.assertTrue(result["ok"])
         self.assertTrue(result["bridge_enabled"])
-        self.assertEqual(result["bridge_port"], 6502)
+        self.assertEqual(result["bridge_port"], 43127)
+        fake_bridge_server.start.assert_not_called()
         self.assertGreater(background_direct.call_args.kwargs["timeout_seconds"], 0)
 
         fake_bridge_server.reset_mock()
@@ -724,7 +750,7 @@ class TestRunnerWrappers(MCPToolTestCase):
         ):
             error_result = self.call_tool(
                 "gm_run",
-                platform="macOS",
+                platform="Windows",
                 runtime="VM",
                 background=True,
                 project_root="/tmp/project",
@@ -732,7 +758,7 @@ class TestRunnerWrappers(MCPToolTestCase):
         self.assertFalse(error_result["ok"])
         self.assertEqual(error_result["stdout"], "launch out")
         self.assertEqual(error_result["stderr"], "launch err")
-        fake_bridge_server.stop.assert_called_once()
+        fake_bridge_server.stop.assert_not_called()
 
         with (
             patch(
@@ -751,7 +777,7 @@ class TestRunnerWrappers(MCPToolTestCase):
         ):
             structured_error_result = self.call_tool(
                 "gm_run",
-                platform="macOS",
+                platform="Windows",
                 runtime="VM",
                 background=True,
                 project_root="/tmp/project",

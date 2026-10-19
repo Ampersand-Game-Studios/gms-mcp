@@ -1077,6 +1077,12 @@ def setup_runner_commands(subparsers):
     run_parser.add_argument("--runtime-version", help="Specific runtime version to use")
     run_parser.add_argument("--background", action="store_true", help="Run in background (don't capture output)")
     run_parser.add_argument(
+        "--enable-bridge",
+        action=argparse.BooleanOptionalAction,
+        default=None,
+        help="Enable the session-owned runtime bridge (use --no-enable-bridge to disable)",
+    )
+    run_parser.add_argument(
         "--output-location",
         default="temp",
         choices=["temp", "project"],

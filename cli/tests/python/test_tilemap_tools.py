@@ -9,6 +9,7 @@ import os
 import shutil
 import sys
 import tempfile
+import tracemalloc
 import unittest
 from copy import deepcopy
 from pathlib import Path
@@ -28,6 +29,7 @@ from gms_helpers.tilemap_codec import (
     layer_tile_stream,
     tile_flags,
     tile_index,
+    write_layer_tiles,
 )
 from gms_helpers.tilemap_ops import patch_tilemap, query_tilemap, validate_maps
 from gms_helpers.utils import load_json_loose, save_json_loose
@@ -60,6 +62,38 @@ def _room(width: int, height: int, stream: list[int], fmt: int = 1) -> dict:
 
 
 class TestTilemapCodec(unittest.TestCase):
+    def test_raw32_boundaries_round_trip_in_both_formats(self):
+        values = [TILE_EMPTY, -(2**31) + 1, -1, 0, 0x10000004, 0x70000004, 2**32 - 1]
+        for fmt in (0, 1):
+            with self.subTest(fmt=fmt):
+                obj = {"SerialiseWidth": len(values), "SerialiseHeight": 1, "TileDataFormat": fmt}
+                write_layer_tiles(obj, values)
+                self.assertEqual(layer_tile_stream(obj), (values, fmt))
+        self.assertEqual(tile_index(TILE_EMPTY), 0)
+        self.assertEqual(tile_flags(TILE_EMPTY), {"mirror": False, "flip": False, "rotate": False})
+        self.assertEqual(tile_flags(0x70000004), {"mirror": True, "flip": True, "rotate": True})
+
+    def test_raw32_invalid_values_are_rejected_by_every_codec_path(self):
+        for invalid in (-(2**31) - 1, 2**32, True, False, 1.0, "1"):
+            for values in ([invalid], [1, invalid]):
+                with self.subTest(values=values), self.assertRaises(ValidationError):
+                    compress_tile_data(values)
+                for fmt, stream in ((0, values), (1, [len(values), *values]), (1, [-1, invalid])):
+                    obj = {
+                        "SerialiseWidth": len(values) if fmt == 0 or stream[0] > 0 else 1,
+                        "SerialiseHeight": 1,
+                        "TileDataFormat": fmt,
+                        "TileSerialiseData" if fmt == 0 else "TileCompressedData": stream,
+                    }
+                    with self.subTest(invalid=invalid, fmt=fmt, stream=stream), self.assertRaises(ValidationError):
+                        layer_tile_stream(obj)
+                for fmt in (0, 1):
+                    obj = {"SerialiseWidth": len(values), "SerialiseHeight": 1, "TileDataFormat": fmt}
+                    before = deepcopy(obj)
+                    with self.subTest(invalid=invalid, write_fmt=fmt), self.assertRaises(ValidationError):
+                        write_layer_tiles(obj, values)
+                    self.assertEqual(obj, before)
+
     def test_zero_dimension_cannot_bypass_limits_but_empty_layers_remain_valid(self):
         for width, height in ((0, 10**12), (10**12, 0), (0, 1), (1, 0)):
             with self.subTest(width=width, height=height), self.assertRaises(ValidationError):
@@ -116,6 +150,129 @@ class TestTilemapCodec(unittest.TestCase):
 
 
 class TestTilemapOps(unittest.TestCase):
+    def test_patch_samples_are_bounded_for_every_operation_in_preview_and_write(self):
+        values = [1] * 64
+        operations = (
+            ("clear", {}, TILE_EMPTY),
+            ("fill", {"tile": 2}, 2),
+            ("replace", {"from_index": 1, "to_tile": 3}, 3),
+            ("stamp", {"stamp_json": json.dumps([[4] * 64])}, 4),
+            ("set", {"tile": 5}, 5),
+            ("set", {"cells_json": json.dumps([{"col": col, "row": 0, "tile": 6} for col in range(64)])}, 6),
+        )
+        for fmt in (0, 1):
+            for op, extra, expected in operations:
+                with self.subTest(fmt=fmt, op=op, extra=extra):
+                    save_json_loose(self.room_path(), _room(64, 1, compress_tile_data(values) if fmt else values, fmt))
+                    before = self.room_path().read_bytes()
+                    args = dict(width=64, height=1, project_root=self.temp, **extra)
+                    preview = patch_tilemap("r_map", "Tiles_Details", op, **args)
+                    self.assertEqual(self.room_path().read_bytes(), before)
+                    written = patch_tilemap("r_map", "Tiles_Details", op, dry_run=False, **args)
+                    self.assertEqual(preview["changes"], written["changes"])
+                    self.assertEqual(written["changes"]["count"], 64)
+                    samples = written["changes"]["samples"]
+                    self.assertEqual(len(samples), 50)
+                    self.assertEqual([cell["col"] for cell in samples], list(range(50)))
+                    self.assertTrue(all(cell["to"] == expected for cell in samples))
+                    obj = load_json_loose(self.room_path())["layers"][0]["tiles"]
+                    self.assertEqual(layer_tile_stream(obj), ([expected] * 64, fmt))
+                    unchanged = patch_tilemap("r_map", "Tiles_Details", op, **args)
+                    self.assertEqual(unchanged["changes"], {"count": 0, "samples": []})
+
+    def test_patch_checks_every_changed_cell_even_after_sample_limit(self):
+        cases = (
+            ("stamp", {"stamp_json": json.dumps([[2] * 63 + [900]])}),
+            (
+                "set",
+                {
+                    "cells_json": json.dumps(
+                        [{"col": col, "row": 0, "tile": 2 if col < 63 else 900} for col in range(64)]
+                    )
+                },
+            ),
+            # Invalid intermediate writes cannot be hidden by a later overwrite.
+            ("set", {"cells_json": json.dumps([{"col": 0, "row": 0, "tile": 900}, {"col": 0, "row": 0, "tile": 2}])}),
+        )
+        save_json_loose(self.room_path(), _room(64, 1, [-64, 1]))
+        before = self.room_path().read_bytes()
+        for dry_run in (True, False):
+            for op, extra in cases:
+                with self.subTest(dry_run=dry_run, op=op), self.assertRaisesRegex(ValidationError, "tile_count"):
+                    patch_tilemap("r_map", "Tiles_Details", op, dry_run=dry_run, project_root=self.temp, **extra)
+                self.assertEqual(self.room_path().read_bytes(), before)
+
+    def test_patch_preview_memory_uses_buffers_and_only_fifty_sample_objects(self):
+        count = 65536
+        save_json_loose(self.room_path(), _room(256, 256, [-count, 1]))
+        before = self.room_path().read_bytes()
+        tracemalloc.start()
+        try:
+            result = patch_tilemap("r_map", "Tiles_Details", "clear", width=256, height=256, project_root=self.temp)
+            _, peak = tracemalloc.get_traced_memory()
+        finally:
+            tracemalloc.stop()
+        self.assertEqual(result["changes"]["count"], count)
+        self.assertEqual(len(result["changes"]["samples"]), 50)
+        # Allows buffer copies and round-trip validation, excluding a dict per change (~20 MB).
+        self.assertLess(peak, 6_000_000)
+        self.assertEqual(self.room_path().read_bytes(), before)
+
+    def test_map_validation_accepts_only_well_formed_empty_dimensions_and_streams(self):
+        for fmt in (0, 1):
+            save_json_loose(self.room_path(), _room(0, 0, [], fmt))
+            self.assertTrue(validate_maps(room_name="r_map", project_root=self.temp)["ok"])
+            for width, height in (
+                ("bad", 1),
+                (True, 1),
+                (None, 1),
+                (1.0, 1),
+                (-1, 1),
+                (0, 1),
+                (1, 0),
+                (0, 10**12),
+                (MAX_TILE_CELLS, 2),
+            ):
+                save_json_loose(self.room_path(), _room(width, height, [], fmt))
+                with self.subTest(fmt=fmt, width=width, height=height):
+                    result = validate_maps(room_name="r_map", project_root=self.temp)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["issues"][0]["code"], "invalid_size")
+            for stream in ([1], None, False, "", {}):
+                save_json_loose(self.room_path(), _room(0, 0, stream, fmt))
+                with self.subTest(fmt=fmt, stream=stream):
+                    result = validate_maps(room_name="r_map", project_root=self.temp)
+                    self.assertFalse(result["ok"])
+                    self.assertEqual(result["issues"][0]["code"], "decode_failed")
+        for malformed in ([], "bad", False, None):
+            room = _room(0, 0, [])
+            room["layers"][0]["tiles"] = malformed
+            save_json_loose(self.room_path(), room)
+            with self.subTest(tiles=malformed):
+                self.assertFalse(validate_maps(room_name="r_map", project_root=self.temp)["ok"])
+                self.assertFalse(query_tilemap("r_map", project_root=self.temp)["ok"])
+
+    def test_raw32_read_failures_are_structured_and_writes_preserve_signed_flags(self):
+        for fmt in (0, 1):
+            for invalid in (-(2**31) - 1, 2**32, True):
+                save_json_loose(self.room_path(), _room(1, 1, [-1, invalid] if fmt else [invalid], fmt))
+                before = self.room_path().read_bytes()
+                with self.subTest(fmt=fmt, invalid=invalid):
+                    self.assertFalse(query_tilemap("r_map", project_root=self.temp)["ok"])
+                    result = validate_maps(room_name="r_map", project_root=self.temp)
+                    self.assertEqual(result["issues"][0]["code"], "decode_failed")
+                    with self.assertRaises(ValidationError):
+                        patch_tilemap("r_map", "Tiles_Details", "clear", dry_run=False, project_root=self.temp)
+                    self.assertEqual(self.room_path().read_bytes(), before)
+            for raw in (TILE_EMPTY, -(2**31) + 1, 0x70000004):
+                save_json_loose(self.room_path(), _room(1, 1, [-1, 0] if fmt else [0], fmt))
+                patch_tilemap(
+                    "r_map", "Tiles_Details", "set", tile=raw, use_raw=True, dry_run=False, project_root=self.temp
+                )
+                self.assertTrue(validate_maps(room_name="r_map", project_root=self.temp)["ok"])
+                query = query_tilemap("r_map", include_empty=True, project_root=self.temp)
+                self.assertEqual(query["data"][0]["cells"][0]["raw"], raw)
+
     def test_query_allocates_only_requested_cell_details(self):
         from gms_helpers import tilemap_ops as ops
 

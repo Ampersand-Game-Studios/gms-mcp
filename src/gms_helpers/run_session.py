@@ -13,6 +13,7 @@ the game process because the GameMakerRunner instance was recreated.
 """
 
 import json
+import logging
 import os
 import threading
 import time
@@ -25,6 +26,11 @@ from typing import Optional, Dict, Any, List
 
 from .utils import atomic_write_text
 from .mac_runtime import project_identity
+
+
+LOGGER = logging.getLogger(__name__)
+LOGGER.addHandler(logging.NullHandler())
+LOGGER.propagate = False
 
 
 @dataclass
@@ -168,7 +174,7 @@ class RunSessionManager:
         session_path = self._current_session_path()
         atomic_write_text(session_path, json.dumps(session.to_dict(), indent=2) + "\n")
 
-        print(f"[SESSION] Created session {session.run_id} (PID: {pid})")
+        LOGGER.info("[SESSION] Created session %s (PID: %s)", session.run_id, pid)
         return session
 
     def get_current_session(self) -> Optional[RunSession]:
@@ -191,7 +197,7 @@ class RunSessionManager:
                 raise ValueError("Session belongs to a different project")
             return session
         except (ValueError, KeyError, TypeError) as e:
-            print(f"[SESSION] Failed to read session file: {e}")
+            LOGGER.warning("[SESSION] Failed to read session file: %s", e)
             return None
 
     def clear_session(self) -> bool:
@@ -205,7 +211,7 @@ class RunSessionManager:
 
         if session_path.exists():
             session_path.unlink()
-            print("[SESSION] Cleared current session")
+            LOGGER.info("[SESSION] Cleared current session")
             return True
         return False
 
@@ -285,7 +291,7 @@ class RunSessionManager:
                     os.kill(pid, sig)
                 return True
         except Exception as e:
-            print(f"[SESSION] Failed to kill process {pid}: {e}")
+            LOGGER.warning("[SESSION] Failed to kill process %s: %s", pid, e)
             return False
 
     def get_session_status(self) -> Dict[str, Any]:
@@ -353,7 +359,7 @@ class RunSessionManager:
             }
 
         # Try graceful termination first
-        print(f"[STOP] Stopping game (PID: {pid})...")
+        LOGGER.info("[STOP] Stopping game (PID: %s)", pid)
 
         if self.kill_process(pid, force=False):
             # Wait a moment for graceful shutdown
@@ -367,7 +373,7 @@ class RunSessionManager:
                 }
 
         # Force kill if still running
-        print(f"[STOP] Forcing kill of game (PID: {pid})...")
+        LOGGER.info("[STOP] Forcing kill of game (PID: %s)", pid)
         if self.kill_process(pid, force=True):
             time.sleep(0.3)
             self.clear_session()

@@ -35,7 +35,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         Once installed, the bridge is automatically used when running with gm_run.
 
         Args:
-            port: Port for bridge server (default: 6502)
+            port: Deprecated installation preference; managed runs use a session-owned free port.
             project_root: Path to project root
 
         Returns:
@@ -120,6 +120,9 @@ def register(mcp: Any, ContextType: Any) -> None:
                 "server_running": server_status.get("running", False),
                 "game_connected": server_status.get("connected", False),
                 "log_count": server_status.get("log_count", 0),
+                "bridge_port": server_status.get("port"),
+                "endpoint": server_status.get("hello"),
+                "bridge_error": server_status.get("connection_error"),
                 "install_details": install_status,
             }
         except Exception as e:

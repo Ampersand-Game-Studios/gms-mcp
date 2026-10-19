@@ -411,6 +411,11 @@ class TestBridgeInstallerGMLContent(unittest.TestCase):
         self.assertIn("network_create_socket", content)
         self.assertIn("network_connect_raw", content)
         self.assertIn("127.0.0.1", content)
+        self.assertIn('environment_get_variable("GMS_MCP_BRIDGE_PORT")', content)
+        self.assertIn('environment_get_variable("GMS_MCP_BRIDGE_PROJECT_ID")', content)
+        self.assertIn('environment_get_variable("GMS_MCP_BRIDGE_SESSION_ID")', content)
+        self.assertIn('"HELLO:"', content)
+        self.assertNotIn("global.__mcp_port = 6502", content)
 
     def test_async_event_contains_command_handler(self):
         """Test Other_68.gml contains command handling."""

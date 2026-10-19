@@ -27,6 +27,7 @@ import io
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tarfile
@@ -457,20 +458,155 @@ def classify_build_log(text: str) -> tuple[list[str], list[str], list[str]]:
 
 
 @contextlib.contextmanager
+def artifact_parent(path: Path, *, create: bool = False):
+    """Anchor every ancestor to directory descriptors; never traverse a symlink."""
+    if os.name == "nt":
+        from .artifact_windows import pinned_parent
+
+        with contextlib.ExitStack() as stack:
+            try:
+                entry = stack.enter_context(pinned_parent(path, create=create))
+            except OSError as exc:
+                raise SnapshotError(
+                    "Artifact ancestors must be real directories without symlinks or reparse points."
+                ) from exc
+            yield entry
+        return
+    absolute = Path(os.path.abspath(path))
+    descriptor = os.open(absolute.anchor, os.O_RDONLY | os.O_DIRECTORY)
+    try:
+        for part in absolute.parts[1:-1]:
+            if create:
+                try:
+                    os.mkdir(part, mode=0o700, dir_fd=descriptor)
+                except FileExistsError:
+                    pass
+            try:
+                child = os.open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+            except OSError as exc:
+                raise SnapshotError("Artifact ancestors must be real directories without symlinks.") from exc
+            os.close(descriptor)
+            descriptor = child
+        yield descriptor, absolute.name
+    finally:
+        os.close(descriptor)
+
+
+def artifact_directory(path: Path) -> None:
+    with artifact_parent(path / ".directory", create=True):
+        pass
+
+
+def clear_artifact_directory(path: Path) -> None:
+    """Remove a literal artifact subtree without following renamed ancestors or links."""
+
+    if os.name == "nt":
+        from .artifact_windows import clear_directory
+
+        try:
+            clear_directory(path)
+        except OSError as exc:
+            raise SnapshotError("Artifact directories must not be symlinks or reparse points.") from exc
+        return
+
+    def clear(descriptor: int) -> None:
+        for name in os.listdir(descriptor):
+            info = os.stat(name, dir_fd=descriptor, follow_symlinks=False)
+            if stat.S_ISDIR(info.st_mode):
+                child = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=descriptor)
+                try:
+                    clear(child)
+                finally:
+                    os.close(child)
+                os.rmdir(name, dir_fd=descriptor)
+            else:
+                os.unlink(name, dir_fd=descriptor)
+
+    with artifact_parent(path, create=True) as (parent, name):
+        try:
+            descriptor = os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent)
+        except FileNotFoundError:
+            return
+        except OSError as exc:
+            raise SnapshotError("Artifact directories must not be symlinks.") from exc
+        try:
+            clear(descriptor)
+        finally:
+            os.close(descriptor)
+        os.rmdir(name, dir_fd=parent)
+
+
+@contextlib.contextmanager
 def artifact_writer(path: Path):
-    """Open an output file without following a checkout-supplied symlink."""
-    if path.is_symlink():
-        raise SnapshotError(f"Refusing to write a symlink artifact: {path.name}")
-    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
-    with os.fdopen(descriptor, "wb") as stream:
-        yield stream
+    """Publish a new inode atomically, so existing hardlinks can never be truncated."""
+    with artifact_parent(path, create=True) as (parent, name):
+        try:
+            if stat.S_ISLNK(os.stat(name, dir_fd=parent, follow_symlinks=False).st_mode):
+                raise SnapshotError(f"Refusing to write a symlink artifact: {path.name}")
+        except FileNotFoundError:
+            pass
+        temporary = f".artifact-{uuid.uuid4().hex}"
+        if parent is None:
+            temporary = str(Path(name).with_name(temporary))
+        descriptor = os.open(
+            temporary,
+            os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0),
+            0o600,
+            dir_fd=parent,
+        )
+        try:
+            with os.fdopen(descriptor, "wb") as stream:
+                yield stream
+            os.replace(temporary, name, src_dir_fd=parent, dst_dir_fd=parent)
+        finally:
+            try:
+                os.unlink(temporary, dir_fd=parent)
+            except FileNotFoundError:
+                pass
 
 
 def copy_artifact(source: Path, destination: Path) -> None:
-    if source.is_symlink():
-        raise SnapshotError("Refusing to archive a symlink source.")
-    with source.open("rb") as incoming, artifact_writer(destination) as outgoing:
-        shutil.copyfileobj(incoming, outgoing)
+    if os.name == "nt":
+        from .artifact_windows import read_source
+
+        with read_source(source) as incoming, artifact_writer(destination) as outgoing:
+            shutil.copyfileobj(incoming, outgoing)
+        return
+    with artifact_parent(source) as (parent, name):
+        try:
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+        except OSError as exc:
+            raise SnapshotError("Refusing to archive an unsafe source or symlink.") from exc
+        with os.fdopen(descriptor, "rb") as incoming, artifact_writer(destination) as outgoing:
+            if not stat.S_ISREG(os.fstat(incoming.fileno()).st_mode):
+                raise SnapshotError("Artifact sources must be regular files.")
+            shutil.copyfileobj(incoming, outgoing)
+
+
+def move_artifact(source: Path, destination: Path) -> None:
+    # Keep the source parent and the exact source inode open for the entire copy.
+    # Reopening the absolute path here could archive a substituted parent and
+    # then unlink the original unique evidence through the first descriptor.
+    with artifact_parent(source) as (parent, name):
+        if os.name == "nt":
+            from .artifact_windows import read_source
+
+            reader = read_source(source, delete_on_success=True)
+        else:
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW, dir_fd=parent)
+            reader = contextlib.closing(os.fdopen(descriptor, "rb"))
+        with reader as incoming:
+            original = os.fstat(incoming.fileno())
+            if not stat.S_ISREG(original.st_mode):
+                raise SnapshotError("Artifact sources must be regular files.")
+            with artifact_writer(destination) as outgoing:
+                shutil.copyfileobj(incoming, outgoing)
+        if os.name == "nt":
+            return
+        current = os.stat(name, dir_fd=parent, follow_symlinks=False)
+        if (original.st_dev, original.st_ino) != (current.st_dev, current.st_ino):
+            raise SnapshotError("Artifact source changed while it was archived; preserving it.")
+        os.unlink(name, dir_fd=parent)
 
 
 def _default_run_igor(command: list[str], log_path: Path, timeout_seconds: float) -> int:
@@ -558,7 +694,7 @@ def compile_snapshot(
             break
         result.access_violation_retries += 1
     if build_log is not None and log_path.is_file() and Path(build_log) != log_path:
-        Path(build_log).parent.mkdir(parents=True, exist_ok=True)
+        artifact_directory(Path(build_log).parent)
         copy_artifact(log_path, Path(build_log))
     result.elapsed_seconds = round(time.monotonic() - started, 1)
     # Igor's final packaging step can fail on a shared staging folder after the game data
@@ -587,9 +723,15 @@ def compile_snapshot(
     if platform == "HTML5":
         # HTML5 emits Stats/Igor complete, not the desktop compile marker.
         # Verify fresh web artifacts instead of trusting Igor's zero exit code.
-        completed = RunnerIgorMixin._verified_html5_package_exists(html5_output, html5_baseline)
+        completed = (
+            return_code == 0
+            and "Igor complete." in text
+            and RunnerIgorMixin._verified_html5_package_exists(html5_output, html5_baseline)
+        )
         if not completed:
-            result.errors.append("HTML5 export did not produce a new verified index.html and JavaScript artifact.")
+            result.errors.append(
+                "HTML5 export did not finish successfully with a new verified index.html and JavaScript artifact."
+            )
     compiled = (
         completed
         and not result.errors
@@ -785,14 +927,17 @@ def launch_mac_runner(
 ) -> tuple[subprocess.Popen, Path]:
     """Start the game. Returns (process, the game's log file)."""
     debug_log = staging / "debug.txt"
-    run_dir.mkdir(parents=True, exist_ok=True)
+    artifact_directory(run_dir)
     with artifact_writer(run_dir / "runner_stderr.log") as stderr_log:
         process = subprocess.Popen(
             [str(runner), "-game", str(game_file), "-debugoutput", str(debug_log), "-output", str(debug_log)],
             cwd=str(staging),
             stdout=stderr_log,
             stderr=subprocess.STDOUT,
-            env={**os.environ, **(environment or {})},
+            env={
+                **{key: value for key, value in os.environ.items() if not key.startswith("GMS_MCP_BRIDGE_")},
+                **(environment or {}),
+            },
         )
     return process, debug_log
 
@@ -816,21 +961,25 @@ def screenshot_files(screenshot_prefix: str, save_dir: Path) -> list[Path]:
 
 def clear_stale_screenshots(screenshot_prefix: str, save_dir: Path) -> None:
     for stale in screenshot_files(screenshot_prefix, save_dir):
-        stale.unlink(missing_ok=True)
+        with artifact_parent(stale) as (parent, name):
+            try:
+                os.unlink(name, dir_fd=parent)
+            except FileNotFoundError:
+                pass
 
 
 def collect_screenshots(shots_dir: Path, screenshot_prefix: str, started_wall: float, save_dir: Path) -> list[Path]:
     """Move screenshots the game saved (screen_save writes to its save directory) next to the run log."""
     if shots_dir.is_symlink():
         raise SnapshotError("The screenshot destination must not be a symlink.")
-    shots_dir.mkdir(parents=True, exist_ok=True)
+    artifact_directory(shots_dir)
     collected: list[Path] = []
     for shot in screenshot_files(screenshot_prefix, save_dir):
         if shot.stat().st_mtime >= started_wall - 1.0:
             target = shots_dir / shot.name
             if target.is_symlink():
                 raise SnapshotError("Refusing to overwrite a screenshot symlink.")
-            shutil.move(str(shot), str(target))
+            move_artifact(shot, target)
             collected.append(target)
     return collected
 
@@ -865,10 +1014,9 @@ def run_game_archive(
     A project lease protects saves; waiting does not count towards ``timeout_seconds``.
     """
     runner = require_mac_runner(toolchain)
-    run_dir.mkdir(parents=True, exist_ok=True)
+    artifact_directory(run_dir)
     shots_dir = run_dir / "shots"
-    if shots_dir.exists():
-        shutil.rmtree(shots_dir)
+    clear_artifact_directory(shots_dir)
     run_log = run_dir / "run.log"
 
     lock = run_lock or project_run_lock(project_root)
@@ -978,7 +1126,7 @@ def snapshot_compile(
     root = Path(project_root).resolve()
     label = safe_label(label)
     run_dir = runs_directory(root, label)
-    run_dir.mkdir(parents=True, exist_ok=True)
+    artifact_directory(run_dir)
     # Unique per invocation: tools run on threads, so two calls in one process can share a label,
     # and two projects can share a folder name.
     work = _work_root() / f"{safe_label(root.name)}_{label}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
@@ -1021,8 +1169,9 @@ def snapshot_compile(
             run_igor=run_igor,
         )
     except BaseException:
-        if not keep_work_dir:
-            shutil.rmtree(work, ignore_errors=True)
+        # Ownership transfers only when this function returns, even when the caller
+        # requested the successful work directory for a later launch.
+        shutil.rmtree(work, ignore_errors=True)
         raise
     public = {
         "ok": build.ok,

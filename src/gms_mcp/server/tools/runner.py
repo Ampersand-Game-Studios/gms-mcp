@@ -107,18 +107,46 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
             output_mode: Output format (full, tail, none)
             tail_lines: Number of lines to show in tail mode
             quiet: Suppress verbose output
-            enable_bridge: If True, start bridge server for log capture and commands.
-                          If None (default), auto-detect based on whether bridge is installed.
+            enable_bridge: If True, start a verified session-owned bridge (macOS).
+                          If None (default), use the project's bridge.enabled setting (default True).
                           If False, explicitly disable bridge even if installed.
 
         Returns:
             If background=True: Dict with session info (ok, pid, run_id, message, bridge_enabled)
             If background=False: Dict with full execution result including stdout
+
+        macOS launches retain their session and bridge in this MCP server;
+        prefer_cli applies only to other targets.
         """
         selected_platform = platform or _default_target_platform()
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.runner_commands import handle_runner_run
+
+        if selected_platform == "macOS":
+            # A disposable CLI worker cannot own a persistent bridge: its
+            # listener and session registry vanish as soon as it returns.
+            # This path uses explicit roots throughout and emits no CLI output.
+            from gms_helpers.runner import GameMakerRunner
+
+            root = _resolve_project_directory(project_root)
+            managed_runner = GameMakerRunner(root, runtime_version=runtime_version)
+            managed_result = await _run_direct_thread_shielded(
+                managed_runner.run_project_direct,
+                selected_platform,
+                runtime,
+                background,
+                output_location,
+                enable_bridge=enable_bridge,
+            )
+            if isinstance(managed_result, dict):
+                return managed_result
+            return {
+                "ok": bool(managed_result),
+                "background": background,
+                "bridge_enabled": False,
+                "message": managed_runner.last_failure_message or "Game launch completed",
+            }
 
         args = argparse.Namespace(
             platform=selected_platform,
@@ -127,26 +155,8 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
             background=background,
             output_location=output_location,
             project_root=project_root,
+            enable_bridge=enable_bridge,
         )
-
-        # Auto-detect bridge if not explicitly set
-        bridge_enabled = False
-        bridge_server = None
-        bridge_start_error: str | None = None
-
-        if enable_bridge is None or enable_bridge is True:
-            try:
-                from gms_helpers.bridge_installer import is_bridge_installed
-                from gms_helpers.bridge_server import get_bridge_server
-
-                if is_bridge_installed(str(repo_root)):
-                    if enable_bridge is not False:
-                        # Start bridge server
-                        bridge_server = get_bridge_server(str(repo_root), create=True)
-                        if bridge_server and bridge_server.start():
-                            bridge_enabled = True
-            except Exception as e:
-                bridge_start_error = str(e)
 
         # For background mode, we want to run directly and return quickly
         # The game will be launched and we'll return session info immediately
@@ -167,13 +177,9 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
                     _default_timeout_seconds_for_cli_args(["run", "background-start"]),
                 )
             except Exception as e:
-                if bridge_server:
-                    bridge_server.stop()
                 return {"ok": False, "background": True, "error": str(e), "message": f"Failed to launch game: {e}"}
 
             if error_text:
-                if bridge_server:
-                    bridge_server.stop()
                 return {
                     "ok": False,
                     "background": True,
@@ -185,15 +191,7 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
 
             if isinstance(result_value, dict):
                 result: Dict[str, Any] = dict(result_value)
-                result["bridge_enabled"] = bridge_enabled
-                if bridge_enabled and bridge_server:
-                    result.setdefault("bridge_port", bridge_server.port)
-                if bridge_start_error:
-                    result.setdefault("bridge_error", bridge_start_error)
-
-                # If the handler reported failure, stop the bridge server to avoid leaving it running.
-                if result.get("ok") is False and bridge_server:
-                    bridge_server.stop()
+                result.setdefault("bridge_enabled", False)
                 if result.get("ok") is False:
                     result.setdefault("stdout", captured_stdout)
                     result.setdefault("stderr", captured_stderr)
@@ -201,13 +199,10 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
 
             # Fallback if somehow we got a bool or an unexpected return type
             ok_bool = bool(result_value) if isinstance(result_value, bool) else bool(ok)
-            if not ok_bool and bridge_server:
-                bridge_server.stop()
             return {
                 "ok": ok_bool,
                 "background": True,
-                "bridge_enabled": bridge_enabled,
-                "bridge_error": bridge_start_error,
+                "bridge_enabled": False,
                 "message": "Game launched" if ok_bool else "Failed to launch game",
             }
 
@@ -224,6 +219,8 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         ]
         if runtime_version:
             cli_args.extend(["--runtime-version", runtime_version])
+        if enable_bridge is not None:
+            cli_args.append("--enable-bridge" if enable_bridge else "--no-enable-bridge")
 
         return await _run_with_fallback(
             direct_handler=handle_runner_run,

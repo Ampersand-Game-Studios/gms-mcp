@@ -67,9 +67,11 @@ class BridgeServer:
     MAX_LOG_BUFFER = 10000
     SOCKET_TIMEOUT = 0.5  # seconds
 
-    def __init__(self, port: int = DEFAULT_PORT):
+    def __init__(self, port: int = DEFAULT_PORT, *, expected_identity: Optional[Dict[str, str]] = None):
         self.port = port
         self.host = "127.0.0.1"
+        self.expected_identity = dict(expected_identity) if expected_identity is not None else None
+        self.connection_error: Optional[str] = None
 
         # Server state
         self._server_socket: Optional[socket.socket] = None
@@ -185,8 +187,10 @@ class BridgeServer:
                 pass
             self._server_socket = None
 
-    def _disconnect_client(self) -> None:
-        """Disconnect the current client."""
+    def _disconnect_client(self, client_socket: Optional[socket.socket] = None) -> None:
+        """Disconnect only the client owned by the calling receive loop."""
+        if client_socket is not None and self._client_socket is not client_socket:
+            return
         if self._client_socket:
             try:
                 self._client_socket.close()
@@ -196,6 +200,7 @@ class BridgeServer:
 
         was_connected = self._connected
         self._connected = False
+        self.hello = None
 
         # Fail any pending commands immediately so callers don't sit on timeout
         # when the game connection drops mid-request.
@@ -224,11 +229,45 @@ class BridgeServer:
                     client_socket, addr = self._server_socket.accept()
                     client_socket.settimeout(self.SOCKET_TIMEOUT)
 
+                    # Authenticate before exposing the connection to any tool or
+                    # replacing a connected game. Older endpoints fail closed.
+                    hello = None
+                    if self.expected_identity is not None:
+                        try:
+                            handshake = bytearray()
+                            deadline = time.monotonic() + 2.0
+                            while b"\n" not in handshake and len(handshake) < 16384:
+                                if time.monotonic() >= deadline or not self._running:
+                                    raise ValueError("Bridge identity handshake timed out")
+                                try:
+                                    chunk = client_socket.recv(1)
+                                except socket.timeout:
+                                    continue
+                                if not chunk:
+                                    raise ValueError("Bridge closed before identity handshake")
+                                if chunk != b"\x00":
+                                    handshake.extend(chunk)
+                            line = handshake.decode("utf-8").strip()
+                            if not line.startswith("HELLO:"):
+                                raise ValueError("Missing bridge identity")
+                            hello = json.loads(line[6:])
+                            if not isinstance(hello, dict) or any(
+                                hello.get(key) != value for key, value in self.expected_identity.items()
+                            ):
+                                raise ValueError("Bridge project/session identity mismatch")
+                        except (ValueError, OSError) as exc:
+                            self.connection_error = str(exc)
+                            client_socket.close()
+                            continue
+
                     with self._lock:
-                        # Close any existing connection
-                        self._disconnect_client()
+                        if self._connected:
+                            client_socket.close()
+                            continue
 
                         self._client_socket = client_socket
+                        self.hello = hello
+                        self.connection_error = None
                         self._connected = True
 
                     self._log(logging.INFO, "[BRIDGE] Game connected from %s", addr)
@@ -241,12 +280,14 @@ class BridgeServer:
 
                     # Start receive thread for this connection
                     self._receive_thread = threading.Thread(
-                        target=self._receive_loop, name="BridgeReceiver", daemon=True
+                        target=self._receive_loop, args=(client_socket,), name="BridgeReceiver", daemon=True
                     )
                     self._receive_thread.start()
 
                     # Also start send thread
-                    send_thread = threading.Thread(target=self._send_loop, name="BridgeSender", daemon=True)
+                    send_thread = threading.Thread(
+                        target=self._send_loop, args=(client_socket,), name="BridgeSender", daemon=True
+                    )
                     send_thread.start()
 
                 except socket.timeout:
@@ -257,21 +298,21 @@ class BridgeServer:
                     self._log(logging.ERROR, "[BRIDGE] Server error: %s", e, exc_info=True)
                 break
 
-    def _receive_loop(self) -> None:
+    def _receive_loop(self, client_socket: socket.socket) -> None:
         """Receive loop - reads data from connected game."""
         buffer = ""
 
-        while self._running and self._connected:
+        while self._running and self._connected and self._client_socket is client_socket:
             try:
                 if not self._client_socket:
                     break
 
                 try:
-                    data = self._client_socket.recv(4096)
+                    data = client_socket.recv(4096)
                     if not data:
                         # Connection closed
                         self._log(logging.INFO, "[BRIDGE] Game disconnected")
-                        self._disconnect_client()
+                        self._disconnect_client(client_socket)
                         break
 
                     buffer += data.decode("utf-8", errors="replace")
@@ -293,12 +334,12 @@ class BridgeServer:
             except Exception as e:
                 if self._running and self._connected:
                     self._log(logging.ERROR, "[BRIDGE] Receive error: %s", e, exc_info=True)
-                self._disconnect_client()
+                self._disconnect_client(client_socket)
                 break
 
-    def _send_loop(self) -> None:
+    def _send_loop(self, client_socket: socket.socket) -> None:
         """Send loop - sends queued commands to game."""
-        while self._running and self._connected:
+        while self._running and self._connected and self._client_socket is client_socket:
             try:
                 # Get command from queue (with timeout)
                 try:
@@ -306,13 +347,13 @@ class BridgeServer:
                 except queue.Empty:
                     continue
 
-                if not self._client_socket or not self._connected:
+                if self._client_socket is not client_socket or not self._connected:
                     break
 
                 # Send command
                 message = f"CMD:{cmd_id}|{command}\n"
                 try:
-                    self._client_socket.sendall(message.encode("utf-8"))
+                    client_socket.sendall(message.encode("utf-8"))
                 except Exception as e:
                     self._log(logging.ERROR, "[BRIDGE] Send error: %s", e, exc_info=True)
                     # Put command back for retry? Or mark as failed?
@@ -356,6 +397,12 @@ class BridgeServer:
                 # Protocol 2 handshake: HELLO:<json describing the game endpoint>
                 try:
                     hello = json.loads(message[6:])
+                    if self.expected_identity is not None and (
+                        not isinstance(hello, dict)
+                        or any(hello.get(key) != value for key, value in self.expected_identity.items())
+                    ):
+                        self._disconnect_client()
+                        return
                     self.hello = hello if isinstance(hello, dict) else {"raw": message[6:]}
                 except ValueError:
                     self.hello = {"raw": message[6:]}
@@ -502,6 +549,7 @@ class BridgeServer:
             "log_count": self.get_log_count(),
             "pending_commands": len(self._pending_commands),
             "hello": self.hello,
+            "connection_error": self.connection_error,
         }
 
 
@@ -525,9 +573,24 @@ def get_bridge_server(project_root: str, create: bool = True, port: Optional[int
 
     key = str(Path(project_root).resolve())
 
+    # The managed launch owns its dynamic port and lifetime. Never create a
+    # second fixed-port listener for tools targeting this same project.
+    from .live_session import get_session
+
+    session = get_session(key)
+    if session is not None:
+        return session.bridge if session.alive and session.bridge and session.bridge.is_running else None
+
     with _servers_lock:
         if key not in _bridge_servers and create:
-            _bridge_servers[key] = BridgeServer() if port is None else BridgeServer(port=port)
+            import uuid
+
+            from .mac_runtime import project_identity
+
+            _bridge_servers[key] = BridgeServer(
+                port=0 if port is None else port,
+                expected_identity={"project_id": project_identity(Path(key)), "session_id": uuid.uuid4().hex},
+            )
         return _bridge_servers.get(key)
 
 

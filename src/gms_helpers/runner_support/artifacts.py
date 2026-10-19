@@ -49,7 +49,14 @@ class RunnerArtifactMixin:
                 return candidate
         return None
 
-    def _find_launch_target(self, build_dir: Path, project_name: str, platform_target: str) -> Optional[Path]:
+    def _find_launch_target(
+        self,
+        build_dir: Path,
+        project_name: str,
+        platform_target: str,
+        *,
+        previous_executables: Mapping[Path, tuple[int, int]] | None = None,
+    ) -> Optional[Path]:
         """Locate a runnable output artifact for the selected platform."""
         target = normalize_platform_target(platform_target)
 
@@ -61,6 +68,10 @@ class RunnerArtifactMixin:
             ]
             for candidate in candidates:
                 if candidate.exists() and candidate.is_file():
+                    if previous_executables is not None:
+                        stat = candidate.stat()
+                        if previous_executables.get(candidate) == (stat.st_mtime_ns, stat.st_size):
+                            continue
                     return candidate
             return None
 

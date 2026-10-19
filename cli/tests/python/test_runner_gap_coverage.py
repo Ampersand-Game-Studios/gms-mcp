@@ -577,6 +577,42 @@ class TestRunnerGapCoverage(unittest.TestCase):
         genuine_failure.assert_called_once()
         no_reset.assert_not_called()
 
+    def test_windows_package_move_recovery_uses_only_fresh_candidates(self):
+        for scenario in ("fresh-template", "fresh-runner", "all-stale", "success", "compile-failed"):
+            with self.subTest(scenario=scenario):
+                runner = self._make_runner()
+                temp_root = self.project_root / scenario
+                build = temp_root / "GameMakerStudio2" / "TestGame"
+                build.mkdir(parents=True)
+                for name in ("TestGame.exe", "template.exe", "runner.exe"):
+                    (build / name).write_text("old")
+                package = MagicMock(returncode=0 if scenario == "success" else 1)
+                lines = ["WindowsBuilder.PackageZip", "System.IO.File.Move"]
+
+                def compile_output(*_args):
+                    if scenario.startswith("fresh-"):
+                        (build / (scenario.removeprefix("fresh-") + ".exe")).write_text("fresh-build")
+                    return lines
+
+                game = MagicMock(pid=777)
+                with (
+                    patch.object(runner, "_system_temp_root", return_value=temp_root),
+                    patch.object(runner, "_build_platform_action_command", return_value=["fake-igor"]),
+                    patch.object(runner, "_run_igor_command", return_value=package),
+                    patch.object(runner, "_stream_igor_output", side_effect=compile_output),
+                    patch.object(runner, "_compile_stage_succeeded", return_value=scenario != "compile-failed"),
+                    patch.object(runner, "_start_game_process", return_value=game) as launch,
+                    patch.object(runner._session_manager, "create_session", return_value=SimpleNamespace(run_id="run")),
+                ):
+                    result = runner._run_project_ide_temp_approach("Windows", background=True)
+                if scenario in {"all-stale", "compile-failed"}:
+                    self.assertFalse(result)
+                    launch.assert_not_called()
+                else:
+                    self.assertTrue(result["ok"])
+                    expected = scenario.removeprefix("fresh-") if scenario.startswith("fresh-") else "TestGame"
+                    launch.assert_called_once_with(build / (expected + ".exe"))
+
     def test_compile_and_run_paths(self):
         runner = self._make_runner()
         from gms_helpers.snapshot_build import BuildResult
