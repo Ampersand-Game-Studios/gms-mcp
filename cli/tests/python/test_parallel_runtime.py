@@ -95,6 +95,8 @@ def test_screenshot_cleanup_never_reads_another_save_directory(tmp_path):
 
 
 def test_two_games_same_label_run_independently_and_natural_exit_releases(tmp_path, monkeypatch):
+    from gms_helpers.runner import GameMakerRunner
+
     monkeypatch.setenv("GMS_MCP_LOCK_DIR", str(tmp_path / "locks"))
     children = []
 
@@ -128,6 +130,13 @@ def test_two_games_same_label_run_independently_and_natural_exit_releases(tmp_pa
     monkeypatch.setattr(snapshot_build, "require_mac_runner", lambda tools: Path("runner"))
     monkeypatch.setattr(live_session, "prepare_mac_runtime", prepare)
     monkeypatch.setattr(snapshot_build, "launch_mac_runner", launch)
+    monkeypatch.setattr(
+        GameMakerRunner,
+        "_snapshot_macos_processes",
+        lambda self: {
+            child.pid: SimpleNamespace(command="fixture runner", started="fixture start") for child in children
+        },
+    )
     roots = [tmp_path / "one", tmp_path / "two"]
     try:
         for root in roots:
@@ -280,6 +289,11 @@ def test_registration_failure_stops_owned_game_before_releasing_leases(tmp_path,
             GameMakerRunner, "_snapshot_macos_processes", lambda self: (_ for _ in ()).throw(OSError("identity failed"))
         )
     else:
+        monkeypatch.setattr(
+            GameMakerRunner,
+            "_snapshot_macos_processes",
+            lambda self: {process.pid: SimpleNamespace(command="fixture runner", started="fixture start")},
+        )
         monkeypatch.setattr(
             RunSessionManager,
             "create_session",
