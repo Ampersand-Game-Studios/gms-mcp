@@ -700,6 +700,7 @@ def test_safe_profile_exercises_every_reader_without_any_filesystem_write(
                     "gm_event_validate": {"object": "o_keep"},
                     "gm_room_layer_list": {"room_name": "r_keep"},
                     "gm_room_instance_list": {"room_name": "r_keep"},
+                    "gm_room_tilemap_query": {"room_name": "r_keep"},
                     "gm_sprite_frame_count": {"sprite_path": "sprites/spr_keep/spr_keep.yy"},
                     "gm_texture_group_read": {"name": "Default"},
                     "gm_texture_group_members": {"group_name": "Default"},
@@ -712,7 +713,7 @@ def test_safe_profile_exercises_every_reader_without_any_filesystem_write(
             if toolsets == "core":
                 assert len(specs) == 17
             else:
-                assert len(specs) == 43
+                assert len(specs) == 45
                 await client.read_resource("ui://gms-mcp/project-dashboard.html")
             assert "gm_resourcetool_validate" not in {spec.name for spec in specs}
 
