@@ -100,29 +100,23 @@ class TestRunnerCommandSelection(unittest.TestCase):
             if marker:
                 archive.writestr("assets/marker", marker)
 
-    @patch.object(GameMakerRunner, "_wait_for_macos_main_loop", return_value=True)
-    @patch.object(GameMakerRunner, "_wait_for_macos_runner_start", return_value=(20, {20}, set()))
-    @patch.object(GameMakerRunner, "_stop_platform_process", return_value=True)
-    def test_compile_project_uses_local_run_validation_on_macos(self, _mock_stop, _mock_runner, _mock_wait):
+    def test_compile_project_uses_snapshot_packaging_without_launching_macos(self):
         runner = GameMakerRunner(self.project_root)
-        captured_cmd = []
-
-        def fake_run_igor(cmd, **_kwargs):
-            captured_cmd[:] = cmd
-            return self._fake_process()
-
-        with patch.object(runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)):
-            with patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")):
-                with patch.object(runner, "get_prefabs_path", return_value=None):
-                    with patch.object(runner, "_run_igor_command", side_effect=fake_run_igor):
-                        with patch.object(runner, "_reject_foreign_igor_after_launch"):
-                            ok = runner.compile_project(platform_target="macOS", runtime_type="VM")
-
-        self.assertTrue(ok)
-        self.assertIn("Run", captured_cmd)
-        self.assertNotIn("PackageZip", captured_cmd)
-        self.assertNotIn("Tests", captured_cmd)
-        self.assertFalse(any(str(arg).startswith("--tf=") for arg in captured_cmd))
+        work = self.project_root / "compile-work"
+        work.mkdir()
+        from gms_helpers.snapshot_build import BuildResult
+        with (
+            patch("gms_helpers.snapshot_build.snapshot_compile", return_value=(
+                {"ok": True}, BuildResult(True, "COMPILE_OK"), work, None,
+            )) as compile_snapshot,
+            patch.object(runner, "_run_igor_command") as launch,
+        ):
+            self.assertTrue(runner.compile_project(platform_target="macOS", runtime_type="VM"))
+        compile_snapshot.assert_called_once_with(
+            runner.project_root, label="compile", runtime="VM", runtime_version=None,
+        )
+        launch.assert_not_called()
+        self.assertFalse(work.exists())
 
     def test_compile_project_keeps_packagezip_on_windows(self):
         runner = GameMakerRunner(self.project_root)
@@ -271,41 +265,21 @@ class TestRunnerCommandSelection(unittest.TestCase):
                         with patch.object(runner, "_stream_igor_output", return_value=output):
                             self.assertFalse(runner.compile_project(platform_target="HTML5"))
 
-    def test_macos_temp_run_uses_local_run_without_tf(self):
+    def test_macos_temp_run_uses_owned_runtime_without_igor_run(self):
         runner = GameMakerRunner(self.project_root)
-        captured_cmd = []
-
-        def fake_run_igor(cmd, **_kwargs):
-            captured_cmd[:] = cmd
-            return self._fake_process()
-
-        with patch.object(runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)):
-            with patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")):
-                with patch.object(runner, "get_prefabs_path", return_value=None):
-                    with patch.object(runner, "_run_igor_command", side_effect=fake_run_igor):
-                        with patch.object(runner, "_reject_foreign_igor_after_launch"):
-                            with patch.object(runner, "_collect_igor_output_async", return_value=([], MagicMock())):
-                                with (
-                                    patch.object(
-                                        runner,
-                                        "_wait_for_macos_runner_start",
-                                        return_value=(222, {222}, {333}),
-                                    ),
-                                    patch.object(runner, "_snapshot_macos_processes", return_value={}),
-                                ):
-                                    result = runner.run_project_direct(
-                                        platform_target="macOS",
-                                        runtime_type="VM",
-                                        background=True,
-                                        output_location="temp",
-                                    )
-
-        self.assertTrue(result["ok"])
-        self.assertTrue(result["background"])
+        process = MagicMock(pid=222)
+        runner._session_manager.create_session(
+            pid=222, exe_path="/owned/game.ios", platform_target="macOS", isolated_runtime=True,
+        )
+        with (
+            patch("gms_helpers.live_session.start", return_value={"ok": True, "running": True, "pid": 222}),
+            patch("gms_helpers.live_session.get_session", return_value=MagicMock(process=process)),
+            patch.object(runner, "_run_igor_command") as generic_run,
+        ):
+            result = runner.run_project_direct(platform_target="macOS", runtime_type="VM", background=True)
+        self.assertTrue(result["ok"] and result["background"])
         self.assertEqual(result["pid"], 222)
-        self.assertIn("Run", captured_cmd)
-        self.assertNotIn("PackageZip", captured_cmd)
-        self.assertFalse(any(str(arg).startswith("--tf=") for arg in captured_cmd))
+        generic_run.assert_not_called()
 
     def test_package_export_failure_message_mentions_signing_stage(self):
         runner = GameMakerRunner(self.project_root)

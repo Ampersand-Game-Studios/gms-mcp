@@ -125,14 +125,14 @@ class TestMacOSRunnerOwnership(unittest.TestCase):
         self.assertEqual(inherited_token, "launchservices-owned-token")
         self.assertTrue(self.runner._macos_process_has_launch_token(int(pid_text), inherited_token))
 
-    def test_classic_run_does_not_start_igor_when_overlap_guard_fails(self) -> None:
+    def test_classic_macos_entry_uses_owned_runtime_engine(self) -> None:
         with (
-            patch.object(self.runner, "_wait_for_igor_idle", side_effect=RuntimeError("busy")),
-            patch.object(self.runner, "_run_igor_command") as launch,
+            patch.object(self.runner, "run_project_direct", return_value=False) as owned,
+            patch.object(self.runner, "_run_igor_command") as generic,
         ):
             self.assertFalse(self.runner._run_project_classic_approach("macOS", background=False))
-        launch.assert_not_called()
-        self.assertEqual(self.runner.last_failure_message, "busy")
+        owned.assert_called_once_with("macOS", "VM", False, "project")
+        generic.assert_not_called()
 
     def test_only_token_marked_bare_and_owned_temp_runners_are_owned(self) -> None:
         expected = f"/runtime/Mac_Runner -game {self.game_path}"
@@ -347,67 +347,19 @@ class TestMacOSRunnerOwnership(unittest.TestCase):
 
         self.assertEqual(pid, 20)
 
-    def test_classic_run_preserves_launchservices_failure_arriving_during_join(self) -> None:
-        process = MagicMock(pid=77, returncode=1)
-        process.poll.return_value = 1
-        output_lines = []
-        output_thread = MagicMock()
+    def test_classic_entry_preserves_owned_launch_failure(self) -> None:
+        expected = {"ok": False, "message": "owned runner launch failed"}
+        with patch.object(self.runner, "run_project_direct", return_value=expected):
+            self.assertEqual(self.runner._run_project_classic_approach("macOS", background=True), expected)
 
-        def publish_final_line(*_args, **_kwargs):
-            if not output_lines:
-                output_lines.append("LSOpenApplication() failed with error -600")
-
-        output_thread.join.side_effect = publish_final_line
-        with (
-            patch.object(self.runner, "_wait_for_igor_idle"),
-            patch.object(self.runner, "_build_platform_action_command", return_value=["igor", "Run"]),
-            patch.object(self.runner, "_snapshot_macos_processes", return_value={}),
-            patch.object(self.runner, "_run_igor_command", return_value=process),
-            patch.object(self.runner, "_reject_foreign_igor_after_launch"),
-            patch.object(self.runner, "_collect_igor_output_async", return_value=(output_lines, output_thread)),
-            patch.object(self.runner, "_wait_for_macos_runner_start", return_value=(None, set(), set())),
-            patch.object(self.runner, "_cleanup_macos_validation_helpers"),
-        ):
-            result = self.runner._run_project_classic_approach("macOS", background=True)
-
-        self.assertFalse(result["ok"])
-        self.assertEqual(
-            result["message"],
-            "macOS runner launch failed: LSOpenApplication() failed with error -600",
-        )
-
-    def test_compile_validation_preserves_launchservices_failure_arriving_during_join(self) -> None:
-        process = MagicMock(pid=77, returncode=1)
-        process.poll.return_value = 1
-        output_lines = []
-        output_thread = MagicMock()
-
-        def publish_final_line(*_args, **_kwargs):
-            if not output_lines:
-                output_lines.append("LSOpenApplication() failed with error -600")
-
-        output_thread.join.side_effect = publish_final_line
-        with (
-            patch.object(self.runner, "_wait_for_igor_idle"),
-            patch.object(self.runner, "_build_macos_compile_validation_command", return_value=["igor", "Run"]),
-            patch.object(self.runner, "find_project_file", return_value=self.project_root / "TestGame.yyp"),
-            patch.object(self.runner, "_macos_debug_log_path", return_value=self.debug_log),
-            patch.object(self.runner, "_snapshot_macos_processes", return_value={}),
-            patch.object(self.runner, "_write_macos_ownership_manifest"),
-            patch.object(self.runner, "_run_igor_command", return_value=process),
-            patch.object(self.runner, "_reject_foreign_igor_after_launch"),
-            patch.object(self.runner, "_collect_igor_output_async", return_value=(output_lines, output_thread)),
-            patch.object(self.runner, "_wait_for_macos_runner_start", return_value=(None, set(), set())),
-            patch.object(self.runner, "_wait_for_macos_main_loop", return_value=False),
-            patch.object(self.runner, "_cleanup_macos_validation_helpers"),
-        ):
-            result = self.runner._compile_project_once("macOS", "VM")
-
-        self.assertFalse(result)
-        self.assertEqual(
-            self.runner.last_failure_message,
-            "macOS runner launch failed: LSOpenApplication() failed with error -600",
-        )
+    def test_snapshot_compile_preserves_compiler_failure(self) -> None:
+        from gms_helpers.snapshot_build import BuildResult
+        work = self.project_root / "compile-work"; work.mkdir()
+        with patch("gms_helpers.snapshot_build.snapshot_compile", return_value=(
+            {"ok": False, "message": "compiler failure"}, BuildResult(False, "BUILD_FAILED"), work, None,
+        )):
+            self.assertFalse(self.runner._compile_project_once("macOS", "VM"))
+        self.assertEqual(self.runner.last_failure_message, "compiler failure")
 
     def test_session_token_finds_bare_runner_spawned_after_initial_tracking(self) -> None:
         bare = MacOSProcess(
@@ -500,48 +452,10 @@ class TestMacOSRunnerOwnership(unittest.TestCase):
         )
         self.assertEqual(self.runner._macos_timeout_temp_root_override, temp_root)
 
-    def test_successful_foreground_run_keeps_behavior_and_runs_owned_cleanup(self) -> None:
-        process = MagicMock(pid=77, returncode=0)
-        process.poll.return_value = None
-        process.wait.return_value = 0
-        owned_processes = {
-            20: MacOSProcess(
-                20,
-                77,
-                f"/runtime/Mac_Runner -game {self.game_path} -debugoutput {self.debug_log}",
-            ),
-            21: MacOSProcess(
-                21,
-                1,
-                f"{Path.home()}/GameMakerStudio2/GM_MAC/TestGame/YoYo Runner.app/Contents/MacOS/Mac_Runner",
-            ),
-        }
-        with (
-            patch.object(self.runner, "_wait_for_igor_idle") as wait_for_idle,
-            patch.object(self.runner, "_build_platform_action_command", return_value=["igor", "Run"]),
-            patch.object(self.runner, "_snapshot_macos_processes", side_effect=[{}, owned_processes, owned_processes]),
-            patch.object(self.runner, "_run_igor_command", return_value=process) as launch,
-            patch.object(self.runner, "_reject_foreign_igor_after_launch"),
-            patch.object(self.runner, "_collect_igor_output_async", return_value=([], MagicMock())),
-            patch.object(self.runner, "_wait_for_macos_runner_start", return_value=(20, {20, 21}, set())),
-            patch.object(self.runner, "_cleanup_macos_validation_helpers") as cleanup,
-        ):
+    def test_foreground_macos_entry_delegates_to_owned_cleanup(self) -> None:
+        with patch.object(self.runner, "run_project_direct", return_value=True) as owned:
             self.assertTrue(self.runner._run_project_classic_approach("macOS", background=False))
-        cleanup.assert_called_once_with(
-            self.game_path,
-            self.debug_log,
-            {},
-            {},
-            77,
-            None,
-            None,
-            ANY,
-            sweep_seconds=3.0,
-        )
-        launch_kwargs = launch.call_args.kwargs
-        self.assertIn("GMS_MCP_MACOS_LAUNCH_TOKEN", launch_kwargs["environment_overrides"])
-        self.assertEqual(wait_for_idle.call_count, 2)
-        self.assertIsNone(self.runner._session_manager.get_current_session())
+        owned.assert_called_once_with("macOS", "VM", False, "project")
 
     def test_signal_revalidation_allows_reparenting_but_rejects_pid_reuse(self) -> None:
         expected = MacOSProcess(20, 77, "/runtime/Mac_Runner -game /tmp/game.ios", "start-20")
@@ -604,34 +518,13 @@ class TestMacOSRunnerOwnership(unittest.TestCase):
         self.assertTrue(result["ok"])
         stop.assert_not_called()
 
-    def test_exception_after_launch_cleans_exact_owned_igor(self) -> None:
-        process = MagicMock(pid=77)
-        igor = MacOSProcess(77, 1, "/runtime/Igor -- Mac Run")
+    def test_macos_private_entry_cannot_launch_shared_igor(self) -> None:
         with (
-            patch.object(self.runner, "_wait_for_igor_idle"),
-            patch.object(self.runner, "_build_platform_action_command", return_value=["igor", "Run"]),
-            patch.object(
-                self.runner,
-                "_snapshot_macos_processes",
-                side_effect=[{}, {77: igor}],
-            ),
-            patch.object(self.runner, "_run_igor_command", return_value=process),
-            patch.object(self.runner, "_reject_foreign_igor_after_launch"),
-            patch.object(self.runner, "_collect_igor_output_async", side_effect=RuntimeError("reader failed")),
-            patch.object(self.runner, "_cleanup_macos_validation_helpers") as cleanup,
+            patch.object(self.runner, "run_project_direct", return_value=False),
+            patch.object(self.runner, "_run_igor_command") as generic,
         ):
             self.assertFalse(self.runner._run_project_classic_approach("macOS", background=False))
-        cleanup.assert_called_once_with(
-            self.game_path,
-            self.debug_log,
-            {},
-            {},
-            77,
-            igor.command,
-            "",
-            ANY,
-            sweep_seconds=3.0,
-        )
+        generic.assert_not_called()
 
     def test_stop_terminates_only_persisted_owned_runner_and_igor(self) -> None:
         runner_command = f"/runtime/Mac_Runner -game {self.game_path}"

@@ -201,7 +201,9 @@ The same `.gms-mcp.json` carries the project's own conventions for builds, tests
 
 ### Shared locks
 
-Builds, game runs and commits are serialized across every process on the machine with `mkdir` locks in `~/.gms-mcp/locks` (`repo.lock`, `gamerun.lock`, `ios_build.lock`, `build_slot_<n>`). Set `GMS_MCP_LOCK_DIR` to use another directory; shell scripts take part with `mkdir "$DIR/gamerun.lock"` / `rmdir`. A lock is reclaimed when its recorded owner process has died or it is older than its stale timeout. `gm_lock_status` shows who holds what.
+Build capacity, commits and mobile packaging cooperate through `mkdir` locks in `~/.gms-mcp/locks` (`build_slot_<n>`, `repo.lock`, `ios_build.lock`). macOS game sessions use `game_<project hash>.lock` plus `runlabel_<project-and-label hash>.lock`: different canonical project paths can run concurrently; one project's saves and one labelled artifact directory have one writer. Each macOS session copies the installed runner into an owned bundle, assigns `com.gmsmcp.game.p<project hash>`, and ad-hoc signs the copy. Its persistent saves and screenshots live under `~/Library/Application Support/<bundle ID>/`; unique staging children hold the runner, data and debug log. No installed runtime or other game's files are changed.
+
+Leases record the actual game PID and the supervisor PID. Natural game exit archives logs/screenshots and releases leases. If the server exits first, the running game keeps its lease and can be stopped from its persisted command/start identity; a later stop/start recovers artifacts and dead-owner leases. New manual sessions survive server exit. Legacy `gamerun.lock` is reported for existing older servers, but isolated sessions never acquire or remove it. `gm_lock_status` includes dynamic project/label leases. `GMS_MCP_LOCK_DIR` selects a shared coordination directory; do not change it to bypass an active project lease. Linux/Windows snapshot execution remains unsupported; native parallel runtime verification currently covers macOS only.
 
 ### Other environment variables
 
@@ -209,7 +211,6 @@ Builds, game runs and commits are serialized across every process on the machine
 |----------|---------|
 | `GMS_MCP_STRICT_PROJECT_VALIDATION=1` | Any validation error blocks a mutation, including errors that predate it. |
 | `GMS_MCP_SNAPSHOT_WORK_DIR` | Where snapshots, Igor cache and output are staged (default: system temp). |
-| `GMS_MCP_RUN_STAGING_DIR` | Where a game is unpacked to run. Its path must not contain `-game`, which the macOS runner misreads. |
 | `GMS_MCP_BRIDGE_PORT` | Set by the server in the game's environment for live sessions; a game endpoint connects to it. |
 
 ## Configuration Resolution Order

@@ -39,6 +39,10 @@ class RunSession:
     runtime_type: str = "VM"
     log_file: Optional[str] = None
     bridge_port: Optional[int] = None
+    isolated_runtime: bool = False
+    runtime_label: Optional[str] = None
+    runtime_work_dir: Optional[str] = None
+    runtime_save_dir: Optional[str] = None
     macos_igor_pid: Optional[int] = None
     macos_igor_command: Optional[str] = None
     macos_igor_started: Optional[str] = None
@@ -102,6 +106,10 @@ class RunSessionManager:
         runtime_type: str = "VM",
         log_file: Optional[str] = None,
         bridge_port: Optional[int] = None,
+        isolated_runtime: bool = False,
+        runtime_label: Optional[str] = None,
+        runtime_work_dir: Optional[str] = None,
+        runtime_save_dir: Optional[str] = None,
         macos_igor_pid: Optional[int] = None,
         macos_igor_command: Optional[str] = None,
         macos_igor_started: Optional[str] = None,
@@ -137,6 +145,10 @@ class RunSessionManager:
             runtime_type=runtime_type,
             log_file=log_file,
             bridge_port=bridge_port,
+            isolated_runtime=isolated_runtime,
+            runtime_label=runtime_label,
+            runtime_work_dir=runtime_work_dir,
+            runtime_save_dir=runtime_save_dir,
             macos_igor_pid=macos_igor_pid,
             macos_igor_command=macos_igor_command,
             macos_igor_started=macos_igor_started,

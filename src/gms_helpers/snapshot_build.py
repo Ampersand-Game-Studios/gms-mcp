@@ -31,7 +31,6 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import threading
 import time
 import uuid
 import zipfile
@@ -40,7 +39,8 @@ from pathlib import Path
 from typing import Any, Callable, Iterable
 
 from . import yyp_registry
-from .agent_locks import GAME_RUN_LOCK, MOBILE_BUILD_LOCK, BuildSlot, DirectoryLock
+from .agent_locks import MOBILE_BUILD_LOCK, BuildSlot, DirectoryLock
+from .mac_runtime import prepare_mac_runtime, project_run_lock
 from .exceptions import ValidationError
 from .project_config import project_setting
 from .utils import find_yyp
@@ -133,34 +133,22 @@ def safe_label(label: str) -> str:
     return cleaned[:60] or "default"
 
 
-_LABEL_THREAD_LOCKS: dict[str, threading.Lock] = {}
-_LABEL_THREAD_LOCKS_GUARD = threading.Lock()
+def pipeline_lock(project_root: str | Path, label: str) -> DirectoryLock:
+    root = Path(project_root).resolve()
+    key = f"{root}|{safe_label(label)}"
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+    return DirectoryLock(f"runlabel_{digest}.lock", purpose=f"pipeline {root.name}:{safe_label(label)}")
 
 
 @contextlib.contextmanager
 def label_pipeline(project_root: str | Path, label: str, timeout_seconds: float = 7200.0):
-    """Serialise whole build/run pipelines that publish to the same labelled run directory.
-
-    `.gms_mcp/runs/<label>` holds one invocation's build log, run log and screenshots; two
-    invocations with the same project and label must not interleave (threads in this process or
-    other processes), or one would read and return the other's results.
-    """
-    root = Path(project_root).resolve()
-    key = f"{root}|{safe_label(label)}"
-    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
-    with _LABEL_THREAD_LOCKS_GUARD:
-        thread_lock = _LABEL_THREAD_LOCKS.setdefault(key, threading.Lock())
-    with thread_lock:
-        lock = DirectoryLock(
-            f"runlabel_{digest}.lock",
-            stale_seconds=timeout_seconds,
-            purpose=f"pipeline {root.name}:{safe_label(label)}",
-        )
-        lock.acquire(timeout_seconds=timeout_seconds)
-        try:
-            yield
-        finally:
-            lock.release()
+    """Serialize writers to one project's labelled artifact directory."""
+    lock = pipeline_lock(project_root, label)
+    lock.acquire(timeout_seconds=timeout_seconds)
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def runs_directory(project_root: str | Path, label: str) -> Path:
@@ -171,28 +159,6 @@ def runs_directory(project_root: str | Path, label: str) -> Path:
 def _work_root() -> Path:
     configured = os.environ.get("GMS_MCP_SNAPSHOT_WORK_DIR", "").strip()
     return Path(configured).expanduser() if configured else Path(tempfile.gettempdir()) / "gms-mcp-snapshots"
-
-
-def _runner_staging_root() -> Path:
-    """A directory whose path the macOS runner can parse.
-
-    The runner treats ``-game`` anywhere in its command line as the start of the game
-    argument, so a project kept in a folder such as ``my-game`` makes it load the wrong file.
-    """
-    candidates = [
-        Path(os.environ["GMS_MCP_RUN_STAGING_DIR"]).expanduser() if os.environ.get("GMS_MCP_RUN_STAGING_DIR") else None,
-        Path(tempfile.gettempdir()) / "gmsmcp_runs",
-        Path("/Users/Shared/GameMakerStudio2/gmsmcp_runs"),
-        Path.home() / ".gmsmcp_runs",
-    ]
-    for candidate in candidates:
-        if candidate is not None and "-game" not in str(candidate.resolve()).lower():
-            return candidate
-    raise SnapshotError(
-        "No usable staging directory for the macOS runner: every candidate path contains '-game', which the "
-        "runner misreads as its -game argument. Set GMS_MCP_RUN_STAGING_DIR to a directory whose full path "
-        "has no '-game' in it."
-    )
 
 
 # ----------------------------------------------------------------------
@@ -703,10 +669,6 @@ def _mac_runner(toolchain: Toolchain) -> Path:
     return toolchain.runtime_path / "mac" / "YoYo Runner.app" / "Contents" / "MacOS" / "Mac_Runner"
 
 
-def _mac_save_directory() -> Path:
-    return Path.home() / "Library" / "Application Support" / "com.yoyogames.macyoyorunner"
-
-
 def require_mac_runner(toolchain: Toolchain) -> Path:
     if sys.platform != "darwin":
         raise SnapshotError(
@@ -722,12 +684,9 @@ def require_mac_runner(toolchain: Toolchain) -> Path:
     return runner
 
 
-def stage_game_archive(game_archive: Path, label: str) -> tuple[Path, Path]:
+def stage_game_archive(game_archive: Path, staging: Path) -> tuple[Path, Path]:
     """Unpack a compiled game where the runner can load it. Returns (staging dir, game file)."""
-    staging = _runner_staging_root() / safe_label(label)
-    if staging.exists():
-        shutil.rmtree(staging)
-    staging.mkdir(parents=True)
+    staging.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(game_archive) as archive:
         archive.extractall(staging)
     assets = staging / "assets"
@@ -763,18 +722,18 @@ def launch_mac_runner(
     return process, debug_log
 
 
-def clear_stale_screenshots(screenshot_prefix: str) -> None:
-    save_dir = _mac_save_directory()
+def clear_stale_screenshots(screenshot_prefix: str, save_dir: Path) -> None:
     if save_dir.is_dir():
         for stale in save_dir.glob(f"{screenshot_prefix}*.png"):
             stale.unlink(missing_ok=True)
 
 
-def collect_screenshots(shots_dir: Path, screenshot_prefix: str, started_wall: float) -> list[Path]:
+def collect_screenshots(
+    shots_dir: Path, screenshot_prefix: str, started_wall: float, save_dir: Path
+) -> list[Path]:
     """Move screenshots the game saved (screen_save writes to its save directory) next to the run log."""
     shots_dir.mkdir(parents=True, exist_ok=True)
     collected: list[Path] = []
-    save_dir = _mac_save_directory()
     if save_dir.is_dir():
         for shot in sorted(save_dir.glob(f"{screenshot_prefix}*.png")):
             if shot.stat().st_mtime >= started_wall - 1.0:
@@ -799,6 +758,8 @@ def run_game_archive(
     *,
     label: str,
     run_dir: Path,
+    project_root: Path,
+    run_lock: DirectoryLock | None = None,
     timeout_seconds: float = 120.0,
     result_marker: str = "[TEST_RESULT]",
     screenshot_prefix: str = "__agent_shot_",
@@ -807,8 +768,8 @@ def run_game_archive(
 ) -> dict[str, Any]:
     """Run a compiled game on this Mac and wait for its result line.
 
-    Only one game runs at a time on a machine (they share a save directory, a window and
-    the audio device); waiting for that lock does not count towards ``timeout_seconds``.
+    Different projects use separate signed runner bundles and save directories.
+    A project lease protects saves; waiting does not count towards ``timeout_seconds``.
     """
     runner = require_mac_runner(toolchain)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -817,17 +778,21 @@ def run_game_archive(
         shutil.rmtree(shots_dir)
     run_log = run_dir / "run.log"
 
-    lock = DirectoryLock(GAME_RUN_LOCK, stale_seconds=max(1800.0, timeout_seconds + 600.0), purpose=f"test run {label}")
-    lock.acquire(timeout_seconds=lock_timeout_seconds)
+    lock = run_lock or project_run_lock(project_root)
+    if not lock.held:
+        lock.acquire(timeout_seconds=lock_timeout_seconds)
     process: subprocess.Popen | None = None
     staging: Path | None = None
     timed_out = False
     waited = 0.0
     try:
-        staging, game_file = stage_game_archive(game_archive, label)
-        clear_stale_screenshots(screenshot_prefix)
+        owned_runtime = prepare_mac_runtime(runner, project_root, label)
+        staging = owned_runtime.staging
+        staging, game_file = stage_game_archive(game_archive, staging)
+        clear_stale_screenshots(screenshot_prefix, owned_runtime.save_dir)
         started_wall = time.time()
-        process, debug_log = launch_mac_runner(runner, staging, game_file, run_dir, environment)
+        process, debug_log = launch_mac_runner(owned_runtime.runner, staging, game_file, run_dir, environment)
+        lock.bind_process(process.pid)
         started = time.monotonic()
         while True:
             time.sleep(0.5)
@@ -856,7 +821,7 @@ def run_game_archive(
             "waited_seconds": round(waited, 1),
             "waited_for_lock_seconds": round(lock.waited_seconds, 1),
             "run_log": run_log,
-            "screenshots": collect_screenshots(shots_dir, screenshot_prefix, started_wall),
+            "screenshots": collect_screenshots(shots_dir, screenshot_prefix, started_wall, owned_runtime.save_dir),
             "exit_code": exit_code,
         }
     finally:
@@ -1005,6 +970,7 @@ def _run_test_pipeline(
     run_igor: Callable[[list[str], Path, float], int] | None = None,
     run_game: Callable[..., dict[str, Any]] | None = None,
     toolchain: Toolchain | None = None,
+    run_lock: DirectoryLock | None = None,
 ) -> dict[str, Any]:
     """Compile a snapshot with the test injected, run it, and report the verdict."""
     root = Path(project_root).resolve()
@@ -1035,6 +1001,8 @@ def _run_test_pipeline(
             tools,
             label=public["label"],
             run_dir=run_dir,
+            project_root=root,
+            run_lock=run_lock,
             timeout_seconds=timeout,
             result_marker=str(project_setting(root, "test.result_marker", "[TEST_RESULT]")),
             screenshot_prefix=str(project_setting(root, "test.screenshot_prefix", "__agent_shot_")),
@@ -1119,7 +1087,7 @@ def run_test(
     toolchain: Toolchain | None = None,
 ) -> dict[str, Any]:
     """Build and run a scripted test; same-label runs for one project are serialised end to end."""
-    with label_pipeline(project_root, label):
+    with label_pipeline(project_root, label), project_run_lock(project_root) as run_lock:
         return _run_test_pipeline(
             project_root,
             test_code=test_code,
@@ -1137,4 +1105,5 @@ def run_test(
             run_igor=run_igor,
             run_game=run_game,
             toolchain=toolchain,
+            run_lock=run_lock,
         )

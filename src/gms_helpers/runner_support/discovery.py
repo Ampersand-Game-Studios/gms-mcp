@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Optional
 
 from ..utils import find_yyp
+from ..exceptions import ProjectNotFoundError
 
 
 class RunnerDiscoveryMixin:
@@ -29,6 +30,9 @@ class RunnerDiscoveryMixin:
         try:
             self.yyp_file = find_yyp(self.project_root)
             return self.yyp_file
+        except ProjectNotFoundError:
+            if not (self.project_root / "gamemaker").is_dir():
+                raise
         except SystemExit:
             pass
 
@@ -38,9 +42,13 @@ class RunnerDiscoveryMixin:
             try:
                 self.yyp_file = find_yyp(gamemaker_subdir)
                 # Update project_root to point to gamemaker directory
-                self.project_root = gamemaker_subdir
+                self.project_root = gamemaker_subdir.resolve()
+                from ..run_session import RunSessionManager
+                from ..runtime_manager import RuntimeManager
+                self._session_manager = RunSessionManager(self.project_root)
+                self._runtime_manager = RuntimeManager(self.project_root)
                 return self.yyp_file
-            except SystemExit:
+            except (SystemExit, ProjectNotFoundError):
                 pass
 
         raise FileNotFoundError(f"No .yyp file found in {self.project_root} or {self.project_root}/gamemaker")

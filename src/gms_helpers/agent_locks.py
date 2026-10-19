@@ -4,15 +4,15 @@ GameMaker work has three contended things that file-level transactions cannot pr
 
 * **the repository** - staging and committing while someone else stages;
 * **build capacity** - each Igor build takes several cores and gigabytes of memory;
-* **the game runner** - every run of the macOS/Windows runner shares one save directory,
-  one window and one audio device, so two concurrent test runs corrupt each other;
+* **project runtimes** - each canonical project owns its save directory while running;
+  macOS sessions use separate signed bundles, so different games can run concurrently;
 * **mobile builds** - one Xcode/Gradle output directory and usually one attached device.
 
 A lock is a directory created with ``mkdir`` (atomic on every supported filesystem). The
 protocol is deliberately trivial so shell scripts can take part:
 
-    mkdir "$LOCK_DIR/gamerun.lock"   # take; retry while it fails
-    rmdir "$LOCK_DIR/gamerun.lock"   # release
+    mkdir "$LOCK_DIR/repo.lock"   # take; retry while it fails
+    rmdir "$LOCK_DIR/repo.lock"   # release
 
 A lock whose holder died is reclaimed when its owner record names a dead process on this
 host, or when it is older than its stale timeout. The lock directory itself stays empty so
@@ -27,6 +27,9 @@ from __future__ import annotations
 import json
 import os
 import socket
+import secrets
+import subprocess
+import sys
 import time
 from pathlib import Path
 from typing import Callable
@@ -35,7 +38,7 @@ _LOCK_DIR_ENV = "GMS_MCP_LOCK_DIR"
 _POLL_SECONDS = 1.0
 
 REPOSITORY_LOCK = "repo.lock"
-GAME_RUN_LOCK = "gamerun.lock"
+LEGACY_GAME_RUN_LOCK = "gamerun.lock"
 MOBILE_BUILD_LOCK = "ios_build.lock"
 BUILD_SLOT_PREFIX = "build_slot_"
 
@@ -91,6 +94,32 @@ def _process_alive(pid: int) -> bool:
     return True
 
 
+def _process_identity(pid: int) -> str | None:
+    """Birth identity prevents a recycled PID inheriting a game lease on macOS."""
+    if sys.platform != "darwin":
+        return None
+    try:
+        result = subprocess.run(
+            ["/bin/ps", "-p", str(pid), "-o", "lstart="],
+            capture_output=True,
+            text=True,
+            timeout=2,
+            check=False,
+        )
+        return result.stdout.strip() or None
+    except (OSError, subprocess.SubprocessError):
+        return None
+
+
+def _owner_process_alive(owner: dict, key: str) -> bool:
+    pid = owner.get(key)
+    if not isinstance(pid, int) or not _process_alive(pid):
+        return False
+    expected = owner.get(f"{key}_started")
+    actual = _process_identity(pid) if expected else None
+    return not (expected and actual and expected != actual)
+
+
 class DirectoryLock:
     """One named ``mkdir`` lock."""
 
@@ -109,6 +138,7 @@ class DirectoryLock:
         self.stale_seconds = stale_seconds
         self.purpose = purpose
         self.held = False
+        self._token = secrets.token_hex(16)
         self.waited_seconds = 0.0
 
     # -- inspection -----------------------------------------------------
@@ -142,7 +172,9 @@ class DirectoryLock:
         if owner and owner.get("host") == socket.gethostname() and isinstance(owner.get("pid"), int):
             # A local owner is judged by its process alone: alive keeps the lock however long the
             # work takes, dead frees it at once. Age only decides for owners we cannot inspect.
-            return not _process_alive(owner["pid"])
+            if _owner_process_alive(owner, "pid"):
+                return False
+            return not _owner_process_alive(owner, "supervisor_pid")
         return age > self.stale_seconds
 
     def _reclaim_stale(self) -> None:
@@ -192,6 +224,7 @@ class DirectoryLock:
             self.owner_path.write_text(
                 json.dumps(
                     {
+                        "token": self._token,
                         "pid": os.getpid(),
                         "host": socket.gethostname(),
                         "purpose": self.purpose,
@@ -231,18 +264,49 @@ class DirectoryLock:
             f"'{self.path.name}' there yourself once you have confirmed nothing is using it."
         )
 
+    def bind_process(self, pid: int) -> None:
+        """Keep the lease while the game lives, even if its MCP parent disappears."""
+        owner = self.owner()
+        if not self.held or not owner or owner.get("token") != self._token:
+            raise RuntimeError("Cannot transfer an unowned game lease")
+        owner["supervisor_pid"] = os.getpid()
+        owner["supervisor_pid_started"] = _process_identity(os.getpid())
+        owner["pid"] = int(pid)
+        owner["pid_started"] = _process_identity(int(pid))
+        self.owner_path.write_text(json.dumps(owner, sort_keys=True), encoding="utf-8")
+
     def release(self) -> None:
         if not self.held:
             return
-        self.held = False
+        mutex = self.path.with_name(self.path.name + ".reclaim")
+        while True:
+            try:
+                mutex.mkdir()
+                break
+            except FileExistsError:
+                try:
+                    if time.time() - mutex.stat().st_mtime > 10.0:
+                        mutex.rmdir()
+                except OSError:
+                    pass
+                time.sleep(0.01)
         try:
-            self.owner_path.unlink()
-        except OSError:
-            pass
-        try:
-            self.path.rmdir()
-        except OSError:
-            pass
+            # Reclaimers use this same mutex. A delayed old cleanup can never remove
+            # a replacement lease after its original process has exited.
+            self.held = False
+            owner = self.owner()
+            if not owner or owner.get("token") != self._token:
+                return
+            self.owner_path.unlink(missing_ok=True)
+            try:
+                self.path.rmdir()
+            except FileNotFoundError:
+                pass
+        finally:
+            try:
+                mutex.rmdir()
+            except OSError:
+                pass
 
     def __enter__(self) -> "DirectoryLock":
         return self.acquire() if not self.held else self
@@ -304,10 +368,11 @@ def lock_status(slots: int = 4, *, directory: Path | None = None) -> dict:
     base = Path(directory) if directory is not None else lock_directory()
     names = [
         REPOSITORY_LOCK,
-        GAME_RUN_LOCK,
+        LEGACY_GAME_RUN_LOCK,
         MOBILE_BUILD_LOCK,
         *(f"{BUILD_SLOT_PREFIX}{i}" for i in range(1, slots + 1)),
     ]
+    names.extend(sorted(path.name for path in base.glob("*.lock") if path.name not in names))
     return {
         "lock_directory": str(base),
         "locks": [DirectoryLock(name, directory=base).describe() for name in names],

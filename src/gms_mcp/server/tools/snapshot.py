@@ -28,7 +28,7 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         Show the machine-wide locks shared by everyone building on this computer.
 
         Use it when a build or test run seems stuck: it lists the repository lock, the
-        one-game-at-a-time run lock, the mobile build lock and the Igor build slots, with who
+        per-project runtime leases, the mobile build lock and the Igor build slots, with who
         holds each and for how long.
         """
         _ = ctx
@@ -161,7 +161,7 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         timeout_seconds (default from .gms-mcp.json test.timeout_seconds).
 
         isolate_paths / yyp_entries / base_only / ref work as in gm_snapshot_compile.
-        Only one game runs at a time on a machine; waiting for that lock is reported
+        Different macOS projects run concurrently; waiting for a project lease is reported
         separately and does not count towards the timeout. Read more of the log afterwards
         with gm_run_log(label=...). Running the game needs a macOS host.
         """

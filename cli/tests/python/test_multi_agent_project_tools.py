@@ -856,10 +856,7 @@ def test_platform_names_and_runner_staging(monkeypatch: pytest.MonkeyPatch, tmp_
     assert snapshot_build.igor_platform("Android") == "Android"
     with pytest.raises(snapshot_build.SnapshotError, match="Unknown platform"):
         snapshot_build.igor_platform("Dreamcast")
-    monkeypatch.setenv("GMS_MCP_RUN_STAGING_DIR", str(tmp_path / "my-game" / "runs"))
-    assert "-game" not in str(snapshot_build._runner_staging_root()).lower()
-    monkeypatch.setenv("GMS_MCP_RUN_STAGING_DIR", str(tmp_path / "fine"))
-    assert snapshot_build._runner_staging_root() == tmp_path / "fine"
+
 
 
 # ----------------------------------------------------------------------
@@ -1174,15 +1171,20 @@ def test_live_session_start_command_screenshot_and_stop(repo: Path, tmp_path: Pa
         log.write_text("boot\nrunning\nERROR nothing\n")
         return process, log
 
-    def fake_stage(_archive, _label):
+    def fake_stage(_archive, _staging):
         staging.mkdir(exist_ok=True)
         return staging, staging / "game.ios"
 
+    from types import SimpleNamespace
+    monkeypatch.setattr("gms_helpers.runner.GameMakerRunner._snapshot_macos_processes",
+                        lambda self: {4242: SimpleNamespace(command="fake runner", started="fake birth")})
     monkeypatch.setattr(snapshot_build, "snapshot_compile", fake_compile)
     monkeypatch.setattr(snapshot_build, "require_mac_runner", lambda _tools: tmp_path / "Mac_Runner")
     monkeypatch.setattr(snapshot_build, "stage_game_archive", fake_stage)
     monkeypatch.setattr(snapshot_build, "launch_mac_runner", fake_launch)
-    monkeypatch.setattr(snapshot_build, "_mac_save_directory", lambda: save_dir)
+    from gms_helpers.mac_runtime import MacRuntime
+    monkeypatch.setattr(live_session, "prepare_mac_runtime",
+        lambda runner, root, label: MacRuntime(runner, staging, save_dir, "test.bundle"))
 
     failed = live_session.start(repo, label="broken")
     assert failed["connected"] is False and failed["status"] == "BUILD_FAILED"
@@ -1191,7 +1193,7 @@ def test_live_session_start_command_screenshot_and_stop(repo: Path, tmp_path: Pa
     try:
         started = live_session.start(repo, label="live", connect_timeout_seconds=5)
         assert started["status"] == "RUNNING" and started["connected"] and started["endpoint"]["game"] == "Fake"
-        assert (lock_dir / "gamerun.lock").is_dir()
+        assert live_session.get_session(repo).lock.path.is_dir()
         with pytest.raises(live_session.LiveSessionError, match="already running"):
             live_session.start(repo, label="second")
 
@@ -1239,7 +1241,7 @@ def test_live_session_reports_a_game_that_exits_or_never_connects(
             _toolchain(tmp_path),
         )
 
-    def fake_stage(_archive, _label):
+    def fake_stage(_archive, _staging):
         staging.mkdir(exist_ok=True)
         return staging, staging / "game.ios"
 
@@ -1248,11 +1250,16 @@ def test_live_session_reports_a_game_that_exits_or_never_connects(
         log.write_text("ERROR in action number 1\n")
         return process, log
 
+    from types import SimpleNamespace
+    monkeypatch.setattr("gms_helpers.runner.GameMakerRunner._snapshot_macos_processes",
+                        lambda self: {4242: SimpleNamespace(command="fake runner", started="fake birth")})
     monkeypatch.setattr(snapshot_build, "snapshot_compile", fake_compile)
     monkeypatch.setattr(snapshot_build, "require_mac_runner", lambda _tools: tmp_path / "Mac_Runner")
     monkeypatch.setattr(snapshot_build, "stage_game_archive", fake_stage)
     monkeypatch.setattr(snapshot_build, "launch_mac_runner", fake_launch)
-    monkeypatch.setattr(snapshot_build, "_mac_save_directory", lambda: tmp_path / "nosave")
+    from gms_helpers.mac_runtime import MacRuntime
+    monkeypatch.setattr(live_session, "prepare_mac_runtime",
+        lambda runner, root, label: MacRuntime(runner, staging, tmp_path / "nosave", "test.bundle"))
 
     silent = live_session.start(repo, label="silent", connect_timeout_seconds=0.3)
     assert silent["status"] == "RUNNING_NOT_CONNECTED" and "GMS_MCP_BRIDGE_PORT" in silent["message"]
