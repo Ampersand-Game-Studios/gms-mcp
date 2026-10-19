@@ -31,16 +31,16 @@ import subprocess
 import sys
 import tarfile
 import tempfile
-import threading
 import time
 import uuid
 import zipfile
 from dataclasses import dataclass, field
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Iterable
 
 from . import yyp_registry
-from .agent_locks import GAME_RUN_LOCK, MOBILE_BUILD_LOCK, BuildSlot, DirectoryLock
+from .agent_locks import MOBILE_BUILD_LOCK, BuildSlot, DirectoryLock
+from .mac_runtime import prepare_mac_runtime, project_run_lock
 from .exceptions import ValidationError
 from .project_config import project_setting
 from .utils import find_yyp
@@ -133,66 +133,38 @@ def safe_label(label: str) -> str:
     return cleaned[:60] or "default"
 
 
-_LABEL_THREAD_LOCKS: dict[str, threading.Lock] = {}
-_LABEL_THREAD_LOCKS_GUARD = threading.Lock()
+def pipeline_lock(project_root: str | Path, label: str) -> DirectoryLock:
+    root = Path(project_root).resolve()
+    key = f"{root}|{safe_label(label)}"
+    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
+    return DirectoryLock(f"runlabel_{digest}.lock", purpose=f"pipeline {root.name}:{safe_label(label)}")
 
 
 @contextlib.contextmanager
 def label_pipeline(project_root: str | Path, label: str, timeout_seconds: float = 7200.0):
-    """Serialise whole build/run pipelines that publish to the same labelled run directory.
-
-    `.gms_mcp/runs/<label>` holds one invocation's build log, run log and screenshots; two
-    invocations with the same project and label must not interleave (threads in this process or
-    other processes), or one would read and return the other's results.
-    """
-    root = Path(project_root).resolve()
-    key = f"{root}|{safe_label(label)}"
-    digest = hashlib.sha1(key.encode("utf-8")).hexdigest()[:12]
-    with _LABEL_THREAD_LOCKS_GUARD:
-        thread_lock = _LABEL_THREAD_LOCKS.setdefault(key, threading.Lock())
-    with thread_lock:
-        lock = DirectoryLock(
-            f"runlabel_{digest}.lock",
-            stale_seconds=timeout_seconds,
-            purpose=f"pipeline {root.name}:{safe_label(label)}",
-        )
-        lock.acquire(timeout_seconds=timeout_seconds)
-        try:
-            yield
-        finally:
-            lock.release()
+    """Serialize writers to one project's labelled artifact directory."""
+    lock = pipeline_lock(project_root, label)
+    lock.acquire(timeout_seconds=timeout_seconds)
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def runs_directory(project_root: str | Path, label: str) -> Path:
     """Where logs and screenshots of one labelled run are kept (inside the project, ignored)."""
-    return Path(project_root).resolve() / ".gms_mcp" / "runs" / safe_label(label)
+    root = Path(project_root).resolve()
+    result = root / ".gms_mcp" / "runs" / safe_label(label)
+    if result.resolve() != result:
+        raise SnapshotError("Run artifact directories must not contain symlinks.")
+    return result
 
 
 def _work_root() -> Path:
     configured = os.environ.get("GMS_MCP_SNAPSHOT_WORK_DIR", "").strip()
-    return Path(configured).expanduser() if configured else Path(tempfile.gettempdir()) / "gms-mcp-snapshots"
-
-
-def _runner_staging_root() -> Path:
-    """A directory whose path the macOS runner can parse.
-
-    The runner treats ``-game`` anywhere in its command line as the start of the game
-    argument, so a project kept in a folder such as ``my-game`` makes it load the wrong file.
-    """
-    candidates = [
-        Path(os.environ["GMS_MCP_RUN_STAGING_DIR"]).expanduser() if os.environ.get("GMS_MCP_RUN_STAGING_DIR") else None,
-        Path(tempfile.gettempdir()) / "gmsmcp_runs",
-        Path("/Users/Shared/GameMakerStudio2/gmsmcp_runs"),
-        Path.home() / ".gmsmcp_runs",
-    ]
-    for candidate in candidates:
-        if candidate is not None and "-game" not in str(candidate.resolve()).lower():
-            return candidate
-    raise SnapshotError(
-        "No usable staging directory for the macOS runner: every candidate path contains '-game', which the "
-        "runner misreads as its -game argument. Set GMS_MCP_RUN_STAGING_DIR to a directory whose full path "
-        "has no '-game' in it."
-    )
+    return (
+        Path(configured).expanduser() if configured else Path(tempfile.gettempdir()) / "gms-mcp-snapshots"
+    ).resolve()
 
 
 # ----------------------------------------------------------------------
@@ -365,6 +337,8 @@ def inject_test_script(
 ) -> str:
     """Add the test as a script asset of the snapshot. Refuses to run on a live project."""
     snapshot = Path(snapshot_root).resolve()
+    if not re.fullmatch(r"[A-Za-z_][A-Za-z0-9_]*", script_name):
+        raise SnapshotError("test.script_name must be a single GameMaker script identifier.")
     if (snapshot / ".git").exists() or not (snapshot / ".gms-mcp-snapshot").is_file():
         raise SnapshotError(
             "Refusing to inject a test outside a snapshot: test scripts must never be written into the "
@@ -447,6 +421,8 @@ def igor_command(
         command.append(f"--pf={toolchain.prefabs_path}")
     command.append(f"-r={'YYC' if str(runtime).upper() == 'YYC' else 'VM'}")
     command.append(f"-j={max(1, int(jobs))}")
+    if platform == "HTML5":
+        command.append(f"/tf={output_file.parent.with_name('html5')}")
     command.extend(["--", platform, action])
     return command
 
@@ -480,8 +456,25 @@ def classify_build_log(text: str) -> tuple[list[str], list[str], list[str]]:
     return errors, warnings, packaging
 
 
+@contextlib.contextmanager
+def artifact_writer(path: Path):
+    """Open an output file without following a checkout-supplied symlink."""
+    if path.is_symlink():
+        raise SnapshotError(f"Refusing to write a symlink artifact: {path.name}")
+    descriptor = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(descriptor, "wb") as stream:
+        yield stream
+
+
+def copy_artifact(source: Path, destination: Path) -> None:
+    if source.is_symlink():
+        raise SnapshotError("Refusing to archive a symlink source.")
+    with source.open("rb") as incoming, artifact_writer(destination) as outgoing:
+        shutil.copyfileobj(incoming, outgoing)
+
+
 def _default_run_igor(command: list[str], log_path: Path, timeout_seconds: float) -> int:
-    with log_path.open("wb") as log:
+    with artifact_writer(log_path) as log:
         try:
             completed = subprocess.run(
                 command, stdout=log, stderr=subprocess.STDOUT, timeout=timeout_seconds, check=False
@@ -527,9 +520,12 @@ def compile_snapshot(
         platform=platform,
         runtime=runtime,
         jobs=jobs,
-        # Igor offers PackageZip only for desktop and HTML5 targets; mobile and Linux use Package.
-        action="PackageZip" if platform in {"Mac", "Windows", "HTML5"} else "Package",
+        action="folder" if platform == "HTML5" else "PackageZip" if platform in {"Mac", "Windows"} else "Package",
     )
+    from .runner_support.igor import RunnerIgorMixin
+
+    html5_output = work / "html5"
+    html5_baseline = RunnerIgorMixin._verified_html5_artifacts(html5_output) if platform == "HTML5" else {}
     runner = run_igor or _default_run_igor
     result = BuildResult(ok=False, status="BUILD_FAILED", build_log=build_log or log_path)
     mobile = str(platform).lower() in {"android", "ios"}
@@ -548,7 +544,7 @@ def compile_snapshot(
             slot.acquire(timeout_seconds=slot_timeout_seconds)
             result.waited_for_slot_seconds += slot.waited_seconds
             try:
-                runner(command, log_path, igor_timeout_seconds)
+                return_code = runner(command, log_path, igor_timeout_seconds)
             finally:
                 slot.release()
         finally:
@@ -563,7 +559,7 @@ def compile_snapshot(
         result.access_violation_retries += 1
     if build_log is not None and log_path.is_file() and Path(build_log) != log_path:
         Path(build_log).parent.mkdir(parents=True, exist_ok=True)
-        shutil.copyfile(log_path, build_log)
+        copy_artifact(log_path, Path(build_log))
     result.elapsed_seconds = round(time.monotonic() - started, 1)
     # Igor's final packaging step can fail on a shared staging folder after the game data
     # was written; the compiled game archive is what a run needs.
@@ -572,10 +568,34 @@ def compile_snapshot(
     desktop = platform in {"Mac", "Windows", "Linux"}
     if archive is not None and not zipfile.is_zipfile(archive):
         archive = None
+    if platform == "Mac" and str(runtime).upper() == "YYC":
+        # The asset-compiler marker precedes the native C++ link. A data-only
+        # archive, or a failed signing/link step, cannot certify a YYC build.
+        native_executable = False
+        if archive is not None:
+            with zipfile.ZipFile(archive) as package:
+                native_executable = any(
+                    ".app/Contents/MacOS/" in member.filename and member.file_size > 0 and not member.is_dir()
+                    for member in package.infolist()
+                )
+        if return_code != 0 or not native_executable or result.packaging_errors:
+            result.errors.append("The native macOS YYC application was not built and packaged successfully.")
     if not desktop and result.packaging_errors:
         # For a mobile or web target the package is the product, so its errors are fatal.
         result.errors = [*result.errors, *result.packaging_errors]
-    compiled = _COMPILE_FINISHED_MARKER in text and not result.errors and not crashed
+    completed = _COMPILE_FINISHED_MARKER in text
+    if platform == "HTML5":
+        # HTML5 emits Stats/Igor complete, not the desktop compile marker.
+        # Verify fresh web artifacts instead of trusting Igor's zero exit code.
+        completed = RunnerIgorMixin._verified_html5_package_exists(html5_output, html5_baseline)
+        if not completed:
+            result.errors.append("HTML5 export did not produce a new verified index.html and JavaScript artifact.")
+    compiled = (
+        completed
+        and not result.errors
+        and not crashed
+        and not RunnerIgorMixin._igor_rejected_command(text.splitlines())
+    )
     if compiled and (archive is not None or not desktop):
         result.ok = True
         result.status = "COMPILE_OK"
@@ -703,10 +723,6 @@ def _mac_runner(toolchain: Toolchain) -> Path:
     return toolchain.runtime_path / "mac" / "YoYo Runner.app" / "Contents" / "MacOS" / "Mac_Runner"
 
 
-def _mac_save_directory() -> Path:
-    return Path.home() / "Library" / "Application Support" / "com.yoyogames.macyoyorunner"
-
-
 def require_mac_runner(toolchain: Toolchain) -> Path:
     if sys.platform != "darwin":
         raise SnapshotError(
@@ -722,13 +738,31 @@ def require_mac_runner(toolchain: Toolchain) -> Path:
     return runner
 
 
-def stage_game_archive(game_archive: Path, label: str) -> tuple[Path, Path]:
+def require_vm_runtime(runtime: str) -> None:
+    """Owned snapshot runs load VM data; YYC needs its own linked executable."""
+    if str(runtime).upper() != "VM":
+        raise SnapshotError(
+            "Isolated macOS runs support runtime='VM' only. YYC requires a compiled native application; "
+            "its game data cannot be launched with the VM runner."
+        )
+
+
+def stage_game_archive(game_archive: Path, staging: Path) -> tuple[Path, Path]:
     """Unpack a compiled game where the runner can load it. Returns (staging dir, game file)."""
-    staging = _runner_staging_root() / safe_label(label)
-    if staging.exists():
-        shutil.rmtree(staging)
-    staging.mkdir(parents=True)
+    staging.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(game_archive) as archive:
+        # The signed runner already lives here. Game assets cannot overwrite it,
+        # and archive paths must remain literal descendants of the staging root.
+        for item in archive.infolist():
+            path = PurePosixPath(item.filename)
+            if (
+                path.is_absolute()
+                or PureWindowsPath(item.filename).anchor
+                or ".." in path.parts
+                or "\\" in item.filename
+                or (path.parts and path.parts[0].casefold() == "runner.app")
+            ):
+                raise SnapshotError("The game archive contains an unsafe or reserved path.")
         archive.extractall(staging)
     assets = staging / "assets"
     if assets.is_dir():
@@ -752,7 +786,7 @@ def launch_mac_runner(
     """Start the game. Returns (process, the game's log file)."""
     debug_log = staging / "debug.txt"
     run_dir.mkdir(parents=True, exist_ok=True)
-    with (run_dir / "runner_stderr.log").open("wb") as stderr_log:
+    with artifact_writer(run_dir / "runner_stderr.log") as stderr_log:
         process = subprocess.Popen(
             [str(runner), "-game", str(game_file), "-debugoutput", str(debug_log), "-output", str(debug_log)],
             cwd=str(staging),
@@ -763,24 +797,41 @@ def launch_mac_runner(
     return process, debug_log
 
 
-def clear_stale_screenshots(screenshot_prefix: str) -> None:
-    save_dir = _mac_save_directory()
-    if save_dir.is_dir():
-        for stale in save_dir.glob(f"{screenshot_prefix}*.png"):
-            stale.unlink(missing_ok=True)
+def screenshot_files(screenshot_prefix: str, save_dir: Path) -> list[Path]:
+    """Select only literal immediate files in this project's save directory."""
+    if not screenshot_prefix or any(char in screenshot_prefix for char in "/\\*?[]\0"):
+        raise SnapshotError("test.screenshot_prefix must be a nonempty filename prefix without paths or wildcards.")
+    if not save_dir.is_dir():
+        return []
+    return sorted(
+        path
+        for path in save_dir.iterdir()
+        if path.name.startswith(screenshot_prefix)
+        and path.name.endswith(".png")
+        and not path.is_symlink()
+        and path.is_file()
+        and path.resolve().parent == save_dir.resolve()
+    )
 
 
-def collect_screenshots(shots_dir: Path, screenshot_prefix: str, started_wall: float) -> list[Path]:
+def clear_stale_screenshots(screenshot_prefix: str, save_dir: Path) -> None:
+    for stale in screenshot_files(screenshot_prefix, save_dir):
+        stale.unlink(missing_ok=True)
+
+
+def collect_screenshots(shots_dir: Path, screenshot_prefix: str, started_wall: float, save_dir: Path) -> list[Path]:
     """Move screenshots the game saved (screen_save writes to its save directory) next to the run log."""
+    if shots_dir.is_symlink():
+        raise SnapshotError("The screenshot destination must not be a symlink.")
     shots_dir.mkdir(parents=True, exist_ok=True)
     collected: list[Path] = []
-    save_dir = _mac_save_directory()
-    if save_dir.is_dir():
-        for shot in sorted(save_dir.glob(f"{screenshot_prefix}*.png")):
-            if shot.stat().st_mtime >= started_wall - 1.0:
-                target = shots_dir / shot.name
-                shutil.move(str(shot), str(target))
-                collected.append(target)
+    for shot in screenshot_files(screenshot_prefix, save_dir):
+        if shot.stat().st_mtime >= started_wall - 1.0:
+            target = shots_dir / shot.name
+            if target.is_symlink():
+                raise SnapshotError("Refusing to overwrite a screenshot symlink.")
+            shutil.move(str(shot), str(target))
+            collected.append(target)
     return collected
 
 
@@ -791,6 +842,7 @@ def stop_process(process: subprocess.Popen | None) -> None:
             process.wait(timeout=5)
         except subprocess.TimeoutExpired:
             process.kill()
+            process.wait(timeout=5)
 
 
 def run_game_archive(
@@ -799,6 +851,8 @@ def run_game_archive(
     *,
     label: str,
     run_dir: Path,
+    project_root: Path,
+    run_lock: DirectoryLock | None = None,
     timeout_seconds: float = 120.0,
     result_marker: str = "[TEST_RESULT]",
     screenshot_prefix: str = "__agent_shot_",
@@ -807,8 +861,8 @@ def run_game_archive(
 ) -> dict[str, Any]:
     """Run a compiled game on this Mac and wait for its result line.
 
-    Only one game runs at a time on a machine (they share a save directory, a window and
-    the audio device); waiting for that lock does not count towards ``timeout_seconds``.
+    Different projects use separate signed runner bundles and save directories.
+    A project lease protects saves; waiting does not count towards ``timeout_seconds``.
     """
     runner = require_mac_runner(toolchain)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -817,17 +871,21 @@ def run_game_archive(
         shutil.rmtree(shots_dir)
     run_log = run_dir / "run.log"
 
-    lock = DirectoryLock(GAME_RUN_LOCK, stale_seconds=max(1800.0, timeout_seconds + 600.0), purpose=f"test run {label}")
-    lock.acquire(timeout_seconds=lock_timeout_seconds)
+    lock = run_lock or project_run_lock(project_root)
+    if not lock.held:
+        lock.acquire(timeout_seconds=lock_timeout_seconds)
     process: subprocess.Popen | None = None
     staging: Path | None = None
     timed_out = False
     waited = 0.0
     try:
-        staging, game_file = stage_game_archive(game_archive, label)
-        clear_stale_screenshots(screenshot_prefix)
+        owned_runtime = prepare_mac_runtime(runner, project_root, label)
+        staging = owned_runtime.staging
+        staging, game_file = stage_game_archive(game_archive, staging)
+        clear_stale_screenshots(screenshot_prefix, owned_runtime.save_dir)
         started_wall = time.time()
-        process, debug_log = launch_mac_runner(runner, staging, game_file, run_dir, environment)
+        process, debug_log = launch_mac_runner(owned_runtime.runner, staging, game_file, run_dir, environment)
+        lock.bind_process(process.pid)
         started = time.monotonic()
         while True:
             time.sleep(0.5)
@@ -846,9 +904,10 @@ def run_game_archive(
                 timed_out = True
                 break
         if debug_log.is_file():
-            shutil.copy2(debug_log, run_log)
+            copy_artifact(debug_log, run_log)
         else:
-            run_log.write_text("", encoding="utf-8")
+            with artifact_writer(run_log):
+                pass
         exit_code = process.poll()
         stop_process(process)
         return {
@@ -856,7 +915,7 @@ def run_game_archive(
             "waited_seconds": round(waited, 1),
             "waited_for_lock_seconds": round(lock.waited_seconds, 1),
             "run_log": run_log,
-            "screenshots": collect_screenshots(shots_dir, screenshot_prefix, started_wall),
+            "screenshots": collect_screenshots(shots_dir, screenshot_prefix, started_wall, owned_runtime.save_dir),
             "exit_code": exit_code,
         }
     finally:
@@ -1005,6 +1064,7 @@ def _run_test_pipeline(
     run_igor: Callable[[list[str], Path, float], int] | None = None,
     run_game: Callable[..., dict[str, Any]] | None = None,
     toolchain: Toolchain | None = None,
+    run_lock: DirectoryLock | None = None,
 ) -> dict[str, Any]:
     """Compile a snapshot with the test injected, run it, and report the verdict."""
     root = Path(project_root).resolve()
@@ -1035,6 +1095,8 @@ def _run_test_pipeline(
             tools,
             label=public["label"],
             run_dir=run_dir,
+            project_root=root,
+            run_lock=run_lock,
             timeout_seconds=timeout,
             result_marker=str(project_setting(root, "test.result_marker", "[TEST_RESULT]")),
             screenshot_prefix=str(project_setting(root, "test.screenshot_prefix", "__agent_shot_")),
@@ -1119,7 +1181,8 @@ def run_test(
     toolchain: Toolchain | None = None,
 ) -> dict[str, Any]:
     """Build and run a scripted test; same-label runs for one project are serialised end to end."""
-    with label_pipeline(project_root, label):
+    require_vm_runtime(runtime)
+    with label_pipeline(project_root, label), project_run_lock(project_root) as run_lock:
         return _run_test_pipeline(
             project_root,
             test_code=test_code,
@@ -1137,4 +1200,5 @@ def run_test(
             run_igor=run_igor,
             run_game=run_game,
             toolchain=toolchain,
+            run_lock=run_lock,
         )

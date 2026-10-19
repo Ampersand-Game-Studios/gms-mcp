@@ -26,7 +26,7 @@ GMS MCP is an independent, open-source project by Ampersand Game Studios, not an
 | Build and run | Compile and launch through GameMaker's Igor toolchain; select and pin installed runtimes; inspect and stop managed run sessions. |
 | Build and test in isolation | Compile and run a throwaway snapshot (the working tree, or a git revision plus only your files), inject a test script, and get a pass/fail verdict with screenshots; Igor's random loader crash is retried. |
 | Interact with a running game | Start a live session, send bridge commands (`state`, `console`, `screenshot`, `log_tail`), read the game log, or install the optional `__mcp_bridge` endpoint and collect logs emitted through `__mcp_log()`. |
-| Share one project between several agents | Minimal-diff `.yyp` edits in GameMaker's own layout, machine-wide build and run locks, and commits that contain only your registrations. |
+| Share one project between several agents | Minimal-diff `.yyp` edits in GameMaker's own layout, bounded build slots and per-project runtime leases, and commits that contain only your registrations. |
 | Give the assistant reusable context | Expose MCP tools, project resources, five workflow prompts, and a project dashboard with optional MCP Apps rendering. |
 
 Availability depends on the selected [tool profile](#enable-editing-and-additional-tools), client capabilities, and installed GameMaker toolchain. The bridge is not a GML hot-reload system, and GMS MCP does not provide automatic synchronization with the GameMaker IDE.
@@ -182,7 +182,7 @@ The generated client configurations use **stdio**, with the client starting a lo
 
 ## Compatibility and limits
 
-**GameMaker:** build/run defaults follow the host platform: Windows, macOS, or Linux. VM and YYC runtime labels are supported, subject to installed toolchains. GMRT labels are currently rejected because the required Igor command-line contract is not implemented. Runtime selection and pinning are available through `gm_runtime_list`, `gm_runtime_pin`, `gm_runtime_unpin`, and `gm_runtime_verify` in the `runtime` toolset.
+**GameMaker:** build/run defaults follow the host platform: Windows, macOS, or Linux. VM and YYC compilation depend on installed toolchains; isolated macOS runs currently support VM only and reject YYC before launch. GMRT labels are currently rejected because the required Igor command-line contract is not implemented. Runtime selection and pinning are available through `gm_runtime_list`, `gm_runtime_pin`, `gm_runtime_unpin`, and `gm_runtime_verify` in the `runtime` toolset.
 
 **AI clients:** installer support means configuration generation and repository tests, not certification of every client release. Optional dashboard rendering, resource subscriptions, and Resolve choices depend on negotiated client capabilities. The dashboard also returns text and structured data without MCP Apps support.
 

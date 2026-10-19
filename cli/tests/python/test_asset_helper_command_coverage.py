@@ -448,7 +448,7 @@ class TestDeleteAndMain(unittest.TestCase):
                 asset_type="script",
                 name="scr_demo",
                 dry_run=True,
-                skip_maintenance=True,
+                skip_maintenance=False,
                 no_auto_fix=False,
                 maintenance_verbose=True,
             )
@@ -460,8 +460,13 @@ class TestDeleteAndMain(unittest.TestCase):
                 with (
                     patch("gms_helpers.utils.find_yyp_file", return_value=root / "demo.yyp"),
                     patch("gms_helpers.utils.load_json", return_value=project_data),
+                    patch(
+                        "gms_helpers.asset_cli.delete.run_auto_maintenance", return_value=_maintenance_result()
+                    ) as maintenance,
+                    patch("gms_helpers.asset_cli.delete.validate_asset_creation_safe", return_value=True),
                 ):
                     result, output = _capture_output(asset_helper.delete_asset, args)
+                    maintenance.assert_called_once_with(".", fix_issues=False, verbose=False)
             finally:
                 os.chdir(old_cwd)
 

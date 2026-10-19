@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### macOS runtime review fixes
+
+- Run macOS VM games in per-project signed runner copies with separate saves and runtime leases, preserving concurrent games and recovery after launcher exit.
+- Keep process-control session records outside project checkouts and validate recovery paths before signalling processes or archiving/removing files.
+- Reject screenshot path/glob escapes, linked log outputs, unsafe archive paths and invalid injected script identifiers; copy runner bundles without writing through symlinks.
+- Clean foreground runs by their original session identity, reconcile predecessors after waiting for leases, and wait for forced process exit before releasing saves.
+- Reject unsupported YYC launches before compilation and require a native application package for successful macOS YYC compilation.
+- Use HTML5 folder exports with fresh verified web artifacts, keep deletion previews free of maintenance writes, and allow already-staged deletions to be staged again safely.
+
 ### Map tools and Windows packaging
 
 - Added the optional `map` toolset with tilemap queries, transactional edits and validation of registered rooms, including nested tile layers and both compressed and plain tile data.

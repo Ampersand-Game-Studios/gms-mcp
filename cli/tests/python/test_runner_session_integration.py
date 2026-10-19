@@ -432,18 +432,17 @@ class TestRunnerBackgroundMode(unittest.TestCase):
         # Should call the method and return its result
         mock_run.assert_called_once()
 
-    @patch.object(GameMakerRunner, "_run_project_classic_approach")
-    @patch.object(GameMakerRunner, "_run_project_ide_temp_approach")
-    def test_macos_temp_output_routes_to_classic_approach(self, mock_temp, mock_classic):
-        """macOS temp output should use the local Run path instead of PackageZip."""
-        mock_classic.return_value = True
-
+    def test_macos_temp_output_routes_to_owned_runtime(self):
         runner = GameMakerRunner(self.project_root)
-        result = runner.run_project_direct(platform_target="macOS", output_location="temp")
-
-        self.assertTrue(result)
-        mock_classic.assert_called_once_with("macOS", "VM", False)
-        mock_temp.assert_not_called()
+        with patch("gms_helpers.live_session.start", return_value={"ok": False, "running": False}) as start:
+            self.assertFalse(runner.run_project_direct(platform_target="macOS", output_location="temp"))
+        start.assert_called_once_with(
+            runner.project_root,
+            label="run",
+            runtime="VM",
+            runtime_version=None,
+            connect_timeout_seconds=0.5,
+        )
 
     @patch.object(GameMakerRunner, "_run_project_classic_approach")
     @patch.object(GameMakerRunner, "_run_project_ide_temp_approach")
@@ -458,91 +457,53 @@ class TestRunnerBackgroundMode(unittest.TestCase):
         mock_temp.assert_called_once_with("Windows", "VM", False)
         mock_classic.assert_not_called()
 
-    def test_macos_background_run_tracks_runner_pid_in_session(self):
-        """macOS background runs should persist the actual Mac_Runner PID, not Igor's PID."""
-        spaced_project_root = self.project_root / "Project With Spaces"
-        spaced_project_root.mkdir()
-        (spaced_project_root / "test_project.yyp").write_text(
-            '{"name": "test_project", "resources": []}',
-            encoding="utf-8",
+    def test_macos_background_run_tracks_owned_runner_pid_in_session(self):
+        runner = GameMakerRunner(self.project_root)
+        process = MagicMock(pid=222)
+        session = runner._session_manager.create_session(
+            pid=222,
+            exe_path="/owned/session/game.ios",
+            platform_target="macOS",
+            isolated_runtime=True,
         )
-        runner = GameMakerRunner(spaced_project_root)
-        fake_process = MagicMock()
-        fake_process.pid = 12345
-        fake_process.poll.return_value = None
-        game_path = runner.project_root / "output" / "test_project" / "game.ios"
-        debug_log_path = game_path.parent / "debug.log"
-        runner_command = f"/runtime/Mac_Runner -game {game_path} -debugoutput {debug_log_path}"
-        tail_command = f"tail -F {debug_log_path}"
-        owned_processes = {
-            12345: MacOSProcess(12345, 1, "/runtime/Igor -- Mac Run"),
-            222: MacOSProcess(222, 12345, runner_command),
-            333: MacOSProcess(333, 12345, tail_command),
-        }
-
-        with patch.object(runner, "_build_platform_action_command", return_value=["igor", "--", "Mac", "Run"]):
-            with patch.object(runner, "_reject_foreign_igor_after_launch"):
-                with patch.object(
-                    runner, "_snapshot_macos_processes", side_effect=[{}, owned_processes, owned_processes]
-                ):
-                    with patch.object(runner, "_run_igor_command", return_value=fake_process):
-                        with patch.object(runner, "_collect_igor_output_async", return_value=([], MagicMock())):
-                            with patch.object(runner, "_wait_for_macos_runner_start", return_value=(222, {222}, {333})):
-                                result = runner.run_project_direct(
-                                    platform_target="macOS",
-                                    runtime_type="VM",
-                                    background=True,
-                                    output_location="temp",
-                                )
-
+        with (
+            patch(
+                "gms_helpers.live_session.start",
+                return_value={"ok": True, "running": True, "pid": 222, "run_id": session.run_id},
+            ),
+            patch(
+                "gms_helpers.live_session.get_session", return_value=MagicMock(process=process, run_id=session.run_id)
+            ),
+            patch.object(runner, "_run_igor_command") as generic_run,
+        ):
+            result = runner.run_project_direct(platform_target="macOS", background=True)
         self.assertTrue(result["ok"])
         self.assertEqual(result["pid"], 222)
-        self.assertEqual(result["igor_pid"], 12345)
+        self.assertEqual(result["run_id"], session.run_id)
+        generic_run.assert_not_called()
 
-        session = runner._session_manager.get_current_session()
-        self.assertIsNotNone(session)
-        self.assertEqual(session.pid, 222)
-        self.assertEqual(Path(session.exe_path).resolve(), game_path.resolve())
-        self.assertEqual(Path(session.log_file).resolve(), debug_log_path.resolve())
-        self.assertEqual(session.macos_runner_commands, {"222": runner_command})
-        self.assertEqual(session.macos_tail_commands, {"333": tail_command})
-        self.assertEqual(session.macos_igor_pid, 12345)
-        self.assertEqual(session.macos_igor_command, "/runtime/Igor -- Mac Run")
-
-    def test_macos_foreground_run_tracks_runner_pid_before_releasing_start_lock(self):
-        """macOS foreground runs should cross the same durable runner/session barrier as background runs."""
+    def test_macos_foreground_waits_for_owned_game_and_cleans_just_its_session(self):
         runner = GameMakerRunner(self.project_root)
-        fake_process = MagicMock(pid=12345, returncode=0)
-        fake_process.poll.return_value = None
-        fake_process.wait.return_value = 0
-        output_thread = MagicMock()
-
-        with patch.object(runner, "_build_platform_action_command", return_value=["igor", "--", "Mac", "Run"]):
-            with patch.object(runner, "_reject_foreign_igor_after_launch"):
-                with patch.object(runner, "_snapshot_macos_processes", return_value={}):
-                    with patch.object(runner, "_run_igor_command", return_value=fake_process):
-                        with patch.object(runner, "_collect_igor_output_async", return_value=([], output_thread)):
-                            with patch.object(runner, "_wait_for_macos_runner_start", return_value=(222, {222}, {333})):
-                                with patch.object(
-                                    runner._session_manager,
-                                    "create_session",
-                                    wraps=runner._session_manager.create_session,
-                                ) as create_session:
-                                    result = runner.run_project_direct(
-                                        platform_target="macOS",
-                                        runtime_type="VM",
-                                        background=False,
-                                        output_location="temp",
-                                    )
-
-        self.assertTrue(result)
-        self.assertEqual(create_session.call_args.kwargs["pid"], 222)
-        self.assertEqual(
-            Path(create_session.call_args.kwargs["exe_path"]).resolve(),
-            (self.project_root / "output" / "test_project" / "game.ios").resolve(),
+        process = MagicMock(pid=222, returncode=0)
+        managed = MagicMock(process=process)
+        session = runner._session_manager.create_session(
+            pid=222,
+            exe_path="/owned/session/game.ios",
+            platform_target="macOS",
+            isolated_runtime=True,
         )
-        output_thread.join.assert_called_once_with(timeout=5)
-        self.assertIsNone(runner._session_manager.get_current_session())
+        managed.run_id = session.run_id
+        with (
+            patch(
+                "gms_helpers.live_session.start",
+                return_value={"ok": True, "running": True, "pid": 222, "run_id": session.run_id},
+            ),
+            patch("gms_helpers.live_session.get_session", return_value=managed),
+            patch("gms_helpers.live_session._cleanup") as cleanup,
+        ):
+            self.assertTrue(runner.run_project_direct(platform_target="macOS", background=False))
+        process.wait.assert_called_once_with()
+        cleanup.assert_called_once_with(managed)
 
 
 class TestRunnerLaunchTargetDetection(unittest.TestCase):
