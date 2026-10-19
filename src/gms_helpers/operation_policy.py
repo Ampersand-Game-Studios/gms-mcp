@@ -37,6 +37,7 @@ PROJECT_MUTATIONS = frozenset(
         "room-layer-remove",
         "room-instance-add",
         "room-instance-remove",
+        "room-tilemap-patch",
         "texture-group-create",
         "texture-group-update",
         "texture-group-rename",
@@ -89,6 +90,8 @@ _ADDITIVE_OPERATIONS = frozenset(
 # These operations do not edit GameMaker resources. Keep their real side effects
 # explicit rather than pretending every operation outside PROJECT_MUTATIONS reads.
 _OPERATION_SCOPES = {
+    "room-tilemap-query": "read",
+    "room-map-validate": "read",
     **dict.fromkeys(
         "doc-lookup doc-search doc-list doc-categories doc-cache-clear build-index".split(),
         "cache",

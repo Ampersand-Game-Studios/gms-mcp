@@ -131,13 +131,13 @@ class TestInstallParity(unittest.TestCase):
                         "--profile",
                         "full",
                         "--toolsets",
-                        "events,rooms",
+                        "events,map,rooms",
                         "--dry-run",
                     ]
                 )
             self.assertEqual(full_code, 0, msg=full_buffer.getvalue())
             full_payload = json.loads(full_buffer.getvalue()[full_buffer.getvalue().index("{") :])
-            self.assertEqual(full_payload["mcpServers"]["gms"]["env"]["GMS_MCP_TOOLSETS"], "events,rooms")
+            self.assertEqual(full_payload["mcpServers"]["gms"]["env"]["GMS_MCP_TOOLSETS"], "events,map,rooms")
             self.assertEqual(full_payload["mcpServers"]["gms"]["env"]["GMS_MCP_REQUIRE_DRY_RUN"], "0")
             self.assertEqual(full_payload["mcpServers"]["gms"]["env"]["GMS_MCP_READ_ONLY"], "0")
 
