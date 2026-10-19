@@ -689,3 +689,59 @@ def test_bridge_screenshot_preserves_foreign_files(tmp_path, monkeypatch, attack
     else:
         assert not live_session.screenshot(root, timeout_seconds=0)["ok"]
     assert foreign.read_bytes() == b"keep"
+
+
+@pytest.mark.parametrize("failure", ["bridge", "preparation", "launch"])
+def test_startup_rollback_closes_bridge_and_releases_both_leases(tmp_path, monkeypatch, failure):
+    root = tmp_path / "project"
+    work = tmp_path / "work"
+    work.mkdir()
+    archive = work / "game.zip"
+    with zipfile.ZipFile(archive, "w") as package:
+        package.writestr("game.ios", b"data")
+    save = tmp_path / "save"
+    staging = save / "session_test"
+    staging.mkdir(parents=True)
+    (save / "existing-save.txt").write_text("keep")
+    closed = []
+    monkeypatch.setenv("GMS_MCP_LOCK_DIR", str(tmp_path / "locks"))
+    monkeypatch.setattr(
+        snapshot_build,
+        "snapshot_compile",
+        lambda *args, **kwargs: (
+            {"ok": True, "label": "rollback"},
+            snapshot_build.BuildResult(True, "COMPILE_OK", game_archive=archive),
+            work,
+            None,
+        ),
+    )
+    monkeypatch.setattr(snapshot_build, "require_mac_runner", lambda tools: Path("runner"))
+    monkeypatch.setattr(
+        live_session,
+        "BridgeServer",
+        lambda **kwargs: SimpleNamespace(
+            start=lambda: failure != "bridge",
+            stop=lambda: closed.append(True),
+            port=0,
+        ),
+    )
+
+    def prepare(*args):
+        if failure == "preparation":
+            raise OSError("runner preparation failed")
+        return mac_runtime.MacRuntime(Path("runner"), staging, save, "fixture.bundle")
+
+    monkeypatch.setattr(live_session, "prepare_mac_runtime", prepare)
+    monkeypatch.setattr(
+        snapshot_build, "launch_mac_runner", lambda *args: (_ for _ in ()).throw(OSError("launch failed"))
+    )
+    with pytest.raises(snapshot_build.SnapshotError if failure == "bridge" else OSError):
+        live_session.start(root, label="rollback", connect_timeout_seconds=0)
+    assert closed == [True]
+    assert not work.exists()
+    if failure == "launch":
+        assert not staging.exists()
+    assert (save / "existing-save.txt").read_text() == "keep"
+    assert not mac_runtime.project_run_lock(root).path.exists()
+    assert not snapshot_build.pipeline_lock(root, "rollback").path.exists()
+    assert live_session.get_session(root) is None
