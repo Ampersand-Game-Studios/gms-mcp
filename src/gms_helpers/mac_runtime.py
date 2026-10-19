@@ -49,10 +49,22 @@ def prepare_mac_runtime(runner: Path, project_root: Path, label: str) -> MacRunt
     staging = Path(tempfile.mkdtemp(prefix="session_", dir=save_dir))
     bundle = staging / "Runner.app"
     try:
-        shutil.copytree(runner.parents[2], bundle, symlinks=True)
+        # Dereference bundle links into the private copy before editing or signing.
+        # A linked Info.plist (or Contents directory) must never write through to
+        # the installed runtime.
+        shutil.copytree(runner.parents[2], bundle, symlinks=False)
         plist_path = bundle / "Contents" / "Info.plist"
         with plist_path.open("rb") as stream:
             info = plistlib.load(stream)
+        executable = info.get("CFBundleExecutable")
+        if (
+            not isinstance(executable, str)
+            or not executable
+            or executable in {".", ".."}
+            or "/" in executable
+            or "\\" in executable
+        ):
+            raise ValueError("The runner bundle has an invalid executable name")
         info["CFBundleIdentifier"] = bundle_id
         info["CFBundleDisplayName"] = f"{project_root.name}: {label}"
         info["CFBundleName"] = f"{project_root.name}: {label}"
@@ -64,7 +76,7 @@ def prepare_mac_runtime(runner: Path, project_root: Path, label: str) -> MacRunt
             capture_output=True,
             text=True,
         )
-        return MacRuntime(bundle / "Contents" / "MacOS" / info["CFBundleExecutable"], staging, save_dir, bundle_id)
+        return MacRuntime(bundle / "Contents" / "MacOS" / executable, staging, save_dir, bundle_id)
     except BaseException:
         shutil.rmtree(staging, ignore_errors=True)
         raise

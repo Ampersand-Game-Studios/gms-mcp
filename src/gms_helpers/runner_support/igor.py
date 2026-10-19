@@ -34,7 +34,7 @@ class RunnerIgorMixin:
 
     @staticmethod
     def _igor_rejected_command(output_lines: List[str]) -> bool:
-        return any("igor: unknown command" in line.lower() for line in output_lines)
+        return any("igor" in line.lower() and "unknown command" in line.lower() for line in output_lines)
 
     def _is_retryable_igor_failure(self, returncode: int, output_lines: List[str]) -> bool:
         output = "\n".join(output_lines)
@@ -373,12 +373,15 @@ class RunnerIgorMixin:
                 self.find_project_file()
                 from .. import snapshot_build
                 import shutil
+
                 self._clear_last_result("snapshot compile")
                 work = None
                 try:
                     with snapshot_build.label_pipeline(self.project_root, "compile"):
                         public, build, work, _tools = snapshot_build.snapshot_compile(
-                            self.project_root, label="compile", runtime=runtime_type,
+                            self.project_root,
+                            label="compile",
+                            runtime=runtime_type,
                             runtime_version=self.runtime_version,
                         )
                     if not build.ok:
@@ -395,17 +398,23 @@ class RunnerIgorMixin:
             project_name = project_file.stem
             ide_temp_dir = system_temp / "GameMakerStudio2" / project_name
             ide_temp_dir.mkdir(parents=True, exist_ok=True)
+            # HTML5 folder export copies the entire output directory. Its target
+            # must be a sibling, never a child that would recursively copy itself.
+            html5_output_dir = ide_temp_dir.with_name(project_name + "_html5")
             android_baseline_packages = (
                 self._verified_android_packages(ide_temp_dir) if platform_target == "Android" else {}
             )
             html5_baseline_artifacts = (
-                self._verified_html5_artifacts(ide_temp_dir) if platform_target == "HTML5" else {}
+                self._verified_html5_artifacts(html5_output_dir) if platform_target == "HTML5" else {}
             )
 
             compile_action = "Package" if platform_target in {"Android", "Linux"} else "PackageZip"
             output_args = [f"/of={ide_temp_dir / project_name}"]
             if platform_target == "Windows":
                 output_args.append(f"--tf={ide_temp_dir / (project_name + '.zip')}")
+            if platform_target == "HTML5":
+                compile_action = "folder"
+                output_args.append(f"/tf={html5_output_dir}")
             cmd = self._build_platform_action_command(
                 compile_action,
                 platform_target,
@@ -420,6 +429,15 @@ class RunnerIgorMixin:
             process.wait()
 
             if process.returncode == 0 and not self._igor_rejected_command(output_lines):
+                if platform_target == "HTML5" and not self._verified_html5_package_exists(
+                    html5_output_dir, html5_baseline_artifacts
+                ):
+                    failure_message = (
+                        "HTML5 export completed without a new verified index.html and JavaScript artifact."
+                    )
+                    self._remember_failure(failure_message)
+                    print(f"[ERROR] {failure_message}")
+                    return False
                 if platform_target == "Android" and not self._verified_new_android_package_exists(
                     ide_temp_dir,
                     android_baseline_packages,
@@ -437,7 +455,7 @@ class RunnerIgorMixin:
             if platform_target == "HTML5" and self._is_verified_html5_target_type_false_failure(
                 process.returncode,
                 output_lines,
-                ide_temp_dir,
+                html5_output_dir,
                 html5_baseline_artifacts,
             ):
                 print(

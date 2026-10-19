@@ -437,7 +437,11 @@ class TestRunnerBackgroundMode(unittest.TestCase):
         with patch("gms_helpers.live_session.start", return_value={"ok": False, "running": False}) as start:
             self.assertFalse(runner.run_project_direct(platform_target="macOS", output_location="temp"))
         start.assert_called_once_with(
-            runner.project_root, label="run", runtime="VM", runtime_version=None, connect_timeout_seconds=0.5,
+            runner.project_root,
+            label="run",
+            runtime="VM",
+            runtime_version=None,
+            connect_timeout_seconds=0.5,
         )
 
     @patch.object(GameMakerRunner, "_run_project_classic_approach")
@@ -457,11 +461,19 @@ class TestRunnerBackgroundMode(unittest.TestCase):
         runner = GameMakerRunner(self.project_root)
         process = MagicMock(pid=222)
         session = runner._session_manager.create_session(
-            pid=222, exe_path="/owned/session/game.ios", platform_target="macOS", isolated_runtime=True,
+            pid=222,
+            exe_path="/owned/session/game.ios",
+            platform_target="macOS",
+            isolated_runtime=True,
         )
         with (
-            patch("gms_helpers.live_session.start", return_value={"ok": True, "running": True, "pid": 222}),
-            patch("gms_helpers.live_session.get_session", return_value=MagicMock(process=process)),
+            patch(
+                "gms_helpers.live_session.start",
+                return_value={"ok": True, "running": True, "pid": 222, "run_id": session.run_id},
+            ),
+            patch(
+                "gms_helpers.live_session.get_session", return_value=MagicMock(process=process, run_id=session.run_id)
+            ),
             patch.object(runner, "_run_igor_command") as generic_run,
         ):
             result = runner.run_project_direct(platform_target="macOS", background=True)
@@ -473,17 +485,25 @@ class TestRunnerBackgroundMode(unittest.TestCase):
     def test_macos_foreground_waits_for_owned_game_and_cleans_just_its_session(self):
         runner = GameMakerRunner(self.project_root)
         process = MagicMock(pid=222, returncode=0)
-        runner._session_manager.create_session(
-            pid=222, exe_path="/owned/session/game.ios", platform_target="macOS", isolated_runtime=True,
+        managed = MagicMock(process=process)
+        session = runner._session_manager.create_session(
+            pid=222,
+            exe_path="/owned/session/game.ios",
+            platform_target="macOS",
+            isolated_runtime=True,
         )
+        managed.run_id = session.run_id
         with (
-            patch("gms_helpers.live_session.start", return_value={"ok": True, "running": True, "pid": 222}),
-            patch("gms_helpers.live_session.get_session", return_value=MagicMock(process=process)),
-            patch("gms_helpers.live_session.stop") as stop,
+            patch(
+                "gms_helpers.live_session.start",
+                return_value={"ok": True, "running": True, "pid": 222, "run_id": session.run_id},
+            ),
+            patch("gms_helpers.live_session.get_session", return_value=managed),
+            patch("gms_helpers.live_session._cleanup") as cleanup,
         ):
             self.assertTrue(runner.run_project_direct(platform_target="macOS", background=False))
         process.wait.assert_called_once_with()
-        stop.assert_called_once_with(runner.project_root)
+        cleanup.assert_called_once_with(managed)
 
 
 class TestRunnerLaunchTargetDetection(unittest.TestCase):

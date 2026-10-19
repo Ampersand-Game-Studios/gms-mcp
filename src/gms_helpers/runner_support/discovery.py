@@ -45,6 +45,7 @@ class RunnerDiscoveryMixin:
                 self.project_root = gamemaker_subdir.resolve()
                 from ..run_session import RunSessionManager
                 from ..runtime_manager import RuntimeManager
+
                 self._session_manager = RunSessionManager(self.project_root)
                 self._runtime_manager = RuntimeManager(self.project_root)
                 return self.yyp_file

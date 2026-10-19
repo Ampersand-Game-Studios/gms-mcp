@@ -401,13 +401,21 @@ class TestRunnerGapCoverage(unittest.TestCase):
 
     def test_macos_snapshot_compile_preserves_existing_game_log(self):
         from gms_helpers.snapshot_build import BuildResult
+
         runner = self._make_runner()
         debug_log = self.project_root / "debug.log"
         debug_log.write_text("foreign running game")
-        work = self.project_root / "snapshot-work"; work.mkdir()
-        with patch("gms_helpers.snapshot_build.snapshot_compile", return_value=(
-            {"ok": True}, BuildResult(True, "COMPILE_OK"), work, None,
-        )):
+        work = self.project_root / "snapshot-work"
+        work.mkdir()
+        with patch(
+            "gms_helpers.snapshot_build.snapshot_compile",
+            return_value=(
+                {"ok": True},
+                BuildResult(True, "COMPILE_OK"),
+                work,
+                None,
+            ),
+        ):
             self.assertTrue(runner._compile_project_once("macOS", "VM"))
         self.assertEqual(debug_log.read_text(), "foreign running game")
         self.assertFalse(work.exists())
@@ -480,12 +488,20 @@ class TestRunnerGapCoverage(unittest.TestCase):
 
     def test_macos_snapshot_compile_never_discovers_or_stops_game_processes(self):
         from gms_helpers.snapshot_build import BuildResult
+
         runner = self._make_runner()
-        work = self.project_root / "snapshot-work"; work.mkdir()
+        work = self.project_root / "snapshot-work"
+        work.mkdir()
         with (
-            patch("gms_helpers.snapshot_build.snapshot_compile", return_value=(
-                {"ok": True}, BuildResult(True, "COMPILE_OK"), work, None,
-            )),
+            patch(
+                "gms_helpers.snapshot_build.snapshot_compile",
+                return_value=(
+                    {"ok": True},
+                    BuildResult(True, "COMPILE_OK"),
+                    work,
+                    None,
+                ),
+            ),
             patch.object(runner, "_snapshot_macos_processes") as processes,
             patch.object(runner, "_stop_platform_process") as stop,
         ):
@@ -564,10 +580,18 @@ class TestRunnerGapCoverage(unittest.TestCase):
     def test_compile_and_run_paths(self):
         runner = self._make_runner()
         from gms_helpers.snapshot_build import BuildResult
-        work = self.project_root / "snapshot-work"; work.mkdir()
-        with patch("gms_helpers.snapshot_build.snapshot_compile", return_value=(
-            {"ok": False, "message": "compile error"}, BuildResult(False, "BUILD_FAILED"), work, None,
-        )):
+
+        work = self.project_root / "snapshot-work"
+        work.mkdir()
+        with patch(
+            "gms_helpers.snapshot_build.snapshot_compile",
+            return_value=(
+                {"ok": False, "message": "compile error"},
+                BuildResult(False, "BUILD_FAILED"),
+                work,
+                None,
+            ),
+        ):
             self.assertFalse(runner.compile_project(platform_target="macOS"))
         self.assertEqual(runner.last_failure_message, "compile error")
 

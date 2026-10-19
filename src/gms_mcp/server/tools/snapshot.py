@@ -163,7 +163,7 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         isolate_paths / yyp_entries / base_only / ref work as in gm_snapshot_compile.
         Different macOS projects run concurrently; waiting for a project lease is reported
         separately and does not count towards the timeout. Read more of the log afterwards
-        with gm_run_log(label=...). Running the game needs a macOS host.
+        with gm_run_log(label=...). Running the game needs a macOS host and runtime="VM".
         """
         _ = ctx
         from gms_helpers.snapshot_build import run_test

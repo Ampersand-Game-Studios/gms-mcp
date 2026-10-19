@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import Optional, Dict, Any, List
 
 from .utils import atomic_write_text
+from .mac_runtime import project_identity
 
 
 @dataclass
@@ -64,21 +65,25 @@ class RunSessionManager:
     """
     Manages persistent run sessions for GameMaker games.
 
-    Session data is stored in .gms_mcp/sessions/ relative to project root.
+    Process and cleanup authority is stored outside the project checkout. A repository
+    must never be able to supply a current.json that authorizes signals or file deletion.
     """
 
-    SESSIONS_DIR = ".gms_mcp/sessions"
     CURRENT_SESSION_FILE = "current.json"
     _run_id_lock = threading.Lock()
     _last_run_id_ns = 0
 
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root).resolve()
-        self.sessions_dir = self.project_root / self.SESSIONS_DIR
+        self.sessions_dir = self._state_root() / project_identity(self.project_root)
+
+    @staticmethod
+    def _state_root() -> Path:
+        return Path.home() / ".gms-mcp" / "sessions"
 
     def _ensure_sessions_dir(self) -> Path:
         """Ensure the sessions directory exists."""
-        self.sessions_dir.mkdir(parents=True, exist_ok=True)
+        self.sessions_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
         return self.sessions_dir
 
     def _current_session_path(self) -> Path:
@@ -181,8 +186,11 @@ class RunSessionManager:
         try:
             with open(session_path, "r", encoding="utf-8") as f:
                 data = json.load(f)
-            return RunSession.from_dict(data)
-        except (json.JSONDecodeError, KeyError, TypeError) as e:
+            session = RunSession.from_dict(data)
+            if session.project_root != str(self.project_root):
+                raise ValueError("Session belongs to a different project")
+            return session
+        except (ValueError, KeyError, TypeError) as e:
             print(f"[SESSION] Failed to read session file: {e}")
             return None
 
@@ -296,7 +304,14 @@ class RunSessionManager:
                 "message": "No game session found",
             }
 
-        is_running = self.is_process_alive(session.pid)
+        if session.isolated_runtime:
+            from .runner import GameMakerRunner
+
+            runner = GameMakerRunner(self.project_root)
+            owned, _ = runner._tracked_macos_helper_pids(session, runner._snapshot_macos_processes())
+            is_running = session.pid in owned
+        else:
+            is_running = self.is_process_alive(session.pid)
 
         return {
             "has_session": True,

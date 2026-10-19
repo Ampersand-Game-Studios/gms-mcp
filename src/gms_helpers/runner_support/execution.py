@@ -40,9 +40,13 @@ class RunnerExecutionMixin:
                     self._remember_failure(result.get("message", "Game did not start"))
                     return result if background else False
                 managed = live_session.get_session(self.project_root)
+                if managed is None or managed.run_id != result.get("run_id"):
+                    raise live_session.LiveSessionError("The owned game session ended before it could be returned.")
                 self.game_process = managed.process
-                persisted = self._session_manager.get_current_session()
                 if background:
+                    persisted = self._session_manager.get_current_session()
+                    if persisted is None or persisted.run_id != managed.run_id:
+                        raise live_session.LiveSessionError("The owned game session exited during startup.")
                     return {
                         **result,
                         "ok": True,
@@ -50,9 +54,11 @@ class RunnerExecutionMixin:
                         "run_id": persisted.run_id,
                         "exe_path": persisted.exe_path,
                     }
-                self.game_process.wait()
-                live_session.stop(self.project_root)
-                return self.game_process.returncode == 0
+                managed.process.wait()
+                # Natural-exit cleanup may already have released this project's
+                # lease and allowed a replacement session. Clean only our handle.
+                live_session._cleanup(managed)
+                return managed.process.returncode == 0
             except Exception as exc:
                 self._remember_failure(str(exc))
                 return {"ok": False, "background": True, "message": str(exc)} if background else False

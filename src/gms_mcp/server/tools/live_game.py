@@ -37,6 +37,7 @@ def register(mcp: Any, ContextType: Any) -> None:
           gm_game_log(lines)         the game's full log (every show_debug_message line)
           gm_game_stop()             stop this project session when finished
         Snapshot options (isolate_paths, yyp_entries, base_only, ref) work as in gm_snapshot_compile.
+        Isolated macOS runs require runtime="VM"; YYC needs a separate native application.
 
         The game connects only if the project has a bridge endpoint enabled for this build that
         reads the GMS_MCP_BRIDGE_PORT environment variable. status RUNNING_NOT_CONNECTED means

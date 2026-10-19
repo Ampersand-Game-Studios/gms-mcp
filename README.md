@@ -182,7 +182,7 @@ The generated client configurations use **stdio**, with the client starting a lo
 
 ## Compatibility and limits
 
-**GameMaker:** build/run defaults follow the host platform: Windows, macOS, or Linux. VM and YYC runtime labels are supported, subject to installed toolchains. GMRT labels are currently rejected because the required Igor command-line contract is not implemented. Runtime selection and pinning are available through `gm_runtime_list`, `gm_runtime_pin`, `gm_runtime_unpin`, and `gm_runtime_verify` in the `runtime` toolset.
+**GameMaker:** build/run defaults follow the host platform: Windows, macOS, or Linux. VM and YYC compilation depend on installed toolchains; isolated macOS runs currently support VM only and reject YYC before launch. GMRT labels are currently rejected because the required Igor command-line contract is not implemented. Runtime selection and pinning are available through `gm_runtime_list`, `gm_runtime_pin`, `gm_runtime_unpin`, and `gm_runtime_verify` in the `runtime` toolset.
 
 **AI clients:** installer support means configuration generation and repository tests, not certification of every client release. Optional dashboard rendering, resource subscriptions, and Resolve choices depend on negotiated client capabilities. The dashboard also returns text and structured data without MCP Apps support.
 

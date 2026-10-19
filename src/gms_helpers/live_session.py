@@ -34,7 +34,7 @@ from typing import Any, Iterable
 
 from . import snapshot_build
 from .agent_locks import DirectoryLock
-from .mac_runtime import prepare_mac_runtime, project_run_lock
+from .mac_runtime import prepare_mac_runtime, project_identity, project_run_lock
 from .bridge_server import BridgeServer
 from .project_config import project_setting
 from .run_session import RunSessionManager
@@ -231,6 +231,7 @@ def _start(
     threading.Thread(target=_watch_exit, args=(session,), daemon=True, name=f"gms-game-{process.pid}").start()
 
     public["pid"] = process.pid
+    public["run_id"] = session.run_id
     public["save_directory"] = str(owned_runtime.save_dir)
     public["bundle_id"] = owned_runtime.bundle_id
     public["connected"] = bridge.is_connected
@@ -343,9 +344,13 @@ def screenshot(project_root: str | Path, name: str = "shot", timeout_seconds: fl
     raw_data = answer.get("data")
     data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else {}
     source = Path(str(data.get("file", ""))) if data.get("file") else None
-    if source is not None and not source.resolve().is_relative_to(session.save_dir.resolve()):
+    if source is not None and (
+        source.is_symlink() or source.resolve().parent != session.save_dir.resolve() or source.suffix.lower() != ".png"
+    ):
         return {"ok": False, "error": "The screenshot path is outside this session's save directory."}
     shots_dir = session.run_dir / "shots"
+    if shots_dir.is_symlink():
+        raise LiveSessionError("The screenshot destination must not be a symlink.")
     shots_dir.mkdir(parents=True, exist_ok=True)
     deadline = time.monotonic() + timeout_seconds
     # screen_save writes at the end of the frame; wait for a complete file.
@@ -361,6 +366,8 @@ def screenshot(project_root: str | Path, name: str = "shot", timeout_seconds: fl
             "hint": 'The endpoint must answer with JSON {"file": "<absolute path>"} after calling screen_save.',
         }
     target = shots_dir / f"{safe}.png"
+    if source.is_symlink() or source.resolve().parent != session.save_dir.resolve() or target.is_symlink():
+        raise LiveSessionError("Screenshot paths changed or contain a symlink; preserving the files.")
     shutil.move(str(source), str(target))
     return {
         "ok": True,
@@ -423,6 +430,11 @@ def stop_persisted(project_root: str | Path, persisted: Any) -> dict[str, Any]:
     """Stop only the persisted command/start identity, never Igor's shared Stop action."""
     from .runner import GameMakerRunner
 
+    manager = RunSessionManager(Path(project_root))
+    current_session = manager.get_current_session()
+    if current_session is None or current_session.to_dict() != persisted.to_dict():
+        return {"ok": True, "stopped": False, "message": "Original session has already been replaced or cleaned."}
+    _persisted_paths(project_root, persisted)
     runner = GameMakerRunner(Path(project_root))
     processes = runner._snapshot_macos_processes()
     owned, _ = runner._tracked_macos_helper_pids(persisted, processes)
@@ -443,41 +455,59 @@ def stop_persisted(project_root: str | Path, persisted: Any) -> dict[str, Any]:
         lease = project_run_lock(project_root)
         lease.acquire(timeout_seconds=5)
         cleanup_stack.callback(lease.release)
-        manager = RunSessionManager(Path(project_root))
-        current_session = manager.get_current_session()
-        if current_session is not None and current_session.run_id == persisted.run_id:
-            run_dir = snapshot_build.runs_directory(project_root, label)
-            run_dir.mkdir(parents=True, exist_ok=True)
-            log = Path(persisted.log_file) if persisted.log_file else None
-            if log is not None and log.is_file() and log.resolve() != (run_dir / "run.log").resolve():
-                shutil.copy2(log, run_dir / "run.log")
-            if persisted.runtime_save_dir:
-                from .mac_runtime import project_identity
-
-                save_dir = Path(persisted.runtime_save_dir)
-                expected_save = (
-                    Path.home()
-                    / "Library"
-                    / "Application Support"
-                    / f"com.gmsmcp.game.p{project_identity(project_root)}"
-                )
-                if save_dir.resolve() != expected_save.resolve():
-                    raise LiveSessionError("Persisted save identity does not match this project; preserving its files.")
-                snapshot_build.collect_screenshots(
-                    run_dir / "shots",
-                    str(project_setting(project_root, "test.screenshot_prefix", "__agent_shot_")),
-                    0,
-                    save_dir,
-                )
-                staging = Path(persisted.exe_path).parent
-                if staging.parent == save_dir and staging.name.startswith("session_"):
-                    shutil.rmtree(staging, ignore_errors=True)
-            if persisted.runtime_work_dir:
-                work = Path(persisted.runtime_work_dir)
-                if work.parent.resolve() == snapshot_build._work_root().resolve():
-                    shutil.rmtree(work, ignore_errors=True)
-            manager.clear_session()
+        _archive_persisted(project_root, persisted)
     return {"ok": True, "stopped": bool(owned), "pid": persisted.pid, "message": "Owned game stopped."}
+
+
+def _archive_persisted(project_root: str | Path, persisted: Any) -> None:
+    """Archive a dead predecessor while the caller holds the project lease."""
+    manager = RunSessionManager(Path(project_root))
+    current = manager.get_current_session()
+    if current is None or current.to_dict() != persisted.to_dict():
+        return
+    save_dir, staging, log, work = _persisted_paths(project_root, persisted)
+    run_dir = snapshot_build.runs_directory(project_root, persisted.runtime_label or "run")
+    run_dir.mkdir(parents=True, exist_ok=True)
+    if log is not None and log.is_file():
+        destination = run_dir / "run.log"
+        if destination.is_symlink():
+            raise LiveSessionError("Refusing to overwrite a run-log symlink.")
+        snapshot_build.copy_artifact(log, destination)
+    snapshot_build.collect_screenshots(
+        run_dir / "shots",
+        str(project_setting(project_root, "test.screenshot_prefix", "__agent_shot_")),
+        0,
+        save_dir,
+    )
+    shutil.rmtree(staging, ignore_errors=True)
+    if work is not None:
+        shutil.rmtree(work, ignore_errors=True)
+    manager.clear_session()
+
+
+def _persisted_paths(project_root: str | Path, persisted: Any) -> tuple[Path, Path, Path | None, Path | None]:
+    """Check every cleanup path before any signals, reads or removals."""
+    expected_save = (
+        Path.home() / "Library" / "Application Support" / f"com.gmsmcp.game.p{project_identity(project_root)}"
+    ).resolve()
+    save_dir = Path(persisted.runtime_save_dir or "")
+    staging = Path(persisted.exe_path).parent
+    log = Path(persisted.log_file) if persisted.log_file else None
+    work = Path(persisted.runtime_work_dir) if persisted.runtime_work_dir else None
+    if (
+        not persisted.runtime_save_dir
+        or save_dir.resolve() != expected_save
+        or staging != staging.resolve()
+        or staging.parent != expected_save
+        or not staging.name.startswith("session_")
+        or (log is not None and (log != staging / "debug.txt" or log.resolve() != log))
+        or (
+            work is not None
+            and (work != work.resolve() or work.resolve().parent != snapshot_build._work_root().resolve())
+        )
+    ):
+        raise LiveSessionError("Persisted runtime paths do not match this project; preserving its files and processes.")
+    return save_dir, staging, log, work
 
 
 def _cleanup(session: LiveSession) -> list[Path]:
@@ -489,8 +519,10 @@ def _cleanup(session: LiveSession) -> list[Path]:
         shots: list[Path] = []
         try:
             session.run_dir.mkdir(parents=True, exist_ok=True)
+            if session.debug_log.is_symlink() or (session.run_dir / "run.log").is_symlink():
+                raise LiveSessionError("Refusing to archive a run-log symlink.")
             if session.debug_log.is_file():
-                shutil.copy2(session.debug_log, session.run_dir / "run.log")
+                snapshot_build.copy_artifact(session.debug_log, session.run_dir / "run.log")
                 # Keep log access available after staging is removed.
                 session.debug_log = session.run_dir / "run.log"
             shots = snapshot_build.collect_screenshots(
@@ -519,6 +551,7 @@ def _watch_exit(session: LiveSession) -> None:
 
 def start(project_root: str | Path, **options: Any) -> dict[str, Any]:
     """Own this project's runtime and artifact label before compiling or launching."""
+    snapshot_build.require_vm_runtime(options.get("runtime", "VM"))
     existing = get_session(project_root)
     if existing is not None and existing.alive:
         raise LiveSessionError(f"A live game ('{existing.label}') is already running for this project.")
@@ -535,6 +568,17 @@ def start(project_root: str | Path, **options: Any) -> dict[str, Any]:
     try:
         lock.acquire(timeout_seconds=timeout)
         try:
+            # A concurrent launcher may have published a session while we waited.
+            # Reconcile it under our lease before replacing its logs or metadata.
+            predecessor = RunSessionManager(Path(project_root)).get_current_session()
+            if predecessor is not None and predecessor.isolated_runtime:
+                from .runner import GameMakerRunner
+
+                runner = GameMakerRunner(Path(project_root))
+                owned, _ = runner._tracked_macos_helper_pids(predecessor, runner._snapshot_macos_processes())
+                if owned:
+                    raise LiveSessionError("An owned game is already running for this project. Use gm_game_stop first.")
+                _archive_persisted(project_root, predecessor)
             public = _start(project_root, lock=lock, label_lock=label_lock, **options)
             if not public.get("running"):
                 lock.release()

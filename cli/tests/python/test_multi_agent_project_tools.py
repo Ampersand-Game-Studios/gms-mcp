@@ -678,6 +678,27 @@ def test_igor_access_violation_is_retried_until_it_compiles(repo: Path, tmp_path
         assert mobile.calls[0][-3:] == ["--", platform, action]
 
 
+def test_html5_snapshot_requires_real_web_output(repo: Path, tmp_path: Path, lock_dir: Path):
+    work = tmp_path / "html5-build"
+    calls = []
+
+    def igor(command, log, timeout):
+        calls.append(command)
+        log.write_text("Stats : GMA : Elapsed=2.0\nIgor complete.\n")
+        if len(calls) == 1:
+            output = work / "html5"
+            output.mkdir()
+            (output / "index.html").write_text("<script src='game.js'></script>")
+            (output / "game.js").write_text("window.game=true;")
+        return 0
+
+    result = snapshot_build.compile_snapshot(repo, work, _toolchain(tmp_path), platform="HTML5", run_igor=igor)
+    assert result.ok and calls[0][-3:] == ["--", "HTML5", "folder"]
+    assert f"/tf={work / 'html5'}" in calls[0]
+    stale = snapshot_build.compile_snapshot(repo, work, _toolchain(tmp_path), platform="HTML5", run_igor=igor)
+    assert not stale.ok and "HTML5 export" in stale.errors[0]
+
+
 def test_snapshot_builds_keep_their_own_log_and_serialise_mobile_targets(repo: Path, tmp_path: Path, lock_dir: Path):
     seen: dict[str, object] = {}
     inner = _fake_igor(["ok"])
@@ -858,7 +879,6 @@ def test_platform_names_and_runner_staging(monkeypatch: pytest.MonkeyPatch, tmp_
         snapshot_build.igor_platform("Dreamcast")
 
 
-
 # ----------------------------------------------------------------------
 # Partial commits
 # ----------------------------------------------------------------------
@@ -899,6 +919,26 @@ def test_stage_paths_keeps_registrations_already_in_the_index(repo: Path, lock_d
     stage_paths(repo, ["scripts/mine"])
     index_yyp = _git(repo, "show", ":game.yyp")
     assert "scripts/mine/mine.yy" in index_yyp and "scripts/theirs/theirs.yy" in index_yyp
+
+
+@pytest.mark.parametrize("path", ["scripts/alpha", "scripts/alpha/alpha.gml"])
+def test_stage_paths_can_repeat_an_already_staged_deletion(repo: Path, lock_dir: Path, path: str):
+    import shutil
+    from gms_helpers.vcs_stage import VcsError
+
+    target = repo / path
+    if target.is_dir():
+        shutil.rmtree(target)
+        yyp_registry.unregister_assets(repo, ["scripts/alpha/alpha.yy"])
+    else:
+        target.unlink()
+    stage_paths(repo, [path])
+    before = _git(repo, "diff", "--cached")
+    repeated = stage_paths(repo, [path])
+    assert repeated["ok"] and not repeated["committed"]
+    assert _git(repo, "diff", "--cached") == before
+    with pytest.raises(VcsError, match="pathspec"):
+        stage_paths(repo, ["scripts/never-existed"])
 
 
 def test_stage_paths_recomposes_the_project_file_when_a_folder_covers_it(repo: Path, lock_dir: Path):
@@ -1176,15 +1216,22 @@ def test_live_session_start_command_screenshot_and_stop(repo: Path, tmp_path: Pa
         return staging, staging / "game.ios"
 
     from types import SimpleNamespace
-    monkeypatch.setattr("gms_helpers.runner.GameMakerRunner._snapshot_macos_processes",
-                        lambda self: {4242: SimpleNamespace(command="fake runner", started="fake birth")})
+
+    monkeypatch.setattr(
+        "gms_helpers.runner.GameMakerRunner._snapshot_macos_processes",
+        lambda self: {4242: SimpleNamespace(command="fake runner", started="fake birth")},
+    )
     monkeypatch.setattr(snapshot_build, "snapshot_compile", fake_compile)
     monkeypatch.setattr(snapshot_build, "require_mac_runner", lambda _tools: tmp_path / "Mac_Runner")
     monkeypatch.setattr(snapshot_build, "stage_game_archive", fake_stage)
     monkeypatch.setattr(snapshot_build, "launch_mac_runner", fake_launch)
     from gms_helpers.mac_runtime import MacRuntime
-    monkeypatch.setattr(live_session, "prepare_mac_runtime",
-        lambda runner, root, label: MacRuntime(runner, staging, save_dir, "test.bundle"))
+
+    monkeypatch.setattr(
+        live_session,
+        "prepare_mac_runtime",
+        lambda runner, root, label: MacRuntime(runner, staging, save_dir, "test.bundle"),
+    )
 
     failed = live_session.start(repo, label="broken")
     assert failed["connected"] is False and failed["status"] == "BUILD_FAILED"
@@ -1251,15 +1298,22 @@ def test_live_session_reports_a_game_that_exits_or_never_connects(
         return process, log
 
     from types import SimpleNamespace
-    monkeypatch.setattr("gms_helpers.runner.GameMakerRunner._snapshot_macos_processes",
-                        lambda self: {4242: SimpleNamespace(command="fake runner", started="fake birth")})
+
+    monkeypatch.setattr(
+        "gms_helpers.runner.GameMakerRunner._snapshot_macos_processes",
+        lambda self: {4242: SimpleNamespace(command="fake runner", started="fake birth")},
+    )
     monkeypatch.setattr(snapshot_build, "snapshot_compile", fake_compile)
     monkeypatch.setattr(snapshot_build, "require_mac_runner", lambda _tools: tmp_path / "Mac_Runner")
     monkeypatch.setattr(snapshot_build, "stage_game_archive", fake_stage)
     monkeypatch.setattr(snapshot_build, "launch_mac_runner", fake_launch)
     from gms_helpers.mac_runtime import MacRuntime
-    monkeypatch.setattr(live_session, "prepare_mac_runtime",
-        lambda runner, root, label: MacRuntime(runner, staging, tmp_path / "nosave", "test.bundle"))
+
+    monkeypatch.setattr(
+        live_session,
+        "prepare_mac_runtime",
+        lambda runner, root, label: MacRuntime(runner, staging, tmp_path / "nosave", "test.bundle"),
+    )
 
     silent = live_session.start(repo, label="silent", connect_timeout_seconds=0.3)
     assert silent["status"] == "RUNNING_NOT_CONNECTED" and "GMS_MCP_BRIDGE_PORT" in silent["message"]

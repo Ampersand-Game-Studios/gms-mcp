@@ -105,15 +105,25 @@ class TestRunnerCommandSelection(unittest.TestCase):
         work = self.project_root / "compile-work"
         work.mkdir()
         from gms_helpers.snapshot_build import BuildResult
+
         with (
-            patch("gms_helpers.snapshot_build.snapshot_compile", return_value=(
-                {"ok": True}, BuildResult(True, "COMPILE_OK"), work, None,
-            )) as compile_snapshot,
+            patch(
+                "gms_helpers.snapshot_build.snapshot_compile",
+                return_value=(
+                    {"ok": True},
+                    BuildResult(True, "COMPILE_OK"),
+                    work,
+                    None,
+                ),
+            ) as compile_snapshot,
             patch.object(runner, "_run_igor_command") as launch,
         ):
             self.assertTrue(runner.compile_project(platform_target="macOS", runtime_type="VM"))
         compile_snapshot.assert_called_once_with(
-            runner.project_root, label="compile", runtime="VM", runtime_version=None,
+            runner.project_root,
+            label="compile",
+            runtime="VM",
+            runtime_version=None,
         )
         launch.assert_not_called()
         self.assertFalse(work.exists())
@@ -230,10 +240,36 @@ class TestRunnerCommandSelection(unittest.TestCase):
         self.assertNotIn("Tests", captured_cmd)
         self.assertTrue(any(str(arg).startswith("/of=") for arg in captured_cmd))
 
+    def test_html5_folder_action_requires_new_web_artifact(self):
+        runner = GameMakerRunner(self.project_root)
+        system_temp = self.project_root / "temp"
+        package = system_temp / "GameMakerStudio2/test_project_html5"
+        package.mkdir(parents=True)
+        commands = []
+
+        def run(cmd, **_kwargs):
+            commands.append(cmd)
+            if len(commands) == 1:
+                (package / "index.html").write_text("<script src='game.js'></script>")
+                (package / "game.js").write_text("window.game = true;")
+            return self._fake_process()
+
+        with (
+            patch.object(runner, "_system_temp_root", return_value=system_temp),
+            patch.object(runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)),
+            patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")),
+            patch.object(runner, "get_prefabs_path", return_value=None),
+            patch.object(runner, "_run_igor_command", side_effect=run),
+        ):
+            self.assertTrue(runner.compile_project(platform_target="HTML5"))
+            self.assertFalse(runner.compile_project(platform_target="HTML5"))
+        self.assertEqual(commands[0][-2:], ["HTML5", "folder"])
+        self.assertIn(f"/tf={package}", commands[0])
+
     def test_html5_target_type_exception_succeeds_only_with_verified_artifact(self):
         runner = GameMakerRunner(self.project_root)
         system_temp = self.project_root / "temp"
-        package_root = system_temp / "GameMakerStudio2" / "test_project" / "html5game"
+        package_root = system_temp / "GameMakerStudio2" / "test_project_html5" / "html5game"
         package_root.mkdir(parents=True)
         process = self._fake_process()
         process.returncode = 1
@@ -268,12 +304,20 @@ class TestRunnerCommandSelection(unittest.TestCase):
     def test_macos_temp_run_uses_owned_runtime_without_igor_run(self):
         runner = GameMakerRunner(self.project_root)
         process = MagicMock(pid=222)
-        runner._session_manager.create_session(
-            pid=222, exe_path="/owned/game.ios", platform_target="macOS", isolated_runtime=True,
+        session = runner._session_manager.create_session(
+            pid=222,
+            exe_path="/owned/game.ios",
+            platform_target="macOS",
+            isolated_runtime=True,
         )
         with (
-            patch("gms_helpers.live_session.start", return_value={"ok": True, "running": True, "pid": 222}),
-            patch("gms_helpers.live_session.get_session", return_value=MagicMock(process=process)),
+            patch(
+                "gms_helpers.live_session.start",
+                return_value={"ok": True, "running": True, "pid": 222, "run_id": session.run_id},
+            ),
+            patch(
+                "gms_helpers.live_session.get_session", return_value=MagicMock(process=process, run_id=session.run_id)
+            ),
             patch.object(runner, "_run_igor_command") as generic_run,
         ):
             result = runner.run_project_direct(platform_target="macOS", runtime_type="VM", background=True)

@@ -219,10 +219,18 @@ class TestRunner95Coverage(unittest.TestCase):
 
     def test_compile_project_remaining_paths(self):
         from gms_helpers.snapshot_build import BuildResult
-        work = self.project_root / "snapshot-work"; work.mkdir()
-        with patch("gms_helpers.snapshot_build.snapshot_compile", return_value=(
-            {"ok": False, "message": "compile failed"}, BuildResult(False, "BUILD_FAILED"), work, None,
-        )):
+
+        work = self.project_root / "snapshot-work"
+        work.mkdir()
+        with patch(
+            "gms_helpers.snapshot_build.snapshot_compile",
+            return_value=(
+                {"ok": False, "message": "compile failed"},
+                BuildResult(False, "BUILD_FAILED"),
+                work,
+                None,
+            ),
+        ):
             self.assertFalse(self.runner.compile_project(platform_target="macOS"))
         self.assertEqual(self.runner.last_failure_message, "compile failed")
         self.assertFalse(work.exists())
@@ -292,7 +300,9 @@ class TestRunner95Coverage(unittest.TestCase):
     def test_classic_run_and_stop_game_remaining_paths(self):
         temp_root = self.project_root / "tmp"
 
-        with patch.object(self.runner, "run_project_direct", return_value={"ok": False, "message": "owned failure"}) as owned:
+        with patch.object(
+            self.runner, "run_project_direct", return_value={"ok": False, "message": "owned failure"}
+        ) as owned:
             result = self.runner._run_project_classic_approach(platform_target="macOS", background=True)
         self.assertFalse(result["ok"])
         owned.assert_called_once_with("macOS", "VM", True, "project")

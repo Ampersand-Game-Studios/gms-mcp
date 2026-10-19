@@ -345,3 +345,333 @@ def test_bridge_screenshot_cannot_collect_another_sessions_file(tmp_path, monkey
     result = live_session.screenshot(root)
     assert not result["ok"] and "outside" in result["error"]
     assert foreign.read_bytes() == b"foreign screenshot"
+
+
+def test_checkout_cannot_supply_process_or_cleanup_authority(tmp_path, monkeypatch):
+    from gms_helpers.run_session import RunSessionManager, RunSession
+    from gms_helpers.runner import GameMakerRunner
+
+    root = tmp_path / "untrusted-project"
+    state = root / ".gms_mcp/sessions/current.json"
+    state.parent.mkdir(parents=True)
+    foreign = tmp_path / "private.txt"
+    foreign.write_text("private fixture")
+    work = tmp_path / "someone-elses-build"
+    work.mkdir()
+    (work / "keep").write_text("keep")
+    forged = RunSession(
+        run_id="forged",
+        pid=os.getpid(),
+        exe_path="unused",
+        project_root=str(root),
+        started_at="now",
+        isolated_runtime=True,
+        log_file=str(foreign),
+        runtime_work_dir=str(work),
+        macos_runner_commands={str(os.getpid()): "unrelated application"},
+        macos_runner_starts={str(os.getpid()): "now"},
+    )
+    state.write_text(json.dumps(forged.to_dict()))
+    monkeypatch.setattr(GameMakerRunner, "_terminate_pid", lambda *args: pytest.fail("unowned process signalled"))
+    assert RunSessionManager(root).get_current_session() is None
+    assert not live_session.status(root)["running"]
+    assert not live_session.stop(root)["stopped"]
+    assert not live_session.stop_persisted(root, forged)["stopped"]
+    assert foreign.read_text() == "private fixture" and (work / "keep").exists()
+    assert not (root / ".gms_mcp/runs").exists()
+
+
+@pytest.mark.parametrize("bad_path", ["log", "work", "log_symlink"])
+def test_invalid_persisted_paths_preserve_files_and_processes(tmp_path, monkeypatch, bad_path):
+    from gms_helpers.run_session import RunSessionManager
+    from gms_helpers.runner import GameMakerRunner
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    root = tmp_path / "project"
+    save = tmp_path / "Library/Application Support" / f"com.gmsmcp.game.p{mac_runtime.project_identity(root)}"
+    staging = save / "session_owned"
+    staging.mkdir(parents=True)
+    work_root = tmp_path / "work"
+    work_root.mkdir()
+    monkeypatch.setattr(snapshot_build, "_work_root", lambda: work_root)
+    foreign = tmp_path / "private.txt"
+    foreign.write_text("keep")
+    log = staging / "debug.txt"
+    work = work_root / "owned"
+    work.mkdir()
+    if bad_path == "log":
+        log = foreign
+    elif bad_path == "log_symlink":
+        log.symlink_to(foreign)
+    else:
+        (work_root / "alias").symlink_to(work_root, target_is_directory=True)
+        work = work_root / "alias/.."
+    persisted = RunSessionManager(root).create_session(
+        pid=os.getpid(),
+        exe_path=str(staging / "game.ios"),
+        isolated_runtime=True,
+        runtime_save_dir=str(save),
+        runtime_work_dir=str(work),
+        log_file=str(log),
+    )
+    monkeypatch.setattr(GameMakerRunner, "_terminate_pid", lambda *args: pytest.fail("signalled before validation"))
+    with pytest.raises(live_session.LiveSessionError, match="paths"):
+        live_session.stop_persisted(root, persisted)
+    assert foreign.read_text() == "keep" and staging.is_dir() and work_root.is_dir()
+
+
+@pytest.mark.parametrize("prefix", ["../foreign/", "escape/", "*", "", "..\\foreign\\"])
+def test_screenshot_prefix_cannot_escape_or_expand(tmp_path, prefix):
+    save = tmp_path / "save"
+    foreign = tmp_path / "foreign"
+    save.mkdir()
+    foreign.mkdir()
+    (foreign / "keep.png").write_bytes(b"keep")
+    (save / "escape").symlink_to(foreign, target_is_directory=True)
+    with pytest.raises(snapshot_build.SnapshotError, match="prefix"):
+        snapshot_build.clear_stale_screenshots(prefix, save)
+    with pytest.raises(snapshot_build.SnapshotError, match="prefix"):
+        snapshot_build.collect_screenshots(tmp_path / "shots", prefix, 0, save)
+    assert (foreign / "keep.png").read_bytes() == b"keep"
+
+
+def test_screenshot_symlinks_are_not_collected(tmp_path):
+    save = tmp_path / "save"
+    save.mkdir()
+    foreign = tmp_path / "private.png"
+    foreign.write_bytes(b"keep")
+    (save / "__agent_shot_link.png").symlink_to(foreign)
+    assert snapshot_build.collect_screenshots(tmp_path / "shots", "__agent_shot_", 0, save) == []
+    snapshot_build.clear_stale_screenshots("__agent_shot_", save)
+    assert foreign.read_bytes() == b"keep"
+
+
+def test_bundle_symlinks_never_write_into_original(tmp_path, monkeypatch):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    original = tmp_path / "official.app"
+    executable = original / "Contents/MacOS/Mac_Runner"
+    executable.parent.mkdir(parents=True)
+    executable.write_bytes(b"runner")
+    external = tmp_path / "original.plist"
+    before = plistlib.dumps({"CFBundleIdentifier": "original", "CFBundleExecutable": "Mac_Runner"})
+    external.write_bytes(before)
+    (original / "Contents/Info.plist").symlink_to(external)
+    monkeypatch.setattr(mac_runtime.subprocess, "run", lambda *args, **kwargs: None)
+    runtime = mac_runtime.prepare_mac_runtime(executable, tmp_path / "game", "test")
+    assert external.read_bytes() == before
+    assert not (runtime.runner.parents[1] / "Info.plist").is_symlink()
+
+
+@pytest.mark.parametrize("path", ["../game.ios", "/game.ios", "Runner.app/Contents/Info.plist"])
+def test_game_archive_cannot_overwrite_runner_or_escape(tmp_path, path):
+    archive = tmp_path / "game.zip"
+    with zipfile.ZipFile(archive, "w") as stream:
+        stream.writestr(path, b"bad")
+    with pytest.raises(snapshot_build.SnapshotError, match="unsafe"):
+        snapshot_build.stage_game_archive(archive, tmp_path / "stage")
+
+
+def test_foreground_exit_preserves_replacement_session(tmp_path, monkeypatch):
+    from gms_helpers.runner import GameMakerRunner
+    from gms_helpers.run_session import RunSessionManager
+
+    (tmp_path / "game.yyp").write_text('{"name":"game","resources":[]}')
+    persisted = RunSessionManager(tmp_path).create_session(pid=123, exe_path="old", isolated_runtime=True)
+    replacement = SimpleNamespace(process=SimpleNamespace(terminate=lambda: pytest.fail("replacement stopped")))
+    process = SimpleNamespace(returncode=0)
+    process.wait = lambda: live_session._SESSIONS.__setitem__(str(tmp_path.resolve()), replacement)
+    original = SimpleNamespace(process=process, run_id=persisted.run_id)
+    monkeypatch.setitem(live_session._SESSIONS, str(tmp_path.resolve()), original)
+    monkeypatch.setattr(live_session, "start", lambda *args, **kwargs: {"running": True, "run_id": persisted.run_id})
+    cleaned = []
+    monkeypatch.setattr(live_session, "_cleanup", lambda session: cleaned.append(session))
+    assert GameMakerRunner(tmp_path).run_project_direct("macOS", background=False)
+    assert cleaned == [original]
+    assert live_session.get_session(tmp_path) is replacement
+    assert RunSessionManager(tmp_path).get_current_session().run_id == persisted.run_id
+
+
+@pytest.mark.parametrize("entry", [live_session.start, snapshot_build.run_test])
+def test_yyc_is_rejected_before_compilation_or_launch(tmp_path, monkeypatch, entry):
+    monkeypatch.setattr(snapshot_build, "snapshot_compile", lambda *args, **kwargs: pytest.fail("YYC compiled"))
+    with pytest.raises(snapshot_build.SnapshotError, match="VM.*only"):
+        entry(tmp_path, runtime="YYC")
+
+
+def test_yyc_data_archive_is_not_a_successful_native_build(tmp_path):
+    project = tmp_path / "project"
+    project.mkdir()
+    (project / "game.yyp").write_text('{"name":"game","resources":[]}')
+    work = tmp_path / "work"
+    tools = snapshot_build.Toolchain(Path("Igor"), tmp_path, Path("license"), None, "test")
+
+    def compile_data(command, log, timeout):
+        log.write_text("Final Compile finished.\nIgor complete.\n")
+        with zipfile.ZipFile(work / "out/game.zip", "w") as archive:
+            archive.writestr("game.ios", b"data without native code")
+        return 0
+
+    result = snapshot_build.compile_snapshot(project, work, tools, runtime="YYC", run_igor=compile_data)
+    assert not result.ok and "native macOS YYC" in result.errors[0]
+
+
+def test_start_rechecks_predecessor_after_waiting_for_lease(tmp_path, monkeypatch):
+    from gms_helpers.run_session import RunSessionManager
+    from gms_helpers.runner import GameMakerRunner
+
+    monkeypatch.setenv("GMS_MCP_LOCK_DIR", str(tmp_path / "locks"))
+    manager = RunSessionManager(tmp_path)
+    lock = mac_runtime.project_run_lock(tmp_path)
+    acquire = lock.acquire
+    events = []
+
+    def acquire_after_other_launcher(**kwargs):
+        manager.create_session(pid=987654321, exe_path="old", isolated_runtime=True)
+        return acquire(**kwargs)
+
+    def archive(root, predecessor):
+        events.append("archived")
+        manager.clear_session()
+
+    def start(root, **kwargs):
+        assert manager.get_current_session() is None
+        events.append("started")
+        return {"running": False}
+
+    monkeypatch.setattr(lock, "acquire", acquire_after_other_launcher)
+    monkeypatch.setattr(live_session, "project_run_lock", lambda root: lock)
+    monkeypatch.setattr(live_session, "_archive_persisted", archive)
+    monkeypatch.setattr(live_session, "_start", start)
+    monkeypatch.setattr(GameMakerRunner, "_snapshot_macos_processes", lambda self: {})
+    live_session.start(tmp_path)
+    assert events == ["archived", "started"]
+
+
+def test_force_stop_waits_for_exit_before_returning():
+    calls = []
+
+    def wait(timeout):
+        calls.append("wait")
+        if calls.count("wait") == 1:
+            raise subprocess.TimeoutExpired("runner", timeout)
+
+    process = SimpleNamespace(
+        poll=lambda: None,
+        terminate=lambda: calls.append("terminate"),
+        kill=lambda: calls.append("kill"),
+        wait=wait,
+    )
+    snapshot_build.stop_process(process)
+    assert calls == ["terminate", "wait", "kill", "wait"]
+
+
+def test_run_artifacts_cannot_follow_checkout_symlinks(tmp_path):
+    root = tmp_path / "project"
+    root.mkdir()
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    (root / ".gms_mcp").symlink_to(foreign, target_is_directory=True)
+    with pytest.raises(snapshot_build.SnapshotError, match="symlinks"):
+        snapshot_build.runs_directory(root, "live")
+    assert not list(foreign.iterdir())
+
+
+@pytest.mark.parametrize("name", ["runner_stderr.log", "build.log", "run.log"])
+def test_log_writes_do_not_follow_artifact_symlinks(tmp_path, name):
+    foreign = tmp_path / "private.txt"
+    foreign.write_text("keep")
+    target = tmp_path / name
+    target.symlink_to(foreign)
+    with pytest.raises(snapshot_build.SnapshotError, match="symlink"):
+        with snapshot_build.artifact_writer(target) as stream:
+            stream.write(b"overwrite")
+    assert foreign.read_text() == "keep"
+
+
+@pytest.mark.parametrize("name", ["../escape", "/absolute/escape", "bad\\name", 'bad"name'])
+def test_configured_test_script_name_cannot_escape_snapshot(tmp_path, name):
+    snapshot = tmp_path / "snapshot"
+    snapshot.mkdir()
+    (snapshot / ".gms-mcp-snapshot").write_text("snapshot")
+    with pytest.raises(snapshot_build.SnapshotError, match="identifier"):
+        snapshot_build.inject_test_script(snapshot, "function agent_test_step(_frame) {}", script_name=name)
+    assert list(snapshot.iterdir()) == [snapshot / ".gms-mcp-snapshot"]
+
+
+def test_run_return_cannot_attach_to_replacement_session(tmp_path, monkeypatch):
+    from gms_helpers.runner import GameMakerRunner
+
+    (tmp_path / "game.yyp").write_text('{"name":"game","resources":[]}')
+    replacement = SimpleNamespace(run_id="new", process=SimpleNamespace(pid=222))
+    monkeypatch.setattr(live_session, "start", lambda *args, **kwargs: {"running": True, "pid": 111, "run_id": "old"})
+    monkeypatch.setattr(live_session, "get_session", lambda root: replacement)
+    result = GameMakerRunner(tmp_path).run_project_direct("macOS", background=True)
+    assert not result["ok"] and "session ended" in result["message"]
+
+
+@pytest.mark.parametrize("failure", ["codesign", "../foreign", "/absolute", "bad\\name", "", 42])
+def test_runner_preparation_failure_removes_only_its_staging(tmp_path, monkeypatch, failure):
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    original = tmp_path / "official.app"
+    runner = original / "Contents/MacOS/Mac_Runner"
+    runner.parent.mkdir(parents=True)
+    runner.write_bytes(b"runner")
+    before = plistlib.dumps(
+        {"CFBundleIdentifier": "original", "CFBundleExecutable": "Mac_Runner" if failure == "codesign" else failure}
+    )
+    (original / "Contents/Info.plist").write_bytes(before)
+    root = tmp_path / "game"
+    save = tmp_path / "Library/Application Support" / f"com.gmsmcp.game.p{mac_runtime.project_identity(root)}"
+    save.mkdir(parents=True)
+    (save / "existing-save.txt").write_text("keep")
+
+    def fail_sign(*args, **kwargs):
+        raise subprocess.CalledProcessError(1, "codesign")
+
+    monkeypatch.setattr(mac_runtime.subprocess, "run", fail_sign)
+    with pytest.raises(subprocess.CalledProcessError if failure == "codesign" else ValueError):
+        mac_runtime.prepare_mac_runtime(runner, root, "test")
+    assert not list(save.glob("session_*"))
+    assert (save / "existing-save.txt").read_text() == "keep"
+    assert (original / "Contents/Info.plist").read_bytes() == before
+
+
+@pytest.mark.parametrize("attack", ["shots_directory", "target_file", "source_link", "non_image", "missing_source"])
+def test_bridge_screenshot_preserves_foreign_files(tmp_path, monkeypatch, attack):
+    root = tmp_path / "project"
+    save = root / "save"
+    run = root / "run"
+    save.mkdir(parents=True)
+    run.mkdir()
+    foreign = tmp_path / "private.png"
+    foreign.write_bytes(b"keep")
+    source = save / "capture.png"
+    source.write_bytes(b"image")
+    shots = run / "shots"
+    if attack == "shots_directory":
+        shots.symlink_to(tmp_path, target_is_directory=True)
+    elif attack == "target_file":
+        shots.mkdir()
+        (shots / "shot.png").symlink_to(foreign)
+    elif attack == "source_link":
+        source.unlink()
+        source.symlink_to(foreign)
+    elif attack == "non_image":
+        source = save / "data.txt"
+        source.write_text("data")
+    elif attack == "missing_source":
+        source = None
+    monkeypatch.setitem(
+        live_session._SESSIONS, str(root.resolve()), SimpleNamespace(save_dir=save, run_dir=run, project_root=root)
+    )
+    monkeypatch.setattr(
+        live_session,
+        "command",
+        lambda *args: {"ok": True, "command": "screenshot shot", "data": {"file": str(source)} if source else {}},
+    )
+    if attack in {"shots_directory", "target_file"}:
+        with pytest.raises(live_session.LiveSessionError, match="symlink"):
+            live_session.screenshot(root, timeout_seconds=0)
+    else:
+        assert not live_session.screenshot(root, timeout_seconds=0)["ok"]
+    assert foreign.read_bytes() == b"keep"

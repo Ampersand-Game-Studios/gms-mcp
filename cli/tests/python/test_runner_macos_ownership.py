@@ -354,10 +354,18 @@ class TestMacOSRunnerOwnership(unittest.TestCase):
 
     def test_snapshot_compile_preserves_compiler_failure(self) -> None:
         from gms_helpers.snapshot_build import BuildResult
-        work = self.project_root / "compile-work"; work.mkdir()
-        with patch("gms_helpers.snapshot_build.snapshot_compile", return_value=(
-            {"ok": False, "message": "compiler failure"}, BuildResult(False, "BUILD_FAILED"), work, None,
-        )):
+
+        work = self.project_root / "compile-work"
+        work.mkdir()
+        with patch(
+            "gms_helpers.snapshot_build.snapshot_compile",
+            return_value=(
+                {"ok": False, "message": "compiler failure"},
+                BuildResult(False, "BUILD_FAILED"),
+                work,
+                None,
+            ),
+        ):
             self.assertFalse(self.runner._compile_project_once("macOS", "VM"))
         self.assertEqual(self.runner.last_failure_message, "compiler failure")
 
