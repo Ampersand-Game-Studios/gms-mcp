@@ -97,7 +97,23 @@ def stage_paths(
         indexed_before = subprocess.run(
             ["git", "-C", str(repo), "show", f":{yyp_repo_path}"], capture_output=True, check=False
         )
+        deleted = set(
+            _git(repo, "diff", "--cached", "--name-only", "--diff-filter=D", "--no-renames", "-z").split("\0")
+        )
+        indexed = set(_git(repo, "ls-files", "-z").split("\0"))
         for path in repo_paths:
+            # git add rejects a deletion already absent from both disk and index.
+            # Only skip a known staged deletion, never an unknown/misspelled path
+            # or a directory with remaining tracked files needing to be staged.
+            exact = path.removeprefix("./").rstrip("/")
+            matches = lambda name: name == exact or name.startswith(exact + "/")
+            if (
+                not (repo / path).exists()
+                and not (repo / path).is_symlink()
+                and any(matches(name) for name in deleted if name)
+                and not any(matches(name) for name in indexed if name)
+            ):
+                continue
             _git(repo, "add", "-A", "--", path)
         staged_entries: list[str] = []
         if not whole_yyp:

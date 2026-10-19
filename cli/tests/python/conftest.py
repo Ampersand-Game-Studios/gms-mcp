@@ -1,6 +1,7 @@
 import sys
 from pathlib import Path
 import os
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[3]
 SRC_ROOT = REPO_ROOT / "src"
@@ -15,3 +16,10 @@ GAMEMAKER_DIR = REPO_ROOT / "cli" / "tests" / "fixtures" / "mcp-conformance"
 os.environ.setdefault("PROJECT_ROOT", str(GAMEMAKER_DIR))
 os.environ.setdefault("GM_PROJECT_ROOT", str(GAMEMAKER_DIR))
 os.environ.setdefault("GMS_MCP_POST_MUTATION_VERIFY", "off")
+
+
+@pytest.fixture(autouse=True)
+def private_run_session_state(tmp_path, monkeypatch):
+    from gms_helpers.run_session import RunSessionManager
+
+    monkeypatch.setattr(RunSessionManager, "_state_root", staticmethod(lambda: tmp_path / "host-sessions"))

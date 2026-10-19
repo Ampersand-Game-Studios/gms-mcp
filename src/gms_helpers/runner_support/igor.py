@@ -34,7 +34,7 @@ class RunnerIgorMixin:
 
     @staticmethod
     def _igor_rejected_command(output_lines: List[str]) -> bool:
-        return any("igor: unknown command" in line.lower() for line in output_lines)
+        return any("igor" in line.lower() and "unknown command" in line.lower() for line in output_lines)
 
     def _is_retryable_igor_failure(self, returncode: int, output_lines: List[str]) -> bool:
         output = "\n".join(output_lines)
@@ -331,16 +331,6 @@ class RunnerIgorMixin:
         thread.start()
         return output_lines, thread
 
-    def _build_macos_compile_validation_command(self, runtime_type: str) -> List[str]:
-        """
-        Build the macOS compile-validation command.
-
-        Igor exposes local `Run` and packaging/export actions on macOS, but not a pure
-        compile-only local build mode. For local validation we use `Run`, wait until the
-        runner reaches the game main loop, then issue `Stop`.
-        """
-        return self._build_platform_action_command("Run", "macOS", runtime_type)
-
     def build_igor_command(
         self, action: str = "Run", platform_target: Optional[str] = None, runtime_type: str = "VM", **kwargs
     ) -> List[str]:
@@ -380,137 +370,26 @@ class RunnerIgorMixin:
             print(f"[BUILD] Compiling project for {platform_target} ({runtime_type})...")
 
             if platform_target == "macOS":
-                self._clear_last_result("local compile validation")
-                self._wait_for_igor_idle()
-                cmd = self._build_macos_compile_validation_command(runtime_type)
-                print("[BUILD] Using bounded Igor local run validation on macOS to avoid package signing.")
-                print(f"[CMD] Validation command: {' '.join(cmd)}")
-                project_name = self.find_project_file().stem
-                debug_log = self._macos_debug_log_path()
-                game_path = self.project_root / "output" / project_name / "game.ios"
-                self._wait_for_igor_idle(timeout_seconds=0)
-                baseline_processes = self._snapshot_macos_processes()
-                baseline_runner_pids = {
-                    pid: process for pid, process in baseline_processes.items() if "/Mac_Runner" in process.command
-                }
-                baseline_tail_pids = {
-                    pid: process for pid, process in baseline_processes.items() if "tail -F" in process.command
-                }
-                macos_launch_token = self._new_macos_launch_token()
-                self._write_macos_ownership_manifest(
-                    baseline_processes,
-                    game_path,
-                    debug_log,
-                    macos_launch_token,
-                )
-                if not baseline_runner_pids and not baseline_tail_pids:
-                    # GameMaker may truncate and then quickly regrow the same log
-                    # beyond its prior size. Starting from a clean transient log
-                    # prevents a stale byte offset from missing the new main-loop marker.
-                    try:
-                        debug_log.unlink(missing_ok=True)
-                    except OSError:
-                        pass
-                start_offset = debug_log.stat().st_size if debug_log.exists() else 0
-                output_lines: List[str] = []
-                output_thread: Optional[threading.Thread] = None
-                process = None
-                owned_igor_command: Optional[str] = None
-                owned_igor_started: Optional[str] = None
-                reached_main_loop = False
-                timed_out = False
+                self.find_project_file()
+                from .. import snapshot_build
+                import shutil
+
+                self._clear_last_result("snapshot compile")
+                work = None
                 try:
-                    process = self._run_igor_command(
-                        cmd,
-                        environment_overrides={self._MACOS_LAUNCH_TOKEN_ENV: macos_launch_token},
-                    )
-                    launched_processes = self._snapshot_macos_processes()
-                    if process.pid in launched_processes:
-                        owned_igor_command = launched_processes[process.pid].command
-                        owned_igor_started = launched_processes[process.pid].started
-                    self._reject_foreign_igor_after_launch(process.pid)
-                    output_lines, output_thread = self._collect_igor_output_async(process, "local compile validation")
-                    runner_pid, _runner_pids, _tail_pids = self._wait_for_macos_runner_start(
-                        process,
-                        game_path,
-                        debug_log,
-                        baseline_runner_pids,
-                        baseline_tail_pids,
-                        macos_launch_token,
-                        timeout_seconds=self._macos_compile_launch_timeout_seconds(),
-                        output_lines=output_lines,
-                    )
-                    if runner_pid is not None:
-                        runner_process = self._snapshot_macos_processes().get(runner_pid)
-                        if runner_process is not None:
-                            game_path, debug_log = self._macos_runner_artifact_paths(
-                                runner_process.command,
-                                game_path,
-                                debug_log,
-                            )
-                            start_offset = 0
-                    reached_main_loop = self._wait_for_macos_main_loop(
-                        process,
-                        debug_log,
-                        start_offset,
-                        timeout_seconds=90.0 if runner_pid is not None else 0.0,
-                    )
-                    timed_out = (not reached_main_loop) and process.poll() is None
+                    with snapshot_build.label_pipeline(self.project_root, "compile"):
+                        public, build, work, _tools = snapshot_build.snapshot_compile(
+                            self.project_root,
+                            label="compile",
+                            runtime=runtime_type,
+                            runtime_version=self.runtime_version,
+                        )
+                    if not build.ok:
+                        self._remember_failure(public.get("message", "Snapshot compile failed"))
+                    return build.ok
                 finally:
-                    if process is not None and process.poll() is None:
-                        print("[BUILD] Stopping macOS local validation run...")
-                        stop_ok = self._stop_platform_process("macOS", runtime_type)
-                        if not stop_ok:
-                            print(
-                                "[WARN] Igor Stop command did not report success; terminating validation process directly."
-                            )
-                            process.terminate()
-                        try:
-                            process.wait(timeout=10)
-                        except subprocess.TimeoutExpired:
-                            process.kill()
-                            process.wait(timeout=5)
-
-                    if output_thread is not None:
-                        output_thread.join(timeout=5)
-
-                    self._cleanup_macos_validation_helpers(
-                        game_path,
-                        debug_log,
-                        baseline_runner_pids,
-                        baseline_tail_pids,
-                        process.pid if process is not None else None,
-                        owned_igor_command,
-                        owned_igor_started,
-                        macos_launch_token,
-                        sweep_seconds=3.0,
-                    )
-
-                if reached_main_loop:
-                    print("[OK] Local compile validation reached the game main loop successfully!")
-                    return True
-
-                launch_failure = self._macos_launchservices_failure(output_lines)
-                if launch_failure is not None:
-                    failure_message = f"macOS runner launch failed: {launch_failure}"
-                elif timed_out:
-                    failure_message = "Local compile validation timed out before the game reached the main loop."
-                elif process is not None and process.returncode == 0:
-                    failure_message = "Local compile validation exited before the game reached the main loop."
-                else:
-                    return_code = process.returncode if process is not None else -1
-                    failure_message = self._build_stage_failure_message(
-                        "local compile validation",
-                        return_code,
-                        output_lines,
-                    )
-                retryable = self._is_retryable_igor_failure(
-                    process.returncode if process is not None else -1,
-                    output_lines,
-                )
-                self._remember_failure(failure_message, retryable=retryable)
-                print(f"[ERROR] {failure_message}")
-                return False
+                    if work is not None:
+                        shutil.rmtree(work, ignore_errors=True)
 
             stage_label = "package/export"
             self._clear_last_result(stage_label)
@@ -519,17 +398,23 @@ class RunnerIgorMixin:
             project_name = project_file.stem
             ide_temp_dir = system_temp / "GameMakerStudio2" / project_name
             ide_temp_dir.mkdir(parents=True, exist_ok=True)
+            # HTML5 folder export copies the entire output directory. Its target
+            # must be a sibling, never a child that would recursively copy itself.
+            html5_output_dir = ide_temp_dir.with_name(project_name + "_html5")
             android_baseline_packages = (
                 self._verified_android_packages(ide_temp_dir) if platform_target == "Android" else {}
             )
             html5_baseline_artifacts = (
-                self._verified_html5_artifacts(ide_temp_dir) if platform_target == "HTML5" else {}
+                self._verified_html5_artifacts(html5_output_dir) if platform_target == "HTML5" else {}
             )
 
             compile_action = "Package" if platform_target in {"Android", "Linux"} else "PackageZip"
             output_args = [f"/of={ide_temp_dir / project_name}"]
             if platform_target == "Windows":
                 output_args.append(f"--tf={ide_temp_dir / (project_name + '.zip')}")
+            if platform_target == "HTML5":
+                compile_action = "folder"
+                output_args.append(f"/tf={html5_output_dir}")
             cmd = self._build_platform_action_command(
                 compile_action,
                 platform_target,
@@ -544,6 +429,15 @@ class RunnerIgorMixin:
             process.wait()
 
             if process.returncode == 0 and not self._igor_rejected_command(output_lines):
+                if platform_target == "HTML5" and not self._verified_html5_package_exists(
+                    html5_output_dir, html5_baseline_artifacts
+                ):
+                    failure_message = (
+                        "HTML5 export completed without a new verified index.html and JavaScript artifact."
+                    )
+                    self._remember_failure(failure_message)
+                    print(f"[ERROR] {failure_message}")
+                    return False
                 if platform_target == "Android" and not self._verified_new_android_package_exists(
                     ide_temp_dir,
                     android_baseline_packages,
@@ -561,7 +455,7 @@ class RunnerIgorMixin:
             if platform_target == "HTML5" and self._is_verified_html5_target_type_false_failure(
                 process.returncode,
                 output_lines,
-                ide_temp_dir,
+                html5_output_dir,
                 html5_baseline_artifacts,
             ):
                 print(

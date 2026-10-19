@@ -20,7 +20,11 @@ def delete_asset(args):
         # Skip maintenance if explicitly requested
         if not getattr(args, "skip_maintenance", False):
             print("[SCAN] Running pre-deletion validation...")
-            pre_result = run_auto_maintenance(".", fix_issues=not getattr(args, "no_auto_fix", False), verbose=False)
+            pre_result = run_auto_maintenance(
+                ".",
+                fix_issues=not (getattr(args, "dry_run", False) or getattr(args, "no_auto_fix", False)),
+                verbose=False,
+            )
 
             if not validate_asset_creation_safe(pre_result):
                 return handle_maintenance_failure(f"Asset '{args.name}' deletion", pre_result)

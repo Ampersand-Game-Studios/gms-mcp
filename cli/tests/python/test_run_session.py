@@ -169,7 +169,7 @@ class TestRunSessionManager(unittest.TestCase):
 
     def test_sessions_dir_created(self):
         """Test that sessions directory is created when needed."""
-        sessions_dir = Path(self.temp_dir) / ".gms_mcp" / "sessions"
+        sessions_dir = self.manager.sessions_dir
         self.assertFalse(sessions_dir.exists())
 
         self.manager._ensure_sessions_dir()
@@ -197,7 +197,7 @@ class TestRunSessionManager(unittest.TestCase):
             exe_path="/persisted/game.exe",
         )
 
-        session_file = Path(self.temp_dir) / ".gms_mcp" / "sessions" / "current.json"
+        session_file = self.manager._current_session_path()
         self.assertTrue(session_file.exists())
 
         with open(session_file, "r") as f:
@@ -228,7 +228,7 @@ class TestRunSessionManager(unittest.TestCase):
 
     def test_get_current_session_handles_corrupted_file(self):
         """Test get_current_session handles corrupted JSON gracefully."""
-        sessions_dir = Path(self.temp_dir) / ".gms_mcp" / "sessions"
+        sessions_dir = self.manager.sessions_dir
         sessions_dir.mkdir(parents=True)
 
         # Write invalid JSON
