@@ -1057,7 +1057,7 @@ def windows_kernel_handles(monkeypatch):
 
     def close(handle):
         os.close(handle)
-        active.pop(handle)
+        active.pop(handle, None)
         return True
 
     def information(handle, kind, output, size):
@@ -1072,6 +1072,7 @@ def windows_kernel_handles(monkeypatch):
         if failure.get("duplicate"):
             return False
         duplicated = os.dup(handle)
+        failure.setdefault("duplicated_handles", []).append(duplicated)
         ctypes.cast(output, ctypes.POINTER(wintypes.HANDLE))[0] = duplicated
         return True
 
@@ -1102,7 +1103,13 @@ def windows_kernel_handles(monkeypatch):
     monkeypatch.setattr(ctypes, "get_last_error", lambda: 2, raising=False)
     monkeypatch.setattr(ctypes, "WinError", lambda error: FileNotFoundError("fake Win32 failure"), raising=False)
     monkeypatch.setattr(os, "O_BINARY", getattr(os, "O_BINARY", 0), raising=False)
-    monkeypatch.setitem(sys.modules, "msvcrt", SimpleNamespace(open_osfhandle=lambda handle, flags: handle))
+
+    def convert_handle(handle, flags):
+        if failure.get("open_osfhandle"):
+            raise OSError("handle conversion failed")
+        return handle
+
+    monkeypatch.setitem(sys.modules, "msvcrt", SimpleNamespace(open_osfhandle=convert_handle))
     original_lstat = Path.lstat
 
     class FileAttributes:
@@ -1188,3 +1195,28 @@ def test_windows_helper_creates_and_clears_literal_nested_directories(tmp_path, 
     assert not target.exists()
     windows.clear_directory(target)
     assert not target.exists()
+
+
+@pytest.mark.parametrize("failure_name", ["open_osfhandle", "fdopen"])
+def test_windows_source_conversion_failure_closes_duplicate_and_preserves_source(
+    tmp_path, monkeypatch, windows_kernel_handles, failure_name
+):
+    windows, active, calls, failure = windows_kernel_handles
+    source = tmp_path / "source.bin"
+    source.write_bytes(b"unique")
+    if failure_name == "open_osfhandle":
+        failure[failure_name] = True
+    else:
+
+        def fail_wrapper(*args, **kwargs):
+            raise OSError("stream conversion failed")
+
+        monkeypatch.setattr(windows.os, "fdopen", fail_wrapper)
+    with pytest.raises(OSError, match="conversion failed"):
+        with windows.read_source(source, delete_on_success=True):
+            pytest.fail("Conversion unexpectedly succeeded")
+    assert source.read_bytes() == b"unique" and not active
+    assert len(failure["duplicated_handles"]) == 1
+    for descriptor in failure["duplicated_handles"]:
+        with pytest.raises(OSError):
+            os.fstat(descriptor)

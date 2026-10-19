@@ -103,8 +103,22 @@ def read_source(path: Path, *, delete_on_success: bool = False):
         handle_value = duplicate.value
         if handle_value is None:
             raise OSError("Windows did not return a duplicate artifact handle.")
-        descriptor = getattr(msvcrt, "open_osfhandle")(handle_value, os.O_RDONLY | getattr(os, "O_BINARY"))
-        with os.fdopen(descriptor, "rb") as incoming:
+        try:
+            descriptor = getattr(msvcrt, "open_osfhandle")(handle_value, os.O_RDONLY | getattr(os, "O_BINARY"))
+        except BaseException:
+            kernel.CloseHandle(handle_value)
+            raise
+        # open_osfhandle transfers HANDLE ownership to the CRT descriptor.
+        # fdopen takes that ownership only after its wrapper is constructed.
+        try:
+            incoming = os.fdopen(descriptor, "rb")
+        except BaseException:
+            try:
+                os.close(descriptor)
+            except OSError:
+                pass  # A failing wrapper may already have closed the descriptor.
+            raise
+        with incoming:
             yield incoming
         if delete_on_success:
             # Delete this exact open file after publication, without releasing

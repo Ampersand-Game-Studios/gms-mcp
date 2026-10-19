@@ -1180,11 +1180,12 @@ class _FakeProcess:
         self.returncode = -9
 
 
-def _fake_game_endpoint(port: int, save_dir: Path, stop: threading.Event) -> None:
+def _fake_game_endpoint(port: int, save_dir: Path, stop: threading.Event, identity: dict[str, str]) -> None:
     """A minimal protocol 2 endpoint: handshake, then answer commands until told to stop."""
     client = socket.create_connection(("127.0.0.1", port), timeout=3)
     client.settimeout(0.2)
-    client.sendall(b'HELLO:{"protocol":2,"game":"Fake","commands":["ping","state","screenshot"]}\n')
+    hello = {"protocol": 2, "game": "Fake", "commands": ["ping", "state", "screenshot"], **identity}
+    client.sendall(("HELLO:" + json.dumps(hello) + "\n").encode())
     buffer = ""
     while not stop.is_set():
         try:
@@ -1238,7 +1239,13 @@ def test_live_session_start_command_screenshot_and_stop(repo: Path, tmp_path: Pa
 
     def fake_launch(_runner, staging_dir, _game_file, run_dir, environment):
         port = int(environment[live_session.BRIDGE_PORT_ENVIRONMENT_VARIABLE])
-        threading.Thread(target=_fake_game_endpoint, args=(port, save_dir, stop_endpoint), daemon=True).start()
+        identity = {
+            "project_id": environment["GMS_MCP_BRIDGE_PROJECT_ID"],
+            "session_id": environment["GMS_MCP_BRIDGE_SESSION_ID"],
+        }
+        threading.Thread(
+            target=_fake_game_endpoint, args=(port, save_dir, stop_endpoint, identity), daemon=True
+        ).start()
         log = staging_dir / "debug.txt"
         log.write_text("boot\nrunning\nERROR nothing\n")
         return process, log

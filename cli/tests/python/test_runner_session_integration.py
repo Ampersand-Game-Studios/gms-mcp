@@ -442,6 +442,7 @@ class TestRunnerBackgroundMode(unittest.TestCase):
             runtime="VM",
             runtime_version=None,
             connect_timeout_seconds=0.5,
+            enable_bridge=None,
         )
 
     @patch.object(GameMakerRunner, "_run_project_classic_approach")
