@@ -409,7 +409,7 @@ Fix:
 
 ## Runtime bridge protocol 2 and live sessions
 
-`gm_game_start` builds a throwaway snapshot of the project, starts it and waits for a bridge endpoint in the game to connect. It then serves `gm_game_command`, `gm_game_screenshot`, `gm_game_log`, `gm_game_status` and `gm_game_stop`. Each session listens on its own free port, so several agents can each have a server; one game runs at a time per machine (the `gamerun.lock`).
+`gm_game_start` builds a throwaway snapshot of the project, starts it and waits for a bridge endpoint in the game to connect. It then serves `gm_game_command`, `gm_game_screenshot`, `gm_game_log`, `gm_game_status` and `gm_game_stop`. Each session listens on its own free port and owns a separate macOS bundle/save root, so different projects can run concurrently. A project lease protects its saves; a label lease protects its artifacts. Closing a game archives its evidence and releases both leases. Manual games survive server exit and remain discoverable through persisted process identity; a new server can inspect or stop them, but bridge commands belong to the launching server.
 
 A game takes part by implementing this contract. The installed `__mcp_bridge` asset (protocol 1, fixed port) keeps working with `gm_run` / `gm_run_command`.
 

@@ -55,6 +55,11 @@ class GameMakerRunner(
 
     def stop_game(self) -> Dict[str, Any]:
         """Serialize game termination against compile and launch operations."""
+        if (self.project_root / "gamemaker").is_dir():
+            self.find_project_file()
+        session = self._session_manager.get_current_session()
+        if session is not None and session.isolated_runtime:
+            return super().stop_game()
         with gamemaker_machine_operation("run-stop", self.project_root):
             return super().stop_game()
 
