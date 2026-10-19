@@ -141,10 +141,15 @@ class TestRunnerCommandSelection(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("PackageZip", captured_cmd)
         self.assertNotIn("Tests", captured_cmd)
-        self.assertTrue(any(str(arg).startswith("--tf=") and str(arg).endswith("test_project.zip") for arg in captured_cmd))
+        self.assertTrue(
+            any(str(arg).startswith("--tf=") and str(arg).endswith("test_project.zip") for arg in captured_cmd)
+        )
 
     _COMPILE_OK_LINES = ["Final Compile finished", "Saving IFF file", "Igor complete."]
-    _ZIP_FAILURE_LINES = ["at System.IO.File.Move(String source, String destination)", "at Igor.WindowsBuilder.PackageZip()"]
+    _ZIP_FAILURE_LINES = [
+        "at System.IO.File.Move(String source, String destination)",
+        "at Igor.WindowsBuilder.PackageZip()",
+    ]
 
     def _windows_temp_run(self, output_lines, *, fresh=False):
         runner = GameMakerRunner(self.project_root)
@@ -172,7 +177,9 @@ class TestRunnerCommandSelection(unittest.TestCase):
             patch.object(runner, "_stream_igor_output", return_value=output_lines),
             patch.object(runner, "_start_game_process", return_value=game) as start_game,
         ):
-            result = runner.run_project_direct(platform_target="Windows", runtime_type="VM", background=True, output_location="temp")
+            result = runner.run_project_direct(
+                platform_target="Windows", runtime_type="VM", background=True, output_location="temp"
+            )
         return result, start_game, commands
 
     def test_windows_compile_failure_never_launches_previous_executable(self):

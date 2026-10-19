@@ -105,11 +105,15 @@ class RunnerExecutionMixin:
 
             print(f"[CMD] Package command: {' '.join(cmd)}")
 
-            previous_executables = {
-                path: (path.stat().st_mtime_ns, path.stat().st_size)
-                for path in ide_temp_dir.glob("*.exe")
-                if path.is_file()
-            } if platform_target == "Windows" else {}
+            previous_executables = (
+                {
+                    path: (path.stat().st_mtime_ns, path.stat().st_size)
+                    for path in ide_temp_dir.glob("*.exe")
+                    if path.is_file()
+                }
+                if platform_target == "Windows"
+                else {}
+            )
 
             # Run packaging
             self._wait_for_igor_idle()
@@ -132,7 +136,9 @@ class RunnerExecutionMixin:
                     and any("WindowsBuilder.PackageZip" in line for line in output_lines)
                     and any("System.IO.File.Move" in line for line in output_lines)
                 ):
-                    self._remember_failure(f"{failure_message} Build did not complete safely; refusing to launch an old build.")
+                    self._remember_failure(
+                        f"{failure_message} Build did not complete safely; refusing to launch an old build."
+                    )
                     print(f"[ERROR] {self.last_failure_message}")
                     return False
                 print(f"[WARN] {failure_message} Checking whether runnable output was still created...")
@@ -170,7 +176,9 @@ class RunnerExecutionMixin:
             if platform_target == "Windows" and process.returncode != 0:
                 current = (launch_path.stat().st_mtime_ns, launch_path.stat().st_size)
                 if current == previous_executables.get(launch_path):
-                    self._remember_failure("Packaging failed without creating a fresh executable; refusing to launch an old build.")
+                    self._remember_failure(
+                        "Packaging failed without creating a fresh executable; refusing to launch an old build."
+                    )
                     print(f"[ERROR] {self.last_failure_message}")
                     return False
 
