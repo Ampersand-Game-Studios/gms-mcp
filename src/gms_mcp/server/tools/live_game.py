@@ -35,8 +35,9 @@ def register(mcp: Any, ContextType: Any) -> None:
           gm_game_command("ping" | "help" | "state" | "console <console command line>" | "log_tail 50")
           gm_game_screenshot(name)   save and return a screenshot
           gm_game_log(lines)         the game's full log (every show_debug_message line)
-          gm_game_stop()             ALWAYS call when finished: one game runs at a time per machine
+          gm_game_stop()             stop this project session when finished
         Snapshot options (isolate_paths, yyp_entries, base_only, ref) work as in gm_snapshot_compile.
+        Isolated macOS runs require runtime="VM"; YYC needs a separate native application.
 
         The game connects only if the project has a bridge endpoint enabled for this build that
         reads the GMS_MCP_BRIDGE_PORT environment variable. status RUNNING_NOT_CONNECTED means
@@ -129,7 +130,7 @@ def register(mcp: Any, ContextType: Any) -> None:
 
     @mcp.tool()
     async def gm_game_stop(project_root: str = ".", ctx: Context | None = None) -> Dict[str, Any]:
-        """Stop the live game, release the machine's game lock, and return where its log and screenshots were saved."""
+        """Stop the live game, release this project's runtime lease, and return where its log and screenshots were saved."""
         _ = ctx
         from gms_helpers import live_session
 
