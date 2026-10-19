@@ -528,6 +528,8 @@ class RunnerIgorMixin:
 
             compile_action = "Package" if platform_target in {"Android", "Linux"} else "PackageZip"
             output_args = [f"/of={ide_temp_dir / project_name}"]
+            if platform_target == "Windows":
+                output_args.append(f"--tf={ide_temp_dir / (project_name + '.zip')}")
             cmd = self._build_platform_action_command(
                 compile_action,
                 platform_target,
