@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Map tools and Windows packaging
+
+- Added the optional `map` toolset with tilemap queries, transactional edits and validation of registered rooms, including nested tile layers and both compressed and plain tile data.
+- Tile edits preview by default, enforce project and dry-run policies, verify saved data, and roll back failed validation or configured compile checks.
+- Map queries cap retained cell and cluster details across layers, bound total decode and histogram work, and reject malformed dimensions before allocation or iteration. Valid empty layers remain supported.
+- Windows packaging now supplies an explicit ZIP destination. Failed direct runs reject stale executables and only tolerate the recognized final ZIP/move failure after successful compilation creates a fresh executable.
+
 ### Multi-agent projects and GameMaker LTS 2026
 
 #### Fixed
