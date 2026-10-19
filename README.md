@@ -21,6 +21,7 @@ GMS MCP is an independent, open-source project by Ampersand Game Studios, not an
 | --- | --- |
 | Understand an unfamiliar project | Inspect assets, rooms, events, and metadata; find GML definitions and references; explore the project index and asset dependency graph. |
 | Create and change game content | Create GameMaker assets, manage object events, place room instances, edit room layers, and organize audio/texture resources. |
+| Inspect and edit tilemaps | Query cells and connected clusters, patch tile layers with previews and transaction rollback, and validate compressed tile data and tileset indices. Enable the optional `map` toolset; see [Map tools](documentation/MAP.md). |
 | Refactor and maintain a project | Use reference-aware rename/delete workflows, check naming and resource integrity, and find orphaned or missing references. |
 | Build and run | Compile and launch through GameMaker's Igor toolchain; select and pin installed runtimes; inspect and stop managed run sessions. |
 | Build and test in isolation | Compile and run a throwaway snapshot (the working tree, or a git revision plus only your files), inject a test script, and get a pass/fail verdict with screenshots; Igor's random loader crash is retried. |
@@ -112,7 +113,7 @@ To expose selected domains instead of everything:
 gms-mcp-init --client cursor --scope workspace --action app-setup --profile standard --toolsets core,assets,events,rooms
 ```
 
-Optional domains: `assets`, `bridge`, `docs`, `events`, `live-reload`, `maintenance`, `resourcetool`, `rooms`, `runtime`, and `texture-groups`. Call `gm_capabilities` to see what is actually enabled. `safe` accepts only the read-only core surface; it cannot be combined with extra toolsets.
+Optional domains: `assets`, `bridge`, `docs`, `events`, `live-reload`, `maintenance`, `map`, `resourcetool`, `rooms`, `runtime`, and `texture-groups`. Call `gm_capabilities` to see what is actually enabled. `safe` accepts only the read-only core surface; it cannot be combined with extra toolsets.
 
 ## Try it with your assistant
 

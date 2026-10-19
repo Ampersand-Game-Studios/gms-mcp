@@ -39,6 +39,7 @@ SUPPORTED_TOOLSETS = (
     "events",
     "live-reload",
     "maintenance",
+    "map",
     "resourcetool",
     "rooms",
     "runtime",

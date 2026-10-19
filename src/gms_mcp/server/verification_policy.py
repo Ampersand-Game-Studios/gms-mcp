@@ -19,6 +19,7 @@ _SMART_VERIFY_VALUES = {"smart", "risk", "risky", "batch", "batched"}
 _OFF_VALUES = {"", "0", "false", "no", "off", "none"}
 
 _HIGH_RISK_TOOL_NAMES = {
+    "gm_room_tilemap_patch",
     "gm_bridge_install",
     "gm_bridge_uninstall",
     "gm_bridge_enable_one_shot",

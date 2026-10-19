@@ -141,6 +141,79 @@ class TestRunnerCommandSelection(unittest.TestCase):
         self.assertTrue(ok)
         self.assertIn("PackageZip", captured_cmd)
         self.assertNotIn("Tests", captured_cmd)
+        self.assertTrue(
+            any(str(arg).startswith("--tf=") and str(arg).endswith("test_project.zip") for arg in captured_cmd)
+        )
+
+    _COMPILE_OK_LINES = ["Final Compile finished", "Saving IFF file", "Igor complete."]
+    _ZIP_FAILURE_LINES = [
+        "at System.IO.File.Move(String source, String destination)",
+        "at Igor.WindowsBuilder.PackageZip()",
+    ]
+
+    def _windows_temp_run(self, output_lines, *, fresh=False):
+        runner = GameMakerRunner(self.project_root)
+        system_temp = self.project_root / "temp"
+        exe = system_temp / "GameMakerStudio2/test_project/test_project.exe"
+        exe.parent.mkdir(parents=True, exist_ok=True)
+        exe.write_bytes(b"old build")
+        process = self._fake_process()
+        process.returncode = 1
+        commands = []
+
+        def run_igor(cmd, **_kwargs):
+            commands.append(cmd)
+            if fresh:
+                exe.write_bytes(b"fresh compiled executable")
+            return process
+
+        game = MagicMock(pid=999999999)
+        with (
+            patch.object(runner, "_system_temp_root", return_value=system_temp),
+            patch.object(runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)),
+            patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")),
+            patch.object(runner, "get_prefabs_path", return_value=None),
+            patch.object(runner, "_run_igor_command", side_effect=run_igor),
+            patch.object(runner, "_stream_igor_output", return_value=output_lines),
+            patch.object(runner, "_start_game_process", return_value=game) as start_game,
+        ):
+            result = runner.run_project_direct(
+                platform_target="Windows", runtime_type="VM", background=True, output_location="temp"
+            )
+        return result, start_game, commands
+
+    def test_windows_compile_failure_never_launches_previous_executable(self):
+        result, launch, commands = self._windows_temp_run(["Cannot load project"])
+        self.assertFalse(result)
+        launch.assert_not_called()
+        self.assertTrue(any(str(arg).startswith("--tf=") for arg in commands[0]))
+
+    def test_windows_zip_failure_requires_a_fresh_executable(self):
+        lines = self._COMPILE_OK_LINES + self._ZIP_FAILURE_LINES
+        result, launch, _ = self._windows_temp_run(lines)
+        self.assertFalse(result)
+        launch.assert_not_called()
+        result, launch, _ = self._windows_temp_run(lines, fresh=True)
+        self.assertTrue(result["ok"])
+        launch.assert_called_once()
+
+    def test_windows_other_package_failures_are_not_tolerated(self):
+        result, launch, _ = self._windows_temp_run(self._COMPILE_OK_LINES + ["ERROR: export failed"], fresh=True)
+        self.assertFalse(result)
+        launch.assert_not_called()
+
+    def test_windows_compile_does_not_report_success_after_package_failure(self):
+        runner = GameMakerRunner(self.project_root)
+        process = self._fake_process()
+        process.returncode = 1
+        with (
+            patch.object(runner, "find_gamemaker_runtime", side_effect=lambda: self._fake_find_runtime(runner)),
+            patch.object(runner, "find_license_file", return_value=Path("/fake/licence.plist")),
+            patch.object(runner, "get_prefabs_path", return_value=None),
+            patch.object(runner, "_run_igor_command", return_value=process),
+            patch.object(runner, "_stream_igor_output", return_value=self._COMPILE_OK_LINES + self._ZIP_FAILURE_LINES),
+        ):
+            self.assertFalse(runner.compile_project(platform_target="Windows"))
 
     def test_compile_project_uses_package_on_linux(self):
         runner = GameMakerRunner(self.project_root)
