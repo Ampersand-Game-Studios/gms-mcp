@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Idle MCP watcher CPU
+
+- Start project scans only for active subscriptions to project resource updates, not merely because an MCP connection exists. Stop scanning and release snapshots when the last relevant subscription closes.
+- Budget subscribed polling against scan duration, keeping at least 19 scan durations idle between scans on large projects. Preserve external-edit debounce, committed-mutation notifications, and rollback isolation.
+
 ### macOS runtime review fixes
 
 - Run macOS VM games in per-project signed runner copies with separate saves and runtime leases, preserving concurrent games and recovery after launcher exit.
