@@ -218,6 +218,7 @@ These are configuration values, not a shell script. Do not enable them in the re
 | Editing or build tools are missing | Check the active profile. `safe` intentionally omits them; select `standard`/`full` and restart. |
 | The wrong project is detected | Run setup from the game workspace and specify `--gm-project-root path/to/game` when needed. Restart the server after changing the target. |
 | A build fails | Run `gms-mcp doctor --full`; check the selected runtime, licence/access credentials, target SDKs, and returned compiler diagnostics. |
+| Several idle MCP connections use CPU | Upgrade `gms-mcp` and reconnect when current work has finished. Project scans run only while a client subscribes to project resource updates, stop after the last subscriber disconnects, and back off after expensive scans. |
 | The bridge runs but has no game connection or logs | Check the startup-room instance, networking requirements, port conflicts, and use of `__mcp_log()`. Follow the bridge guide before recompiling repeatedly. |
 
 ### Codex setup and checks
