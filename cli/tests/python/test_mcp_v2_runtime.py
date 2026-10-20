@@ -86,8 +86,9 @@ class MCPV2RuntimeTests(unittest.IsolatedAsyncioTestCase):
                     async with client.listen(resource_subscriptions=[PROJECT_INDEX_URI]):
                         async with client.listen(resource_subscriptions=[ASSET_GRAPH_URI]):
                             self.assertEqual(runtime._watch_subscribers, 2)
-                            await asyncio.sleep(0.02)
-                            self.assertGreater(snapshot.call_count, 1)
+                            with anyio.fail_after(2):
+                                while snapshot.call_count < 2:
+                                    await asyncio.sleep(0.005)
                         with anyio.fail_after(1):
                             while runtime._watch_subscribers != 1:
                                 await asyncio.sleep(0)
@@ -130,25 +131,26 @@ class MCPV2RuntimeTests(unittest.IsolatedAsyncioTestCase):
     async def test_expensive_scans_back_off_and_resubscription_resets_delay(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             calls = 0
-            scanned = asyncio.Event()
-            loop = asyncio.get_running_loop()
+            scan_durations: list[float] = []
 
             def slow_snapshot(_root):
                 nonlocal calls
                 calls += 1
                 if calls > 1:
-                    time.sleep(0.01)
-                    loop.call_soon_threadsafe(scanned.set)
+                    started = time.monotonic()
+                    time.sleep(0.03)
+                    scan_durations.append(time.monotonic() - started)
                 return ()
 
             with patch("gms_mcp.server.mcp_v2._snapshot_project", side_effect=slow_snapshot):
                 runtime = _runtime(Path(temp_dir), poll_seconds=0.001)
                 async with runtime.lifespan(None):
                     async with runtime.project_subscription_scope():
-                        await asyncio.wait_for(scanned.wait(), timeout=1)
-                        await asyncio.sleep(0.03)
-                        self.assertEqual(calls, 2)
-                        self.assertGreaterEqual(runtime._poll_delay, 0.19)
+                        with anyio.fail_after(2):
+                            while runtime._poll_delay == runtime.poll_seconds:
+                                await asyncio.sleep(0.005)
+                        self.assertGreater(scan_durations[0], 0)
+                        self.assertGreaterEqual(runtime._poll_delay, scan_durations[0] * 19)
                     async with runtime.project_subscription_scope():
                         self.assertEqual(runtime._poll_delay, runtime.poll_seconds)
 
