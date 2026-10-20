@@ -5,12 +5,15 @@ from __future__ import annotations
 import asyncio
 import tempfile
 import threading
+import time
 import unittest
+from contextlib import AsyncExitStack
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any, cast
 from unittest.mock import patch
 
+import anyio
 from mcp import Client
 from mcp.server.mcpserver import MCPServer
 from mcp.server.subscriptions import ResourceUpdated, ServerEvent
@@ -23,6 +26,7 @@ from gms_mcp.server.mcp_v2 import (
     PROJECT_INDEX_URI,
     MCPV2Runtime,
     MutationSerializationMiddleware,
+    ProjectWatchMiddleware,
 )
 from gms_mcp.server.project import ProjectAccessPolicy
 from gms_mcp.server.results import mcp_tool_result, unwrap_call_tool_result
@@ -34,6 +38,150 @@ def _runtime(project_root: Path, **kwargs: Any) -> MCPV2Runtime:
 
 
 class MCPV2RuntimeTests(unittest.IsolatedAsyncioTestCase):
+    async def _subscribe_to_project(self, runtime: MCPV2Runtime) -> None:
+        stack = AsyncExitStack()
+        self.addAsyncCleanup(stack.aclose)
+        await stack.enter_async_context(runtime.project_subscription_scope())
+
+    async def test_idle_runtime_and_unobserved_mutation_do_not_scan(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("gms_mcp.server.mcp_v2._snapshot_project", return_value=()) as snapshot:
+                runtime = _runtime(Path(temp_dir), poll_seconds=0.001)
+                async with runtime.lifespan(None):
+                    await asyncio.sleep(0.02)
+                    async with runtime.mutation_scope():
+                        await runtime.publish_committed_mutation()
+                    await asyncio.sleep(0.02)
+                snapshot.assert_not_called()
+
+    async def test_unrelated_listen_streams_do_not_start_project_scans(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("gms_mcp.server.mcp_v2._snapshot_project", return_value=()) as snapshot:
+                runtime = _runtime(Path(temp_dir), poll_seconds=0.001)
+                server = MCPServer(
+                    "idle-subscriptions",
+                    subscriptions=runtime.subscriptions,
+                    lifespan=runtime.lifespan,
+                    middleware=[ProjectWatchMiddleware(runtime)],
+                )
+                async with Client(server, mode="2026-07-28") as client:
+                    await client.list_resources()
+                    async with client.listen(tools_list_changed=True, resources_list_changed=True):
+                        await asyncio.sleep(0.02)
+                    async with client.listen(resource_subscriptions=["test://unrelated"]):
+                        await asyncio.sleep(0.02)
+                snapshot.assert_not_called()
+
+    async def test_last_resource_subscription_disconnect_stops_scans(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with patch("gms_mcp.server.mcp_v2._snapshot_project", return_value=()) as snapshot:
+                runtime = _runtime(Path(temp_dir), poll_seconds=0.001)
+                server = MCPServer(
+                    "subscription-lifecycle",
+                    subscriptions=runtime.subscriptions,
+                    lifespan=runtime.lifespan,
+                    middleware=[ProjectWatchMiddleware(runtime)],
+                )
+                async with Client(server, mode="2026-07-28") as client:
+                    async with client.listen(resource_subscriptions=[PROJECT_INDEX_URI]):
+                        async with client.listen(resource_subscriptions=[ASSET_GRAPH_URI]):
+                            self.assertEqual(runtime._watch_subscribers, 2)
+                            await asyncio.sleep(0.02)
+                            self.assertGreater(snapshot.call_count, 1)
+                        with anyio.fail_after(1):
+                            while runtime._watch_subscribers != 1:
+                                await asyncio.sleep(0)
+                    with anyio.fail_after(1):
+                        while runtime._watch_subscribers:
+                            await asyncio.sleep(0)
+                    # An already-running worker may finish, but no new scan starts.
+                    await asyncio.sleep(0.01)
+                    stopped_count = snapshot.call_count
+                    await asyncio.sleep(0.03)
+                    self.assertEqual(snapshot.call_count, stopped_count)
+                    self.assertIsNone(runtime._published_snapshot)
+                    async with client.listen(resource_subscriptions=[PROJECT_INDEX_URI]):
+                        self.assertEqual(runtime._watch_subscribers, 1)
+                        self.assertGreater(snapshot.call_count, stopped_count)
+
+    async def test_subscriber_cancellation_releases_watcher(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = _runtime(Path(temp_dir))
+            middleware = ProjectWatchMiddleware(runtime)
+            started = asyncio.Event()
+
+            async def listen(_ctx):
+                started.set()
+                await asyncio.Event().wait()
+
+            ctx = SimpleNamespace(
+                method="subscriptions/listen",
+                params={"notifications": {"resource_subscriptions": [PROJECT_INDEX_URI]}},
+            )
+            listener = asyncio.create_task(middleware(cast(Any, ctx), listen))
+            await asyncio.wait_for(started.wait(), timeout=1)
+            self.assertEqual(runtime._watch_subscribers, 1)
+            listener.cancel()
+            with self.assertRaises(asyncio.CancelledError):
+                await listener
+            self.assertEqual(runtime._watch_subscribers, 0)
+            self.assertFalse(runtime._watch_requested.is_set())
+
+    async def test_expensive_scans_back_off_and_resubscription_resets_delay(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            calls = 0
+            scanned = asyncio.Event()
+            loop = asyncio.get_running_loop()
+
+            def slow_snapshot(_root):
+                nonlocal calls
+                calls += 1
+                if calls > 1:
+                    time.sleep(0.01)
+                    loop.call_soon_threadsafe(scanned.set)
+                return ()
+
+            with patch("gms_mcp.server.mcp_v2._snapshot_project", side_effect=slow_snapshot):
+                runtime = _runtime(Path(temp_dir), poll_seconds=0.001)
+                async with runtime.lifespan(None):
+                    async with runtime.project_subscription_scope():
+                        await asyncio.wait_for(scanned.wait(), timeout=1)
+                        await asyncio.sleep(0.03)
+                        self.assertEqual(calls, 2)
+                        self.assertGreaterEqual(runtime._poll_delay, 0.19)
+                    async with runtime.project_subscription_scope():
+                        self.assertEqual(runtime._poll_delay, runtime.poll_seconds)
+
+    async def test_inflight_snapshot_is_discarded_after_last_unsubscribe(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runtime = _runtime(Path(temp_dir), poll_seconds=0.001, debounce_seconds=0)
+            started = threading.Event()
+            release = threading.Event()
+            finished = threading.Event()
+            events: list[ServerEvent] = []
+            unsubscribe = runtime.subscriptions.subscribe(events.append)
+
+            def delayed_snapshot(_root):
+                started.set()
+                release.wait(timeout=1)
+                finished.set()
+                return (("external.gml", 1, 1),)
+
+            try:
+                async with runtime.lifespan(None):
+                    async with runtime.project_subscription_scope():
+                        with patch("gms_mcp.server.mcp_v2._snapshot_project", side_effect=delayed_snapshot):
+                            self.assertTrue(await asyncio.to_thread(started.wait, 1))
+                    release.set()
+                    self.assertTrue(await asyncio.to_thread(finished.wait, 1))
+                    await asyncio.sleep(0.01)
+                    self.assertIsNone(runtime._published_snapshot)
+                    self.assertIsNone(runtime._observed_snapshot)
+                    self.assertEqual(events, [])
+            finally:
+                release.set()
+                unsubscribe()
+
     async def test_cache_hints_are_advertised_and_honored_by_modern_client(self):
         calls: list[str] = []
 
@@ -106,6 +254,7 @@ class MCPV2RuntimeTests(unittest.IsolatedAsyncioTestCase):
                     updates_received.set()
 
             unsubscribe = runtime.subscriptions.subscribe(record_event)
+            await self._subscribe_to_project(runtime)
             watcher = asyncio.create_task(runtime.watch_project())
             try:
                 (root / "external.gml").write_text("show_debug_message('changed');", encoding="utf-8")
@@ -115,7 +264,7 @@ class MCPV2RuntimeTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 watcher.cancel()
                 with self.assertRaises(asyncio.CancelledError):
-                    await watcher
+                    await asyncio.wait_for(watcher, timeout=1)
                 unsubscribe()
 
         self.assertTrue(all(isinstance(event, ResourceUpdated) for event in events))
@@ -129,6 +278,7 @@ class MCPV2RuntimeTests(unittest.IsolatedAsyncioTestCase):
             runtime = _runtime(root, poll_seconds=0.005, debounce_seconds=0)
             events: list[ServerEvent] = []
             unsubscribe = runtime.subscriptions.subscribe(events.append)
+            await self._subscribe_to_project(runtime)
             watcher = asyncio.create_task(runtime.watch_project())
             try:
                 async with runtime.mutation_scope():
@@ -140,7 +290,7 @@ class MCPV2RuntimeTests(unittest.IsolatedAsyncioTestCase):
             finally:
                 watcher.cancel()
                 with self.assertRaises(asyncio.CancelledError):
-                    await watcher
+                    await asyncio.wait_for(watcher, timeout=1)
                 unsubscribe()
 
         self.assertEqual(events, [])
@@ -151,6 +301,7 @@ class MCPV2RuntimeTests(unittest.IsolatedAsyncioTestCase):
             runtime = _runtime(root, poll_seconds=0.001, debounce_seconds=0)
             events: list[ServerEvent] = []
             unsubscribe = runtime.subscriptions.subscribe(events.append)
+            await self._subscribe_to_project(runtime)
             snapshot_started = threading.Event()
             release_snapshot = threading.Event()
 
@@ -178,7 +329,7 @@ class MCPV2RuntimeTests(unittest.IsolatedAsyncioTestCase):
                     release_snapshot.set()
                     watcher.cancel()
                     with self.assertRaises(asyncio.CancelledError):
-                        await watcher
+                        await asyncio.wait_for(watcher, timeout=1)
                     unsubscribe()
 
         self.assertEqual(events, [])
