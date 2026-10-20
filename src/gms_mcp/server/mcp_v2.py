@@ -15,6 +15,8 @@ from mcp.server import CacheHint
 from mcp.server.caching import CacheableMethod
 from mcp.server.context import CallNext, HandlerResult, ServerRequestContext
 from mcp.server.subscriptions import InMemorySubscriptionBus, ResourceUpdated
+from mcp.types import SubscriptionsListenRequestParams
+from pydantic import ValidationError
 
 from .project import ProjectAccessPolicy
 from .resolution import ResolutionRuntime
@@ -67,6 +69,9 @@ _IGNORED_DIRECTORY_NAMES = frozenset(
 
 ProjectSnapshot = tuple[tuple[str, int, int], ...]
 
+# Leave at least 19 times the scan duration idle, even on very large projects.
+_SCAN_IDLE_MULTIPLIER = 19
+
 
 def _snapshot_project(project_root: Path) -> ProjectSnapshot:
     """Return a stable, inexpensive signature of MCP-visible project files."""
@@ -107,9 +112,41 @@ class MCPV2Runtime:
         self._snapshot_lock = anyio.Lock()
         self._mutation_active = False
         self._mutation_generation = 0
-        self._published_snapshot = _snapshot_project(self.project_root)
-        self._observed_snapshot = self._published_snapshot
+        self._published_snapshot: ProjectSnapshot | None = None
+        self._observed_snapshot: ProjectSnapshot | None = None
         self._changed_at: float | None = None
+        self._watch_subscribers = 0
+        self._watch_generation = 0
+        self._watch_requested = anyio.Event()
+        self._poll_delay = poll_seconds
+
+    @asynccontextmanager
+    async def project_subscription_scope(self):
+        """Watch only while a client is listening for project resource updates."""
+        async with self.mutation_lock:
+            async with self._snapshot_lock:
+                if not self._watch_subscribers:
+                    # Establish the baseline before the listen handler acknowledges
+                    # the subscription, and never from a partially applied mutation.
+                    snapshot = await to_thread.run_sync(_snapshot_project, self.project_root)
+                    self._published_snapshot = snapshot
+                    self._observed_snapshot = snapshot
+                    self._changed_at = None
+                    self._watch_generation += 1
+                    self._poll_delay = self.poll_seconds
+                    self._watch_requested.set()
+                self._watch_subscribers += 1
+        try:
+            yield
+        finally:
+            # No awaits here: disconnect cancellation must always stop the watcher.
+            self._watch_subscribers -= 1
+            if not self._watch_subscribers:
+                self._watch_generation += 1
+                self._watch_requested = anyio.Event()
+                self._published_snapshot = None
+                self._observed_snapshot = None
+                self._changed_at = None
 
     @asynccontextmanager
     async def mutation_scope(self):
@@ -125,11 +162,14 @@ class MCPV2Runtime:
 
     async def publish_committed_mutation(self) -> None:
         """Publish cache invalidations after a transaction has committed."""
-        snapshot = await to_thread.run_sync(_snapshot_project, self.project_root)
-        async with self._snapshot_lock:
-            self._published_snapshot = snapshot
-            self._observed_snapshot = snapshot
-            self._changed_at = None
+        if self._watch_subscribers:
+            watch_generation = self._watch_generation
+            snapshot = await to_thread.run_sync(_snapshot_project, self.project_root)
+            async with self._snapshot_lock:
+                if self._watch_subscribers and watch_generation == self._watch_generation:
+                    self._published_snapshot = snapshot
+                    self._observed_snapshot = snapshot
+                    self._changed_at = None
         await self._publish_project_resources_changed()
 
     async def _publish_project_resources_changed(self) -> None:
@@ -137,14 +177,29 @@ class MCPV2Runtime:
         await self.subscriptions.publish(ResourceUpdated(uri=ASSET_GRAPH_URI))
 
     async def watch_project(self) -> None:
-        """Poll deterministically, debounce bursts, and publish external edits."""
+        """Sleep without subscribers; budget and debounce subscribed scans."""
         while True:
-            await anyio.sleep(self.poll_seconds)
+            await self._watch_requested.wait()
+            watch_generation = self._watch_generation
+            scan_after = time.monotonic() + self._poll_delay
+            # Recheck demand during backoff without nested cancellation scopes;
+            # direct task cancellation must not race a polling timeout.
+            while self._watch_subscribers and watch_generation == self._watch_generation:
+                remaining = scan_after - time.monotonic()
+                if remaining <= 0:
+                    break
+                await anyio.sleep(min(self.poll_seconds, remaining))
+            if not self._watch_subscribers or watch_generation != self._watch_generation:
+                continue
             scan_generation = self._mutation_generation
+            started = time.monotonic()
             snapshot = await to_thread.run_sync(_snapshot_project, self.project_root)
             now = time.monotonic()
             publish = False
             async with self._snapshot_lock:
+                if not self._watch_subscribers or watch_generation != self._watch_generation:
+                    continue
+                self._poll_delay = max(self.poll_seconds, (now - started) * _SCAN_IDLE_MULTIPLIER)
                 if self._mutation_active or scan_generation != self._mutation_generation:
                     # Tool-owned changes are published by publish_committed_mutation;
                     # Ignore any scan that overlapped a mutation, even when the
@@ -169,13 +224,35 @@ class MCPV2Runtime:
 
     @asynccontextmanager
     async def lifespan(self, _server):
-        """Start one watcher per process and cancel it deterministically."""
+        """Own the demand-driven watcher and cancel it deterministically."""
         async with anyio.create_task_group() as task_group:
             task_group.start_soon(self.watch_project)
             try:
                 yield self
             finally:
                 task_group.cancel_scope.cancel()
+
+
+class ProjectWatchMiddleware:
+    """Tie filesystem watching to relevant listen streams, not server lifetime."""
+
+    def __init__(self, runtime: MCPV2Runtime) -> None:
+        self._runtime = runtime
+
+    async def __call__(self, ctx: ServerRequestContext[Any, Any], call_next: CallNext) -> HandlerResult:
+        if ctx.method == "subscriptions/listen":
+            try:
+                params = SubscriptionsListenRequestParams.model_validate(ctx.params)
+            except ValidationError:
+                # Let the SDK report malformed requests without starting a watcher.
+                return await call_next(ctx)
+            if any(
+                uri in (PROJECT_INDEX_URI, ASSET_GRAPH_URI)
+                for uri in (params.notifications.resource_subscriptions or ())
+            ):
+                async with self._runtime.project_subscription_scope():
+                    return await call_next(ctx)
+        return await call_next(ctx)
 
 
 class MutationSerializationMiddleware:

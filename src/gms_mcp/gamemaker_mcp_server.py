@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from .server.http_security import local_bearer_auth, validate_local_bearer_token
-from .server.mcp_v2 import MCP_CACHE_HINTS, MCPV2Runtime, MutationSerializationMiddleware
+from .server.mcp_v2 import MCP_CACHE_HINTS, MCPV2Runtime, MutationSerializationMiddleware, ProjectWatchMiddleware
 from .server.project import ProjectAccessError, ProjectAccessPolicy
 from .server.register_all import register_all
 from .server.results import expose_host_diagnostics_from_environment, mcp_tool_result
@@ -589,11 +589,12 @@ def build_server(*, http_auth_value: str | None = None, http_auth_issuer_url: st
         token_verifier=token_verifier,
         extensions=[dashboard_app],
         middleware=[
+            ProjectWatchMiddleware(runtime),
             MutationSerializationMiddleware(
                 runtime,
                 lambda name: operation_scope(name) == "read",
                 _is_committed_mutation_result,
-            )
+            ),
         ],
     )
     _wrap_tool_registration(
