@@ -23,6 +23,7 @@ classifiers = [
   "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
+  "certifi>=2026.10.19",
   "mcp==2.3.0",
   "mcp-types==2.3.0",
   "pydantic>=2,<3",
@@ -32,6 +33,7 @@ dependencies = [
 
 [project.optional-dependencies]
 dev = [
+  "pip>=26.2.2",
   "build>=1,<2",
   "setuptools>=83,<84",
   "setuptools-scm>=8,<9",

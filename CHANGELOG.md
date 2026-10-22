@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+- Security: require certifi 2026.10.19 and pip 26.2.2, and update build/publish tooling to distrust the compromised emSign CA chains.
+
 ### Idle MCP watcher CPU
 
 - Start project scans only for active subscriptions to project resource updates, not merely because an MCP connection exists. Stop scanning and release snapshots when the last relevant subscription closes.
