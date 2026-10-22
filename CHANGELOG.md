@@ -4,7 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
-- Security: require certifi 2026.10.19 and pip 26.2.2, and update build/publish tooling to distrust the compromised emSign CA chains.
+### Changed
+- Raise the minimum Python version to 3.11 so image imports can use Pillow 13 security fixes.
+
+### Security
+- Require Pillow 13 and OpenTelemetry SDK 1.45.1 or newer to remove known vulnerabilities from image-import and development dependencies.
+- Require certifi 2026.10.19 and pip 26.2.2, and update build/publish tooling to distrust the compromised emSign CA chains.
 
 ### Idle MCP watcher CPU
 
