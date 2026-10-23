@@ -7,7 +7,7 @@ name = "gms-mcp"
 dynamic = ["version"]
 description = "GameMaker CLI + MCP server toolset"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.11"
 license = "MIT"
 license-files = ["LICENSE"]
 authors = [
@@ -17,21 +17,21 @@ keywords = ["gamemaker", "mcp", "cursor", "cli", "tools"]
 classifiers = [
   "Programming Language :: Python :: 3",
   "Programming Language :: Python :: 3 :: Only",
-  "Programming Language :: Python :: 3.10",
   "Programming Language :: Python :: 3.11",
   "Programming Language :: Python :: 3.12",
   "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
+  "certifi>=2026.10.19",
   "mcp==2.3.0",
   "mcp-types==2.3.0",
   "pydantic>=2,<3",
   "colorama>=0.4.6,<1",
-  "tomli>=2,<3; python_version < '3.11'",
 ]
 
 [project.optional-dependencies]
 dev = [
+  "pip>=26.2.2",
   "build>=1,<2",
   "setuptools>=83,<84",
   "setuptools-scm>=8,<9",
@@ -39,8 +39,8 @@ dev = [
   "packaging>=25,<27",
   "pytest>=9,<10",
   "pytest-cov>=7,<8",
-  "Pillow>=10,<13",
-  "opentelemetry-sdk>=1.28,<2",
+  "Pillow>=13,<14",
+  "opentelemetry-sdk>=1.45.1,<2",
   "pip-audit>=2.9,<3",
   "ruff>=0.9,<1",
   "pyright>=1.1.390,<2",
@@ -48,7 +48,7 @@ dev = [
   "tomli>=2,<3",
 ]
 import = [
-  "Pillow>=10,<13",
+  "Pillow>=13,<14",
 ]
 
 [project.urls]
@@ -85,7 +85,7 @@ parallel = true
 patch = ["subprocess"]
 
 [tool.ruff]
-target-version = "py310"
+target-version = "py311"
 line-length = 120
 exclude = [".venv", "build", "dist"]
 
