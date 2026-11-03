@@ -1,5 +1,5 @@
 [build-system]
-requires = ["setuptools>=83,<84", "setuptools-scm>=8,<9", "wheel>=0.45,<1"]
+requires = ["setuptools>=84.1,<85", "setuptools-scm>=8,<9", "wheel>=0.45,<1"]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -33,7 +33,7 @@ dependencies = [
 dev = [
   "pip>=26.2.2",
   "build>=1,<2",
-  "setuptools>=83,<84",
+  "setuptools>=84.1,<85",
   "setuptools-scm>=8,<9",
   "wheel>=0.45,<1",
   "packaging>=25,<27",
