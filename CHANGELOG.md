@@ -31,6 +31,7 @@ All notable changes to this project will be documented in this file.
 - Tile edits preview by default, enforce project and dry-run policies, verify saved data, and roll back failed validation or configured compile checks.
 - Map queries cap retained cell and cluster details across layers, bound total decode and histogram work, and reject malformed dimensions before allocation or iteration. Valid empty layers remain supported.
 - Windows packaging now supplies an explicit ZIP destination. Failed direct runs reject stale executables and only tolerate the recognized final ZIP/move failure after successful compilation creates a fresh executable.
+- Thanks to Dinh Hong Ngoc ([ngocdh383](https://github.com/ngocdh383)), whose fork's map tooling these tools build on, and Guillermo Ares ([guillermoares](https://github.com/guillermoares)), whose fork's Windows ZIP destination and stale-build fixes these packaging changes follow.
 
 ### Multi-agent projects and GameMaker LTS 2026
 
