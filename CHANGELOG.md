@@ -4,6 +4,13 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Raise the minimum Python version to 3.11 so image imports can use Pillow 13 security fixes.
+
+### Security
+- Require Pillow 13 and OpenTelemetry SDK 1.45.1 or newer to remove known vulnerabilities from image-import and development dependencies.
+- Require certifi 2026.10.19 and pip 26.2.2, and update build/publish tooling to distrust the compromised emSign CA chains.
+
 ### Idle MCP watcher CPU
 
 - Start project scans only for active subscriptions to project resource updates, not merely because an MCP connection exists. Stop scanning and release snapshots when the last relevant subscription closes.
@@ -24,6 +31,7 @@ All notable changes to this project will be documented in this file.
 - Tile edits preview by default, enforce project and dry-run policies, verify saved data, and roll back failed validation or configured compile checks.
 - Map queries cap retained cell and cluster details across layers, bound total decode and histogram work, and reject malformed dimensions before allocation or iteration. Valid empty layers remain supported.
 - Windows packaging now supplies an explicit ZIP destination. Failed direct runs reject stale executables and only tolerate the recognized final ZIP/move failure after successful compilation creates a fresh executable.
+- Thanks to Dinh Hong Ngoc ([ngocdh383](https://github.com/ngocdh383)), whose fork's map tooling these tools build on, and Guillermo Ares ([guillermoares](https://github.com/guillermoares)), whose fork's Windows ZIP destination and stale-build fixes these packaging changes follow.
 
 ### Multi-agent projects and GameMaker LTS 2026
 

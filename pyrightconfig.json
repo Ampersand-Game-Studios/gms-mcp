@@ -8,7 +8,7 @@
     "scripts/verify_release_certification.py"
   ],
   "exclude": [".venv", "build", "dist"],
-  "pythonVersion": "3.10",
+  "pythonVersion": "3.11",
   "typeCheckingMode": "basic",
   "venvPath": ".",
   "venv": ".venv",

@@ -35,7 +35,7 @@ Availability depends on the selected [tool profile](#enable-editing-and-addition
 
 ### 1. Install
 
-You need **Python 3.10 or newer**, a GameMaker project containing a `.yyp` file, and an MCP-capable client. Building and running also require an installed GameMaker runtime, the appropriate licence/access credentials, and any target-specific SDKs. Project inspection does not require the GameMaker IDE to be running.
+You need **Python 3.11 or newer**, a GameMaker project containing a `.yyp` file, and an MCP-capable client. Building and running also require an installed GameMaker runtime, the appropriate licence/access credentials, and any target-specific SDKs. Project inspection does not require the GameMaker IDE to be running.
 
 With [pipx](https://pipx.pypa.io/stable/how-to/install-pipx.html) installed:
 
@@ -51,7 +51,7 @@ The package installs three commands:
 | `gms-mcp-init` | Generate client configuration and check setup. |
 | `gms` | Run GameMaker project operations directly from the terminal. |
 
-For sprite image imports, install the optional image dependency with `pipx inject gms-mcp Pillow`.
+For sprite image imports, install the optional image dependency with `pipx inject gms-mcp 'Pillow>=13,<14'`.
 
 ### 2. Connect your client
 
@@ -269,7 +269,7 @@ uv run --frozen pytest cli/tests/python/test_final_verification.py
 uv run --frozen python scripts/generate_quality_reports.py
 ```
 
-CI runs core tests on Linux and Windows across Python 3.10–3.13, plus macOS runner/session tests across Python 3.11–3.13. It also checks MCP protocol behaviour, locked dependencies for known vulnerabilities, package privacy boundaries, and tool-registration parity. These checks are evidence of tested behaviour, not a guarantee that a project or dependency is free of defects.
+CI runs core tests on Linux and Windows across Python 3.11–3.13, plus macOS runner/session tests across Python 3.11–3.13. It also checks MCP protocol behaviour, locked dependencies for known vulnerabilities, package privacy boundaries, and tool-registration parity. These checks are evidence of tested behaviour, not a guarantee that a project or dependency is free of defects.
 
 Release publication requires passing **real GameMaker 2024 and 2026 LTS certification** from the exact push-triggered CI run on disposable Linux, Windows, and macOS runners. A generated MCP fixture alone does not establish compile/run compatibility. Build archives must also pass the public-file allowlist; local reports, service operations, development tests, and CI configuration are excluded from published packages.
 

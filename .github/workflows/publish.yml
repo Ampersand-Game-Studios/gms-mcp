@@ -39,7 +39,7 @@ jobs:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
-          version: "0.11.28"
+          version: "0.13.4"
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: Install version tooling
@@ -85,7 +85,7 @@ jobs:
           python-version: "3.12"
       - uses: astral-sh/setup-uv@11f9893b081a58869d3b5fccaea48c9e9e46f990 # v8.3.2
         with:
-          version: "0.11.28"
+          version: "0.13.4"
           enable-cache: true
           cache-dependency-glob: uv.lock
       - name: Install build tooling
@@ -120,4 +120,4 @@ jobs:
       - name: Re-verify downloaded package privacy boundary
         run: python3 scripts/verify_package_artifacts.py dist
       - name: Publish to PyPI (Trusted Publishing)
-        uses: pypa/gh-action-pypi-publish@ed0c53931b1dc9bd32cbe73a98c7f6766f8a527e # release/v1
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
