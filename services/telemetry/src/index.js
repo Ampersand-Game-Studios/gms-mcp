@@ -1,3 +1,5 @@
+import { clientBudgetName } from "./ingest-budget.js";
+
 const SCHEMA_VERSION = 1;
 const MAX_EVENTS = 50;
 const MAX_REQUEST_BYTES = 256 * 1024;
@@ -5,7 +7,38 @@ const MAX_ARCHIVE_DAYS = 31;
 const MAX_ARCHIVE_OBJECTS = 10000;
 const PRIMARY_HOSTNAME = "gms-mcp-telemetry.ampersandgamestudios.com";
 const DEV_HOSTS = new Set(["localhost", "127.0.0.1"]);
-const SERVICE_REVISION = "retention-boundary-v6";
+const SERVICE_REVISION = "ingest-security-v8";
+const EVENT_SURFACES = {
+  "cli.command": "cli",
+  "telemetry.consent_changed": "cli",
+  "mcp.tool": "mcp",
+  "mcp.server_start": "mcp",
+  "init.run": "init",
+  "init.codex_check": "init",
+};
+const ERROR_FAMILIES = new Set([
+  "timeout",
+  "cancelled",
+  "missing_dependency",
+  "permission",
+  "not_found",
+  "network",
+  "validation",
+  "system_exit",
+  "runtime",
+  "unexpected",
+  "project_access",
+]);
+const DURATION_BUCKETS = new Set([
+  "lt_100",
+  "100_499",
+  "500_999",
+  "1000_4999",
+  "5000_29999",
+  "ge_30000",
+]);
+
+export { IngestBudget } from "./ingest-budget.js";
 
 const EVENT_RULES = {
   schema_version: { type: "integer", required: true },
@@ -31,10 +64,15 @@ const EVENT_RULES = {
   install_hash: { type: "string", required: false, maxLength: 128 },
 };
 
-function jsonResponse(status, payload) {
+function jsonResponse(status, payload, headers = {}) {
   return new Response(JSON.stringify(payload, null, 2), {
     status,
-    headers: { "content-type": "application/json; charset=utf-8" },
+    headers: {
+      "content-type": "application/json; charset=utf-8",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+      ...headers,
+    },
   });
 }
 
@@ -191,18 +229,20 @@ function sanitizeEvent(event) {
     return null;
   if (sanitized.ci || sanitized.test_env) return null;
   if (
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(
-      sanitized.timestamp,
-    )
+    !Object.hasOwn(EVENT_SURFACES, sanitized.event_type) ||
+    EVENT_SURFACES[sanitized.event_type] !== sanitized.surface ||
+    (sanitized.error_family && !ERROR_FAMILIES.has(sanitized.error_family)) ||
+    (sanitized.duration_bucket &&
+      !DURATION_BUCKETS.has(sanitized.duration_bucket)) ||
+    (sanitized.duration_ms !== undefined &&
+      sanitized.duration_ms > 7 * 86400000) ||
+    !/^\d+(?:\.\d+)*(?:(?:a|b|rc)\d+)?(?:\.post\d+)?(?:\.dev\d+)?(?:\+[a-z0-9]+(?:[._-][a-z0-9]+)*)?$/i.test(
+      sanitized.gms_mcp_version,
+    ) ||
+    !/^\d+\.\d+$/.test(sanitized.python_version)
   )
     return null;
-  const timestamp = Date.parse(sanitized.timestamp);
-  if (
-    !Number.isFinite(timestamp) ||
-    timestamp > Date.now() + 300000 ||
-    timestamp < Date.now() - 7 * 86400000
-  )
-    return null;
+  if (!validClientTimestamp(sanitized.timestamp)) return null;
   return sanitized;
 }
 
@@ -530,6 +570,44 @@ async function handleArchiveObject(request, env) {
 }
 
 async function handleIngest(request, env) {
+  // Only Cloudflare's connection address controls the limit. Forwarded headers
+  // and client-provided session/install identities cannot select a fresh quota.
+  const ip = request.headers.get("cf-connecting-ip");
+  if (!ip)
+    return jsonResponse(403, { ok: false, error: "Missing client address." });
+  try {
+    const local = await env.INGEST_IP_LIMITER.limit({ key: ip });
+    if (!local.success)
+      return jsonResponse(
+        429,
+        { ok: false, error: "Rate limited." },
+        { "retry-after": "60" },
+      );
+    const overall = await env.INGEST_EDGE_LIMITER.limit({ key: "ingest" });
+    if (!overall.success)
+      return jsonResponse(
+        429,
+        { ok: false, error: "Rate limited." },
+        { "retry-after": "60" },
+      );
+  } catch {
+    return jsonResponse(
+      503,
+      { ok: false, error: "Ingestion protection unavailable." },
+      { "retry-after": "60" },
+    );
+  }
+  if (
+    (request.headers.get("content-type") || "")
+      .split(";")[0]
+      .trim()
+      .toLowerCase() !== "application/json"
+  ) {
+    return jsonResponse(415, {
+      ok: false,
+      error: "Expected application/json.",
+    });
+  }
   let payload;
   try {
     payload = await readJsonBody(request);
@@ -548,6 +626,13 @@ async function handleIngest(request, env) {
 
   const events = Array.isArray(payload?.events) ? payload.events : null;
   if (
+    !payload ||
+    typeof payload !== "object" ||
+    Array.isArray(payload) ||
+    Object.keys(payload).some(
+      (key) => !["schema_version", "sent_at", "events"].includes(key),
+    ) ||
+    (payload.sent_at !== undefined && !validClientTimestamp(payload.sent_at)) ||
     payload?.schema_version !== SCHEMA_VERSION ||
     !events ||
     events.length === 0 ||
@@ -563,18 +648,75 @@ async function handleIngest(request, env) {
       error: "Every event must satisfy the closed telemetry schema.",
     });
   }
+  if (
+    new Set(sanitized.map((event) => event.event_id)).size !== sanitized.length
+  ) {
+    return jsonResponse(400, {
+      ok: false,
+      error: "Duplicate event IDs in batch.",
+    });
+  }
 
-  await env.TELEMETRY_QUEUE.send({
-    schema_version: SCHEMA_VERSION,
-    received_at: new Date().toISOString(),
-    events: sanitized,
-  });
+  try {
+    // The client share goes first, so a rejected network spends no global budget.
+    for (const [name, path] of [
+      [await clientBudgetName(ip), "/reserve-client"],
+      ["global", "/reserve"],
+    ]) {
+      const budget = env.INGEST_BUDGET.get(env.INGEST_BUDGET.idFromName(name));
+      const decision = await budget.fetch(`https://budget.internal${path}`, {
+        method: "POST",
+        body: JSON.stringify({ events: sanitized.length }),
+      });
+      if (decision.status === 429) return decision;
+      if (!decision.ok) throw new Error("budget_unavailable");
+    }
+  } catch {
+    return jsonResponse(
+      503,
+      { ok: false, error: "Ingestion protection unavailable." },
+      { "retry-after": "60" },
+    );
+  }
+
+  try {
+    await env.TELEMETRY_QUEUE.send({
+      schema_version: SCHEMA_VERSION,
+      received_at: new Date().toISOString(),
+      events: sanitized,
+    });
+  } catch {
+    return jsonResponse(
+      503,
+      { ok: false, error: "Ingestion queue unavailable." },
+      { "retry-after": "60" },
+    );
+  }
 
   return jsonResponse(202, {
     ok: true,
     accepted: sanitized.length,
     dropped: events.length - sanitized.length,
   });
+}
+
+function validClientTimestamp(value) {
+  if (
+    typeof value !== "string" ||
+    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(value)
+  )
+    return false;
+  const timestamp = Date.parse(value);
+  const canonical = value.replace(
+    /(\.\d{1,3})?Z$/,
+    (_, fraction) => `${(fraction || ".").padEnd(4, "0")}Z`,
+  );
+  return (
+    Number.isFinite(timestamp) &&
+    new Date(timestamp).toISOString() === canonical &&
+    timestamp <= Date.now() + 300000 &&
+    timestamp >= Date.now() - 7 * 86400000
+  );
 }
 
 async function handleQueue(batch, env) {

@@ -4,12 +4,42 @@ import { gzipSync } from "node:zlib";
 import worker, {
   buildDailyAggregate,
   handleQueue,
+  IngestBudget,
   retentionSettings,
   runRetention,
   sanitizeEvent,
 } from "../src/index.js";
+import { clientBudgetName, clientNetwork } from "../src/ingest-budget.js";
 
 const host = "https://gms-mcp-telemetry.ampersandgamestudios.com";
+const ingestHeaders = {
+  "content-type": "application/json",
+  "cf-connecting-ip": "192.0.2.1",
+};
+function protections() {
+  return {
+    INGEST_IP_LIMITER: {
+      async limit() {
+        return { success: true };
+      },
+    },
+    INGEST_EDGE_LIMITER: {
+      async limit() {
+        return { success: true };
+      },
+    },
+    INGEST_BUDGET: {
+      idFromName: (name) => name,
+      get() {
+        return {
+          async fetch() {
+            return new Response(null, { status: 200 });
+          },
+        };
+      },
+    },
+  };
+}
 function event(overrides = {}) {
   return {
     schema_version: 1,
@@ -118,6 +148,24 @@ test("calendar month cutoff clamps end of month and rejects unsafe configuration
 });
 test("every schema field is validated and diagnostics cannot enter storage", () => {
   assert.ok(sanitizeEvent(event()));
+  for (const [event_type, surface] of [
+    ["cli.command", "cli"],
+    ["telemetry.consent_changed", "cli"],
+    ["mcp.tool", "mcp"],
+    ["mcp.server_start", "mcp"],
+    ["init.run", "init"],
+    ["init.codex_check", "init"],
+  ])
+    assert.ok(
+      sanitizeEvent(
+        event({
+          event_type,
+          surface,
+          result: "error",
+          error_family: "project_access",
+        }),
+      ),
+    );
   for (const override of [
     { extra: "/secret/project" },
     { tool_name: "/secret/path" },
@@ -132,8 +180,45 @@ test("every schema field is validated and diagnostics cannot enter storage", () 
     { duration_ms: -1 },
     { result: "unexpected" },
     { surface: "invalid" },
+    { event_type: "arbitrary" },
+    { event_type: "mcp.tool" },
+    { error_family: "secret" },
+    { duration_bucket: "secret" },
+    { duration_ms: 7 * 86400000 + 1 },
+    { python_version: "private-value" },
+    { gms_mcp_version: "private-value" },
   ])
     assert.equal(sanitizeEvent(event(override)), null);
+});
+test("timestamps reject calendar rollover while preserving client UTC formats", () => {
+  const originalNow = Date.now;
+  Date.now = () => Date.parse("2026-03-02T12:00:00Z");
+  try {
+    for (const timestamp of [
+      "2026-03-02T12:00:00Z",
+      "2026-03-02T12:00:00.1Z",
+      "2026-03-02T12:00:00.12Z",
+      "2026-03-02T12:00:00.123Z",
+    ])
+      assert.ok(sanitizeEvent(event({ timestamp })));
+    assert.equal(
+      sanitizeEvent(event({ timestamp: "2026-02-30T12:00:00Z" })),
+      null,
+    );
+  } finally {
+    Date.now = originalNow;
+  }
+});
+test("package versions accept normalized release and SCM development versions", () => {
+  for (const gms_mcp_version of [
+    "0.1.dev64",
+    "0.0.13",
+    "0.1.0rc1",
+    "0.1.0.post1.dev2",
+    "0.1.dev64+g1234abcd",
+  ]) {
+    assert.ok(sanitizeEvent(event({ gms_mcp_version })), gms_mcp_version);
+  }
 });
 test("identity/gzip decompressed bodies are bounded even without content-length", async () => {
   for (const gzip of [false, true]) {
@@ -143,10 +228,14 @@ test("identity/gzip decompressed bodies are bounded even without content-length"
     });
     const request = new Request(`${host}/v1/events`, {
       method: "POST",
-      headers: gzip ? { "content-encoding": "gzip" } : {},
+      headers: {
+        ...ingestHeaders,
+        ...(gzip ? { "content-encoding": "gzip" } : {}),
+      },
       body: gzip ? gzipSync(payload) : payload,
     });
     const response = await worker.fetch(request, {
+      ...protections(),
       TELEMETRY_QUEUE: {
         send() {
           throw new Error("Oversize must never enqueue");
@@ -159,6 +248,7 @@ test("identity/gzip decompressed bodies are bounded even without content-length"
 test("batch is all-or-nothing and permitted schema reaches queue without request metadata", async () => {
   const sent = [];
   const localEnv = {
+    ...protections(),
     TELEMETRY_QUEUE: {
       async send(body) {
         sent.push(body);
@@ -168,6 +258,7 @@ test("batch is all-or-nothing and permitted schema reaches queue without request
   const request = (events) =>
     new Request(`${host}/v1/events`, {
       method: "POST",
+      headers: ingestHeaders,
       body: JSON.stringify({ schema_version: 1, events }),
     });
   assert.equal(
@@ -199,10 +290,11 @@ test("compressed transport itself is bounded without a Content-Length header", a
   const response = await worker.fetch(
     new Request(`${host}/v1/events`, {
       method: "POST",
-      headers: { "content-encoding": "gzip" },
+      headers: { ...ingestHeaders, "content-encoding": "gzip" },
       body,
     }),
     {
+      ...protections(),
       TELEMETRY_QUEUE: {
         async send() {
           sent = true;
@@ -212,6 +304,219 @@ test("compressed transport itself is bounded without a Content-Length header", a
   );
   assert.equal(response.status, 413);
   assert.equal(sent, false);
+});
+
+test("limits run before parsing, use the connection IP, and fail closed", async () => {
+  for (const failure of ["ip", "edge", "exception", "missing"]) {
+    let queued = false;
+    const localEnv = {
+      ...protections(),
+      TELEMETRY_QUEUE: {
+        async send() {
+          queued = true;
+        },
+      },
+    };
+    const keys = [];
+    localEnv.INGEST_IP_LIMITER.limit = async ({ key }) => {
+      keys.push(key);
+      if (failure === "exception") throw new Error("outage");
+      return { success: failure !== "ip" };
+    };
+    localEnv.INGEST_EDGE_LIMITER.limit = async () => ({
+      success: failure !== "edge",
+    });
+    if (failure === "missing") delete localEnv.INGEST_IP_LIMITER;
+    const response = await worker.fetch(
+      new Request(`${host}/v1/events`, {
+        method: "POST",
+        headers: { ...ingestHeaders, "x-forwarded-for": "198.51.100.8" },
+        body: "invalid json",
+      }),
+      localEnv,
+    );
+    assert.equal(response.status, ["ip", "edge"].includes(failure) ? 429 : 503);
+    assert.equal(response.headers.get("retry-after"), "60");
+    assert.equal(queued, false);
+    if (failure !== "missing") assert.deepEqual(keys, ["192.0.2.1"]);
+  }
+});
+
+test("strict transport, batch envelope, and duplicate IDs never enqueue", async () => {
+  const localEnv = {
+    ...protections(),
+    TELEMETRY_QUEUE: {
+      async send() {
+        assert.fail("must not enqueue");
+      },
+    },
+  };
+  const payload = { schema_version: 1, events: [event()] };
+  for (const [body, headers, expected] of [
+    [payload, { "content-type": "application/json" }, 403],
+    [payload, { ...ingestHeaders, "content-type": "text/plain" }, 415],
+    [{ ...payload, extra: "private" }, ingestHeaders, 400],
+    [{ ...payload, sent_at: null }, ingestHeaders, 400],
+    [{ ...payload, sent_at: "2000-01-01T00:00:00Z" }, ingestHeaders, 400],
+    [{ ...payload, events: [event(), event()] }, ingestHeaders, 400],
+  ]) {
+    const response = await worker.fetch(
+      new Request(`${host}/v1/events`, {
+        method: "POST",
+        headers,
+        body: JSON.stringify(body),
+      }),
+      localEnv,
+    );
+    assert.equal(response.status, expected);
+  }
+});
+
+test("daily budget rejection and outages prevent queue writes; queue failures are retryable", async () => {
+  for (const failure of ["budget_limit", "budget_outage", "queue"]) {
+    let queued = false;
+    const localEnv = {
+      ...protections(),
+      TELEMETRY_QUEUE: {
+        async send() {
+          queued = true;
+          throw new Error("outage");
+        },
+      },
+    };
+    localEnv.INGEST_BUDGET.get = () => ({
+      async fetch() {
+        if (failure === "budget_outage") throw new Error("outage");
+        if (failure === "budget_limit")
+          return new Response(null, {
+            status: 429,
+            headers: { "retry-after": "123" },
+          });
+        return new Response(null, { status: 200 });
+      },
+    });
+    const response = await worker.fetch(
+      new Request(`${host}/v1/events`, {
+        method: "POST",
+        headers: ingestHeaders,
+        body: JSON.stringify({
+          schema_version: 1,
+          sent_at: new Date().toISOString(),
+          events: [event()],
+        }),
+      }),
+      localEnv,
+    );
+    assert.equal(response.status, failure === "budget_limit" ? 429 : 503);
+    assert.equal(queued, failure === "queue");
+  }
+});
+
+test("durable quota persists across restarts and enforces minute/day boundaries atomically", async () => {
+  const originalNow = Date.now;
+  let now = Date.parse("2026-11-03T12:00:00Z");
+  const data = new Map();
+  let pending = Promise.resolve();
+  const storage = {
+    transaction(callback) {
+      const next = pending.then(() =>
+        callback({
+          get: async (key) => data.get(key),
+          put: async (key, value) => data.set(key, value),
+        }),
+      );
+      pending = next.catch(() => {});
+      return next;
+    },
+  };
+  const reserve = (count = 1) =>
+    new IngestBudget({ storage }).fetch(
+      new Request("https://budget/reserve", {
+        method: "POST",
+        body: JSON.stringify({ events: count }),
+      }),
+    );
+  Date.now = () => now;
+  try {
+    const parallel = await Promise.all(
+      Array.from({ length: 305 }, () => reserve()),
+    );
+    assert.equal(
+      parallel.filter((response) => response.status === 200).length,
+      300,
+    );
+    assert.equal(data.get("counters").events, 300);
+    now += 60000;
+    assert.equal((await reserve()).status, 200);
+    data.set("counters", {
+      day: Math.floor(now / 86400000),
+      minute: Math.floor(now / 60000),
+      events: 49999,
+      batches: 0,
+    });
+    assert.equal((await reserve(2)).status, 429);
+    assert.equal((await reserve()).status, 200);
+    now += 60000;
+    assert.equal((await reserve()).status, 429);
+    assert.equal(data.get("counters").events, 50000);
+    now += 86400000;
+    assert.equal((await reserve(50)).status, 200);
+    assert.equal(data.get("counters").events, 50);
+    assert.deepEqual([...data.keys()], ["counters"]);
+  } finally {
+    Date.now = originalNow;
+  }
+});
+test("one network's daily share cannot exhaust the shared budget and leaves no lasting record", async () => {
+  const data = new Map();
+  let alarm = null;
+  const storage = {
+    transaction: (run) =>
+      run({
+        get: async (key) => data.get(key),
+        put: async (key, value) => data.set(key, value),
+        setAlarm: async (time) => {
+          alarm = time;
+        },
+      }),
+    deleteAll: async () => data.clear(),
+  };
+  const object = new IngestBudget({ storage });
+  const reserve = () =>
+    object.fetch(
+      new Request("https://budget/reserve-client", {
+        method: "POST",
+        body: JSON.stringify({ events: 50 }),
+      }),
+    );
+  for (let batch = 0; batch < 100; batch += 1) {
+    assert.equal((await reserve()).status, 200);
+  }
+  const rejected = await reserve();
+  assert.equal(rejected.status, 429);
+  assert.ok(Number(rejected.headers.get("retry-after")) >= 1);
+  assert.deepEqual([...data.entries()], [["client_events", 5000]]);
+  assert.equal(alarm % 86400000, 0);
+  await object.alarm();
+  assert.equal(data.size, 0);
+
+  assert.equal(clientNetwork("203.0.113.9"), "203.0.113");
+  assert.equal(clientNetwork("2001:db8:1:2::9"), "2001:0db8:0001");
+  assert.equal(clientNetwork("2001:db8::9"), "2001:0db8:0000");
+  const today = 86400000 * 20000;
+  assert.equal(
+    await clientBudgetName("203.0.113.9", today),
+    await clientBudgetName("203.0.113.200", today),
+  );
+  assert.notEqual(
+    await clientBudgetName("203.0.113.9", today),
+    await clientBudgetName("203.0.114.9", today),
+  );
+  assert.notEqual(
+    await clientBudgetName("203.0.113.9", today),
+    await clientBudgetName("203.0.113.9", today + 86400000),
+  );
+  assert.ok(!(await clientBudgetName("203.0.113.9", today)).includes("203"));
 });
 test("queue retries are idempotent and invalid queue payload cannot bypass ingest schema", async () => {
   const bucket = new Bucket();

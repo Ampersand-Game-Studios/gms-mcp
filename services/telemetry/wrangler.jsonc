@@ -8,6 +8,12 @@
   "preview_urls": false,
   "keep_vars": true,
   "observability": { "enabled": false },
+  "ratelimits": [
+    { "name": "INGEST_IP_LIMITER", "namespace_id": "761301", "simple": { "limit": 60, "period": 60 } },
+    { "name": "INGEST_EDGE_LIMITER", "namespace_id": "761302", "simple": { "limit": 300, "period": 60 } }
+  ],
+  "durable_objects": { "bindings": [{ "name": "INGEST_BUDGET", "class_name": "IngestBudget" }] },
+  "migrations": [{ "tag": "ingest-budget-v1", "new_sqlite_classes": ["IngestBudget"] }],
   "routes": [{ "pattern": "gms-mcp-telemetry.ampersandgamestudios.com", "custom_domain": true }],
   "vars": { "RAW_RETENTION_DAYS": "90", "AGGREGATE_RETENTION_MONTHS": "24" },
   "r2_buckets": [{ "binding": "TELEMETRY_BUCKET", "bucket_name": "gms-mcp-telemetry-prod" }],
