@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import difflib
 import re
+from gms_helpers.bounded_regex import search_many
 from typing import Any, Dict, List, Optional
 
 from .cache import CachedDoc, DocCache, FunctionIndexEntry
@@ -164,28 +165,20 @@ def list_functions(
     index = fetch_function_index(cache)
 
     results: List[Dict[str, Any]] = []
-    regex = None
-
+    entries = [
+        (name, entry)
+        for name, entry in sorted(index.items(), key=lambda x: x[1].name)
+        if not category or category.lower() in entry.category.lower() or category.lower() in entry.subcategory.lower()
+    ]
     if pattern:
         try:
-            regex = re.compile(pattern, re.IGNORECASE)
-        except re.error as e:
-            return {
-                "ok": False,
-                "error": f"Invalid regex pattern: {e}",
-            }
-
-    for name, entry in sorted(index.items(), key=lambda x: x[1].name):
-        # Category filter
-        if category:
-            cat_lower = category.lower()
-            if cat_lower not in entry.category.lower() and cat_lower not in entry.subcategory.lower():
-                continue
-
-        # Pattern filter
-        if regex and not regex.search(name):
-            continue
-
+            matches = search_many(pattern, [name for name, _ in entries], flags=re.IGNORECASE, max_matches=limit)
+            entries = [entries[index] for index, _ in matches]
+        except re.error as exc:
+            return {"ok": False, "error": f"Invalid regex pattern: {exc}"}
+        except ValueError as exc:
+            return {"ok": False, "error": f"Regex search failed: {exc}"}
+    for name, entry in entries:
         results.append(
             {
                 "name": entry.name,

@@ -4,6 +4,7 @@ import asyncio
 import contextlib
 import datetime as _dt
 import os
+import ntpath
 import re
 import shlex
 import shutil
@@ -20,8 +21,8 @@ from typing import Any, Dict, List, Optional, Tuple
 from ..telemetry import SUPPRESS_CLI_TELEMETRY_ENV_VAR
 from .debug import _dbg
 from .log_paths import diagnostic_log_dir, secure_private_file
-from .project import _resolve_project_directory, _with_cli_pythonpath
-from .results import ToolRunResult
+from .project import _resolve_project_directory
+from .results import ToolRunResult, _redact_host_text
 
 
 # Completed logs are pruned oldest-first by (mtime, filename). Active logs and
@@ -150,13 +151,42 @@ def _cmd_to_str(cmd: List[str]) -> str:
     return " ".join(shlex.quote(p) for p in cmd)
 
 
+def _safe_lookup_path() -> str:
+    return os.pathsep.join(
+        part
+        for part in os.environ.get("PATH", "").split(os.pathsep)
+        if part and Path(part).is_absolute() and Path(part).resolve() != Path.cwd().resolve()
+    )
+
+
+def _windows_system_executable(name: str) -> str:
+    root = os.environ.get("SystemRoot", "C:/Windows")
+    if not ntpath.isabs(root):
+        raise OSError("SystemRoot must be absolute")
+    return ntpath.join(root, "System32", name)
+
+
+def _redact_log_text(value: str) -> str:
+    value = re.sub(r"(?i)\bbearer\s+[^\s,;]+", "Bearer [REDACTED]", value)
+    return re.sub(
+        r"(?i)((?:authorization|cookie|password|passwd|secret|token|api[_-]?key|access[_-]?key)[\w-]*[\"']?\s*(?:[:=]\s*|\s+))[^\r\n]+",
+        r"\1[REDACTED]",
+        value,
+    )
+
+
 def _resolve_gms_candidates_windows() -> List[str]:
     """
     On Windows, `shutil.which('gms')` can pick the WindowsApps shim first.
     Prefer real executables when multiple exist.
     """
     try:
-        completed = subprocess.run(["where", "gms"], capture_output=True, text=True)
+        completed = subprocess.run(
+            [_windows_system_executable("where.exe"), "$PATH:gms"],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PATH": _safe_lookup_path()},
+        )
         if completed.returncode != 0:
             return []
         lines = [l.strip() for l in (completed.stdout or "").splitlines() if l.strip()]
@@ -190,7 +220,14 @@ def _select_gms_executable() -> Tuple[Optional[str], List[str]]:
                 return c, candidates
         if candidates:
             return candidates[0], candidates
-    selected = shutil.which("gms")
+    selected = next(
+        (
+            found
+            for directory in _safe_lookup_path().split(os.pathsep)
+            if directory and (found := shutil.which(str(Path(directory) / "gms")))
+        ),
+        None,
+    )
     if selected:
         candidates = [selected]
     return selected, candidates
@@ -346,7 +383,7 @@ def _terminate_process_tree(proc: subprocess.Popen) -> bool:
     try:
         if os.name == "nt":
             completed = subprocess.run(
-                ["taskkill", "/PID", str(proc.pid), "/T", "/F"],
+                [_windows_system_executable("taskkill.exe"), "/PID", str(proc.pid), "/T", "/F"],
                 capture_output=True,
                 text=True,
             )
@@ -417,8 +454,8 @@ async def _run_cli_async(
     #
     # You can opt back into `gms.exe` by setting:
     #   GMS_MCP_PREFER_GMS_EXE=1
-    selected_gms, gms_candidates = _select_gms_executable()
     prefer_exe = os.environ.get("GMS_MCP_PREFER_GMS_EXE", "").strip().lower() in ("1", "true", "yes", "on")
+    selected_gms, gms_candidates = _select_gms_executable() if prefer_exe else (None, [])
     cli_invocation = ["--project-root", str(project_root_value), *cli_args]
     if transaction_env:
         cmd = journaled_gms_cli_command(cli_invocation)
@@ -428,12 +465,24 @@ async def _run_cli_async(
         execution_mode = "subprocess:gms-exe"
     else:
         # -u: unbuffered for more predictable output when stdout/stderr are pipes
-        cmd = [sys.executable, "-u", "-m", "gms_helpers.gms", "--project-root", str(project_root_value), *cli_args]
+        cmd = [
+            sys.executable,
+            "-P",
+            "-u",
+            "-m",
+            "gms_helpers.gms",
+            "--project-root",
+            str(project_root_value),
+            *cli_args,
+        ]
         execution_mode = "subprocess:python-module"
-    nested_cli_env = _with_cli_pythonpath(os.environ.copy())
+    nested_cli_env = os.environ.copy()
     nested_cli_env[SUPPRESS_CLI_TELEMETRY_ENV_VAR] = "1"
     nested_cli_env["PYTHONDONTWRITEBYTECODE"] = "1"
     nested_cli_env.update(transaction_env)
+    nested_cli_env["PYTHONSAFEPATH"] = "1"
+    nested_cli_env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
+    nested_cli_env["GMS_MCP_APPROVED_PROJECT_ROOT"] = str(project_directory.resolve())
 
     effective_timeout = timeout_seconds
     if effective_timeout is None:
@@ -523,11 +572,11 @@ async def _run_subprocess_async(
 
     log_writer = _BoundedLogWriter(log_path, LOG_MAX_ACTIVE_BYTES)
     log_writer.append(f"[gms-mcp] tool={tool_name or ''}\n")
-    log_writer.append(f"[gms-mcp] cwd={cwd}\n")
+    log_writer.append("[gms-mcp] cwd=.\n")
     log_writer.append(f"[gms-mcp] mode={execution_mode or ''}\n")
     if candidates:
-        log_writer.append(f"[gms-mcp] candidates={candidates}\n")
-    log_writer.append(f"[gms-mcp] cmd={_cmd_to_str(safe_command)}\n")
+        log_writer.append(_redact_host_text(f"[gms-mcp] candidates={candidates}\n", cwd))
+    log_writer.append(_redact_host_text(_redact_log_text(f"[gms-mcp] cmd={_cmd_to_str(safe_command)}\n"), cwd))
     log_writer.append(f"[gms-mcp] timeout_seconds={timeout_seconds}\n\n")
 
     try:
@@ -544,7 +593,7 @@ async def _run_subprocess_async(
         )
     except Exception:
         error_text = traceback.format_exc()
-        log_writer.append(f"[stderr] [gms-mcp] SPAWN FAILED\n{error_text}\n")
+        log_writer.append("[stderr] [gms-mcp] SPAWN FAILED\nHost error details withheld.\n")
         result = ToolRunResult(
             ok=False,
             stdout="",
@@ -572,7 +621,7 @@ async def _run_subprocess_async(
         )
     # endregion
 
-    def _append_and_log(stream: str, chunk: str | bytes) -> None:
+    def _append_and_log(stream: str, chunk: str | bytes, *, write_log: bool = True) -> None:
         now = time.monotonic()
         with last_output_lock:
             last_output_time[0] = now
@@ -582,15 +631,22 @@ async def _run_subprocess_async(
         else:
             stderr_capture.append(chunk)
 
-        encoded = chunk.encode("utf-8", errors="replace") if isinstance(chunk, str) else chunk
+        if not write_log:
+            return
+        text = chunk.decode("utf-8", errors="replace") if isinstance(chunk, bytes) else chunk
+        encoded = _redact_host_text(_redact_log_text(text), cwd).encode("utf-8", errors="replace")
         log_writer.append(f"[{stream}] ".encode() + encoded)
         if not encoded.endswith(b"\n"):
             log_writer.append(b"\n")
 
     def _reader(pipe: Any, stream: str) -> None:
         try:
-            while chunk := pipe.read(64 * 1024):
-                _append_and_log(stream, chunk)
+            oversized_line = False
+            while chunk := pipe.readline(64 * 1024):
+                complete = chunk.endswith(b"\n") if isinstance(chunk, bytes) else chunk.endswith("\n")
+                oversized_chunk = len(chunk) >= 64 * 1024 and not complete
+                _append_and_log(stream, chunk, write_log=not oversized_line and not oversized_chunk)
+                oversized_line = (oversized_line or oversized_chunk) and not complete
         except Exception:
             pass
         finally:

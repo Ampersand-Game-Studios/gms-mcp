@@ -102,6 +102,12 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         from gms_helpers.snapshot_build import label_pipeline, snapshot_compile
         import shutil
 
+        from gms_helpers.path_safety import validate_git_ref
+
+        try:
+            validate_git_ref(ref)
+        except Exception as exc:
+            return _failure("snapshot", exc)
         root = _resolve_project_directory(project_root)
 
         def work() -> Dict[str, Any]:
@@ -168,6 +174,12 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         _ = ctx
         from gms_helpers.snapshot_build import run_test
 
+        from gms_helpers.path_safety import validate_git_ref
+
+        try:
+            validate_git_ref(ref)
+        except Exception as exc:
+            return _failure("gm_test_run", exc)
         root = _resolve_project_directory(project_root)
 
         def work() -> Dict[str, Any]:

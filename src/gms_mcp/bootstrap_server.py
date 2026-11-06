@@ -20,22 +20,23 @@ from .telemetry import maybe_start_background_flush, queue_event, resolve_state
 
 def main() -> int:
     # region agent log
-    _dbg(
-        "H1",
-        "src/gms_mcp/bootstrap_server.py:main:entry",
-        "bootstrap main entry",
-        {
-            "pid": os.getpid(),
-            "exe": sys.executable,
-            "argv": sys.argv,
-            "cwd": os.getcwd(),
-            "stdin_isatty": bool(getattr(sys.stdin, "isatty", lambda: False)()),
-            "stdout_isatty": bool(getattr(sys.stdout, "isatty", lambda: False)()),
-            "env_GM_PROJECT_ROOT": os.environ.get("GM_PROJECT_ROOT"),
-            "env_PYTHONPATH": os.environ.get("PYTHONPATH"),
-            "py_path_head": sys.path[:5],
-        },
-    )
+    if os.environ.get("GMS_MCP_DEBUG_LOG") == "1":
+        _dbg(
+            "H1",
+            "src/gms_mcp/bootstrap_server.py:main:entry",
+            "bootstrap main entry",
+            {
+                "pid": os.getpid(),
+                "exe": sys.executable,
+                "argv": sys.argv,
+                "cwd": os.getcwd(),
+                "stdin_isatty": bool(getattr(sys.stdin, "isatty", lambda: False)()),
+                "stdout_isatty": bool(getattr(sys.stdout, "isatty", lambda: False)()),
+                "env_GM_PROJECT_ROOT": os.environ.get("GM_PROJECT_ROOT"),
+                "env_PYTHONPATH": os.environ.get("PYTHONPATH"),
+                "py_path_head": sys.path[:5],
+            },
+        )
     # endregion
     try:
         from .gamemaker_mcp_server import main as server_main

@@ -3,6 +3,9 @@ Path Validation - Check that all folder paths referenced in assets exist
 """
 
 import os
+from pathlib import Path
+
+from ..path_safety import project_file_path
 from typing import List, Tuple, Dict, Set
 
 from ..utils import load_json, find_yyp_file
@@ -73,9 +76,9 @@ def validate_folder_paths(
                 continue
 
             # Load asset file and check parent reference
-            full_asset_path = os.path.join(project_root, asset_path)
-            if os.path.exists(full_asset_path):
+            if asset_path:
                 try:
+                    full_asset_path = project_file_path(asset_path, project_root=Path(project_root))
                     asset_data = load_json(full_asset_path)
                     parent = asset_data.get("parent", {})
                     parent_path = parent.get("path", "")
@@ -145,7 +148,7 @@ def validate_folder_paths(
                 and "options" not in asset_path.lower()
             ):
                 try:
-                    asset_data = load_json(os.path.join(project_root, asset_path))
+                    asset_data = load_json(project_file_path(asset_path, project_root=Path(project_root)))
                     parent = asset_data.get("parent", {})
                     parent_path = parent.get("path", "")
                     # Skip root-level assets (parent is the .yyp file itself)

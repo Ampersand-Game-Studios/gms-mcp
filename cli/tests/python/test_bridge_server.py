@@ -287,6 +287,7 @@ class TestBridgeServerConnection(unittest.TestCase):
 
         try:
             client.connect(("127.0.0.1", self.port))
+            client.sendall(('HELLO:{"token":"' + self.server.token + '"}\n').encode())
             time.sleep(0.2)  # Give server time to accept
 
             self.assertTrue(self.server.is_connected)
@@ -301,6 +302,7 @@ class TestBridgeServerConnection(unittest.TestCase):
 
         try:
             client.connect(("127.0.0.1", self.port))
+            client.sendall(('HELLO:{"token":"' + self.server.token + '"}\n').encode())
             time.sleep(0.2)
 
             # Send a log message
@@ -328,6 +330,7 @@ class TestBridgeServerConnection(unittest.TestCase):
 
         try:
             client.connect(("127.0.0.1", self.port))
+            client.sendall(('HELLO:{"token":"' + self.server.token + '"}\n').encode())
             time.sleep(0.2)
 
             # Send two log lines with an embedded NUL between them (simulates GM buffer_string).
@@ -351,6 +354,7 @@ class TestBridgeServerConnection(unittest.TestCase):
 
         try:
             client.connect(("127.0.0.1", self.port))
+            client.sendall(('HELLO:{"token":"' + self.server.token + '"}\n').encode())
             time.sleep(0.2)
 
             # Start a thread to respond to commands
@@ -399,6 +403,7 @@ class TestBridgeServerConnection(unittest.TestCase):
 
         try:
             client.connect(("127.0.0.1", self.port))
+            client.sendall(('HELLO:{"token":"' + self.server.token + '"}\n').encode())
             time.sleep(0.2)
 
             def disconnect_on_command():

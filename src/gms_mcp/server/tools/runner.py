@@ -1,15 +1,35 @@
 from __future__ import annotations
 
 import argparse
+import os
 from typing import Any, Dict
 
 from ..direct import _run_direct, _run_direct_thread_shielded
 from ..dispatch import _run_with_fallback
+from ..output import _apply_output_mode
 from ..mcp_types import Context
 from ..platform import _default_target_platform
 from ..project import _ensure_cli_on_sys_path, _resolve_project_directory, _resolve_repo_root
 from ..subprocess_runner import _default_timeout_seconds_for_cli_args
 from ..tool_types import OutputMode, RunnerPlatform
+
+
+def handle_runner_run(args: argparse.Namespace) -> Any:
+    """Set bridge credentials only inside the disposable launch worker."""
+    from gms_helpers.commands.runner_commands import handle_runner_run as run
+
+    for key in ("GMS_MCP_BRIDGE_PORT", "GMS_MCP_BRIDGE_TOKEN"):
+        os.environ.pop(key, None)
+    environment = getattr(args, "bridge_environment", {})
+    os.environ.update(environment)
+    try:
+        from gms_helpers.live_session import bridge_launch_environment
+
+        with bridge_launch_environment(environment):
+            return run(args)
+    finally:
+        for key in ("GMS_MCP_BRIDGE_PORT", "GMS_MCP_BRIDGE_TOKEN"):
+            os.environ.pop(key, None)
 
 
 def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
@@ -103,7 +123,7 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
                         Returns session info (pid, run_id) for tracking.
             output_location: 'temp' (IDE-style) or 'project' (classic output folder)
             project_root: Path to project root
-            prefer_cli: Force CLI execution mode
+            prefer_cli: Reserved; game launches use the isolated typed worker for credential isolation.
             output_mode: Output format (full, tail, none)
             tail_lines: Number of lines to show in tail mode
             quiet: Suppress verbose output
@@ -118,7 +138,6 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         selected_platform = platform or _default_target_platform()
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
-        from gms_helpers.commands.runner_commands import handle_runner_run
 
         args = argparse.Namespace(
             platform=selected_platform,
@@ -139,14 +158,26 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
                 from gms_helpers.bridge_installer import is_bridge_installed
                 from gms_helpers.bridge_server import get_bridge_server
 
-                if is_bridge_installed(str(repo_root)):
+                if is_bridge_installed(str(_resolve_project_directory(project_root))):
                     if enable_bridge is not False:
                         # Start bridge server
-                        bridge_server = get_bridge_server(str(repo_root), create=True)
+                        bridge_server = get_bridge_server(
+                            str(_resolve_project_directory(project_root)), create=True, port=0
+                        )
                         if bridge_server and bridge_server.start():
                             bridge_enabled = True
+                        else:
+                            bridge_start_error = (
+                                "Could not bind a local bridge socket; game launched without bridge credentials."
+                            )
             except Exception as e:
                 bridge_start_error = str(e)
+
+        args.bridge_environment = (
+            {"GMS_MCP_BRIDGE_PORT": str(bridge_server.port), "GMS_MCP_BRIDGE_TOKEN": bridge_server.token}
+            if bridge_enabled and bridge_server
+            else {}
+        )
 
         # For background mode, we want to run directly and return quickly
         # The game will be launched and we'll return session info immediately
@@ -187,9 +218,11 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
                 result: Dict[str, Any] = dict(result_value)
                 result["bridge_enabled"] = bridge_enabled
                 if bridge_enabled and bridge_server:
-                    result.setdefault("bridge_port", bridge_server.port)
+                    result["bridge_port"] = bridge_server.port
+                    result["connected"] = bridge_server.is_connected
+                    result["endpoint"] = bridge_server.hello
                 if bridge_start_error:
-                    result.setdefault("bridge_error", bridge_start_error)
+                    result["bridge_error"] = bridge_start_error
 
                 # If the handler reported failure, stop the bridge server to avoid leaving it running.
                 if result.get("ok") is False and bridge_server:
@@ -211,31 +244,30 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
                 "message": "Game launched" if ok_bool else "Failed to launch game",
             }
 
-        # For foreground mode, use the standard fallback mechanism
-        cli_args = [
-            "run",
-            "start",
-            "--platform",
-            selected_platform,
-            "--runtime",
-            runtime,
-            "--output-location",
-            output_location,
-        ]
-        if runtime_version:
-            cli_args.extend(["--runtime-version", runtime_version])
-
-        return await _run_with_fallback(
-            direct_handler=handle_runner_run,
-            direct_args=args,
-            cli_args=cli_args,
-            project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
-        )
+        # Launch through the isolated typed worker so credentials never touch the MCP process environment.
+        try:
+            direct = await _run_direct_thread_shielded(
+                _run_direct,
+                handle_runner_run,
+                args,
+                project_root,
+                _default_timeout_seconds_for_cli_args(["run", "start"]),
+            )
+            result = _apply_output_mode(
+                direct.as_dict(),
+                output_mode=output_mode,
+                tail_lines=tail_lines,
+                quiet=quiet,
+            )
+            result["bridge_enabled"] = bridge_enabled
+            if bridge_enabled and bridge_server:
+                result["bridge_port"] = bridge_server.port
+            if bridge_start_error:
+                result["bridge_error"] = bridge_start_error
+            return result
+        finally:
+            if bridge_server:
+                bridge_server.stop()
 
     @mutating_tool
     async def gm_run_stop(

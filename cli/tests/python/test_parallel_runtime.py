@@ -129,7 +129,7 @@ def test_two_games_same_label_run_independently_and_natural_exit_releases(tmp_pa
     monkeypatch.setattr(snapshot_build, "snapshot_compile", compile_game)
     monkeypatch.setattr(snapshot_build, "require_mac_runner", lambda tools: Path("runner"))
     monkeypatch.setattr(live_session, "prepare_mac_runtime", prepare)
-    monkeypatch.setattr(snapshot_build, "launch_mac_runner", launch)
+    monkeypatch.setattr(live_session, "_launch_game", launch)
     monkeypatch.setattr(
         GameMakerRunner,
         "_snapshot_macos_processes",
@@ -283,7 +283,7 @@ def test_registration_failure_stops_owned_game_before_releasing_leases(tmp_path,
     process = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(60)"])
     log = staging / "debug.txt"
     log.write_text("owned log")
-    monkeypatch.setattr(snapshot_build, "launch_mac_runner", lambda *args: (process, log))
+    monkeypatch.setattr(live_session, "_launch_game", lambda *args: (process, log))
     if failure == "identity":
         monkeypatch.setattr(
             GameMakerRunner, "_snapshot_macos_processes", lambda self: (_ for _ in ()).throw(OSError("identity failed"))
@@ -734,6 +734,7 @@ def test_startup_rollback_closes_bridge_and_releases_both_leases(tmp_path, monke
             start=lambda: failure != "bridge",
             stop=lambda: closed.append(True),
             port=0,
+            token="session-token",
         ),
     )
 
@@ -743,14 +744,12 @@ def test_startup_rollback_closes_bridge_and_releases_both_leases(tmp_path, monke
         return mac_runtime.MacRuntime(Path("runner"), staging, save, "fixture.bundle")
 
     monkeypatch.setattr(live_session, "prepare_mac_runtime", prepare)
-    monkeypatch.setattr(
-        snapshot_build, "launch_mac_runner", lambda *args: (_ for _ in ()).throw(OSError("launch failed"))
-    )
-    with pytest.raises(snapshot_build.SnapshotError if failure == "bridge" else OSError):
+    monkeypatch.setattr(live_session, "_launch_game", lambda *args: (_ for _ in ()).throw(OSError("launch failed")))
+    with pytest.raises(OSError, match="preparation failed|launch failed"):
         live_session.start(root, label="rollback", connect_timeout_seconds=0)
     assert closed == [True]
     assert not work.exists()
-    if failure == "launch":
+    if failure in {"bridge", "launch"}:
         assert not staging.exists()
     assert (save / "existing-save.txt").read_text() == "keep"
     assert not mac_runtime.project_run_lock(root).path.exists()

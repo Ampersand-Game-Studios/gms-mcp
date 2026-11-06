@@ -13,12 +13,12 @@ are never hard-coded in gms-mcp:
         "allow_root_assets": ["__agent_*"]
       },
       "bridge":  {"port": 6502},
-      "live_reload": {"start": ["gms-fire", "start"], "stop": ["gms-fire", "stop"],
-                      "status": ["gms-fire", "status", "--json"]}
+      "live_reload": {"status_file": ".gms-fire/status.json"}
     }
 
 Resolution order for one setting: environment variable (when the setting has one),
-project file, ``~/.gms-mcp/config.json``, built-in default.
+project file, ``~/.gms-mcp/config.json``, built-in default. Live-reload executable
+commands are an exception: they are read only from the user configuration.
 """
 
 from __future__ import annotations
@@ -113,3 +113,26 @@ def configured_post_mutation_verification(project_root: str | Path) -> str | Non
     if isinstance(value, str) and value.strip():
         return value.strip().lower()
     return None
+
+
+def global_setting(dotted_key: str, default: Any = None) -> Any:
+    """Read only the user-owned configuration, without project or environment overrides."""
+    value: Any = _load_json_file(Path.home() / GLOBAL_CONFIG_DIR / GLOBAL_CONFIG_FILE)
+    for part in dotted_key.split("."):
+        if not isinstance(value, Mapping) or part not in value:
+            return default
+        value = value[part]
+    return default if value is None else value
+
+
+def project_live_reload_command_warnings(project_root: str | Path) -> list[str]:
+    """Explain ignored executable commands supplied by an untrusted project."""
+    config = _load_json_file(Path(project_root) / PROJECT_CONFIG_FILE)
+    live_reload = config.get("live_reload", {}) if isinstance(config, dict) else {}
+    ignored = [key for key in ("start", "stop", "status") if isinstance(live_reload, dict) and key in live_reload]
+    if not ignored:
+        return []
+    return [
+        "Ignored project live_reload commands (" + ", ".join(ignored) + ") in .gms-mcp.json. "
+        "Move trusted commands to the user config ~/.gms-mcp/config.json under live_reload."
+    ]

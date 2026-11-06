@@ -22,7 +22,6 @@ _DEFAULT_IGNORED_DIRS = {
 }
 
 _FORWARDED_ENV_VARS = [
-    "GMS_MCP_GMS_PATH",
     "GMS_MCP_DEFAULT_TIMEOUT_SECONDS",
     "GMS_MCP_ENABLE_DIRECT",
     "GMS_MCP_IGOR_PROCESSOR_COUNT",
@@ -289,11 +288,41 @@ def _workspace_folder_var(client: str) -> str:
     return "${workspaceFolder}"
 
 
-def _write_json(path: Path, data: dict, *, dry_run: bool) -> None:
+def _validate_config_destination(path: Path, workspace_root: Path | None = None) -> None:
+    path = Path(os.path.abspath(path.expanduser()))
+    if workspace_root is not None:
+        root = Path(os.path.abspath(workspace_root.expanduser()))
+        if not path.is_relative_to(root):
+            raise ValueError("Workspace config must remain inside the workspace")
+    else:
+        home = Path.home().absolute()
+        root = home if path.is_relative_to(home) else Path(path.anchor)
+    current = path
+    while True:
+        if current.is_symlink() and (workspace_root is not None or str(current) not in {"/tmp", "/var", "/etc"}):
+            raise ValueError("Refusing to write config through a symlink")
+        if current == root or current == current.parent:
+            break
+        current = current.parent
+
+
+def _write_json(path: Path, data: dict, *, dry_run: bool, workspace_root: Path | None = None) -> None:
+    _validate_config_destination(path, workspace_root)
     if dry_run:
         return
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
+    from .client_configs import _write_json_atomic_with_backup
+
+    merged = {}
+    if path.exists():
+        merged = _parse_json_object_or_raise(text=path.read_text(encoding="utf-8"), source_label=str(path))
+    for key, value in data.items():
+        if isinstance(value, dict) and key in merged:
+            if not isinstance(merged[key], dict):
+                raise ValueError(f"Config section {key} must be an object")
+            merged[key] = {**merged[key], **value}
+        else:
+            merged[key] = value
+    _write_json_atomic_with_backup(output_path=path, payload=merged)
 
 
 def _relpath_posix_or_none(target: Path | None, base: Path) -> str | None:
@@ -358,7 +387,7 @@ def _resolve_antigravity_config_path(config_path: str | None) -> Path:
         return _default_antigravity_config_path()
     path = Path(config_path).expanduser()
     if not path.is_absolute():
-        path = (Path.cwd() / path).resolve()
+        path = (Path.cwd() / path).absolute()
     return path
 
 
@@ -640,10 +669,15 @@ def _resolve_launcher(*, mode: str, python_command: str) -> tuple[str, list[str]
     Return (command, args_prefix) for launching the server.
     """
     if mode == "command":
+        if os.name == "nt":
+            resolved_command = _which_without_cwd("gms-mcp")
+            if resolved_command is None:
+                raise ValueError("gms-mcp was not found on a trusted PATH; use --mode=python-module.")
+            return resolved_command, []
         return "gms-mcp", []
     if mode == "python-module":
         resolved_python = _resolve_python_command(python_command)
-        return resolved_python, ["-m", "gms_mcp.bootstrap_server"]
+        return resolved_python, ["-P", "-m", "gms_mcp.bootstrap_server"]
     raise ValueError(f"Unknown mode: {mode}")
 
 
@@ -664,23 +698,28 @@ def _resolve_python_command(python_command: str) -> str:
     """
     Resolve a usable Python command for --mode=python-module.
 
-    Keeps caller-provided values when available and falls back to common
-    interpreter commands if needed.
+    Resolve PATH entries without allowing implicit current-directory lookup.
     """
     requested = (python_command or "").strip() or _default_python_command()
-    if shutil.which(requested):
-        return requested
+    for candidate in (requested, sys.executable, "python3", "python"):
+        resolved = _which_without_cwd(candidate)
+        if resolved:
+            return resolved
+    raise ValueError("No usable Python interpreter found; supply an absolute --python-command path.")
 
-    fallback_candidates: list[str] = []
-    if sys.executable:
-        fallback_candidates.append(sys.executable)
-    fallback_candidates.extend(["python3", "python"])
 
-    for candidate in fallback_candidates:
-        if candidate and shutil.which(candidate):
-            return candidate
-
-    return requested
+def _which_without_cwd(command: str) -> str | None:
+    if not command:
+        return None
+    if Path(command).is_absolute() or os.path.dirname(command):
+        return shutil.which(str(Path(command).expanduser().absolute()))
+    for directory in os.environ.get("PATH", "").split(os.pathsep):
+        if not directory or not Path(directory).is_absolute() or Path(directory).resolve() == Path.cwd().resolve():
+            continue
+        resolved = shutil.which(str(Path(directory) / command))
+        if resolved:
+            return resolved
+    return None
 
 
 def _parse_json_object_or_raise(*, text: str, source_label: str) -> dict:

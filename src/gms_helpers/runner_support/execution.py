@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from ..gamemaker_machine_lock import GameMakerMachineLock
+from .security import private_directory
 from .targets import ensure_igor_supported_runtime_type, normalize_platform_target
 
 
@@ -122,7 +123,7 @@ class RunnerExecutionMixin:
 
             # Use IDE temp directory structure
             ide_temp_dir = system_temp / "GameMakerStudio2" / project_name
-            ide_temp_dir.mkdir(parents=True, exist_ok=True)
+            private_directory(private_directory(system_temp / "GameMakerStudio2") / project_name)
 
             target_app_zip = None
             extra_args = [f"/of={ide_temp_dir / project_name}"]
@@ -141,15 +142,7 @@ class RunnerExecutionMixin:
 
             print(f"[CMD] Package command: {' '.join(cmd)}")
 
-            previous_executables = (
-                {
-                    path: (path.stat().st_mtime_ns, path.stat().st_size)
-                    for path in ide_temp_dir.glob("*.exe")
-                    if path.is_file()
-                }
-                if platform_target == "Windows"
-                else {}
-            )
+            previous_artifacts = self._artifact_fingerprints(ide_temp_dir)
 
             # Run packaging
             self._wait_for_igor_idle()
@@ -167,18 +160,11 @@ class RunnerExecutionMixin:
                     process.returncode,
                     output_lines,
                 )
-                if platform_target == "Windows" and not (
-                    self._compile_stage_succeeded(output_lines)
-                    and any("WindowsBuilder.PackageZip" in line for line in output_lines)
-                    and any("System.IO.File.Move" in line for line in output_lines)
-                ):
-                    self._remember_failure(
-                        f"{failure_message} Build did not complete safely; refusing to launch an old build."
-                    )
-                    print(f"[ERROR] {self.last_failure_message}")
-                    return False
-                print(f"[WARN] {failure_message} Checking whether runnable output was still created...")
-                # Don't return False immediately - check if files were created successfully
+                self._remember_failure(
+                    f"{failure_message} Build did not complete safely; refusing to launch an old build."
+                )
+                print(f"[ERROR] {self.last_failure_message}")
+                return False
 
             if platform_target == "macOS" and target_app_zip and target_app_zip.exists():
                 # Igor emits a zipped .app. Extract it so we can launch the bundle directly.
@@ -209,14 +195,13 @@ class RunnerExecutionMixin:
                     print(f"  - {file.name}")
                 return False
 
-            if platform_target == "Windows" and process.returncode != 0:
-                current = (launch_path.stat().st_mtime_ns, launch_path.stat().st_size)
-                if current == previous_executables.get(launch_path):
-                    self._remember_failure(
-                        "Packaging failed without creating a fresh executable; refusing to launch an old build."
-                    )
-                    print(f"[ERROR] {self.last_failure_message}")
-                    return False
+            safe_artifact = launch_path.resolve().is_relative_to(ide_temp_dir.resolve()) and not any(
+                parent.is_symlink() for parent in launch_path.parents if parent.is_relative_to(ide_temp_dir)
+            )
+            if not safe_artifact or not self._artifact_is_fresh(launch_path, previous_artifacts):
+                self._remember_failure("Build did not produce a fresh executable; refusing to launch an old build.")
+                print(f"[ERROR] {self.last_failure_message}")
+                return False
 
             print(f"[OK] Game packaged successfully: {launch_path}")
 

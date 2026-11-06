@@ -58,6 +58,14 @@ def temporary_home(home_dir: Path):
                 os.environ[key] = val
 
 
+def test_module_launcher_enables_safe_path():
+    from gms_mcp.install_support.common import _resolve_launcher
+
+    command, args = _resolve_launcher(mode="python-module", python_command=sys.executable)
+    assert command
+    assert args == ["-P", "-m", "gms_mcp.bootstrap_server"]
+
+
 class TestInstallAutodetect(unittest.TestCase):
     def test_make_server_config_autodetect(self):
         # Set some environment variables to detect
@@ -77,7 +85,7 @@ class TestInstallAutodetect(unittest.TestCase):
 
             env = config["mcpServers"]["gms-test"]["env"]
 
-            self.assertEqual(env["GMS_MCP_GMS_PATH"], "C:\\path\\to\\gms.exe")
+            self.assertNotIn("GMS_MCP_GMS_PATH", env)
             self.assertEqual(env["GMS_MCP_DEFAULT_TIMEOUT_SECONDS"], "60")
             self.assertEqual(env["GMS_MCP_ENABLE_DIRECT"], "1")
             self.assertEqual(env["GMS_MCP_IGOR_PROCESSOR_COUNT"], "2")
@@ -312,7 +320,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
             )
 
             env = config["mcpServers"]["gms"]["env"]
-            self.assertEqual(env["GMS_MCP_GMS_PATH"], "/path/to/gms")
+            self.assertNotIn("GMS_MCP_GMS_PATH", env)
             self.assertEqual(env["GMS_MCP_ENABLE_DIRECT"], "1")
         finally:
             del os.environ["GMS_MCP_GMS_PATH"]
@@ -352,7 +360,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
                 gm_project_root=gm_root,
                 workspace_root=workspace_root,
             )
-            self.assertIn('GMS_MCP_GMS_PATH = "/path/to/gms"', config)
+            self.assertNotIn("GMS_MCP_GMS_PATH", config)
             self.assertIn('GMS_MCP_ENABLE_DIRECT = "1"', config)
             self.assertIn(
                 f"GM_PROJECT_ROOT = {_make_codex_toml_value('gamemaker')}",

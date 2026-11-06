@@ -47,6 +47,7 @@ def _default_runner_platform() -> str:
 def create_parser():
     """Create the master argument parser with all subcommands."""
     parser = argparse.ArgumentParser(
+        allow_abbrev=False,
         prog="gms",
         description="GameMaker Studio Development Tools",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -97,6 +98,14 @@ Examples:
     setup_telemetry_commands(subparsers)
     setup_doc_commands(subparsers)
 
+    def disable_abbreviation(current):
+        current.allow_abbrev = False
+        for action in current._actions:
+            if isinstance(action, argparse._SubParsersAction):
+                for child in action.choices.values():
+                    disable_abbreviation(child)
+
+    disable_abbreviation(parser)
     return parser
 
 
@@ -1236,21 +1245,37 @@ _CLI_NAME_KEYS = [
 
 
 def _promote_global_options(argv: list[str]) -> list[str]:
+    parser = create_parser()
+    current = parser
     global_tokens: list[str] = []
     remainder: list[str] = []
     index = 0
     while index < len(argv):
         token = argv[index]
-        if token.startswith("--project-root=") or token.startswith("--telemetry="):
-            global_tokens.append(token)
-            index += 1
-            continue
-        if token in {"--project-root", "--telemetry"} and index + 1 < len(argv):
-            global_tokens.extend([token, argv[index + 1]])
-            index += 2
-            continue
-        remainder.append(token)
-        index += 1
+        if token == "--":
+            remainder.extend(argv[index:])
+            break
+        option = token.split("=", 1)[0]
+        action = current._option_string_actions.get(option)
+        if option in {"--project-root", "--telemetry"}:
+            action = parser._option_string_actions[option]
+        count = 1
+        if action is not None and "=" not in token:
+            if action.nargs is None:
+                count += 1
+            elif isinstance(action.nargs, int):
+                count += action.nargs
+        tokens = argv[index : index + count]
+        if option in {"--project-root", "--telemetry"}:
+            global_tokens.extend(tokens)
+        else:
+            remainder.extend(tokens)
+            if action is None:
+                for candidate in current._actions:
+                    if isinstance(candidate, argparse._SubParsersAction) and token in candidate.choices:
+                        current = candidate.choices[token]
+                        break
+        index += count
     return global_tokens + remainder
 
 
@@ -1440,13 +1465,12 @@ def main():
             print(f"[ERROR] {e}")
             return False
 
-    # Resolve project directory before parsing full args (subparsers are required).
-    pre_parser = argparse.ArgumentParser(add_help=False)
-    pre_parser.add_argument("--project-root", default=None)
-    pre_args, _ = pre_parser.parse_known_args(argv)
-
+    args = parser.parse_args(argv)
     try:
-        project_dir = resolve_project_directory(pre_args.project_root)
+        project_dir = resolve_project_directory(args.project_root).resolve()
+        approved = os.environ.get("GMS_MCP_APPROVED_PROJECT_ROOT")
+        if approved is not None and project_dir != Path(approved).resolve():
+            raise ValueError("Resolved project directory differs from GMS_MCP_APPROVED_PROJECT_ROOT")
     except Exception as e:
         print(f"[ERROR] {e}")
         return False
@@ -1462,8 +1486,6 @@ def main():
         except GMSError as e:
             print(f"[ERROR] {e.message}")
             raise
-
-        args = parser.parse_args(argv)
 
         # Normalize project_root after chdir so downstream handlers resolve correctly.
         # (If the user passed --project-root gamemaker from repo root, leaving it as-is would resolve to gamemaker/gamemaker)

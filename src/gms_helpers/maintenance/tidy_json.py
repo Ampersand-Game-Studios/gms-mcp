@@ -19,9 +19,6 @@ def validate_file(file_path: str) -> Tuple[bool, str]:
         (is_valid, message) - whether file has valid JSON and status message
     """
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
-
         # Skip options files - they have special format
         if "options" in file_path.lower():
             return True, "Skipped (options file)"

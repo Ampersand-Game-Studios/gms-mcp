@@ -1,0 +1,146 @@
+"""Access-control regression tests, including native Windows integration."""
+
+import os
+import subprocess
+import ctypes
+from types import SimpleNamespace
+
+import pytest
+
+from gms_helpers import windows_security as security
+from gms_helpers.path_safety import private_directory
+
+
+USER = "S-1-5-21-100-200-300-1001"
+OTHER = "S-1-5-21-100-200-300-1002"
+
+
+@pytest.mark.parametrize("owner", [USER, *security.SYSTEM_SIDS])
+def test_private_current_user_and_system_access(owner):
+    entries = [(0, 0, 0x1F01FF, sid) for sid in security.SYSTEM_SIDS | {USER}]
+    assert security._descriptor_issue(owner, entries, USER, private=True) is None
+
+
+@pytest.mark.parametrize("sid", [OTHER, "S-1-1-0", "S-1-5-11", "S-1-5-32-545"])
+@pytest.mark.parametrize("access", [0x2, 0x4, 0x10, 0x40, 0x100, 0x10000, 0x40000, 0x80000, 0x10000000, 0x40000000])
+def test_untrusted_write_grants_are_rejected(sid, access):
+    assert security._descriptor_issue(USER, [(0, 0, access, sid)], USER)
+
+
+def test_private_reads_and_ancestor_replacement_have_distinct_boundaries():
+    read = [(0, 0, 0x120089, OTHER)]
+    assert security._descriptor_issue(USER, read, USER) is None
+    assert security._descriptor_issue(USER, read, USER, private=True)
+    assert security._descriptor_issue(USER, [(0, 0, 4, OTHER)], USER, ancestor=True) is None
+    assert security._descriptor_issue(USER, [(0, 0, 0x40, OTHER)], USER, ancestor=True)
+
+
+def test_deny_inherit_only_unknown_and_null_acl_handling():
+    assert security._descriptor_issue(USER, [(1, 0, 0x1F01FF, OTHER), (0, 8, 0x1F01FF, OTHER)], USER) is None
+    assert security._descriptor_issue(USER, [(9, 0, 0, "")], USER)
+    assert security._descriptor_issue(USER, None, USER)
+    assert security._descriptor_issue(OTHER, [], USER)
+
+
+@pytest.mark.parametrize("error", [OSError, ValueError, AttributeError])
+def test_unavailable_security_descriptor_fails_closed(monkeypatch, tmp_path, error):
+    def unavailable(_path):
+        raise error("unavailable")
+
+    monkeypatch.setattr(security, "_read_descriptor", unavailable)
+    assert "could not be verified" in security.windows_path_trust_issue(tmp_path)
+
+
+def test_descriptor_policy_is_used_for_each_requested_path(monkeypatch, tmp_path):
+    monkeypatch.setattr(security, "_read_descriptor", lambda path: (USER, [(0, 0, 1, OTHER)], USER))
+    assert security.windows_path_trust_issue(tmp_path) is None
+    assert security.windows_path_trust_issue(tmp_path, private=True)
+
+
+@pytest.mark.parametrize("failure", ["", "open", "size", "token", "descriptor", "ace", "short", "sid"])
+def test_native_descriptor_buffer_handling_and_cleanup(monkeypatch, tmp_path, failure):
+    """Exercise native buffer ownership and parsing without relying on the host OS."""
+    identity = ctypes.create_string_buffer(16)
+    acl = ctypes.create_string_buffer(bytes([2, 0, 8, 0, 3, 0, 0, 0]))
+    allow = ctypes.create_string_buffer(bytes([0, 0, 16 if failure != "short" else 8, 0, 2, 0, 0, 0]) + b"\0" * 8)
+    deny = ctypes.create_string_buffer(bytes([1, 0, 16, 0]) + b"\0" * 12)
+    inherited = ctypes.create_string_buffer(bytes([0, 8, 16, 0]) + b"\0" * 12)
+    aces = [allow, deny, inherited]
+    closed, freed = [], []
+
+    class Function:
+        def __init__(self, function):
+            self.function = function
+
+        def __call__(self, *args):
+            return self.function(*args)
+
+    def open_token(_process, _rights, output):
+        output._obj.value = 7
+        return failure != "open"
+
+    def token_info(_token, _kind, buffer, _length, needed):
+        needed._obj.value = 0 if failure == "size" else 16
+        if buffer is None:
+            return False
+        ctypes.c_void_p.from_buffer(buffer).value = ctypes.addressof(identity)
+        return failure != "token"
+
+    def descriptor(_path, _kind, _flags, owner, _group, dacl, _sacl, output):
+        owner._obj.value = ctypes.addressof(identity)
+        dacl._obj.value = ctypes.addressof(acl)
+        output._obj.value = 99
+        return 5 if failure == "descriptor" else 0
+
+    def get_ace(_acl, index, output):
+        output._obj.value = ctypes.addressof(aces[index])
+        return failure != "ace"
+
+    def sid_string(_sid, output):
+        output._obj.value = USER
+        return failure != "sid"
+
+    api = SimpleNamespace(
+        **{
+            name: Function(function)
+            for name, function in {
+                "OpenProcessToken": open_token,
+                "GetTokenInformation": token_info,
+                "GetNamedSecurityInfoW": descriptor,
+                "GetAce": get_ace,
+                "ConvertSidToStringSidW": sid_string,
+            }.items()
+        }
+    )
+    kernel = SimpleNamespace(
+        GetCurrentProcess=Function(lambda: 3),
+        CloseHandle=Function(lambda handle: closed.append(handle.value)),
+        LocalFree=Function(lambda pointer: freed.append(pointer.value)),
+    )
+    monkeypatch.setattr(ctypes, "WinDLL", lambda name, **kwargs: api if name == "advapi32" else kernel, raising=False)
+    if failure:
+        with pytest.raises(OSError):
+            security._read_descriptor(tmp_path)
+    else:
+        owner, entries, current = security._read_descriptor(tmp_path)
+        assert owner == current == USER
+        assert entries == [(0, 0, 2, USER), (1, 0, 0, ""), (0, 8, 0, "")]
+    assert closed == ([] if failure == "open" else [7])
+    if failure in {"", "ace", "short"}:
+        assert 99 in freed
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Requires native Windows filesystem ACLs")
+def test_native_private_directory_and_untrusted_runtime_acl(tmp_path):
+    from gms_helpers.runtime_manager import runtime_trust_issue
+    from gms_mcp.server.subprocess_runner import _windows_system_executable
+
+    private = private_directory(tmp_path / "private")
+    assert security.windows_path_trust_issue(private, private=True) is None
+    runtime = private / "runtime-example"
+    igor = runtime / "bin" / "Igor.exe"
+    igor.parent.mkdir(parents=True)
+    igor.write_bytes(b"fixture")
+    assert runtime_trust_issue(runtime, igor) is None
+    subprocess.run([_windows_system_executable("icacls.exe"), str(igor), "/grant", "*S-1-1-0:(W)"], check=True)
+    assert runtime_trust_issue(runtime, igor)

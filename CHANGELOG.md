@@ -4,6 +4,24 @@ All notable changes to this project will be documented in this file.
 
 ## [Unreleased]
 
+### Changed
+- Raise the minimum Python version to 3.11 so image imports can use Pillow 13 security fixes.
+
+### Security
+- Require Pillow 13 and OpenTelemetry SDK 1.45.1 or newer to remove known vulnerabilities from image-import and development dependencies.
+- Require certifi 2026.10.19 and pip 26.2.2, and update build/publish tooling to distrust the compromised emSign CA chains.
+- **CLI flags must be spelled in full.** Abbreviated options such as `--max` are rejected, so a project-supplied argument cannot resolve to an unintended flag.
+- **Reinstall older game bridges.** The bridge now uses a random per-session credential and an automatically chosen loopback port. Bridges without credentials stay inert, a client must authenticate within 3 seconds, and an unauthenticated client cannot displace the active connection. If the port cannot be bound, the game launches without the bridge. Fixed bridge ports no longer apply.
+- **Live-reload commands now come only from `~/.gms-mcp/config.json`.** Commands found in project configuration are ignored with a migration warning, and `status_file` must be project-relative.
+- **Debug logs are opt-in.** Set `GMS_MCP_DEBUG_LOG=1` to write them; persisted output is redacted.
+- Helper processes and transaction children no longer import code from the project directory. GameMaker runtimes and their cache ancestors must have trusted ownership and permissions, Windows tools resolve to absolute system paths, and failed builds never launch a stale artifact from a shared directory.
+- Transactional tools fail closed when a write falls outside the project and known tool-owned locations. Mutating tools check the approved project root.
+- Snapshot builds validate references, read through `ls-tree`/`cat-file` instead of extracting archives, contain test, prelude and isolated paths, reject symlinks, and disable repository-configured Git hooks and fsmonitor.
+- New limits: caller-supplied regular expressions stop after 5 seconds (patterns up to 1000 characters), JSON project files and live-reload status files are capped at 64 MiB, sprite imports at 4096 frames and PNG input, bridge frames are byte-capped, and metadata reads stay on regular files inside the project.
+- `gm_yyp_register` only adds entries and rejects invalid names. Swap-sprite names are validated. The machine-wide lock moved to a private, verified directory under `~/.gms-mcp/runtime-locks`.
+- MCP installers merge with existing client configs, keep unrelated Codex TOML tables, take backups, refuse symlinked targets, redact previews, and no longer write `GMS_MCP_GMS_PATH` to workspace configs. Setup scripts no longer run through a shell.
+- PyPI publishing runs in a protected `pypi` environment.
+
 ### Idle MCP watcher CPU
 
 - Start project scans only for active subscriptions to project resource updates, not merely because an MCP connection exists. Stop scanning and release snapshots when the last relevant subscription closes.
@@ -24,6 +42,7 @@ All notable changes to this project will be documented in this file.
 - Tile edits preview by default, enforce project and dry-run policies, verify saved data, and roll back failed validation or configured compile checks.
 - Map queries cap retained cell and cluster details across layers, bound total decode and histogram work, and reject malformed dimensions before allocation or iteration. Valid empty layers remain supported.
 - Windows packaging now supplies an explicit ZIP destination. Failed direct runs reject stale executables and only tolerate the recognized final ZIP/move failure after successful compilation creates a fresh executable.
+- Thanks to Dinh Hong Ngoc ([ngocdh383](https://github.com/ngocdh383)), whose fork's map tooling these tools build on, and Guillermo Ares ([guillermoares](https://github.com/guillermoares)), whose fork's Windows ZIP destination and stale-build fixes these packaging changes follow.
 
 ### Multi-agent projects and GameMaker LTS 2026
 

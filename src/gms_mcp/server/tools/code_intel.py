@@ -126,7 +126,7 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
             max_results=max_results,
         )
 
-        cli_args = ["symbol", "find-references", symbol_name, "--max", str(max_results)]
+        cli_args = ["symbol", "find-references", symbol_name, "--max-results", str(max_results)]
 
         return await _run_with_fallback(
             direct_handler=handle_find_references,
@@ -179,10 +179,10 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         if kind:
             cli_args.extend(["--kind", kind])
         if name_filter:
-            cli_args.extend(["--name", name_filter])
+            cli_args.extend(["--name-filter", name_filter])
         if file_filter:
-            cli_args.extend(["--file", file_filter])
-        cli_args.extend(["--max", str(max_results)])
+            cli_args.extend(["--file-filter", file_filter])
+        cli_args.extend(["--max-results", str(max_results)])
 
         return await _run_with_fallback(
             direct_handler=handle_list_symbols,

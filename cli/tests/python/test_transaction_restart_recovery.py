@@ -375,7 +375,7 @@ def test_standalone_bridge_install_failure_restores_preexisting_files(project):
 
 
 def test_recovery_waits_for_orphan_journaled_subprocess_before_restoring(project):
-    ready = project.parent / f"{project.name}-child-ready"
+    ready = project / ".gms_mcp" / "child-ready"
     release = project.parent / f"{project.name}-child-release"
     child_code = "\n".join(
         [
@@ -400,7 +400,7 @@ def test_recovery_waits_for_orphan_journaled_subprocess_before_restoring(project
             "root,ready,release=map(Path,sys.argv[1:4])",
             "tx=GameMakerProjectTransaction(root,'orphan-parent'); tx.begin()",
             "subprocess.Popen([sys.executable,'-c',sys.argv[4],str(root),str(ready),str(release)],",
-            "    env={**os.environ,**transaction_subprocess_environment()},stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL)",
+            "    env={**os.environ,**transaction_subprocess_environment()},stdout=subprocess.PIPE,stderr=subprocess.PIPE)",
             "deadline=time.monotonic()+5",
             "while not ready.exists() and time.monotonic()<deadline: time.sleep(0.01)",
             "os._exit(73 if ready.exists() else 74)",
