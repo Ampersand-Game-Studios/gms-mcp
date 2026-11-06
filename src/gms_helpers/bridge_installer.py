@@ -178,6 +178,15 @@ class BridgeInstaller:
         # Determine overall status
         status["installed"] = status["object_exists"] and status["script_exists"] and status["registered_in_yyp"]
 
+        status["warnings"] = (
+            [
+                "Bridge assets are installed. Reinstall to upgrade older endpoints; uninstall before release. "
+                "The current bridge is inert unless launched with a bridge port and session token."
+            ]
+            if status["installed"]
+            else []
+        )
+
         # Check for inconsistencies
         if status["object_exists"] and not status["registered_in_yyp"]:
             status["issues"].append("Bridge files exist but not registered in .yyp")
@@ -359,7 +368,10 @@ class BridgeInstaller:
             "resourceVersion": "2.0",
         }
 
-        script_gml = """/// @function __mcp_log(message)
+        script_gml = """global.__mcp_socket = -1;
+global.__mcp_enabled = false;
+
+/// @function __mcp_log(message)
 /// @description Log a message to both debug output and MCP bridge
 /// @param {string} message The message to log
 function __mcp_log(_message) {
@@ -370,7 +382,7 @@ function __mcp_log(_message) {
     show_debug_message(_full_msg);
     
     // Send to MCP bridge if connected
-    if (variable_global_exists("__mcp_socket") && global.__mcp_socket >= 0) {
+    if (global.__mcp_enabled && global.__mcp_socket >= 0) {
         var _packet = "LOG:" + _timestamp + "|" + string(_message) + chr(10);
         var _buffer = buffer_create(string_byte_length(_packet) + 1, buffer_fixed, 1);
         buffer_write(_buffer, buffer_string, _packet);
@@ -384,7 +396,7 @@ function __mcp_log(_message) {
 /// @param {string} cmd_id The command ID to respond to
 /// @param {string} result The result string
 function __mcp_send_response(_cmd_id, _result) {
-    if (variable_global_exists("__mcp_socket") && global.__mcp_socket >= 0) {
+    if (global.__mcp_enabled && global.__mcp_socket >= 0) {
         var _packet = "RSP:" + string(_cmd_id) + "|" + string(_result) + chr(10);
         var _buffer = buffer_create(string_byte_length(_packet) + 1, buffer_fixed, 1);
         buffer_write(_buffer, buffer_string, _packet);
@@ -487,28 +499,36 @@ function __mcp_send_response(_cmd_id, _result) {
         events = {}
 
         # Create Event
-        events["Create_0.gml"] = f"""/// @description Initialize MCP Bridge connection
-// This object connects to the MCP bridge server for debugging/control
-
+        events["Create_0.gml"] = """/// @description Initialize MCP Bridge connection
 global.__mcp_socket = -1;
 global.__mcp_enabled = false;
 global.__mcp_buffer = "";
-global.__mcp_port = {port};
+global.__mcp_port = 0;
 
-// Try to connect to MCP bridge server
+var _port_text = environment_get_variable("GMS_MCP_BRIDGE_PORT");
+var _credential = environment_get_variable("GMS_MCP_BRIDGE_TOKEN");
+if (_credential == "" || string_length(_port_text) == 0 || string_length(_port_text) > 5) exit;
+for (var _i = 1; _i <= string_length(_port_text); _i++) {
+    var _digit = ord(string_char_at(_port_text, _i));
+    if (_digit < ord("0") || _digit > ord("9")) exit;
+}
+global.__mcp_port = real(_port_text);
+if (global.__mcp_port < 1 || global.__mcp_port > 65535) exit;
+
 var _socket = network_create_socket(network_socket_tcp);
 var _result = network_connect_raw(_socket, "127.0.0.1", global.__mcp_port);
-
-if (_result >= 0) {{
+if (_result >= 0) {
     global.__mcp_socket = _socket;
     global.__mcp_enabled = true;
+    var _hello = "HELLO:" + json_stringify({protocol: 2, token: _credential}) + chr(10);
+    var _packet = buffer_create(string_byte_length(_hello) + 1, buffer_fixed, 1);
+    buffer_write(_packet, buffer_string, _hello);
+    network_send_raw(_socket, _packet, buffer_tell(_packet));
+    buffer_delete(_packet);
     __mcp_log("[MCP] Bridge connected on port " + string(global.__mcp_port));
-}} else {{
-    // No bridge server running - that's fine, game runs normally
+} else {
     network_destroy(_socket);
-    global.__mcp_socket = -1;
-    global.__mcp_enabled = false;
-}}
+}
 """
 
         # Step Event
@@ -540,6 +560,13 @@ switch (_type) {
         var _size = async_load[? "size"];
         
         if (_size > 0) {
+            if (_size + string_byte_length(global.__mcp_buffer) > 1048576) {
+                network_destroy(global.__mcp_socket);
+                global.__mcp_socket = -1;
+                global.__mcp_enabled = false;
+                global.__mcp_buffer = "";
+                exit;
+            }
             var _data = buffer_read(_buffer, buffer_string);
             global.__mcp_buffer += _data;
             
@@ -577,6 +604,7 @@ switch (_type) {
 /// @function __mcp_execute_command(command)
 /// @description Execute a command from MCP and return result
 function __mcp_execute_command(_command) {
+    if (!global.__mcp_enabled) return "ERR:disabled Bridge is inactive";
     // Parse command (space-separated)
     var _parts = [];
     var _temp = _command;
@@ -602,7 +630,7 @@ function __mcp_execute_command(_command) {
         case "goto_room":
             if (array_length(_parts) > 1) {
                 var _room = asset_get_index(_parts[1]);
-                if (_room >= 0 && room_exists(_room)) {
+                if (_room >= 0 && asset_get_type(_room) == asset_room) {
                     room_goto(_room);
                     return "OK:Changed to " + _parts[1];
                 }
@@ -616,10 +644,11 @@ function __mcp_execute_command(_command) {
                 // Check if it starts with "global."
                 if (string_pos("global.", _var_name) == 1) {
                     var _real_name = string_delete(_var_name, 1, 7);
-                    if (variable_global_exists(_real_name)) {
+                    try {
                         return "OK:" + string(variable_global_get(_real_name));
+                    } catch (_error) {
+                        return "ERROR:Global variable not found: " + _real_name;
                     }
-                    return "ERROR:Global variable not found: " + _real_name;
                 }
                 return "ERROR:Only global variables supported";
             }
@@ -649,7 +678,7 @@ function __mcp_execute_command(_command) {
                 var _obj = asset_get_index(_parts[1]);
                 var _x = real(_parts[2]);
                 var _y = real(_parts[3]);
-                if (_obj >= 0 && object_exists(_obj)) {
+                if (_obj >= 0 && asset_get_type(_obj) == asset_object) {
                     var _inst = instance_create_depth(_x, _y, 0, _obj);
                     return "OK:Created " + _parts[1] + " at " + string(_x) + "," + string(_y);
                 }
@@ -737,12 +766,7 @@ global.__mcp_enabled = false;
         """
         if not transaction_is_active(self.project_root):
             return self._run_standalone("gm_bridge_install", lambda: self.install(port))
-        if self.is_installed():
-            return {
-                "ok": True,
-                "message": "Bridge already installed",
-                "already_installed": True,
-            }
+        already_installed = self.is_installed()
 
         created_paths: List[Path] = []
 
@@ -788,6 +812,20 @@ global.__mcp_enabled = false;
             yyp_data = load_json(self.yyp_path)
 
             # Add folder - match format of existing folders in .yyp
+            yyp_data["Folders"] = [
+                folder
+                for folder in yyp_data.get("Folders", [])
+                if folder.get("folderPath") != f"folders/{BRIDGE_FOLDER_NAME}.yy"
+            ]
+            yyp_data["resources"] = [
+                resource
+                for resource in yyp_data.get("resources", [])
+                if resource.get("id", {}).get("path")
+                not in {
+                    f"scripts/{BRIDGE_SCRIPT_NAME}/{BRIDGE_SCRIPT_NAME}.yy",
+                    f"objects/{BRIDGE_OBJECT_NAME}/{BRIDGE_OBJECT_NAME}.yy",
+                }
+            ]
             existing_folders = yyp_data.get("Folders", [])
             folder_format = ""
             if existing_folders:
@@ -841,8 +879,8 @@ global.__mcp_enabled = false;
             print("[BRIDGE] Installation complete!")
             return {
                 "ok": True,
-                "message": "Bridge installed successfully",
-                "port": port,
+                "message": "Bridge updated successfully" if already_installed else "Bridge installed successfully",
+                "already_installed": already_installed,
                 "files_created": len(created_paths),
             }
 

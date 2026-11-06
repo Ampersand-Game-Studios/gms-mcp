@@ -210,15 +210,16 @@ class TestAgentSetupFullCoverage(unittest.TestCase):
                 result = setup_bash_alias()
                 self.assertFalse(result)
 
-    def test_setup_bash_alias_exception(self):
-        """Test setup_bash_alias when os.system raises exception."""
+    def test_setup_bash_alias_never_executes_shell(self):
+        """Alias setup prints safely quoted instructions without executing a shell."""
         from gms_helpers.agent_setup import setup_bash_alias
 
         with patch("gms_helpers.agent_setup.__file__", str(self.agent_setup_script)):
             with patch("pathlib.Path.exists", return_value=True):
-                with patch("os.system", side_effect=Exception("Test error")):
+                with patch("os.system", side_effect=AssertionError("Shell execution")) as shell:
                     result = setup_bash_alias()
-                    self.assertFalse(result)
+                    self.assertTrue(result)
+                    shell.assert_not_called()
 
     def test_test_gms_command_timeout(self):
         """Test test_gms_command when subprocess times out."""

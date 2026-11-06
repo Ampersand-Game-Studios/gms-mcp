@@ -24,7 +24,12 @@ class TestServerDebugLog(unittest.TestCase):
             with (
                 patch.dict(
                     "os.environ",
-                    {"GM_PROJECT_ROOT": str(project), "HOME": str(home), "USERPROFILE": str(home)},
+                    {
+                        "GM_PROJECT_ROOT": str(project),
+                        "HOME": str(home),
+                        "USERPROFILE": str(home),
+                        "GMS_MCP_DEBUG_LOG": "1",
+                    },
                     clear=True,
                 ),
                 patch.object(debug, "_MAX_LOG_BYTES", 500),

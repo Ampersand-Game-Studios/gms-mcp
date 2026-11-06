@@ -828,9 +828,11 @@ def maybe_start_background_flush(*, force: bool = False) -> bool:
 
     env = os.environ.copy()
     env.setdefault("PYTHONUNBUFFERED", "1")
+    env["PYTHONSAFEPATH"] = "1"
+    env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
     try:
         subprocess.Popen(
-            [sys.executable, "-m", "gms_mcp.telemetry_runtime", "flush-spool"],
+            [sys.executable, "-P", "-m", "gms_mcp.telemetry_runtime", "flush-spool"],
             stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,

@@ -8,6 +8,15 @@ from .utils import atomic_write_bytes, generate_uuid, ensure_directory, load_jso
 from .exceptions import ValidationError
 from .path_safety import assert_project_tree_contained, project_relative_path, validate_resource_name
 
+MAX_SPRITE_FRAMES = 4096
+
+
+def validate_frame_count(count: int) -> int:
+    if not isinstance(count, int) or isinstance(count, bool) or not 1 <= count <= MAX_SPRITE_FRAMES:
+        raise ValidationError(f"Sprite frame count must be between 1 and {MAX_SPRITE_FRAMES}")
+    return count
+
+
 # Pillow is optional - import lazily
 if TYPE_CHECKING:
     from PIL import Image
@@ -42,31 +51,34 @@ def detect_strip_layout(
 
     Returns: (frame_count, frame_width, frame_height)
     """
+    for dimension in (frame_width, frame_height):
+        if dimension is not None and dimension <= 0:
+            raise ValidationError("Frame dimensions must be positive")
     Image = _get_pillow()
-    with Image.open(image_path) as image:
+    with Image.open(image_path, formats=["PNG"]) as image:
         width, height = image.size
 
     if frame_width and frame_height:
         # Grid mode - both dimensions specified
         cols = width // frame_width
         rows = height // frame_height
-        return cols * rows, frame_width, frame_height
+        return validate_frame_count(cols * rows), frame_width, frame_height
     elif frame_width:
         # Horizontal strip with known frame width
-        return width // frame_width, frame_width, height
+        return validate_frame_count(width // frame_width), frame_width, height
     elif frame_height:
         # Vertical strip with known frame height
-        return height // frame_height, width, frame_height
+        return validate_frame_count(height // frame_height), width, frame_height
     else:
         # Auto-detect: assume horizontal strip with square frames
         if width > height:
             # Horizontal strip
             frame_size = height
-            return width // frame_size, frame_size, frame_size
+            return validate_frame_count(width // frame_size), frame_size, frame_size
         else:
             # Vertical strip
             frame_size = width
-            return height // frame_size, frame_size, frame_size
+            return validate_frame_count(height // frame_size), frame_size, frame_size
 
 
 def split_strip(
@@ -88,9 +100,12 @@ def split_strip(
 
     Returns: List of PIL Image objects
     """
+    for dimension in (frame_width, frame_height):
+        if dimension is not None and dimension <= 0:
+            raise ValidationError("Frame dimensions must be positive")
     Image = _get_pillow()
     frames = []
-    with Image.open(source_path) as image:
+    with Image.open(source_path, formats=["PNG"]) as image:
         width, height = image.size
 
         if layout == "grid":
@@ -100,7 +115,10 @@ def split_strip(
                 # Auto-detect columns from image width
                 columns = width // frame_width
 
+            if columns <= 0:
+                raise ValidationError("Grid columns must be positive")
             rows = height // frame_height
+            validate_frame_count(min(columns, (width + frame_width - 1) // frame_width) * rows)
             for row in range(rows):
                 for col in range(columns):
                     if col * frame_width >= width:
@@ -112,6 +130,7 @@ def split_strip(
             if not frame_height:
                 frame_height = width  # Assume square frames
             frame_count = height // frame_height
+            validate_frame_count(frame_count)
             for i in range(frame_count):
                 box = (0, i * frame_height, width, (i + 1) * frame_height)
                 frames.append(image.crop(box).copy())
@@ -120,6 +139,7 @@ def split_strip(
             if not frame_width:
                 frame_width = height  # Assume square frames
             frame_count = width // frame_width
+            validate_frame_count(frame_count)
             for i in range(frame_count):
                 box = (i * frame_width, 0, (i + 1) * frame_width, height)
                 frames.append(image.crop(box).copy())
@@ -270,7 +290,9 @@ def import_frames_to_existing_sprite(
     # Create a temp directory for the frame images
     import tempfile
 
-    with tempfile.TemporaryDirectory() as tmpdir:
+    temporary_root = project_relative_path(".gms_mcp/tmp", project_root=project_root, kind="sprite temporary directory")
+    temporary_root.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="sprite-frames-", dir=temporary_root) as tmpdir:
         tmpdir = Path(tmpdir)
 
         # Save frames to temp files and add them

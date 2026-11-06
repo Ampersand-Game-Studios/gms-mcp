@@ -65,7 +65,7 @@ class TestSubprocessRunnerRegressions(unittest.TestCase):
             self.assertTrue(subprocess_runner._terminate_process_tree(process))
 
         taskkill.assert_called_once_with(
-            ["taskkill", "/PID", "321", "/T", "/F"],
+            [subprocess_runner._windows_system_executable("taskkill.exe"), "/PID", "321", "/T", "/F"],
             capture_output=True,
             text=True,
         )

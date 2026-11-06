@@ -538,7 +538,7 @@ def test_snapshot_work_directories_are_unique_per_invocation(repo: Path, tmp_pat
         return real(project_root, destination, **kwargs)
 
     monkeypatch.setattr(snapshot_build, "create_snapshot", spy)
-    monkeypatch.setattr(snapshot_build, "_work_root", lambda: tmp_path / "work_root")
+    monkeypatch.setenv("GMS_MCP_SNAPSHOT_WORK_DIR", str(tmp_path / "work_root"))
     for _ in range(2):
         snapshot_build.snapshot_compile(
             repo, label="same", toolchain=_toolchain(tmp_path), run_igor=_fake_igor(["ok"]), keep_work_dir=True
@@ -604,9 +604,9 @@ def test_isolated_snapshot_is_base_revision_plus_named_paths(repo: Path, tmp_pat
 
     base = snapshot_build.create_snapshot(repo, tmp_path / "base", base_only=True)
     assert base["isolated_paths"] == [] and (tmp_path / "base" / "scripts/zeta/zeta.yy").is_file()
-    with pytest.raises(snapshot_build.SnapshotError, match="not a path inside the project"):
+    with pytest.raises(ValidationError, match="project-relative"):
         snapshot_build.create_snapshot(repo, tmp_path / "bad", isolate_paths=["../outside"])
-    with pytest.raises(snapshot_build.SnapshotError, match="could not read revision"):
+    with pytest.raises(snapshot_build.SnapshotError, match="could not resolve revision"):
         snapshot_build.create_snapshot(repo, tmp_path / "bad", isolate_paths=["scripts/mine"], ref="no-such-ref")
 
 
@@ -633,7 +633,7 @@ def test_test_injection_only_ever_touches_a_snapshot(repo: Path, tmp_path: Path)
 
     with pytest.raises(snapshot_build.SnapshotError, match="exactly one"):
         snapshot_build.load_test_source(repo, None, None)
-    with pytest.raises(snapshot_build.SnapshotError, match="not found"):
+    with pytest.raises(ValidationError, match="regular file"):
         snapshot_build.load_test_source(repo, "missing.gml", None)
     (repo / "t.gml").write_text(code)
     assert snapshot_build.load_test_source(repo, "t.gml", None) == code
@@ -1049,7 +1049,9 @@ def test_bridge_server_picks_a_free_port_and_records_the_handshake():
     assert server.start() and server.port != 0
     client = socket.create_connection(("127.0.0.1", server.port), timeout=2)
     try:
-        client.sendall(b'HELLO:{"protocol":2,"commands":["ping"]}\n')
+        client.sendall(
+            ("HELLO:" + json.dumps({"protocol": 2, "commands": ["ping"], "token": server.token}) + "\n").encode()
+        )
         deadline = time.time() + 3
         while server.hello is None and time.time() < deadline:
             time.sleep(0.02)
@@ -1079,12 +1081,16 @@ def test_live_session_requests_without_a_game_explain_what_to_do(project: Path):
         live_session.command(project, "ping")
 
 
-def test_live_reload_is_driven_by_project_configuration(project: Path):
+def test_live_reload_is_driven_by_user_configuration(project: Path, monkeypatch):
+    home = project / "user-home"
+    config = home / ".gms-mcp" / "config.json"
+    config.parent.mkdir(parents=True)
+    monkeypatch.setattr(Path, "home", lambda: home)
     assert live_reload.status(project)["configured"] is False
     with pytest.raises(live_reload.LiveReloadError, match="live_reload"):
         live_reload.start(project)
     (project / "status.json").write_text('{"serving": true}')
-    (project / ".gms-mcp.json").write_text(
+    config.write_text(
         json.dumps(
             {
                 "live_reload": {
@@ -1100,10 +1106,10 @@ def test_live_reload_is_driven_by_project_configuration(project: Path):
     assert "started" in (project / ".gms_mcp" / "live_reload.log").read_text()
     assert live_reload.status(project)["status"] == {"serving": True, "clients": 1}
     assert live_reload.stop(project)["stopped"]
-    (project / ".gms-mcp.json").write_text(json.dumps({"live_reload": {"stop": "gms-fire stop"}}))
+    config.write_text(json.dumps({"live_reload": {"stop": "gms-fire stop"}}))
     with pytest.raises(live_reload.LiveReloadError, match="list of strings"):
         live_reload.stop(project)
-    (project / ".gms-mcp.json").write_text(json.dumps({"live_reload": {"stop": ["definitely-not-installed-tool"]}}))
+    config.write_text(json.dumps({"live_reload": {"stop": ["definitely-not-installed-tool"]}}))
     with pytest.raises(live_reload.LiveReloadError, match="not installed"):
         live_reload.stop(project)
 
@@ -1148,11 +1154,17 @@ class _FakeProcess:
         self.returncode = -9
 
 
-def _fake_game_endpoint(port: int, save_dir: Path, stop: threading.Event) -> None:
+def _fake_game_endpoint(port: int, token: str, save_dir: Path, stop: threading.Event) -> None:
     """A minimal protocol 2 endpoint: handshake, then answer commands until told to stop."""
     client = socket.create_connection(("127.0.0.1", port), timeout=3)
     client.settimeout(0.2)
-    client.sendall(b'HELLO:{"protocol":2,"game":"Fake","commands":["ping","state","screenshot"]}\n')
+    client.sendall(
+        (
+            "HELLO:"
+            + json.dumps({"protocol": 2, "game": "Fake", "commands": ["ping", "state", "screenshot"], "token": token})
+            + "\n"
+        ).encode()
+    )
     buffer = ""
     while not stop.is_set():
         try:
@@ -1206,7 +1218,11 @@ def test_live_session_start_command_screenshot_and_stop(repo: Path, tmp_path: Pa
 
     def fake_launch(_runner, staging_dir, _game_file, run_dir, environment):
         port = int(environment[live_session.BRIDGE_PORT_ENVIRONMENT_VARIABLE])
-        threading.Thread(target=_fake_game_endpoint, args=(port, save_dir, stop_endpoint), daemon=True).start()
+        threading.Thread(
+            target=_fake_game_endpoint,
+            args=(port, environment[live_session.BRIDGE_TOKEN_ENVIRONMENT_VARIABLE], save_dir, stop_endpoint),
+            daemon=True,
+        ).start()
         log = staging_dir / "debug.txt"
         log.write_text("boot\nrunning\nERROR nothing\n")
         return process, log
@@ -1224,7 +1240,7 @@ def test_live_session_start_command_screenshot_and_stop(repo: Path, tmp_path: Pa
     monkeypatch.setattr(snapshot_build, "snapshot_compile", fake_compile)
     monkeypatch.setattr(snapshot_build, "require_mac_runner", lambda _tools: tmp_path / "Mac_Runner")
     monkeypatch.setattr(snapshot_build, "stage_game_archive", fake_stage)
-    monkeypatch.setattr(snapshot_build, "launch_mac_runner", fake_launch)
+    monkeypatch.setattr(live_session, "_launch_game", fake_launch)
     from gms_helpers.mac_runtime import MacRuntime
 
     monkeypatch.setattr(
@@ -1306,7 +1322,7 @@ def test_live_session_reports_a_game_that_exits_or_never_connects(
     monkeypatch.setattr(snapshot_build, "snapshot_compile", fake_compile)
     monkeypatch.setattr(snapshot_build, "require_mac_runner", lambda _tools: tmp_path / "Mac_Runner")
     monkeypatch.setattr(snapshot_build, "stage_game_archive", fake_stage)
-    monkeypatch.setattr(snapshot_build, "launch_mac_runner", fake_launch)
+    monkeypatch.setattr(live_session, "_launch_game", fake_launch)
     from gms_helpers.mac_runtime import MacRuntime
 
     monkeypatch.setattr(

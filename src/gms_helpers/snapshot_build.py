@@ -23,26 +23,26 @@ from __future__ import annotations
 
 import contextlib
 import hashlib
-import io
 import os
 import re
 import shutil
 import subprocess
 import sys
-import tarfile
 import tempfile
 import time
-import uuid
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Iterable
 
 from . import yyp_registry
+from .bounded_regex import search_many
 from .agent_locks import MOBILE_BUILD_LOCK, BuildSlot, DirectoryLock
 from .mac_runtime import prepare_mac_runtime, project_run_lock
 from .exceptions import ValidationError
 from .project_config import project_setting
+from gms_mcp.project_detection import safe_git_command
+from .path_safety import private_directory, project_file_path, project_relative_path, validate_git_ref
 from .utils import find_yyp
 
 ACCESS_VIOLATION_MARKER = "AccessViolationException"
@@ -162,9 +162,7 @@ def runs_directory(project_root: str | Path, label: str) -> Path:
 
 def _work_root() -> Path:
     configured = os.environ.get("GMS_MCP_SNAPSHOT_WORK_DIR", "").strip()
-    return (
-        Path(configured).expanduser() if configured else Path(tempfile.gettempdir()) / "gms-mcp-snapshots"
-    ).resolve()
+    return private_directory(Path(configured) if configured else Path.home() / ".gms-mcp" / "snapshots")
 
 
 # ----------------------------------------------------------------------
@@ -203,7 +201,7 @@ def discover_toolchain(project_root: str | Path, runtime_version: str | None = N
 # Snapshots
 # ----------------------------------------------------------------------
 def _git(repo: Path, *args: str, input_bytes: bytes | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(["git", "-C", str(repo), *args], input=input_bytes, capture_output=True, check=False)
+    return subprocess.run(safe_git_command(repo, *args), input=input_bytes, capture_output=True, check=False)
 
 
 def git_context(project_root: str | Path) -> tuple[Path, str]:
@@ -221,15 +219,62 @@ def git_context(project_root: str | Path) -> tuple[Path, str]:
 
 
 def _project_relative(path: str, project_prefix: str) -> str:
-    normalized = str(path).replace("\\", "/").strip().strip("/")
-    if project_prefix and (normalized == project_prefix or normalized.startswith(project_prefix + "/")):
-        normalized = normalized[len(project_prefix) :].strip("/")
-    if not normalized or normalized.startswith("../") or "/../" in f"/{normalized}/" or normalized.startswith("/"):
-        raise SnapshotError(
-            f"'{path}' is not a path inside the project. Use paths relative to the folder containing the .yyp, "
-            "for example scripts/my_script or objects/o_player/Step_0.gml."
-        )
+    normalized = str(path)
+    project_relative_path(normalized, project_root=Path.cwd(), kind="isolate path")
+    if project_prefix and normalized.startswith(project_prefix + "/"):
+        normalized = normalized[len(project_prefix) + 1 :]
+    if normalized in {"", "."}:
+        raise SnapshotError("Isolate paths must name a child of the project")
     return normalized
+
+
+def _check_copy_source(source: Path, root: Path) -> None:
+    project_relative_path(source.relative_to(root).as_posix(), project_root=root, kind="snapshot input")
+    for directory, dirs, files in os.walk(source, followlinks=False):
+        for name in dirs + files:
+            child = Path(directory) / name
+            project_relative_path(child.relative_to(root).as_posix(), project_root=root, kind="snapshot input")
+            if child.is_symlink() and child.is_dir():
+                raise SnapshotError(f"Directory symlinks are not supported in snapshots: {child}")
+            if name in files and not child.is_file():
+                raise SnapshotError(f"Snapshot input is not a regular file: {child}")
+    if source.is_symlink() and source.is_dir():
+        raise SnapshotError(f"Directory symlinks are not supported in snapshots: {source}")
+
+
+def _read_git_tree(repo: Path, sha: str, staging: Path, prefix: str) -> None:
+    tree = _git(repo, "ls-tree", "-r", "-z", sha, "--", *([prefix + "/"] if prefix else []))
+    if tree.returncode:
+        raise SnapshotError("git could not list the snapshot tree")
+    entries = []
+    for record in tree.stdout.split(b"\0"):
+        if not record:
+            continue
+        metadata, raw_path = record.split(b"\t", 1)
+        mode, kind, oid = metadata.decode("ascii").split()
+        path = os.fsdecode(raw_path)
+        target = project_relative_path(path, project_root=staging, kind="Git tree path")
+        if mode not in {"100644", "100755"} or kind != "blob":
+            raise SnapshotError(f"Snapshot revision contains an unsupported symlink or submodule: {path}")
+        entries.append((mode, oid, target))
+    blobs = _git(repo, "cat-file", "--batch", input_bytes="".join(oid + "\n" for _, oid, _ in entries).encode("ascii"))
+    if blobs.returncode:
+        raise SnapshotError("git could not read snapshot blobs")
+    offset = 0
+    for mode, oid, target in entries:
+        end = blobs.stdout.find(b"\n", offset)
+        header = blobs.stdout[offset:end].decode("ascii").split()
+        if len(header) != 3 or header[:2] != [oid, "blob"]:
+            raise SnapshotError("Invalid git cat-file response")
+        size = int(header[2])
+        offset = end + 1
+        data = blobs.stdout[offset : offset + size]
+        if len(data) != size or blobs.stdout[offset + size : offset + size + 1] != b"\n":
+            raise SnapshotError("Truncated git cat-file response")
+        offset += size + 1
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(data)
+        target.chmod(0o700 if mode == "100755" else 0o600)
 
 
 def _copy_tree(source: Path, destination: Path) -> None:
@@ -238,6 +283,7 @@ def _copy_tree(source: Path, destination: Path) -> None:
             return {name for name in names if name in _SNAPSHOT_IGNORED}
         return {name for name in names if name == "__pycache__"}
 
+    _check_copy_source(source, source)
     shutil.copytree(source, destination, ignore=ignore, symlinks=False, dirs_exist_ok=True)
 
 
@@ -257,8 +303,16 @@ def create_snapshot(
     (a named path that no longer exists is deleted from the copy), and its ``.yyp`` is the
     base revision plus only the registrations those paths need.
     """
+    validate_git_ref(ref)
     root = Path(project_root).resolve()
     dest = Path(destination)
+    isolate_paths = list(isolate_paths) if isolate_paths is not None else None
+    for raw in isolate_paths or []:
+        project_relative_path(raw, project_root=root, kind="isolate source")
+        if str(raw) in {"", "."}:
+            raise SnapshotError("Isolate paths must name a child of the project")
+    if dest.resolve() == root or dest.resolve().is_relative_to(root) or root.is_relative_to(dest.resolve()):
+        raise SnapshotError("Snapshot destination must not overlap the source project")
     if dest.exists():
         shutil.rmtree(dest)
     dest.parent.mkdir(parents=True, exist_ok=True)
@@ -280,19 +334,13 @@ def create_snapshot(
         return {"mode": "working-tree", "isolated_paths": [], "yyp_entries": [], "ref": None}
 
     repo, prefix = git_context(root)
-    archive = _git(repo, "archive", "--format=tar", ref, *([prefix] if prefix else []))
-    if archive.returncode != 0:
-        raise SnapshotError(
-            f"git could not read revision '{ref}': {archive.stderr.decode('utf-8', 'replace').strip()}. "
-            "Pass a commit, branch or tag that exists (default HEAD)."
-        )
-    staging = Path(tempfile.mkdtemp(prefix="gms-mcp-archive-", dir=dest.parent))
+    resolved = _git(repo, "rev-parse", "--verify", "--end-of-options", ref + "^{commit}")
+    sha = resolved.stdout.decode("ascii", "replace").strip()
+    if resolved.returncode or not re.fullmatch(r"[0-9a-f]{40,64}", sha):
+        raise SnapshotError(f"git could not resolve revision '{ref}' to a commit")
+    staging = Path(tempfile.mkdtemp(prefix="gms-mcp-tree-", dir=dest.parent))
     try:
-        with tarfile.open(fileobj=io.BytesIO(archive.stdout)) as tar:
-            try:
-                tar.extractall(staging, filter="data")
-            except TypeError:  # Python < 3.12 without the filter argument
-                tar.extractall(staging)
+        _read_git_tree(repo, sha, staging, prefix)
         base_project = staging / prefix if prefix else staging
         if not (base_project / yyp_name).is_file():
             raise SnapshotError(
@@ -301,8 +349,9 @@ def create_snapshot(
             )
         relative_paths = [_project_relative(path, prefix) for path in paths]
         for relative in relative_paths:
-            source = root / relative
-            target = base_project / relative
+            source = project_relative_path(relative, project_root=root, kind="isolate source")
+            target = project_relative_path(relative, project_root=base_project, kind="isolate target")
+            _check_copy_source(root / relative, root)
             if target.is_dir() and not target.is_symlink():
                 shutil.rmtree(target)
             elif target.exists() or target.is_symlink():
@@ -382,11 +431,11 @@ def load_test_source(project_root: Path, test_file: str | None, test_code: str |
         raise SnapshotError("Pass exactly one of test_code (the GML text) or test_file (a path to a .gml file).")
     if test_code:
         return test_code
-    path = Path(str(test_file)).expanduser()
-    if not path.is_absolute():
-        path = project_root / path
+    path = project_file_path(test_file, project_root=project_root, kind="test file")
     if not path.is_file():
-        raise SnapshotError(f"Test file not found: {test_file}. Pass an absolute path or the GML text as test_code.")
+        raise SnapshotError(
+            f"Test file not found: {test_file}. Pass a project-relative path or the GML text as test_code."
+        )
     if path.stat().st_size > _MAX_TEST_BYTES:
         raise SnapshotError("The test file is larger than 2 MB; that is not a test script.")
     return path.read_text(encoding="utf-8")
@@ -981,10 +1030,7 @@ def snapshot_compile(
     run_dir.mkdir(parents=True, exist_ok=True)
     # Unique per invocation: tools run on threads, so two calls in one process can share a label,
     # and two projects can share a folder name.
-    work = _work_root() / f"{safe_label(root.name)}_{label}_{os.getpid()}_{uuid.uuid4().hex[:8]}"
-    if work.exists():
-        shutil.rmtree(work)
-    work.mkdir(parents=True)
+    work = Path(tempfile.mkdtemp(prefix=f"{safe_label(root.name)}_{label}_", dir=_work_root()))
     snapshot_root = work / "project"
     try:
         snapshot_info = create_snapshot(
@@ -995,12 +1041,12 @@ def snapshot_compile(
             prelude = DEFAULT_TEST_PRELUDE
             prelude_file = project_setting(root, "test.prelude_file")
             if prelude_file:
-                prelude_path = root / str(prelude_file)
+                prelude_path = project_file_path(prelude_file, project_root=root, kind="test.prelude_file")
                 if not prelude_path.is_file():
                     raise SnapshotError(
                         f"test.prelude_file in .gms-mcp.json points at '{prelude_file}', which does not exist."
                     )
-                prelude = prelude_path.read_text(encoding="utf-8")
+                prelude = load_test_source(root, str(prelude_file), None)
             inject_test_script(
                 snapshot_root,
                 test_code,
@@ -1146,10 +1192,11 @@ def read_run_artifact(
     content = path.read_text(encoding="utf-8", errors="replace").splitlines()
     if pattern:
         try:
-            matcher = re.compile(pattern)
+            content = [content[index] for index, _ in search_many(pattern, content)]
         except re.error as exc:
             raise SnapshotError(f"pattern is not a valid regular expression: {exc}") from exc
-        content = [line for line in content if matcher.search(line)]
+        except ValueError as exc:
+            raise SnapshotError(f"Regex search failed: {exc}") from exc
     selected = content[-max(1, min(int(lines), 2000)) :]
     return {
         "ok": True,

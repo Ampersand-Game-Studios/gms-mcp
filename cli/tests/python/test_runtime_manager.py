@@ -72,12 +72,12 @@ class TestRuntimeManager(unittest.TestCase):
                 selected = self.manager.select()
                 self.assertEqual(selected.version, "1.0.0.0")
 
-    def test_select_matches_project_channel_and_defaults_to_stable(self):
+    def test_select_uses_newest_without_exact_project_version(self):
         stable = RuntimeInfo("2024.14.4.268", "/stable", "/stable/Igor", True, "stable")
         lts = RuntimeInfo("2026.0.0.23", "/lts", "/lts/Igor", True, "lts")
 
         with mock.patch.object(RuntimeManager, "list_installed", return_value=[lts, stable]):
-            self.assertEqual(self.manager.select(), stable)
+            self.assertEqual(self.manager.select(), lts)
 
             (self.project_root / "TestGame.yyp").write_text(
                 '{"MetaData":{"IDEVersion":"2026.0.1.20"}}',

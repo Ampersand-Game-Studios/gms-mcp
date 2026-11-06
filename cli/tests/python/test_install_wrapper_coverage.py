@@ -80,7 +80,7 @@ class TestInstallWrapperCoverage(unittest.TestCase):
             self.assertTrue(result)
             target = local_bin / "gms"
             self.assertTrue(target.exists())
-            self.assertIn('python3 "', target.read_text(encoding="utf-8"))
+            self.assertIn("-P -m gms_helpers.gms", target.read_text(encoding="utf-8"))
             self.assertIn("Installed gms command", output)
             self.assertIn("Add this to your shell configuration", output)
 
@@ -118,9 +118,10 @@ class TestInstallWrapperCoverage(unittest.TestCase):
             shim = windows_apps / "gms.cmd"
             self.assertTrue(shim.exists())
             self.assertIn(
-                str(install_module.Path(__file__).parents[3] / "src" / "gms_helpers" / "gms.py").split("gms-mcp")[0],
+                f'set "PYTHONPATH={Path(install_module.__file__).resolve().parents[1]}"',
                 shim.read_text(encoding="utf-8"),
             )
+            self.assertIn(" -P -m gms_helpers.gms %*", shim.read_text(encoding="utf-8"))
             self.assertIn("Shim created", output)
             self.assertIn("Added to user PATH", output)
             self.assertTrue(fake_winreg.set_calls)
