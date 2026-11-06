@@ -16,10 +16,16 @@ REPLACE_MASK = 0x100D0040  # Replace an existing child or change/delete the ance
 READ_MASK = 0xA0000001  # Generic read/execute and file data/directory listing.
 
 
+# OWNER RIGHTS grants only to the object's owner, which must already be trusted.
+# Python's mkdir(mode=0o700) on Windows creates exactly SYSTEM, Administrators and OWNER RIGHTS.
+OWNER_RIGHTS_SID = "S-1-3-4"
+
+
 def _descriptor_issue(owner, entries, current_sid, *, private=False, ancestor=False):
     trusted = SYSTEM_SIDS | {current_sid}
     if owner not in trusted:
         return "filesystem owner is not trusted"
+    trusted = trusted | {OWNER_RIGHTS_SID}
     if entries is None:
         return "filesystem has an unrestricted DACL"
     forbidden = REPLACE_MASK if ancestor else WRITE_MASK | (READ_MASK if private else 0)

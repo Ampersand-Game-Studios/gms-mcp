@@ -101,8 +101,11 @@ class TestGameMakerProjectTransactions(unittest.TestCase):
             backup.mkdir()
             context = transactions_module._TransactionJournalContext(root, journal, backup)
 
-            with patch.object(transactions_module.os, "name", "nt"):
-                for device in ("nul", "NUL.txt", r"\\.\COM1"):
+            with (
+                patch.object(transactions_module.os, "name", "nt"),
+                patch.object(transactions_module.os, "devnull", "nul"),
+            ):
+                for device in ("con", "NUL.txt", r"\\.\COM1"):
                     with self.assertRaises(ValidationError):
                         transactions_module._journal_relative_path(context, device)
 

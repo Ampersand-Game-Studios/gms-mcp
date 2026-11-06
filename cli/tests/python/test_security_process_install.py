@@ -448,6 +448,7 @@ def test_runner_work_base_is_private_and_per_user(tmp_path, monkeypatch):
     assert runner._igor_work_root().is_relative_to(base)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="The legacy wrapper is a POSIX shell script")
 def test_legacy_shell_wrapper_treats_paths_as_data(tmp_path, monkeypatch):
     from gms_helpers import install
 

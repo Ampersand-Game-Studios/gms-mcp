@@ -35,6 +35,12 @@ def test_private_reads_and_ancestor_replacement_have_distinct_boundaries():
     assert security._descriptor_issue(USER, [(0, 0, 0x40, OTHER)], USER, ancestor=True)
 
 
+def test_owner_rights_is_trusted_only_through_a_trusted_owner():
+    python_private = [(0, 3, 0x1F01FF, sid) for sid in ("S-1-5-18", "S-1-5-32-544", security.OWNER_RIGHTS_SID)]
+    assert security._descriptor_issue("S-1-5-32-544", python_private, USER, private=True) is None
+    assert security._descriptor_issue(OTHER, python_private, USER)
+
+
 def test_deny_inherit_only_unknown_and_null_acl_handling():
     assert security._descriptor_issue(USER, [(1, 0, 0x1F01FF, OTHER), (0, 8, 0x1F01FF, OTHER)], USER) is None
     assert security._descriptor_issue(USER, [(9, 0, 0, "")], USER)

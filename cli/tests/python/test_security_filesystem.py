@@ -93,6 +93,7 @@ def test_c1_transaction_allows_tool_state_but_never_the_user_config(tmp_path, mo
     root = project(tmp_path)
     home = tmp_path / "home"
     monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setenv("USERPROFILE", str(home))
     infrastructure = tmp_path / "transaction"
     context = transactions._TransactionJournalContext(root, infrastructure / "journal", infrastructure / "backup")
     for path in [
@@ -321,7 +322,8 @@ def test_c3_git_tree_uses_raw_blobs_and_pins_commit(tmp_path, monkeypatch):
     dest = tmp_path / "snapshot"
     snapshot_build.create_snapshot(root, dest, base_only=True)
     assert (dest / "game.yyp").read_bytes() == raw
-    assert (dest / "game.yyp").stat().st_mode & stat.S_IXUSR
+    if os.name != "nt":  # Windows has no executable mode bit to restore.
+        assert (dest / "game.yyp").stat().st_mode & stat.S_IXUSR
     assert all("archive" not in call for call in calls)
 
 
