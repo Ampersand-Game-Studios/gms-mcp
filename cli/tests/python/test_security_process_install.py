@@ -236,6 +236,9 @@ def test_artifact_freshness_rejects_symlinks(tmp_path):
     baseline = RunnerArtifactMixin._artifact_fingerprints(tmp_path)
     assert not RunnerArtifactMixin._artifact_is_fresh(artifact, baseline)
     artifact.write_text("fresh")
+    # Windows timestamps can stay equal for back-to-back writes; a real build takes longer.
+    info = artifact.stat()
+    os.utime(artifact, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
     assert RunnerArtifactMixin._artifact_is_fresh(artifact, baseline)
     link = tmp_path / "link"
     link.symlink_to(artifact)
@@ -250,6 +253,27 @@ def test_windows_system_helpers_are_absolute(tmp_path, monkeypatch):
         subprocess_runner._resolve_gms_candidates_windows()
     assert run.call_args.args[0] == [ntpath.join("C:/Windows", "System32", "where.exe"), "$PATH:gms"]
     assert ntpath.isabs(subprocess_runner._windows_system_executable("taskkill.exe"))
+
+
+def test_trusted_command_lookup_applies_windows_pathext(tmp_path, monkeypatch):
+    candidate = tmp_path / "bin" / "gms-mcp"
+    executable = str(candidate) + ".EXE"
+    tried = []
+
+    def which(name):
+        tried.append(name)
+        return name if name == executable else None
+
+    monkeypatch.setattr(common.shutil, "which", which)
+    monkeypatch.setenv("PATHEXT", os.pathsep.join([".COM", ".EXE"]))
+    # Patch the platform only around the lookup: pathlib picks its flavour from os.name.
+    monkeypatch.setattr(common.os, "name", "nt")
+    try:
+        found = common._which_path(candidate)
+    finally:
+        monkeypatch.undo()
+    assert found == executable
+    assert tried == [str(candidate) + ".COM", executable]
 
 
 def test_path_lookup_excludes_cwd_and_relative_entries(tmp_path, monkeypatch):
@@ -443,7 +467,12 @@ def test_runner_work_base_is_private_and_per_user(tmp_path, monkeypatch):
     runner = GameMakerRunner(project)
     base = runner._system_temp_root()
     assert base == home / ".gms-mcp/build"
-    assert stat.S_IMODE(base.stat().st_mode) == 0o700
+    if os.name != "nt":
+        assert stat.S_IMODE(base.stat().st_mode) == 0o700
+    else:
+        from gms_helpers.windows_security import windows_path_trust_issue
+
+        assert windows_path_trust_issue(base, private=True) is None
     runner.runtime_path = tmp_path / "runtime"
     assert runner._igor_work_root().is_relative_to(base)
 

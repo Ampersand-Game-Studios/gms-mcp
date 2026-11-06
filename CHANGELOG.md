@@ -15,6 +15,7 @@ All notable changes to this project will be documented in this file.
 - **Live-reload commands now come only from `~/.gms-mcp/config.json`.** Commands found in project configuration are ignored with a migration warning, and `status_file` must be project-relative.
 - **Debug logs are opt-in.** Set `GMS_MCP_DEBUG_LOG=1` to write them; persisted output is redacted.
 - Helper processes and transaction children no longer import code from the project directory. GameMaker runtimes and their cache ancestors must have trusted ownership and permissions, Windows tools resolve to absolute system paths, and failed builds never launch a stale artifact from a shared directory.
+- On Windows with Python 3.11, setup now finds an installed `gms-mcp.exe` on the trusted PATH by applying `PATHEXT`.
 - On Windows, private lock, build and snapshot directories are created with a protected owner-only access list instead of inheriting the parent's permissions.
 - Transactional tools fail closed when a write falls outside the project and known tool-owned locations. Temporary-directory discovery runs before transaction auditing to avoid a cold-start deadlock. Mutating tools check the approved project root.
 - Snapshot builds validate references, read through `ls-tree`/`cat-file` instead of extracting archives, contain test, prelude and isolated paths, reject symlinks, and disable repository-configured Git hooks and fsmonitor.

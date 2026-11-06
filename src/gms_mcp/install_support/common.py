@@ -708,15 +708,28 @@ def _resolve_python_command(python_command: str) -> str:
     raise ValueError("No usable Python interpreter found; supply an absolute --python-command path.")
 
 
+def _which_path(candidate: Path) -> str | None:
+    # Before Python 3.12, Windows shutil.which() skips PATHEXT when the command names a directory.
+    names = [candidate]
+    if os.name == "nt" and not candidate.suffix:
+        extensions = os.environ.get("PATHEXT", ".COM;.EXE;.BAT;.CMD").split(os.pathsep)
+        names = [candidate.with_name(candidate.name + extension) for extension in extensions if extension] + names
+    for name in names:
+        resolved = shutil.which(str(name))
+        if resolved:
+            return resolved
+    return None
+
+
 def _which_without_cwd(command: str) -> str | None:
     if not command:
         return None
     if Path(command).is_absolute() or os.path.dirname(command):
-        return shutil.which(str(Path(command).expanduser().absolute()))
+        return _which_path(Path(command).expanduser().absolute())
     for directory in os.environ.get("PATH", "").split(os.pathsep):
         if not directory or not Path(directory).is_absolute() or Path(directory).resolve() == Path.cwd().resolve():
             continue
-        resolved = shutil.which(str(Path(directory) / command))
+        resolved = _which_path(Path(directory) / command)
         if resolved:
             return resolved
     return None
