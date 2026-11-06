@@ -7,7 +7,7 @@ Creates convenient access to the gms command.
 import os
 import sys
 import platform
-import subprocess
+import shlex
 from pathlib import Path
 from typing import Any, cast
 from .exceptions import GMSError
@@ -21,6 +21,9 @@ def install_gms_command(auto: bool = False):
     gms_py = script_dir / "gms.py"
     # Prefer the project-local wrapper so the CLI can be copied as a folder.
     gms_bat = cli_dir / "gms.bat"
+    module_command = [sys.executable, "-P", "-m", "gms_helpers.gms"]
+    quoted_python = sys.executable.replace("'", "''")
+    quoted_root = str(cli_dir).replace("'", "''")
 
     is_windows = platform.system() == "Windows"
 
@@ -30,9 +33,11 @@ def install_gms_command(auto: bool = False):
         print("\n1. Add the CLI directory to your PATH:")
         print(f"   {cli_dir}")
         print("\n2. Create an alias in PowerShell:")
-        print(f'   function gms {{ python "{gms_py}" $args }}')
+        print(
+            f"   function gms {{ $env:PYTHONPATH = '{quoted_root}'; & '{quoted_python}' -P -m gms_helpers.gms @args }}"
+        )
         print("\n3. Use the full path:")
-        print(f'   python "{gms_py}" [commands]')
+        print(f"   $env:PYTHONPATH = '{quoted_root}'; & '{quoted_python}' -P -m gms_helpers.gms [commands]")
         print("\n4. Use the batch file:")
         print(f'   "{gms_bat}" [commands]')
 
@@ -42,7 +47,11 @@ def install_gms_command(auto: bool = False):
             windows_apps = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WindowsApps"
             if windows_apps.exists():
                 shim = windows_apps / "gms.cmd"
-                shim_content = f'@echo off\r\n"{sys.executable}" "{gms_py}" %*\r\n'
+                if any(char in str(cli_dir) + sys.executable for char in '&|<>^%!"\r\n'):
+                    raise ValueError("Unsafe characters in command shim path")
+                shim_content = (
+                    f'@echo off\r\nset "PYTHONPATH={cli_dir}"\r\n"{sys.executable}" -P -m gms_helpers.gms %*\r\n'
+                )
                 shim.write_text(shim_content, encoding="utf-8")
                 print(f"\n[OK] Shim created at {shim}")
                 print("   You can usually run: gms --help  (may require opening a new terminal)")
@@ -79,7 +88,7 @@ def install_gms_command(auto: bool = False):
                 print(f"\n[WARN] Could not update user PATH via registry: {e}")
         else:
             print("\n[INFO] Tip (optional): add this line to your PowerShell profile for the current session:")
-            print(f'   $env:Path += ";{script_dir}"')
+            print("   $env:Path += ';" + str(script_dir).replace("'", "''") + "'")
 
     else:
         # Unix-like systems (Linux, macOS)
@@ -93,9 +102,9 @@ def install_gms_command(auto: bool = False):
             target = local_bin / "gms"
 
             # Create a shell script instead of symlink for better compatibility
-            shell_script = f"""#!/bin/sh
-python3 "{gms_py}" "$@"
-"""
+            shell_script = (
+                "#!/bin/sh\nexec " + shlex.join(["env", f"PYTHONPATH={cli_dir}", *module_command]) + ' "$@"\n'
+            )
 
             try:
                 target.write_text(shell_script)
@@ -107,7 +116,7 @@ python3 "{gms_py}" "$@"
                 path_dirs = os.environ.get("PATH", "").split(os.pathsep)
                 if str(local_bin) not in path_dirs:
                     print(f"\n[WARN] Add this to your shell configuration:")
-                    print(f'   export PATH="$PATH:{local_bin}"')
+                    print('   export PATH="$PATH":' + shlex.quote(str(local_bin)))
 
                 return True
 
@@ -117,11 +126,11 @@ python3 "{gms_py}" "$@"
         # Fallback instructions
         print(f"\n[ERROR] Could not auto-install. Manual options:")
         print(f"\n1. Add this directory to your PATH:")
-        print(f'   export PATH="$PATH:{script_dir}"')
+        print('   export PATH="$PATH":' + shlex.quote(str(script_dir)))
         print(f"\n2. Create an alias:")
-        print(f"   alias gms='python3 \"{gms_py}\"'")
+        print("   alias gms=" + shlex.quote(shlex.join(["env", f"PYTHONPATH={cli_dir}", *module_command])))
         print(f"\n3. Create a symlink:")
-        print(f'   sudo ln -s "{gms_py}" /usr/local/bin/gms')
+        print("   " + shlex.join(["sudo", "ln", "-s", str(gms_py), "/usr/local/bin/gms"]))
 
     print("\n[INFO] Usage examples:")
     print("   gms --help")

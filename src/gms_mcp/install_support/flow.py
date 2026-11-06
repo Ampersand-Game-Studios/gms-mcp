@@ -33,6 +33,7 @@ from .common import (
     _redact_private_paths,
     _relpath_posix_or_none,
     _validate_common_entry,
+    _validate_config_destination,
     _write_json,
 )
 
@@ -167,6 +168,11 @@ def _run_setup_for_client(
         return 0
 
     target = spec.resolve_path(workspace_root=workspace_root, scope=scope, override=config_path_override)
+    try:
+        _validate_config_destination(target, workspace_root if scope == "workspace" else None)
+    except ValueError as exc:
+        print(f"[ERROR] {exc}")
+        return 2
 
     if spec.key == "cursor":
         gm_rel_posix = _relpath_posix_or_none(gm_project_root if scope == "workspace" else None, workspace_root)
@@ -187,6 +193,7 @@ def _run_setup_for_client(
             args_prefix=args_prefix,
             gm_project_root=gm_project_root if scope == "workspace" else None,
             out_path=target,
+            workspace_scope=scope == "workspace",
             dry_run=dry_run,
             safe_profile=safe_profile,
             onboarding_profile=onboarding_profile,
@@ -262,7 +269,7 @@ def _run_setup_for_client(
             if dry_run:
                 print(f"[DRY-RUN] Antigravity config would be merged into: {_privacy_safe_path_label(target)}")
                 print(json.dumps(_redact_private_paths(_redact_config_value(payload)), indent=2, sort_keys=True))
-                print(json.dumps(_redact_private_paths(_redact_config_value(merged)), indent=2, sort_keys=True))
+
             else:
                 print(f"[INFO] Antigravity config updated: {target}")
             return 0
@@ -277,7 +284,7 @@ def _run_setup_for_client(
             onboarding_profile=onboarding_profile,
             toolsets=toolsets,
         )
-        _write_json(target, payload, dry_run=dry_run)
+        _write_json(target, payload, dry_run=dry_run, workspace_root=workspace_root if scope == "workspace" else None)
         print(
             f"[{'DRY-RUN' if dry_run else 'INFO'}] Antigravity workspace config {'would be written to' if dry_run else 'written to'}: {_privacy_safe_path_label(target)}"
         )
@@ -355,7 +362,7 @@ def _run_setup_for_client(
         onboarding_profile=onboarding_profile,
         toolsets=toolsets,
     )
-    _write_json(target, payload, dry_run=dry_run)
+    _write_json(target, payload, dry_run=dry_run, workspace_root=workspace_root if scope == "workspace" else None)
     print(
         f"[{'DRY-RUN' if dry_run else 'INFO'}] {spec.key} config {'would be written to' if dry_run else 'written to'}: {_privacy_safe_path_label(target)}"
     )
@@ -482,7 +489,7 @@ def _run_canonical_flow(
 
     if resolve_client_spec(client).key == "openclaw":
         skills_code = _maybe_install_openclaw_skills(
-            enable=openclaw_install_skills,
+            enable=openclaw_install_skills and not dry_run,
             project_scope=openclaw_skills_project,
             workspace_root=workspace_root,
         )

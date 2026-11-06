@@ -11,7 +11,9 @@ Protocol:
 - Game -> Server: RSP:<cmd_id>|<result>\n
 """
 
+import hmac
 import json
+import secrets
 import logging
 import queue
 import socket
@@ -54,7 +56,7 @@ class BridgeServer:
     TCP server that bridges MCP tools and GameMaker games.
 
     The server:
-    - Listens on localhost (default port 6502)
+    - Listens on localhost (ephemeral port)
     - Accepts one game connection at a time
     - Buffers incoming log messages
     - Queues outgoing commands
@@ -63,13 +65,18 @@ class BridgeServer:
     Thread-safe for concurrent MCP tool access.
     """
 
-    DEFAULT_PORT = 6502
+    DEFAULT_PORT = 0
     MAX_LOG_BUFFER = 10000
+    MAX_LINE_BYTES = 1024 * 1024
+    MAX_LOG_BYTES = 8 * 1024 * 1024
+    HELLO_TIMEOUT = 3.0
     SOCKET_TIMEOUT = 0.5  # seconds
 
     def __init__(self, port: int = DEFAULT_PORT):
         self.port = port
+        self._requested_port = port
         self.host = "127.0.0.1"
+        self.token = secrets.token_urlsafe(32)
 
         # Server state
         self._server_socket: Optional[socket.socket] = None
@@ -85,14 +92,14 @@ class BridgeServer:
         # Data buffers (thread-safe)
         self._log_buffer: List[LogEntry] = []
         self._log_lock = threading.Lock()
+        self._log_bytes = 0
 
         # Command tracking
         self._command_queue: queue.Queue = queue.Queue()
         self._pending_commands: Dict[str, CommandResult] = {}
         self._command_lock = threading.Lock()
-        self._command_counter = 0
 
-        # Protocol 2 handshake sent by the game (HELLO:<json>); None for older endpoints.
+        # Authenticated endpoint metadata; credentials are never exposed in status.
         self.hello: Optional[Dict[str, Any]] = None
 
         # Callbacks
@@ -132,11 +139,12 @@ class BridgeServer:
                 return True
 
             try:
+                self.token = secrets.token_urlsafe(32)
                 # Create server socket
                 self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
                 self._server_socket.settimeout(self.SOCKET_TIMEOUT)
-                self._server_socket.bind((self.host, self.port))
+                self._server_socket.bind((self.host, self._requested_port))
                 # Port 0 asks the OS for a free port, so several servers can run at once.
                 self.port = int(self._server_socket.getsockname()[1])
                 self._server_socket.listen(1)
@@ -152,6 +160,7 @@ class BridgeServer:
 
             except Exception as e:
                 self._log(logging.ERROR, "[BRIDGE] Failed to start server: %s", e, exc_info=True)
+                self._running = False
                 self._cleanup_server()
                 return False
 
@@ -170,10 +179,6 @@ class BridgeServer:
             # Close server socket
             self._cleanup_server()
 
-            # Wait for threads to finish
-            if self._server_thread and self._server_thread.is_alive():
-                self._server_thread.join(timeout=2.0)
-
             self._log(logging.INFO, "[BRIDGE] Server stopped")
 
     def _cleanup_server(self) -> None:
@@ -189,6 +194,10 @@ class BridgeServer:
         """Disconnect the current client."""
         if self._client_socket:
             try:
+                self._client_socket.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass
+            try:
                 self._client_socket.close()
             except Exception:
                 pass
@@ -196,6 +205,8 @@ class BridgeServer:
 
         was_connected = self._connected
         self._connected = False
+        self.hello = None
+        self._command_queue = queue.Queue()
 
         # Fail any pending commands immediately so callers don't sit on timeout
         # when the game connection drops mid-request.
@@ -212,119 +223,131 @@ class BridgeServer:
             except Exception:
                 pass
 
-    def _server_loop(self) -> None:
-        """Main server loop - accepts connections."""
-        while self._running:
+    def _read_hello(self, client: socket.socket) -> tuple[Dict[str, Any], bytes]:
+        deadline = time.monotonic() + self.HELLO_TIMEOUT
+        buffer = bytearray()
+        search_from = 0
+        while self._running and time.monotonic() < deadline:
             try:
-                if not self._server_socket:
-                    break
-
-                # Accept new connection
-                try:
-                    client_socket, addr = self._server_socket.accept()
-                    client_socket.settimeout(self.SOCKET_TIMEOUT)
-
-                    with self._lock:
-                        # Close any existing connection
-                        self._disconnect_client()
-
-                        self._client_socket = client_socket
-                        self._connected = True
-
-                    self._log(logging.INFO, "[BRIDGE] Game connected from %s", addr)
-
-                    if self._on_connect:
-                        try:
-                            self._on_connect()
-                        except Exception:
-                            pass
-
-                    # Start receive thread for this connection
-                    self._receive_thread = threading.Thread(
-                        target=self._receive_loop, name="BridgeReceiver", daemon=True
-                    )
-                    self._receive_thread.start()
-
-                    # Also start send thread
-                    send_thread = threading.Thread(target=self._send_loop, name="BridgeSender", daemon=True)
-                    send_thread.start()
-
-                except socket.timeout:
-                    continue
-
-            except Exception as e:
-                if self._running:
-                    self._log(logging.ERROR, "[BRIDGE] Server error: %s", e, exc_info=True)
+                data = client.recv(4096)
+            except socket.timeout:
+                continue
+            if not data:
                 break
-
-    def _receive_loop(self) -> None:
-        """Receive loop - reads data from connected game."""
-        buffer = ""
-
-        while self._running and self._connected:
-            try:
-                if not self._client_socket:
+            buffer.extend(data)
+            newline = buffer.find(b"\n", search_from)
+            if newline >= 0:
+                if newline > self.MAX_LINE_BYTES:
                     break
+                line = bytes(buffer[:newline]).replace(b"\x00", b"")
+                if not line.startswith(b"HELLO:"):
+                    break
+                hello = json.loads(line[6:])
+                token = hello.get("token") if isinstance(hello, dict) else None
+                if not isinstance(token, str) or not hmac.compare_digest(token.encode(), self.token.encode()):
+                    break
+                hello.pop("token")
+                return hello, bytes(buffer[newline + 1 :])
+            if len(buffer) > self.MAX_LINE_BYTES:
+                break
+            search_from = len(buffer)
+        raise ValueError("Bridge authentication failed or timed out")
 
+    def _server_loop(self) -> None:
+        """Authenticate candidates before replacing the active game connection."""
+        listener = self._server_socket
+        while self._running and listener is not None and self._server_socket is listener:
+            try:
+                client, _addr = listener.accept()
+            except socket.timeout:
+                continue
+            except OSError:
+                break
+            client.settimeout(self.SOCKET_TIMEOUT)
+            try:
+                hello, buffered = self._read_hello(client)
+            except (OSError, ValueError, RecursionError):
+                client.close()
+                continue
+            with self._lock:
+                if not self._running or self._server_socket is not listener:
+                    client.close()
+                    break
+                self._disconnect_client()
+                self._client_socket = client
+                self.hello = hello
+                self._connected = True
+                commands = self._command_queue
+            if self._on_connect:
                 try:
-                    data = self._client_socket.recv(4096)
-                    if not data:
-                        # Connection closed
-                        self._log(logging.INFO, "[BRIDGE] Game disconnected")
-                        self._disconnect_client()
+                    self._on_connect()
+                except Exception:
+                    pass
+            self._receive_thread = threading.Thread(
+                target=self._receive_loop, args=(client, buffered), name="BridgeReceiver", daemon=True
+            )
+            self._receive_thread.start()
+            threading.Thread(target=self._send_loop, args=(client, commands), name="BridgeSender", daemon=True).start()
+
+    def _disconnect_socket(self, client: socket.socket) -> None:
+        with self._lock:
+            if self._client_socket is client:
+                self._disconnect_client()
+
+    def _receive_loop(self, client: socket.socket, initial: bytes = b"") -> None:
+        """Frame bytes before decoding, scanning each incoming byte only once."""
+        buffer = bytearray(initial)
+        search_from = 0
+        try:
+            while self._running and self._client_socket is client:
+                while True:
+                    newline = buffer.find(b"\n", search_from)
+                    if newline < 0:
+                        if len(buffer) > self.MAX_LINE_BYTES:
+                            return
+                        search_from = len(buffer)
                         break
-
-                    buffer += data.decode("utf-8", errors="replace")
-                    # GameMaker's `buffer_write(..., buffer_string, ...)` writes a NUL-terminated string.
-                    # When we receive raw TCP bytes and split on '\n', subsequent messages may start with '\x00'
-                    # (e.g. '\x00LOG:' / '\x00RSP:'), which would fail our startswith() checks.
-                    buffer = buffer.replace("\x00", "")
-
-                    # Process complete lines
-                    while "\n" in buffer:
-                        line, buffer = buffer.split("\n", 1)
-                        line = line.strip()
+                    if newline > self.MAX_LINE_BYTES:
+                        return
+                    line = bytes(buffer[:newline]).replace(b"\x00", b"").decode("utf-8", errors="replace").strip()
+                    del buffer[: newline + 1]
+                    search_from = 0
+                    with self._lock:
+                        if self._client_socket is not client:
+                            return
                         if line:
                             self._process_message(line)
-
+                try:
+                    data = client.recv(4096)
                 except socket.timeout:
                     continue
+                if not data:
+                    return
+                buffer.extend(data)
+        except OSError:
+            pass
+        finally:
+            self._disconnect_socket(client)
 
-            except Exception as e:
-                if self._running and self._connected:
-                    self._log(logging.ERROR, "[BRIDGE] Receive error: %s", e, exc_info=True)
-                self._disconnect_client()
-                break
-
-    def _send_loop(self) -> None:
-        """Send loop - sends queued commands to game."""
-        while self._running and self._connected:
+    def _send_loop(self, client: socket.socket, commands: queue.Queue) -> None:
+        """Send only on the socket and queue owned by this connection."""
+        while self._running and self._client_socket is client:
             try:
-                # Get command from queue (with timeout)
+                cmd_id, command = commands.get(timeout=self.SOCKET_TIMEOUT)
+            except queue.Empty:
+                continue
+            with self._lock:
+                if self._client_socket is not client:
+                    return
+                with self._command_lock:
+                    pending = self._pending_commands.get(cmd_id)
+                    if pending is None or pending.completed_at is not None:
+                        continue
                 try:
-                    cmd_id, command = self._command_queue.get(timeout=0.5)
-                except queue.Empty:
-                    continue
-
-                if not self._client_socket or not self._connected:
-                    break
-
-                # Send command
-                message = f"CMD:{cmd_id}|{command}\n"
-                try:
-                    self._client_socket.sendall(message.encode("utf-8"))
-                except Exception as e:
-                    self._log(logging.ERROR, "[BRIDGE] Send error: %s", e, exc_info=True)
-                    # Put command back for retry? Or mark as failed?
-                    with self._command_lock:
-                        if cmd_id in self._pending_commands:
-                            self._pending_commands[cmd_id].error = str(e)
-                            self._pending_commands[cmd_id].completed_at = time.time()
-
-            except Exception as e:
-                if self._running:
-                    self._log(logging.ERROR, "[BRIDGE] Send loop error: %s", e, exc_info=True)
-                break
+                    client.sendall(f"CMD:{cmd_id}|{command}\n".encode("utf-8"))
+                except OSError:
+                    self._disconnect_socket(client)
+                    return
 
     def _process_message(self, message: str) -> None:
         """Process a message received from the game."""
@@ -342,23 +365,16 @@ class BridgeServer:
 
                 with self._log_lock:
                     self._log_buffer.append(entry)
-                    # Trim buffer if too large
-                    if len(self._log_buffer) > self.MAX_LOG_BUFFER:
-                        self._log_buffer = self._log_buffer[-self.MAX_LOG_BUFFER // 2 :]
+                    self._log_bytes += len(timestamp.encode("utf-8")) + len(log_msg.encode("utf-8"))
+                    while len(self._log_buffer) > self.MAX_LOG_BUFFER or self._log_bytes > self.MAX_LOG_BYTES:
+                        removed = self._log_buffer.pop(0)
+                        self._log_bytes -= len(removed.timestamp.encode("utf-8")) + len(removed.message.encode("utf-8"))
 
                 if self._on_log:
                     try:
                         self._on_log(entry)
                     except Exception:
                         pass
-
-            elif message.startswith("HELLO:"):
-                # Protocol 2 handshake: HELLO:<json describing the game endpoint>
-                try:
-                    hello = json.loads(message[6:])
-                    self.hello = hello if isinstance(hello, dict) else {"raw": message[6:]}
-                except ValueError:
-                    self.hello = {"raw": message[6:]}
 
             elif message.startswith("RSP:"):
                 # Command response: RSP:<cmd_id>|<result>
@@ -413,6 +429,7 @@ class BridgeServer:
         """Clear the log buffer."""
         with self._log_lock:
             self._log_buffer.clear()
+            self._log_bytes = 0
 
     def send_command(self, command: str, timeout: float = 5.0) -> CommandResult:
         """
@@ -430,8 +447,7 @@ class BridgeServer:
 
         # Generate command ID
         with self._command_lock:
-            self._command_counter += 1
-            cmd_id = f"cmd_{self._command_counter}"
+            cmd_id = secrets.token_urlsafe(24)
 
             # Create pending command
             result = CommandResult(command_id=cmd_id, command=command)
@@ -478,8 +494,7 @@ class BridgeServer:
             return ""
 
         with self._command_lock:
-            self._command_counter += 1
-            cmd_id = f"cmd_{self._command_counter}"
+            cmd_id = secrets.token_urlsafe(24)
 
             result = CommandResult(command_id=cmd_id, command=command)
             self._pending_commands[cmd_id] = result

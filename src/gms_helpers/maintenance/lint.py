@@ -8,7 +8,8 @@ from dataclasses import dataclass
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 
-from ..utils import load_json, validate_name, find_yyp_file
+from ..path_safety import project_file_path
+from ..utils import _read_text_preserving_newlines, load_json, validate_name, find_yyp_file
 from ..naming_config import get_config, NamingConfig
 from ..diagnostics import (
     Diagnostic,
@@ -133,8 +134,7 @@ class ProjectLinter:
     def _validate_options_file(self, file_path: str):
         """Validate GameMaker options files which have special format."""
         try:
-            with open(file_path, "r", encoding="utf-8") as f:
-                content = f.read()
+            content = _read_text_preserving_newlines(Path(file_path))
 
             # Options files have format: version_header|{json_content}
             if "|{" in content:
@@ -271,7 +271,7 @@ class ProjectLinter:
 
         try:
             # Convert .yy path to .gml path
-            gml_path = path.replace(".yy", ".gml")
+            gml_path = project_file_path(path.replace(".yy", ".gml"), project_root=self.project_root)
             if not os.path.exists(gml_path):
                 return False
 

@@ -4,8 +4,7 @@
 
 Before running a game with the bridge, verify ALL of the following:
 
-- [ ] **STOP any running games FIRST**: Run `gm_run_stop()` before starting a new game. Only ONE game can connect to the bridge at a time (port 6502 conflict).
-- [ ] **Sandbox disabled (Windows)**: Set `option_windows_disable_sandbox: true` in `options_windows.yy`. **TCP networking WILL NOT WORK without this.** Verify by reading the file.
+- [ ] **STOP any running games FIRST**: Run `gm_run_stop()` before starting a new game. Only ONE game can connect to the bridge at a time (one active game per project).
 - [ ] **Correct project_root**: Run `gm_project_info()` first to confirm the `.yyp` location
 - [ ] **Bridge installed**: Run `gm_bridge_install()` if not already installed
 - [ ] **Bridge instance in room**: Use `gm_room_instance_add()` to add `__mcp_bridge` to your startup room
@@ -17,7 +16,6 @@ Before running a game with the bridge, verify ALL of the following:
 ```
 1. gm_run_stop()                                         # STOP any running games first
 2. gm_project_info(project_root="gamemaker")             # Verify project
-3. [Verify option_windows_disable_sandbox: true]         # CRITICAL for TCP
 4. gm_bridge_install(project_root="gamemaker")           # Install bridge (once)
 5. gm_room_instance_add(..., "__mcp_bridge", ...)        # Add to startup room (once)
 6. [Verify instanceCreationOrder in room .yy file]       # CRITICAL - see troubleshooting
@@ -40,7 +38,7 @@ It enables bidirectional communication between:
 
 The bridge is designed to be:
 
-- Opt-in: the game runs normally when the bridge is not installed or not running.
+- Opt-in: without a valid launch port and non-empty session token, the installed bridge stays inert and opens no socket. Builds launched outside gms-mcp run normally. Uninstall bridge assets before release anyway; `gm_bridge_status` warns while they are installed.
 - Local-only: the server listens on `127.0.0.1` and the game connects out to it.
 - Low footprint: assets are prefixed with `__mcp_` for easy identification/removal.
 - Safe-by-default: bridge install/uninstall use backup/rollback for `.yyp` edits.
@@ -53,7 +51,7 @@ These are common mistakes agents make when setting up or troubleshooting the bri
 
 **Mistake**: Starting a new game without stopping the previous one.
 
-**Why it fails**: Port 6502 can only be used by one game at a time. If another game is already connected, the new game cannot connect.
+**Why it fails**: Each project has one active game connection. Separate projects use independent ephemeral ports.
 
 **Symptoms**:
 - `game_connected: false` even though bridge is installed and in room
@@ -61,24 +59,19 @@ These are common mistakes agents make when setting up or troubleshooting the bri
 
 **Fix**: Always run `gm_run_stop()` BEFORE starting a new game.
 
-### 2. Not checking if sandbox is disabled
+### 2. Weakening the Windows filesystem sandbox
 
-**Mistake**: Assuming TCP networking will work without verifying the sandbox setting.
-
-**Why it fails**: GameMaker's sandbox mode blocks TCP networking by default on Windows.
-
-**Symptoms**:
-- `game_connected: false`
-- Game runs fine but never connects to bridge
-- No errors in game output
-
-**Fix**: Read `options/windows/options_windows.yy` and verify `option_windows_disable_sandbox: true`. If false, change it.
+TCP loopback networking does not require disabling the filesystem sandbox. Keep
+`option_windows_disable_sandbox` at its normal setting. If you previously disabled it
+for access to screenshot paths outside the game's save directory, that setting ships
+in builds: revert it before release. The live-session screenshot workflow uses the
+session save directory.
 
 ### 3. Repeatedly recompiling when connection fails
 
 **Mistake**: Re-running `gm_run()` over and over hoping it will fix connection issues.
 
-**Why it fails**: If the connection setup is wrong (sandbox, port conflict, missing instance), recompiling won't help.
+**Why it fails**: If the connection setup is wrong (missing credentials or missing instance), recompiling won't help.
 
 **Better approach**:
 1. Stop the game
@@ -172,19 +165,9 @@ Run:
 
 Use the returned `.yyp` directory as `project_root` for everything below.
 
-### Step 0.5: Verify sandbox is disabled (Windows)
-
-Read `options/windows/options_windows.yy` and confirm:
-
-```json
-"option_windows_disable_sandbox": true
-```
-
-If it's `false`, TCP networking will NOT work. Change it to `true`.
-
 ### Step 1: Install the bridge (one-time per project)
 
-- `gm_bridge_install(project_root=..., port=6502)`
+- `gm_bridge_install(project_root=...)`
 - `gm_bridge_status(project_root=...)` should report `installed: true`
 
 If you see `[ERROR] No .yyp file found ...`, your `project_root` is wrong.
@@ -265,6 +248,7 @@ This is a simple newline-delimited, UTF-8 text protocol over TCP.
 Messages are one-per-line, terminated by `\n`.
 
 - Game -> Server:
+  - `HELLO:{"protocol":2,"token":"<session token>"}\n` (required first line)
   - `LOG:<timestamp>|<message>\n`
   - `RSP:<cmd_id>|<result>\n`
 - Server -> Game:
@@ -274,7 +258,8 @@ Notes:
 
 - GameMaker `buffer_write(..., buffer_string, ...)` writes a NUL terminator (`\x00`).
   The server strips NUL bytes during receive so that parsing is stable across packets.
-- The bridge supports one game connection at a time.
+- The bridge supports one authenticated game connection per project. HELLO must arrive within three seconds.
+- Each session owns an OS-assigned port and a fresh secret. Lines are limited to 1 MiB; buffered logs to 8 MiB.
 
 ## Uninstalling safely (avoid breaking the project)
 
@@ -318,8 +303,8 @@ Fix:
 
 Most common causes:
 
-1. **Another game is already running** on port 6502. Run `gm_run_stop()` first.
-2. **Sandbox not disabled** (Windows). Verify `option_windows_disable_sandbox: true` in `options_windows.yy`.
+1. **Another game is already running** for this project. Run `gm_run_stop()` first.
+2. **Old bridge assets or missing credentials**. Reinstall the bridge and launch through gms-mcp.
 3. **`__mcp_bridge` is not instantiated in the running game** (not placed in a room).
 4. **The `instanceCreationOrder` array is empty** in the room's `.yy` file (see CRITICAL section below).
 5. The game is running from a different build/project than the one you think.
@@ -328,7 +313,7 @@ Most common causes:
 Fix:
 
 - Run `gm_run_stop()` to ensure no other games are using the port.
-- Verify sandbox is disabled by reading `options_windows.yy`.
+- Reinstall older bridge assets, then launch through gms-mcp to provide the session credentials.
 - Place an instance of `__mcp_bridge` in your startup room (see workflow Step 2), then restart via `gm_run`.
 - **CRITICAL**: Verify the room's `instanceCreationOrder` includes the bridge instance (see below).
 
@@ -411,12 +396,12 @@ Fix:
 
 `gm_game_start` builds a throwaway snapshot of the project, starts it and waits for a bridge endpoint in the game to connect. It then serves `gm_game_command`, `gm_game_screenshot`, `gm_game_log`, `gm_game_status` and `gm_game_stop`. Each session listens on its own free port and owns a separate macOS bundle/save root, so different projects can run concurrently. A project lease protects its saves; a label lease protects its artifacts. Closing a game archives its evidence and releases both leases. Manual games survive server exit and remain discoverable through persisted process identity; a new server can inspect or stop them, but bridge commands belong to the launching server.
 
-A game takes part by implementing this contract. The installed `__mcp_bridge` asset (protocol 1, fixed port) keeps working with `gm_run` / `gm_run_command`.
+A game takes part by implementing this contract. Reinstall `__mcp_bridge` to upgrade older fixed-port assets. The installed bridge also works with `gm_run` / `gm_run_command`.
 
-- **Transport**: TCP on `127.0.0.1`. The MCP server listens. The game connects out to the port in the `GMS_MCP_BRIDGE_PORT` environment variable. When the variable is not set the game must not open a socket.
+- **Transport**: TCP on `127.0.0.1`. The MCP server listens. The game connects out to the port in the `GMS_MCP_BRIDGE_PORT` environment variable. When the variable is not a valid port, or `GMS_MCP_BRIDGE_TOKEN` is empty, the game must not open a socket. Both values are supplied by gms-mcp at launch.
 - **Framing**: UTF-8 lines ending in `\n`. NUL bytes are ignored.
-- **Game to server**: `HELLO:<json>` once after connecting (suggested fields: `protocol`, `game`, `version`, `commands`); `RSP:<id>|<answer>`; optionally `LOG:<ms>|<text>`.
+- **Game to server**: `HELLO:<json>` as the first line within three seconds, with a required `token` field matching `GMS_MCP_BRIDGE_TOKEN` (other fields: `protocol`, `game`, `version`, `commands`); `RSP:<id>|<answer>`; optionally `LOG:<ms>|<text>`.
 - **Server to game**: `CMD:<id>|<name> <arguments>`.
 - **Answers**: one line. Plain text, JSON when it starts with `{` or `[` (returned parsed in `data`), or `ERR:<code> <message>` (returned as `ok: false` with `error_code`).
 - **Standard commands**: `ping` (answers `pong`), `help`, `state`, `screenshot [name]` (answers `{"file": "<absolute path>"}` after `screen_save`), `log_tail [count]` (answers `{"lines": [...]}`), `console <command line>` (answers `{"ok": true, "output": [...]}`). `input ...` is reserved for input injection.
-- Enable the endpoint only in development builds.
+- The installed endpoint is inert in builds not launched by gms-mcp. Uninstall it before release anyway; `gm_bridge_status` warns whenever bridge assets are installed.

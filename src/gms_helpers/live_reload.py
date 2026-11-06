@@ -1,7 +1,7 @@
 """Start, stop and query an external live-reload tool (for example GMS Fire).
 
 gms-mcp does not implement hot reload. A project that uses a live-reload tool tells
-gms-mcp how to drive it in ``.gms-mcp.json``:
+gms-mcp how to drive it in the user config ``~/.gms-mcp/config.json``:
 
     "live_reload": {
       "start":  ["gms-fire", "start", "--project", "{project}"],
@@ -20,13 +20,17 @@ launched detached and must return control quickly or keep running as the tool's 
 from __future__ import annotations
 
 import json
+import os
 import shutil
 import subprocess
 from pathlib import Path
 from typing import Any
 
 from .exceptions import ValidationError
-from .project_config import project_setting
+from .project_config import global_setting, project_setting, project_live_reload_command_warnings
+from .path_safety import project_relative_path
+from .transactions import _assert_plain_infrastructure
+from .utils import _read_text_preserving_newlines
 
 
 class LiveReloadError(ValidationError):
@@ -34,23 +38,24 @@ class LiveReloadError(ValidationError):
 
 
 def _command(project_root: Path, action: str) -> list[str]:
-    configured = project_setting(project_root, f"live_reload.{action}")
+    configured = global_setting(f"live_reload.{action}")
     if not configured:
         raise LiveReloadError(
             f"No live-reload '{action}' command is configured for this project. Add "
-            f'"live_reload": {{"{action}": ["<tool>", "<args>", ...]}} to .gms-mcp.json '
-            "(see documentation/CONFIGURATION.md, 'Live reload')."
+            f'"live_reload": {{"{action}": ["<tool>", "<args>", ...]}} to ~/.gms-mcp/config.json '
+            "(see documentation/CONFIGURATION.md, 'Live reload'). "
+            + " ".join(project_live_reload_command_warnings(project_root))
         )
     if not isinstance(configured, list) or not all(isinstance(part, str) and part for part in configured):
         raise LiveReloadError(
-            f"live_reload.{action} in .gms-mcp.json must be a list of strings, for example "
+            f"live_reload.{action} in ~/.gms-mcp/config.json must be a list of strings, for example "
             '["gms-fire", "start"]; shell command strings are not accepted.'
         )
     command = [part.replace("{project}", str(project_root)) for part in configured]
     if shutil.which(command[0]) is None and not Path(command[0]).is_file():
         raise LiveReloadError(
             f"The live-reload tool '{command[0]}' is not installed or not on PATH. Install it, or correct "
-            f"live_reload.{action} in .gms-mcp.json."
+            f"live_reload.{action} in ~/.gms-mcp/config.json."
         )
     return command
 
@@ -59,11 +64,9 @@ def _read_status_file(project_root: Path) -> dict[str, Any] | None:
     configured = project_setting(project_root, "live_reload.status_file")
     if not configured:
         return None
-    path = Path(str(configured))
-    if not path.is_absolute():
-        path = project_root / path
+    path = project_relative_path(configured, project_root=project_root, kind="live_reload.status_file")
     try:
-        data = json.loads(path.read_text(encoding="utf-8"))
+        data = json.loads(_read_text_preserving_newlines(path))
         return data if isinstance(data, dict) else {"raw": data}
     except (OSError, ValueError):
         return None
@@ -71,11 +74,12 @@ def _read_status_file(project_root: Path) -> dict[str, Any] | None:
 
 def status(project_root: str | Path, timeout_seconds: float = 10.0) -> dict[str, Any]:
     root = Path(project_root).resolve()
-    result: dict[str, Any] = {"ok": True, "configured": True}
+    warnings = project_live_reload_command_warnings(root)
+    result: dict[str, Any] = {"ok": True, "configured": True, "warnings": warnings}
     from_file = _read_status_file(root)
     if from_file is not None:
         result["status"] = from_file
-    if project_setting(root, "live_reload.status"):
+    if global_setting("live_reload.status"):
         command = _command(root, "status")
         try:
             completed = subprocess.run(
@@ -85,6 +89,7 @@ def status(project_root: str | Path, timeout_seconds: float = 10.0) -> dict[str,
             return {
                 "ok": False,
                 "error": f"The live-reload status command did not answer within {int(timeout_seconds)}s.",
+                "warnings": warnings,
             }
         output = completed.stdout.decode("utf-8", "replace").strip()
         try:
@@ -97,11 +102,12 @@ def status(project_root: str | Path, timeout_seconds: float = 10.0) -> dict[str,
         if completed.returncode != 0:
             result["error"] = completed.stderr.decode("utf-8", "replace").strip()[-1000:] or "status command failed"
     elif from_file is None:
-        if not project_setting(root, "live_reload.start"):
+        if not global_setting("live_reload.start"):
             return {
                 "ok": True,
                 "configured": False,
-                "message": "This project has no live-reload tool configured in .gms-mcp.json.",
+                "message": "This project has no live-reload tool configured in ~/.gms-mcp/config.json.",
+                "warnings": warnings,
             }
         result["status"] = {}
         result["message"] = "No status command or status file is configured; start/stop are available."
@@ -112,8 +118,11 @@ def start(project_root: str | Path) -> dict[str, Any]:
     root = Path(project_root).resolve()
     command = _command(root, "start")
     log_path = root / ".gms_mcp" / "live_reload.log"
+    project_relative_path(".gms_mcp/live_reload.log", project_root=root, kind="live-reload log")
+    _assert_plain_infrastructure(root, log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
-    with log_path.open("ab") as log:
+    descriptor = os.open(log_path, os.O_WRONLY | os.O_CREAT | os.O_APPEND | getattr(os, "O_NOFOLLOW", 0), 0o600)
+    with os.fdopen(descriptor, "ab") as log:
         process = subprocess.Popen(
             command,
             cwd=str(root),
@@ -127,18 +136,21 @@ def start(project_root: str | Path) -> dict[str, Any]:
     except subprocess.TimeoutExpired:
         exit_code = None
     if exit_code not in (None, 0):
+        _assert_plain_infrastructure(root, log_path)
         tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]
         return {
             "ok": False,
             "error": f"The live-reload start command exited with code {exit_code}.",
             "log_tail": tail,
             "log": ".gms_mcp/live_reload.log",
+            "warnings": project_live_reload_command_warnings(root),
         }
     return {
         "ok": True,
         "started": True,
         "pid": process.pid if exit_code is None else None,
         "log": ".gms_mcp/live_reload.log",
+        "warnings": project_live_reload_command_warnings(root),
         "message": "Started. Call gm_live_reload_status to confirm it is serving.",
     }
 
@@ -149,10 +161,15 @@ def stop(project_root: str | Path, timeout_seconds: float = 30.0) -> dict[str, A
     try:
         completed = subprocess.run(command, cwd=str(root), capture_output=True, timeout=timeout_seconds, check=False)
     except subprocess.TimeoutExpired:
-        return {"ok": False, "error": f"The live-reload stop command did not finish within {int(timeout_seconds)}s."}
+        return {
+            "ok": False,
+            "error": f"The live-reload stop command did not finish within {int(timeout_seconds)}s.",
+            "warnings": project_live_reload_command_warnings(root),
+        }
     return {
         "ok": completed.returncode == 0,
         "stopped": completed.returncode == 0,
+        "warnings": project_live_reload_command_warnings(root),
         "exit_code": completed.returncode,
         "output": (completed.stdout + completed.stderr).decode("utf-8", "replace").strip()[-1500:],
     }

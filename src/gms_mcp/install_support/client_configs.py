@@ -24,6 +24,7 @@ from .common import (
     _relpath_posix_or_none,
     _validate_common_entry,
     _write_json,
+    _validate_config_destination,
 )
 
 if sys.version_info >= (3, 11):
@@ -43,6 +44,7 @@ def _generate_cursor_config(
     args_prefix: list[str],
     gm_project_root: Path | None,
     out_path: Path,
+    workspace_scope: bool = True,
     dry_run: bool,
     safe_profile: bool = False,
     onboarding_profile: str | None = None,
@@ -59,7 +61,7 @@ def _generate_cursor_config(
         onboarding_profile=onboarding_profile,
         toolsets=toolsets,
     )
-    _write_json(out_path, config, dry_run=dry_run)
+    _write_json(out_path, config, dry_run=dry_run, workspace_root=workspace_root if workspace_scope else None)
     return out_path
 
 
@@ -104,7 +106,7 @@ def _generate_example_configs(
                 toolsets=toolsets,
             )
         out_path = out_dir / f"{client}.mcp.json"
-        _write_json(out_path, config, dry_run=dry_run)
+        _write_json(out_path, config, dry_run=dry_run, workspace_root=workspace_root)
         out_paths.append(out_path)
     return out_paths
 
@@ -176,6 +178,8 @@ def _build_codex_env(
         "PYTHONUNBUFFERED": "1",
     }
 
+    if not include_project_root and os.environ.get("GMS_MCP_GMS_PATH"):
+        env["GMS_MCP_GMS_PATH"] = os.environ["GMS_MCP_GMS_PATH"]
     if include_project_root:
         resolved_workspace = workspace_root.expanduser().resolve()
         resolved_root = (gm_project_root if gm_project_root is not None else workspace_root).expanduser().resolve()
@@ -312,39 +316,29 @@ def _upsert_codex_server_config(
     server_block: str,
 ) -> str:
     """Return TOML text with the target server block inserted or replaced."""
-    server_header = f"[mcp_servers.{server_name}]"
-    block_lines = server_block.splitlines()
-
-    if not existing_text.strip():
-        return "\n".join(block_lines) + "\n"
-
+    before = _parse_toml_or_raise(text=existing_text, source_label="existing config")
     lines = existing_text.splitlines()
-    start: int | None = None
-    for idx, line in enumerate(lines):
-        if line.strip() == server_header:
-            start = idx
-            break
-
-    if start is None:
-        if lines and lines[-1].strip() != "":
-            return "\n".join(lines + ["", *block_lines]) + "\n"
-        return "\n".join(lines + block_lines) + "\n"
-
-    section_prefix = f"[mcp_servers.{server_name}."
-    end = len(lines)
-    for idx in range(start + 1, len(lines)):
-        candidate = lines[idx].strip()
-        if (
-            candidate.startswith("[")
-            and candidate.endswith("]")
-            and candidate.startswith("[mcp_servers.")
-            and not candidate.startswith(section_prefix)
-        ):
-            end = idx
-            break
-
-    merged = lines[:start] + block_lines + lines[end:]
-    return "\n".join(merged) + "\n"
+    kept = []
+    own_section = False
+    for line in lines:
+        match = re.match(r"^\s*(\[\[?.+?\]\]?)(?:\s*#.*)?\s*$", line)
+        if match:
+            header = _parse_toml_or_raise(text=match.group(1), source_label="table header")
+            servers = header.get("mcp_servers", {})
+            own_section = set(header) == {"mcp_servers"} and set(servers) == {server_name}
+        if not own_section:
+            kept.append(line)
+    merged = "\n".join([*kept, "", server_block]).strip() + "\n"
+    after = _parse_toml_or_raise(text=merged, source_label="merged config")
+    for parsed in (before, after):
+        servers = parsed.get("mcp_servers")
+        if isinstance(servers, dict):
+            servers.pop(server_name, None)
+            if not servers:
+                parsed.pop("mcp_servers")
+    if before != after:
+        raise ValueError("Config merge changed unrelated TOML tables")
+    return merged
 
 
 def _make_codex_toml_value(value: object) -> str:
@@ -426,9 +420,11 @@ def _generate_codex_config(
         server_name=server_name,
         server_block=payload,
     )
+    _validate_config_destination(output_path, workspace_root if include_project_root else None)
     if not dry_run:
-        output_path.parent.mkdir(parents=True, exist_ok=True)
-        output_path.write_text(merged, encoding="utf-8")
+        _write_text_atomic_with_backup(output_path=output_path, text=merged)
+        if output_path.read_text(encoding="utf-8") != merged:
+            raise OSError("Written Codex config failed verification")
 
     return output_path, payload, merged
 
@@ -503,31 +499,37 @@ def _make_backup_path(output_path: Path) -> Path:
 
 
 def _write_json_atomic_with_backup(*, output_path: Path, payload: dict) -> Path | None:
-    output_path.parent.mkdir(parents=True, exist_ok=True)
+    return _write_text_atomic_with_backup(output_path=output_path, text=json.dumps(payload, indent=2) + "\n")
 
-    backup_path: Path | None = None
+
+def _write_text_atomic_with_backup(*, output_path: Path, text: str) -> Path | None:
+    _validate_config_destination(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    backup_path = None
     if output_path.exists():
         backup_path = _make_backup_path(output_path)
-        shutil.copy2(output_path, backup_path)
-
-    temp_path: Path | None = None
+        descriptor = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as backup:
+            backup.write(output_path.read_text(encoding="utf-8"))
+    temp_path = None
     try:
         with tempfile.NamedTemporaryFile(
             mode="w",
             encoding="utf-8",
-            dir=str(output_path.parent),
+            dir=output_path.parent,
             prefix=f".{output_path.name}.",
             suffix=".tmp",
             delete=False,
         ) as handle:
-            json.dump(payload, handle, indent=2)
-            handle.write("\n")
             temp_path = Path(handle.name)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _validate_config_destination(output_path)
         os.replace(temp_path, output_path)
     finally:
-        if temp_path is not None and temp_path.exists():
+        if temp_path is not None:
             temp_path.unlink(missing_ok=True)
-
     return backup_path
 
 

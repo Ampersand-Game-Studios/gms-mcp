@@ -8,7 +8,8 @@ Runtime bridge contract (protocol 2), shared by every game-side endpoint:
 
 * Transport: TCP on 127.0.0.1. The MCP server listens; the game connects out to the port
   named in the ``GMS_MCP_BRIDGE_PORT`` environment variable. A game started without that
-  variable must not open a socket at all.
+  variable must not open a socket at all. The non-empty ``GMS_MCP_BRIDGE_TOKEN``
+  is required too; include it as ``token`` in the first HELLO JSON message.
 * Framing: UTF-8 lines ending in ``\\n``. NUL bytes are ignored.
 * Game -> server: ``HELLO:<json>`` once after connecting, ``LOG:<ms>|<text>``,
   ``RSP:<id>|<result>``.
@@ -23,7 +24,10 @@ Runtime bridge contract (protocol 2), shared by every game-side endpoint:
 from __future__ import annotations
 
 import contextlib
+import contextvars
 import json
+import os
+import re
 import shutil
 import subprocess
 import threading
@@ -36,10 +40,12 @@ from . import snapshot_build
 from .agent_locks import DirectoryLock
 from .mac_runtime import prepare_mac_runtime, project_identity, project_run_lock
 from .bridge_server import BridgeServer
+from .bounded_regex import RegexTimeoutError, search_many
 from .project_config import project_setting
 from .run_session import RunSessionManager
 
 BRIDGE_PORT_ENVIRONMENT_VARIABLE = "GMS_MCP_BRIDGE_PORT"
+BRIDGE_TOKEN_ENVIRONMENT_VARIABLE = "GMS_MCP_BRIDGE_TOKEN"
 STANDARD_COMMANDS = ("ping", "help", "state", "screenshot", "log_tail", "console")
 
 
@@ -105,6 +111,49 @@ def parse_bridge_result(text: str | None) -> dict[str, Any]:
     return {"ok": True, "result": raw}
 
 
+_BRIDGE_LAUNCH_ENVIRONMENT: contextvars.ContextVar[dict[str, str] | None] = contextvars.ContextVar(
+    "bridge_launch_environment", default=None
+)
+
+
+@contextlib.contextmanager
+def bridge_launch_environment(environment: dict[str, str]):
+    """Use a listener owned by the calling MCP process instead of the disposable launch worker."""
+    reset_handle = _BRIDGE_LAUNCH_ENVIRONMENT.set(environment)
+    try:
+        yield
+    finally:
+        _BRIDGE_LAUNCH_ENVIRONMENT.reset(reset_handle)
+
+
+def _launch_game(runner: Path, staging: Path, game_file: Path, run_dir: Path, environment: dict[str, str]):
+    """Launch with explicit session credentials, removing any inherited bridge settings."""
+    env = {
+        key: value
+        for key, value in os.environ.items()
+        if key not in (BRIDGE_PORT_ENVIRONMENT_VARIABLE, BRIDGE_TOKEN_ENVIRONMENT_VARIABLE)
+    }
+    env.update(environment)
+    run_dir.mkdir(parents=True, exist_ok=True)
+    with snapshot_build.artifact_writer(run_dir / "runner_stderr.log") as stderr_log:
+        process = subprocess.Popen(
+            [
+                str(runner),
+                "-game",
+                str(game_file),
+                "-debugoutput",
+                str(staging / "debug.txt"),
+                "-output",
+                str(staging / "debug.txt"),
+            ],
+            cwd=str(staging),
+            stdout=stderr_log,
+            stderr=subprocess.STDOUT,
+            env=env,
+        )
+    return process, staging / "debug.txt"
+
+
 def _start(
     project_root: str | Path,
     *,
@@ -157,8 +206,18 @@ def _start(
     staging: Path | None = None
     try:
         runner = snapshot_build.require_mac_runner(tools)
-        if not bridge.start():
-            raise LiveSessionError("Could not open a local TCP port for the runtime bridge.")
+        launch_environment = _BRIDGE_LAUNCH_ENVIRONMENT.get()
+        owns_bridge = launch_environment is None
+        if launch_environment is None:
+            bridge_enabled = bridge.start()
+            launch_environment = (
+                {BRIDGE_PORT_ENVIRONMENT_VARIABLE: str(bridge.port), BRIDGE_TOKEN_ENVIRONMENT_VARIABLE: bridge.token}
+                if bridge_enabled
+                else {}
+            )
+        else:
+            bridge_enabled = bool(launch_environment)
+        bridge_port = int(launch_environment[BRIDGE_PORT_ENVIRONMENT_VARIABLE]) if bridge_enabled else None
         owned_runtime = prepare_mac_runtime(runner, root, label)
         staging = owned_runtime.staging
         staging, game_file = snapshot_build.stage_game_archive(build.game_archive, staging)
@@ -166,17 +225,27 @@ def _start(
         shots = run_dir / "shots"
         if shots.exists():
             shutil.rmtree(shots)
-        process, debug_log = snapshot_build.launch_mac_runner(
-            owned_runtime.runner, staging, game_file, run_dir, {BRIDGE_PORT_ENVIRONMENT_VARIABLE: str(bridge.port)}
+        process, debug_log = _launch_game(
+            owned_runtime.runner,
+            staging,
+            game_file,
+            run_dir,
+            launch_environment,
         )
         lock.bind_process(process.pid)
         label_lock.bind_process(process.pid)
         deadline = time.monotonic() + connect_timeout_seconds
-        while time.monotonic() < deadline and not bridge.is_connected and process.poll() is None:
+        while (
+            owns_bridge
+            and bridge_enabled
+            and time.monotonic() < deadline
+            and not bridge.is_connected
+            and process.poll() is None
+        ):
             time.sleep(0.2)
         # Give the endpoint a moment to send its handshake.
         handshake_deadline = time.monotonic() + 2.0
-        while bridge.is_connected and bridge.hello is None and time.monotonic() < handshake_deadline:
+        while owns_bridge and bridge.is_connected and bridge.hello is None and time.monotonic() < handshake_deadline:
             time.sleep(0.05)
     except BaseException:
         snapshot_build.stop_process(process)
@@ -213,7 +282,7 @@ def _start(
             platform_target="macOS",
             runtime_type=runtime,
             log_file=str(debug_log),
-            bridge_port=bridge.port,
+            bridge_port=bridge_port,
             isolated_runtime=True,
             runtime_label=session.label,
             runtime_work_dir=str(work),
@@ -235,7 +304,14 @@ def _start(
     public["save_directory"] = str(owned_runtime.save_dir)
     public["bundle_id"] = owned_runtime.bundle_id
     public["connected"] = bridge.is_connected
-    public["bridge_port"] = bridge.port
+    public["bridge_port"] = bridge_port
+    public["bridge_enabled"] = bridge_enabled
+    if not bridge_enabled:
+        public["bridge_error"] = (
+            "Could not bind a local bridge socket; game launched without bridge credentials."
+            if owns_bridge
+            else "Bridge disabled by the launching MCP server; game launched without bridge credentials."
+        )
     public["endpoint"] = bridge.hello
     public["running"] = session.alive
     if not session.alive:
@@ -247,6 +323,12 @@ def _start(
         )
         public["log_tail"] = snapshot_build.tail_lines(session.debug_log, 40)
         stop(root)
+    elif not bridge_enabled:
+        public["status"] = "RUNNING_WITHOUT_BRIDGE"
+        public["message"] = public["bridge_error"]
+    elif not owns_bridge:
+        public["status"] = "RUNNING"
+        public["message"] = "The game is running; the launching MCP server owns its bridge connection."
     elif not bridge.is_connected:
         public["status"] = "RUNNING_NOT_CONNECTED"
         public["message"] = (
@@ -378,8 +460,6 @@ def screenshot(project_root: str | Path, name: str = "shot", timeout_seconds: fl
 
 def game_log(project_root: str | Path, lines: int = 100, pattern: str | None = None) -> dict[str, Any]:
     session = _require_session(project_root)
-    import re
-
     content = (
         session.debug_log.read_text(encoding="utf-8", errors="replace").splitlines()
         if session.debug_log.is_file()
@@ -387,10 +467,12 @@ def game_log(project_root: str | Path, lines: int = 100, pattern: str | None = N
     )
     if pattern:
         try:
-            matcher = re.compile(pattern)
-        except re.error as exc:
+            matches = search_many(pattern, content)
+        except RegexTimeoutError as exc:
+            raise LiveSessionError(f"pattern matching timed out: {exc}") from exc
+        except (re.error, ValueError) as exc:
             raise LiveSessionError(f"pattern is not a valid regular expression: {exc}") from exc
-        content = [line for line in content if matcher.search(line)]
+        content = [content[index] for index, _matched in matches]
     return {
         "ok": True,
         "running": session.alive,

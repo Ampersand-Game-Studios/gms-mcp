@@ -217,12 +217,13 @@ def _build_runtime_selection_check(project_directory: Path) -> DoctorCheck:
             status="error",
             severity="fatal",
             message="No GameMaker runtimes were discovered.",
+            details=list(manager.discovery_diagnostics),
             recommendation=["Install a GameMaker runtime through the IDE."],
             metadata={"count": 0, "pinned_version": pinned},
         )
 
     status = "ok" if verify.get("ok") else "error"
-    details = [f"Installed runtimes: {len(installed)}"]
+    details = [f"Installed runtimes: {len(installed)}", *manager.discovery_diagnostics]
     if pinned:
         details.append(f"Pinned runtime: {pinned}")
     issues = verify.get("issues")

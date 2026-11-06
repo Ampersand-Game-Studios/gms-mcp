@@ -99,6 +99,8 @@ def register(mcp: Any, ContextType: Any) -> None:
             case_sensitive=case_sensitive,
             max_results=max_results,
         )
+        if results and "error" in results[0]:
+            return {"ok": False, "error": results[0]["error"]}
         return {"pattern": pattern, "scope": scope, "results": results, "count": len(results)}
 
     @mcp.tool()

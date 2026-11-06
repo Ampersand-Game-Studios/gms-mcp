@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import os
+import stat
 import tempfile
 from pathlib import Path
 
@@ -25,11 +26,13 @@ def _is_within(path: Path, directory: Path) -> bool:
 
 
 def _make_private_directory(path: Path) -> Path:
+    if path.is_symlink():
+        raise OSError("Refusing symlink diagnostic directory")
     path.mkdir(mode=_PRIVATE_DIRECTORY_MODE, parents=True, exist_ok=True)
-    try:
-        path.chmod(_PRIVATE_DIRECTORY_MODE)
-    except OSError:
-        pass
+    info = path.lstat()
+    if not stat.S_ISDIR(info.st_mode) or (os.name != "nt" and (info.st_uid != os.getuid() or info.st_mode & 0o022)):
+        raise OSError("Unsafe diagnostic directory ownership or permissions")
+    path.chmod(_PRIVATE_DIRECTORY_MODE)
     return path
 
 
@@ -58,9 +61,6 @@ def diagnostic_log_dir(project_directory: Path) -> Path:
 
 def secure_private_file(path: Path) -> None:
     """Create a private file if needed and restrict it to the current user."""
-    descriptor = os.open(path, os.O_CREAT | os.O_WRONLY, _PRIVATE_FILE_MODE)
+    descriptor = os.open(path, os.O_CREAT | os.O_WRONLY | getattr(os, "O_NOFOLLOW", 0), _PRIVATE_FILE_MODE)
     os.close(descriptor)
-    try:
-        path.chmod(_PRIVATE_FILE_MODE)
-    except OSError:
-        pass
+    path.chmod(_PRIVATE_FILE_MODE)
