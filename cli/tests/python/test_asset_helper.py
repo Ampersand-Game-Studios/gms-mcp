@@ -187,7 +187,7 @@ function TestConstructor() constructor {
 
             # Test constructor detection
             linter = ProjectLinter(temp_dir)
-            is_constructor = linter._is_constructor_script(str(yy_file))
+            is_constructor = linter._is_constructor_script(yy_file.relative_to(Path(temp_dir)).as_posix())
             self.assertTrue(is_constructor, "Should detect constructor pattern")
 
             # Test non-constructor script
@@ -196,7 +196,7 @@ function TestConstructor() constructor {
 }"""
             gml_file.write_text(regular_gml, encoding="utf-8")
 
-            is_constructor = linter._is_constructor_script(str(yy_file))
+            is_constructor = linter._is_constructor_script(yy_file.relative_to(Path(temp_dir)).as_posix())
             self.assertFalse(is_constructor, "Should not detect constructor pattern in regular script")
 
     def test_delete_command_argument_parsing(self):

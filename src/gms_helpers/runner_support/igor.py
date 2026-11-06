@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from ..exceptions import LicenseNotFoundError, RuntimeNotFoundError
+from .security import private_directory
 from .targets import _to_igor_platform, ensure_igor_supported_runtime_type, normalize_platform_target
 
 
@@ -157,10 +158,8 @@ class RunnerIgorMixin:
             return 1800.0
 
     def _system_temp_root(self) -> Path:
-        """Return the system temp directory used for Igor cache/temp folders."""
-        import tempfile
-
-        return Path(tempfile.gettempdir())
+        """Return the private per-user base used for Igor build folders."""
+        return private_directory(private_directory(Path.home() / ".gms-mcp") / "build")
 
     def _igor_work_root(self) -> Path:
         """Return the project/runtime-scoped disposable Igor work directory."""
@@ -170,7 +169,7 @@ class RunnerIgorMixin:
         runtime_scope = str(Path(self.runtime_path).resolve())
         project_scope = str(project_file.resolve())
         work_key = hashlib.sha256(f"{project_scope}\0{runtime_scope}".encode("utf-8")).hexdigest()[:16]
-        return self._system_temp_root() / "gms-mcp" / work_key
+        return private_directory(private_directory(self._system_temp_root() / "gms-mcp") / work_key)
 
     def _reset_igor_transient_state(self) -> None:
         """Discard one project's disposable cache before an infrastructure retry."""
@@ -201,8 +200,8 @@ class RunnerIgorMixin:
         work_root = self._igor_work_root()
         cache_dir = work_root / "cache"
         temp_dir = work_root / "temp"
-        cache_dir.mkdir(parents=True, exist_ok=True)
-        temp_dir.mkdir(parents=True, exist_ok=True)
+        private_directory(cache_dir)
+        private_directory(temp_dir)
 
         cmd = [str(igor_path)]
         cmd.extend([f"/lf={license_file}"])
@@ -397,10 +396,10 @@ class RunnerIgorMixin:
             system_temp = self._system_temp_root()
             project_name = project_file.stem
             ide_temp_dir = system_temp / "GameMakerStudio2" / project_name
-            ide_temp_dir.mkdir(parents=True, exist_ok=True)
+            private_directory(private_directory(system_temp / "GameMakerStudio2") / project_name)
             # HTML5 folder export copies the entire output directory. Its target
             # must be a sibling, never a child that would recursively copy itself.
-            html5_output_dir = ide_temp_dir.with_name(project_name + "_html5")
+            html5_output_dir = private_directory(ide_temp_dir.with_name(project_name + "_html5"))
             android_baseline_packages = (
                 self._verified_android_packages(ide_temp_dir) if platform_target == "Android" else {}
             )

@@ -43,6 +43,14 @@ def prepare_mac_runtime(runner: Path, project_root: Path, label: str) -> MacRunt
     Save identity is stable per canonical project path. A project lease prevents two
     sessions writing these saves at once. Staging is unique even for identical labels.
     """
+    from .runtime_manager import runtime_trust_issue
+
+    for parent in runner.parents:
+        if parent.name.startswith("runtime-"):
+            issue = runtime_trust_issue(parent, runner)
+            if issue:
+                raise OSError(f"Untrusted GameMaker runtime: {issue}")
+            break
     bundle_id = f"com.gmsmcp.game.p{project_identity(project_root)}"
     save_dir = Path.home() / "Library" / "Application Support" / bundle_id
     save_dir.mkdir(parents=True, exist_ok=True)

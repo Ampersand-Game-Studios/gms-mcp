@@ -36,6 +36,7 @@ class _BridgePeer:
         sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         sock.settimeout(0.2)
         sock.connect(("127.0.0.1", self.port))
+        sock.sendall(b'HELLO:{"protocol": 2, "token": "transport-test-credential"}\n')
         sock.sendall(b"LOG:1|hello from test\n")
         self._socket = sock
         self._thread = threading.Thread(target=self._serve, daemon=True)
@@ -118,7 +119,7 @@ class TestMCPStdioTransportRegression(unittest.TestCase):
 
                 _servers = {{}}
 
-                def _get_bridge_server(project_root, create=True):
+                def _get_bridge_server(project_root, create=True, port=None):
                     key = str(Path(project_root).resolve())
                     if key not in _servers and create:
                         _servers[key] = BridgeServer(port={bridge_port})
@@ -131,6 +132,7 @@ class TestMCPStdioTransportRegression(unittest.TestCase):
                         server.stop()
 
                 patches = [
+                    patch("gms_helpers.bridge_server.secrets.token_urlsafe", return_value="transport-test-credential"),
                     patch("gms_helpers.bridge_installer.is_bridge_installed", return_value=True),
                     patch("gms_helpers.bridge_installer.get_bridge_status", return_value={{"installed": True}}),
                     patch("gms_helpers.bridge_server.get_bridge_server", side_effect=_get_bridge_server),

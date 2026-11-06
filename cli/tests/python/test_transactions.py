@@ -92,7 +92,7 @@ class TestGameMakerProjectTransactions(unittest.TestCase):
             finally:
                 transaction.cleanup()
 
-    def test_journal_ignores_windows_reserved_device_paths(self):
+    def test_journal_rejects_windows_reserved_device_paths(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = self._project(Path(temp_dir))
             journal = root / "journal.jsonl"
@@ -101,10 +101,13 @@ class TestGameMakerProjectTransactions(unittest.TestCase):
             backup.mkdir()
             context = transactions_module._TransactionJournalContext(root, journal, backup)
 
-            with patch.object(transactions_module.os, "name", "nt"):
-                self.assertIsNone(transactions_module._journal_relative_path(context, "nul"))
-                self.assertIsNone(transactions_module._journal_relative_path(context, "NUL.txt"))
-                self.assertIsNone(transactions_module._journal_relative_path(context, r"\\.\COM1"))
+            with (
+                patch.object(transactions_module.os, "name", "nt"),
+                patch.object(transactions_module.os, "devnull", "nul"),
+            ):
+                for device in ("con", "NUL.txt", r"\\.\COM1"):
+                    with self.assertRaises(ValidationError):
+                        transactions_module._journal_relative_path(context, device)
 
     def test_journal_rejects_lexical_project_path_that_resolves_outside(self):
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -263,7 +266,7 @@ class TestGameMakerProjectTransactions(unittest.TestCase):
             parent = Path(temp_dir)
             root = self._project(parent)
             ready_path = parent / "child-ready"
-            acquired_path = parent / "child-acquired"
+            acquired_path = root / "child-acquired"
             first = GameMakerProjectTransaction(root, "parent")
             first.begin()
             child_code = "\n".join(

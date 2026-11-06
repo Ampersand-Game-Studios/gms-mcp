@@ -15,6 +15,7 @@ from typing import Dict, List, Any, Optional, Set, Tuple
 from dataclasses import dataclass, field
 
 from .utils import load_json_loose
+from .bounded_regex import search_many
 from .exceptions import ValidationError
 from .path_safety import project_child_path
 
@@ -387,55 +388,40 @@ def search_references(
     regex_flags = 0 if case_sensitive else re.IGNORECASE
     search_pattern = pattern if is_regex else re.escape(pattern)
 
-    try:
-        prog = re.compile(search_pattern, regex_flags)
-    except re.error as e:
-        # Return empty list with error info on invalid regex
-        return [{"error": f"Invalid regex: {e}"}]
-
-    count = 0
+    records = []
     skip_dirs = {".git", "node_modules", ".cursor", ".gms_mcp", "__pycache__"}
-
     for pattern_glob in file_patterns:
-        if count >= max_results:
-            break
-
-        try:
-            for file_path in project_root.glob(pattern_glob):
-                if count >= max_results:
-                    break
-
-                # Skip ignored directories
-                if any(part in skip_dirs for part in file_path.parts):
-                    continue
-
-                if not file_path.is_file():
-                    continue
-
-                safe_file_path = _safe_project_path(project_root, file_path.relative_to(project_root))
-                if safe_file_path is None or not safe_file_path.is_file():
-                    continue
-
-                try:
-                    with open(safe_file_path, "r", encoding="utf-8", errors="ignore") as f:
-                        for i, line in enumerate(f):
-                            match = prog.search(line)
-                            if match:
-                                results.append(
-                                    {
-                                        "file": safe_file_path.relative_to(project_root.resolve()).as_posix(),
-                                        "line": i + 1,
-                                        "match": match.group(0),
-                                        "context": line.strip()[:200],  # Limit context length
-                                    }
-                                )
-                                count += 1
-                                if count >= max_results:
-                                    break
-                except Exception:
-                    continue
-        except Exception:
-            continue
+        for file_path in project_root.glob(pattern_glob):
+            if any(part in skip_dirs for part in file_path.parts):
+                continue
+            safe_path = _safe_project_path(project_root, file_path.relative_to(project_root))
+            if safe_path is None or not safe_path.is_file():
+                continue
+            try:
+                with safe_path.open(encoding="utf-8", errors="ignore") as handle:
+                    records.extend((safe_path, number, line) for number, line in enumerate(handle, 1))
+            except OSError:
+                continue
+    try:
+        if max_results <= 0:
+            return []
+        matches = search_many(
+            search_pattern, [line for _, _, line in records], flags=regex_flags, max_matches=max_results
+        )
+    except re.error as exc:
+        return [{"error": f"Invalid regex: {exc}"}]
+    except ValueError as exc:
+        return [{"error": f"Regex search failed: {exc}"}]
+    for index, matched in matches:
+        path, number, line = records[index]
+        results.append(
+            {
+                "file": path.relative_to(project_root.resolve()).as_posix(),
+                "line": number,
+                "match": matched,
+                "context": line.strip()[:200],
+            }
+        )
 
     return results
 

@@ -417,7 +417,7 @@ class TestUtilsCoverage(unittest.TestCase):
                 side_effect=[
                     {
                         "Folders": [{"folderPath": "folders/A.yy", "name": "Folder A"}],
-                        "resources": [{"id": {"name": "obj", "path": str(project_file)}}],
+                        "resources": [{"id": {"name": "obj", "path": project_file.name}}],
                     },
                     {"parent": {"path": "folders/A.yy"}, "resourceType": "GMObject"},
                 ],

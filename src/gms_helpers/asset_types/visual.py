@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from ..base_asset import BaseAsset
+from ..sprite_import import validate_frame_count
 from ..utils import atomic_write_text, create_dummy_png, ensure_directory, generate_uuid
 from .naming import get_config
 
@@ -19,8 +20,9 @@ class SpriteAsset(BaseAsset):
     def create_yy_data(self, name: str, parent_path: str, **kwargs) -> Dict[str, Any]:
         # Multi-frame support: get frame_count, default to 1 for backwards compat
         frame_count = kwargs.get("frame_count", 1)
-        if frame_count < 1:
+        if isinstance(frame_count, int) and frame_count < 1:
             frame_count = 1
+        frame_count = validate_frame_count(frame_count)
 
         # Custom dimensions (used by sprite import)
         width = kwargs.get("width", 1)

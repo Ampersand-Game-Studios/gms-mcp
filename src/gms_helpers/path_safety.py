@@ -1,6 +1,7 @@
 """Filesystem path safety helpers for project-local asset tools."""
 
 import os
+import stat
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -97,3 +98,71 @@ def assert_project_tree_contained(project_root: Path) -> Path:
                 raise ValidationError("Project contains a filesystem link that escapes the approved project root")
 
     return root
+
+
+def validate_git_ref(ref: str) -> str:
+    if not isinstance(ref, str) or not ref.strip() or ref.startswith("-") or "\x00" in ref:
+        raise ValidationError("Invalid ref: expected a commit, branch or tag, never an option")
+    return ref
+
+
+def private_directory(path: Path) -> Path:
+    """Create a private directory without trusting symlinked or foreign-owned parents."""
+    path = Path(os.path.abspath(path.expanduser()))
+    missing = []
+    current = path
+    while not current.exists() and not current.is_symlink():
+        missing.append(current)
+        current = current.parent
+    for parent in [current, *current.parents]:
+        info = parent.lstat()
+        if os.name == "nt":
+            from .windows_security import windows_path_trust_issue
+
+            if getattr(info, "st_file_attributes", 0) & 0x400 or windows_path_trust_issue(parent, ancestor=True):
+                raise ValidationError(f"Unsafe private directory parent: {parent}")
+        elif hasattr(os, "getuid"):
+            # Root-owned links such as macOS /var and /tmp can only be replaced by root.
+            trusted_link = stat.S_ISLNK(info.st_mode) and info.st_uid == 0
+            if (stat.S_ISLNK(info.st_mode) and not trusted_link) or info.st_uid not in {0, os.getuid()}:
+                raise ValidationError(f"Unsafe private directory parent: {parent}")
+            if trusted_link:
+                info = parent.stat()
+            if info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX:
+                raise ValidationError(f"Replaceable private directory parent: {parent}")
+        elif stat.S_ISLNK(info.st_mode):
+            raise ValidationError(f"Unsafe private directory parent: {parent}")
+    for directory in reversed(missing):
+        if os.name == "nt":
+            from .windows_security import create_private_directory
+
+            try:
+                create_private_directory(directory)
+            except (AttributeError, OSError, ValueError) as exc:
+                raise ValidationError(f"Cannot create private directory: {directory}") from exc
+        else:
+            directory.mkdir(mode=0o700, exist_ok=True)
+        info = directory.lstat()
+        if stat.S_ISLNK(info.st_mode) or (hasattr(os, "getuid") and info.st_uid != os.getuid()):
+            raise ValidationError(f"Unsafe private directory parent: {directory}")
+    info = path.lstat()
+    if (
+        not stat.S_ISDIR(info.st_mode)
+        or stat.S_ISLNK(info.st_mode)
+        or (hasattr(os, "getuid") and info.st_uid != os.getuid())
+        or (os.name != "nt" and stat.S_IMODE(info.st_mode) & 0o077)
+    ):
+        raise ValidationError(f"Private directory must be owned by this user with mode 0700: {path}")
+    if os.name == "nt":
+        from .windows_security import windows_path_trust_issue
+
+        if issue := windows_path_trust_issue(path, private=True):
+            raise ValidationError(f"Unsafe private directory: {issue}")
+    return path
+
+
+def project_file_path(path: Any, *, project_root: Path, kind: str = "metadata path") -> Path:
+    target = project_relative_path(path, project_root=project_root, kind=kind)
+    if not target.is_file():
+        raise ValidationError(f"Invalid {kind}: expected a regular file")
+    return target

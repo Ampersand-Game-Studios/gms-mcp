@@ -121,6 +121,7 @@ def register(mcp: Any, ContextType: Any) -> None:
                 "game_connected": server_status.get("connected", False),
                 "log_count": server_status.get("log_count", 0),
                 "install_details": install_status,
+                "warnings": install_status.get("warnings", []),
             }
         except Exception as e:
             return {"ok": False, "error": str(e), "message": f"Status check failed: {e}"}

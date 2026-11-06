@@ -880,7 +880,7 @@ class TestCodeIntelTools(MCPToolTestCase):
                 (
                     "gm_find_references",
                     {"project_root": "/tmp/project", "symbol_name": "player_move", "max_results": 25},
-                    ["symbol", "find-references", "player_move", "--max", "25"],
+                    ["symbol", "find-references", "player_move", "--max-results", "25"],
                 ),
                 (
                     "gm_list_symbols",
@@ -891,7 +891,18 @@ class TestCodeIntelTools(MCPToolTestCase):
                         "file_filter": "scripts",
                         "max_results": 10,
                     },
-                    ["symbol", "list", "--kind", "function", "--name", "player", "--file", "scripts", "--max", "10"],
+                    [
+                        "symbol",
+                        "list",
+                        "--kind",
+                        "function",
+                        "--name-filter",
+                        "player",
+                        "--file-filter",
+                        "scripts",
+                        "--max-results",
+                        "10",
+                    ],
                 ),
             ]
             for tool_name, kwargs, cli_args in cases:

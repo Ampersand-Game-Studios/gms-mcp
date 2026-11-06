@@ -15,6 +15,7 @@ from collections import defaultdict
 from ...diagnostics import Diagnostic, CODE_REFERENCE_MISSING, CODE_ORPHAN_FILE, CODE_CASE_MISMATCH
 from ...event_model import event_filename
 from ...exceptions import ValidationError
+from ...path_safety import project_file_path
 from ...utils import load_json, find_yyp_file
 from ..path_utils import (
     build_filesystem_map,
@@ -33,7 +34,7 @@ class ReferenceCollector:
     """Collects all asset references from GameMaker project files."""
 
     def __init__(self, project_root: str = "."):
-        self.project_root = Path(project_root)
+        self.project_root = Path(project_root).resolve()
         self.referenced_files: Set[str] = set()
         self.primary_assets: Dict[str, Dict] = {}
         self.parsing_queue: List[Path] = []
@@ -90,7 +91,7 @@ class ReferenceCollector:
 
                     # Queue .yy files for detailed parsing
                     if asset_path.endswith(".yy"):
-                        full_path = self.project_root / asset_path
+                        full_path = project_file_path(asset_path, project_root=self.project_root)
                         if full_path.exists():
                             self.parsing_queue.append(full_path)
 

@@ -6,12 +6,14 @@ import hashlib
 import json
 import os
 import secrets
-import tempfile
+import stat
 import threading
 import time
 from contextlib import contextmanager
 from pathlib import Path
 from typing import BinaryIO, Iterator
+
+from .path_safety import private_directory
 
 
 _THREAD_LOCK = threading.Lock()
@@ -33,8 +35,8 @@ def _lock_path() -> Path:
         path = Path(configured).expanduser()
         if not path.is_absolute():
             raise ValueError("GMS_MCP_MACHINE_LOCK_PATH must be absolute so every project uses the same lock")
-        return path.resolve(strict=False)
-    return Path(tempfile.gettempdir()).resolve() / "gms-mcp" / "locks" / "gamemaker-runtime.lock"
+        return private_directory(path.parent) / path.name
+    return private_directory(Path.home() / ".gms-mcp" / "runtime-locks") / "gamemaker-runtime.lock"
 
 
 def _delegation_path(lock_path: Path) -> Path:
@@ -63,8 +65,23 @@ class GameMakerMachineLock:
         self._thread_acquired = True
 
         try:
-            self.path.parent.mkdir(parents=True, exist_ok=True)
-            lock_file = self.path.open("a+b")
+            private_directory(self.path.parent)
+            descriptor = os.open(self.path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600)
+            try:
+                info = os.fstat(descriptor)
+                if (
+                    not stat.S_ISREG(info.st_mode)
+                    or info.st_nlink != 1
+                    or self.path.is_symlink()
+                    or (hasattr(os, "getuid") and info.st_uid != os.getuid())
+                ):
+                    raise ValueError(
+                        "Unsafe GameMaker lock file: expected a regular, singly linked file owned by this user"
+                    )
+                lock_file = os.fdopen(descriptor, "r+b")
+            except BaseException:
+                os.close(descriptor)
+                raise
             self._file = lock_file
             os.set_inheritable(lock_file.fileno(), False)
             if lock_file.seek(0, os.SEEK_END) == 0:

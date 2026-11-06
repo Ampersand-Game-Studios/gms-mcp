@@ -538,6 +538,7 @@ def main(argv: list[str] | None = None) -> int:
                 args_prefix=args_prefix,
                 gm_project_root=None,
                 out_path=Path.home() / ".cursor" / "mcp.json",
+                workspace_scope=False,
                 dry_run=dry_run,
                 safe_profile=bool(args.safe_profile),
             )
@@ -711,9 +712,7 @@ def main(argv: list[str] | None = None) -> int:
         if dry_run:
             print(f"[DRY-RUN] Antigravity config would be merged into: {antigravity_path}")
             print("[DRY-RUN] Antigravity payload:")
-            print(json.dumps(antigravity_payload, indent=2, sort_keys=True))
-            print("[DRY-RUN] Antigravity final merged payload:")
-            print(json.dumps(antigravity_merged, indent=2, sort_keys=True))
+            print(json.dumps(_redact_config_value(antigravity_payload), indent=2, sort_keys=True))
         else:
             print(f"[INFO] Antigravity config updated: {antigravity_path}")
             if antigravity_backup is not None:
