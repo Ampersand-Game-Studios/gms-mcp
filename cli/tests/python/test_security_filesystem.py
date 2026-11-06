@@ -147,6 +147,45 @@ def test_c1_transaction_hook_blocks_actual_external_write(tmp_path):
     assert not (tmp_path / "outside").exists()
 
 
+def test_cold_temporary_directory_discovery_cannot_deadlock_transaction_audit(tmp_path):
+    root = project(tmp_path)
+    home = tmp_path / "home"
+    home.mkdir()
+    temporary = tmp_path / "system-temp"
+    temporary.mkdir()
+    program = """
+import os, tempfile
+from pathlib import Path
+from gms_helpers import transactions
+from gms_helpers.exceptions import ValidationError
+from gms_mcp.server.log_paths import diagnostic_log_dir
+root = Path.cwd()
+tempfile.tempdir = None
+context = transactions._TransactionJournalContext(root, root / '.gms_mcp/journal', root / '.gms_mcp/backup')
+transactions._ensure_transaction_audit_hook()
+token = transactions._ACTIVE_TRANSACTION.set(context)
+try:
+    assert diagnostic_log_dir(root).is_dir()
+    try:
+        (Path(os.environ['TMPDIR']) / 'unrelated-file').write_text('blocked')
+    except ValidationError:
+        pass
+    else:
+        raise AssertionError('External write was permitted')
+finally:
+    transactions._ACTIVE_TRANSACTION.reset(token)
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", program],
+        cwd=root,
+        env={**os.environ, "HOME": str(home), "USERPROFILE": str(home), "TMPDIR": str(temporary)},
+        capture_output=True,
+        timeout=5,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr.decode()
+
+
 def test_c1_audit_resolution_errors_fail_closed(tmp_path, monkeypatch):
     root = project(tmp_path)
     context = transactions._TransactionJournalContext(root, root / "journal", root / "backup")

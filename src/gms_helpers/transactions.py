@@ -79,6 +79,9 @@ class _TransactionJournalContext:
     backup_root: Path
     seen_paths: set[str] = field(default_factory=set)
     machine_lock_path: Path | None = None
+    # tempfile probes its candidate directories while holding a non-reentrant lock.
+    # Resolve this before activating the audit context, never from an open hook.
+    temporary_root: Path = field(default_factory=lambda: Path(tempfile.gettempdir()).resolve(strict=False))
 
 
 _ACTIVE_TRANSACTION: contextvars.ContextVar[_TransactionJournalContext | None] = contextvars.ContextVar(
@@ -235,7 +238,7 @@ def _is_bytecode_cache_path(resolved: Path) -> bool:
     return resolved.parent.name == "__pycache__" and re.fullmatch(r".+\.pyc(?:\.\d+)?", resolved.name) is not None
 
 
-def _is_tool_infrastructure_path(resolved: Path) -> bool:
+def _is_tool_infrastructure_path(resolved: Path, temporary_root: Path) -> bool:
     """Name the tool's own writes outside a project: private state, its temp directories and bytecode."""
     if str(resolved) == os.devnull or _is_bytecode_cache_path(resolved):
         return True
@@ -246,7 +249,6 @@ def _is_tool_infrastructure_path(resolved: Path) -> bool:
     lock_directory = os.environ.get("GMS_MCP_LOCK_DIR", "").strip()
     if lock_directory and resolved.is_relative_to(Path(lock_directory).expanduser().resolve(strict=False)):
         return True
-    temporary_root = Path(tempfile.gettempdir()).resolve(strict=False)
     if resolved.is_relative_to(temporary_root) and resolved != temporary_root:
         return resolved.relative_to(temporary_root).parts[0].startswith("gms-mcp-")
     return False
@@ -284,7 +286,7 @@ def _journal_relative_path(
                 temporary = rf"\.{re.escape(lock.name)}\.delegation\.{os.getpid()}\.[0-9a-f]{{16}}\.tmp"
                 if resolved.name in {lock.name, lock.name + ".delegation"} or re.fullmatch(temporary, resolved.name):
                     return None
-            if _is_tool_infrastructure_path(resolved):
+            if _is_tool_infrastructure_path(resolved, context.temporary_root):
                 return None
             infrastructure = (
                 context.journal_path,
