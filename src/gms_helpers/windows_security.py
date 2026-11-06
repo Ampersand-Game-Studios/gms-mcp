@@ -33,7 +33,7 @@ def _descriptor_issue(owner, entries, current_sid, *, private=False, ancestor=Fa
     return None
 
 
-def _read_descriptor(path):
+def _api():
     loader = getattr(ctypes, "WinDLL")
     security = loader("advapi32", use_last_error=True)
     kernel = loader("kernel32", use_last_error=True)
@@ -74,6 +74,11 @@ def _read_descriptor(path):
         finally:
             kernel.LocalFree(value)
 
+    return security, kernel, sid_string
+
+
+def _current_sid(security, kernel, sid_string):
+    pointer = ctypes.c_void_p
     token = pointer()
     if not security.OpenProcessToken(kernel.GetCurrentProcess(), 0x0008, ctypes.byref(token)):
         raise OSError("Cannot query Windows process identity")
@@ -85,9 +90,15 @@ def _read_descriptor(path):
         buffer = ctypes.create_string_buffer(size.value)
         if not security.GetTokenInformation(token, 1, buffer, size.value, ctypes.byref(size)):
             raise OSError("Cannot query Windows process identity")
-        current_sid = sid_string(pointer.from_buffer(buffer))
+        return sid_string(pointer.from_buffer(buffer))
     finally:
         kernel.CloseHandle(token)
+
+
+def _read_descriptor(path):
+    security, kernel, sid_string = _api()
+    current_sid = _current_sid(security, kernel, sid_string)
+    pointer = ctypes.c_void_p
     owner, dacl, descriptor = pointer(), pointer(), pointer()
     if security.GetNamedSecurityInfoW(
         str(path), 1, 5, ctypes.byref(owner), None, ctypes.byref(dacl), None, ctypes.byref(descriptor)
@@ -114,6 +125,45 @@ def _read_descriptor(path):
                 mask = ctypes.c_uint32.from_address(ace.value + 4).value
                 entries.append((kind, flags, mask, sid_string(pointer(ace.value + 8))))
         return owner_sid, entries, current_sid
+    finally:
+        kernel.LocalFree(descriptor)
+
+
+class _SecurityAttributes(ctypes.Structure):
+    _fields_ = [
+        ("nLength", wintypes.DWORD),
+        ("lpSecurityDescriptor", ctypes.c_void_p),
+        ("bInheritHandle", wintypes.BOOL),
+    ]
+
+
+def create_private_directory(path: Path) -> None:
+    """Create a directory whose protected DACL admits only this user and the system accounts.
+
+    Windows ignores mkdir's mode, so a plain mkdir inherits whatever its parent grants.
+    An existing directory is left unchanged for the caller's trust checks.
+    """
+    security, kernel, sid_string = _api()
+    current_sid = _current_sid(security, kernel, sid_string)
+    security.ConvertStringSecurityDescriptorToSecurityDescriptorW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        ctypes.POINTER(ctypes.c_void_p),
+        ctypes.POINTER(wintypes.ULONG),
+    ]
+    kernel.CreateDirectoryW.argtypes = [wintypes.LPCWSTR, ctypes.POINTER(_SecurityAttributes)]
+    kernel.CreateDirectoryW.restype = wintypes.BOOL
+    # P blocks inherited entries; OICI passes the same grants to new children.
+    sddl = "D:P" + "".join(f"(A;OICI;FA;;;{sid})" for sid in (current_sid, "SY", "BA"))
+    descriptor = ctypes.c_void_p()
+    if not security.ConvertStringSecurityDescriptorToSecurityDescriptorW(sddl, 1, ctypes.byref(descriptor), None):
+        raise OSError("Cannot build a private Windows security descriptor")
+    try:
+        attributes = _SecurityAttributes(ctypes.sizeof(_SecurityAttributes), descriptor.value, False)
+        if not kernel.CreateDirectoryW(str(path), ctypes.byref(attributes)):
+            error = getattr(ctypes, "get_last_error")()
+            if error != 183:  # ERROR_ALREADY_EXISTS
+                raise OSError(error, "Cannot create private directory", str(path))
     finally:
         kernel.LocalFree(descriptor)
 

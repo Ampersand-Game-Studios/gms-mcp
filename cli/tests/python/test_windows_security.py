@@ -144,3 +144,57 @@ def test_native_private_directory_and_untrusted_runtime_acl(tmp_path):
     assert runtime_trust_issue(runtime, igor) is None
     subprocess.run([_windows_system_executable("icacls.exe"), str(igor), "/grant", "*S-1-1-0:(W)"], check=True)
     assert runtime_trust_issue(runtime, igor)
+
+
+@pytest.mark.parametrize("failure", ["", "exists", "sddl", "create"])
+def test_private_directory_creation_uses_protected_owner_only_dacl(monkeypatch, tmp_path, failure):
+    calls, freed = [], []
+
+    def convert(sddl, revision, output, _size):
+        calls.append(("sddl", sddl, revision))
+        output._obj.value = 42
+        return failure != "sddl"
+
+    def create(path, attributes):
+        calls.append(("create", path, attributes._obj.lpSecurityDescriptor))
+        return failure not in {"exists", "create"}
+
+    class Function:
+        def __init__(self, function):
+            self.function = function
+
+        def __call__(self, *args):
+            return self.function(*args)
+
+    api = SimpleNamespace(ConvertStringSecurityDescriptorToSecurityDescriptorW=Function(convert))
+    kernel = SimpleNamespace(CreateDirectoryW=Function(create), LocalFree=Function(lambda p: freed.append(p.value)))
+    monkeypatch.setattr(security, "_api", lambda: (api, kernel, None))
+    monkeypatch.setattr(security, "_current_sid", lambda *_args: USER)
+    monkeypatch.setattr(ctypes, "get_last_error", lambda: 183 if failure == "exists" else 5, raising=False)
+    target = tmp_path / "private"
+    if failure in {"sddl", "create"}:
+        with pytest.raises(OSError):
+            security.create_private_directory(target)
+    else:
+        security.create_private_directory(target)
+    assert calls[0] == ("sddl", f"D:P(A;OICI;FA;;;{USER})(A;OICI;FA;;;SY)(A;OICI;FA;;;BA)", 1)
+    if failure != "sddl":
+        assert calls[1] == ("create", str(target), 42)
+        assert freed == [42]
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Requires native Windows filesystem ACLs")
+def test_native_private_directories_under_home_and_temp_are_trusted(tmp_path):
+    import tempfile
+    from pathlib import Path
+
+    for base in (Path.home(), Path(tempfile.gettempdir()), tmp_path):
+        for ancestor in [base, *base.parents]:
+            issue = security.windows_path_trust_issue(ancestor, ancestor=True)
+            assert issue is None, (str(ancestor), issue, security._read_descriptor(ancestor))
+    for base in (tmp_path / "nested" / "private", Path(tempfile.mkdtemp(prefix="gms-mcp-test-")) / "private"):
+        created = private_directory(base)
+        for path in (created, created.parent):
+            issue = security.windows_path_trust_issue(path, private=True)
+            assert issue is None, (str(path), issue, security._read_descriptor(path))
+        assert private_directory(base) == created

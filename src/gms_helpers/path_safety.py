@@ -133,7 +133,15 @@ def private_directory(path: Path) -> Path:
         elif stat.S_ISLNK(info.st_mode):
             raise ValidationError(f"Unsafe private directory parent: {parent}")
     for directory in reversed(missing):
-        directory.mkdir(mode=0o700, exist_ok=True)
+        if os.name == "nt":
+            from .windows_security import create_private_directory
+
+            try:
+                create_private_directory(directory)
+            except (AttributeError, OSError, ValueError) as exc:
+                raise ValidationError(f"Cannot create private directory: {directory}") from exc
+        else:
+            directory.mkdir(mode=0o700, exist_ok=True)
         info = directory.lstat()
         if stat.S_ISLNK(info.st_mode) or (hasattr(os, "getuid") and info.st_uid != os.getuid()):
             raise ValidationError(f"Unsafe private directory parent: {directory}")
