@@ -75,6 +75,21 @@ class TestGameMakerCISetup(unittest.TestCase):
             self.assertFalse(user_dir.exists())
             self.assertEqual(github_env.read_text(encoding="utf-8"), "GMS_MCP_LICENSE_FILE=\n")
 
+    def test_runtime_root_is_trusted_by_runtime_discovery(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            runner_temp = Path(temp_dir)
+            root = setup_ci._runtime_root(runner_temp)
+            if os.name != "nt":
+                self.assertEqual(root, runner_temp / "gms-mcp-runtimes")
+                return
+            from gms_helpers.windows_security import windows_path_trust_issue
+
+            self.assertEqual(root, Path.home() / ".gms-mcp-ci" / "runtimes")
+            setup_ci._create_runtime_root(root)
+            self.assertIsNone(windows_path_trust_issue(root, private=True))
+            for ancestor in root.parents:
+                self.assertIsNone(windows_path_trust_issue(ancestor, ancestor=True), str(ancestor))
+
     def test_github_environment_writer_rejects_newlines(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             github_env = Path(temp_dir) / "github-env"
