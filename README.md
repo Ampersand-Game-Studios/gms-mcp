@@ -231,7 +231,7 @@ gms-mcp-init --client codex --scope workspace --action check-json --config-path 
 gms-mcp-init --client codex --scope workspace --action setup --config-path .codex/config.toml --dry-run
 ```
 
-Checks redact secret-like values. Dry-run setup previews only the target server entry without writing, omitting unrelated config and replacing private paths. Workspace Codex configuration stores project roots relative to the repository; roots outside that workspace are rejected. Global configuration deliberately leaves project resolution to the server's startup workspace. The older `--codex-check`, `--codex-check-json`, and `--codex-dry-run-only` helpers target the initializer's default snippet/global paths, not the custom project config above.
+Setup merges preserve unrelated servers and TOML tables, create a backup before atomic replacement, and reject symlink destinations or workspace paths outside the repository. Python module launchers use `-P` to prevent project files shadowing installed packages. Workspace configs omit host-specific `GMS_MCP_GMS_PATH` overrides. Checks redact secret-like values. Dry-run setup previews only the target server entry without writing, omitting unrelated config and replacing private paths. Workspace Codex configuration stores project roots relative to the repository; roots outside that workspace are rejected. Global configuration deliberately leaves project resolution to the server's startup workspace. The older `--codex-check`, `--codex-check-json`, and `--codex-dry-run-only` helpers target the initializer's default snippet/global paths, not the custom project config above.
 
 ### Updates
 

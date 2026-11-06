@@ -192,14 +192,14 @@ class TestRunnerCommandSelection(unittest.TestCase):
         launch.assert_not_called()
         self.assertTrue(any(str(arg).startswith("--tf=") for arg in commands[0]))
 
-    def test_windows_zip_failure_requires_a_fresh_executable(self):
+    def test_windows_zip_failure_never_launches_even_fresh_executable(self):
         lines = self._COMPILE_OK_LINES + self._ZIP_FAILURE_LINES
         result, launch, _ = self._windows_temp_run(lines)
         self.assertFalse(result)
         launch.assert_not_called()
         result, launch, _ = self._windows_temp_run(lines, fresh=True)
-        self.assertTrue(result["ok"])
-        launch.assert_called_once()
+        self.assertFalse(result)
+        launch.assert_not_called()
 
     def test_windows_other_package_failures_are_not_tolerated(self):
         result, launch, _ = self._windows_temp_run(self._COMPILE_OK_LINES + ["ERROR: export failed"], fresh=True)

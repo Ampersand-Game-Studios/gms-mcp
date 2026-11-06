@@ -8,7 +8,7 @@ from pathlib import Path, PureWindowsPath
 from typing import Any, Dict, Iterable, List, Mapping
 
 from gms_helpers.exceptions import ValidationError
-from gms_helpers.path_safety import project_child_path
+from gms_helpers.path_safety import project_child_path, validate_git_ref
 
 
 ValidationErrorList = List[Dict[str, str]]
@@ -951,6 +951,11 @@ def validate_mcp_tool_arguments(tool_name: str, arguments: Mapping[str, Any]) ->
     else:
         errors = _validate_legacy_generic(tool_name, arguments)
 
+    if "ref" in arguments:
+        try:
+            validate_git_ref(arguments["ref"])
+        except ValidationError as exc:
+            errors.append({"field": "ref", "message": str(exc)})
     _validate_choices(arguments, "output_mode", _OUTPUT_MODES, errors)
     _validate_int_range(arguments, "tail_lines", 0, None, errors)
     _validate_int_range(arguments, "timeout_seconds", 0, None, errors)

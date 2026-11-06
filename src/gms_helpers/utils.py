@@ -12,6 +12,7 @@ import tempfile
 from pathlib import Path
 from typing import Dict, Any, List
 import os
+import stat
 
 from .exceptions import GMSError, ProjectNotFoundError, ValidationError
 from gms_mcp.project_detection import resolve_project_directory as resolve_gm_project_directory
@@ -76,9 +77,24 @@ def _has_trailing_commas(raw_text: str) -> bool:
     return next(_trailing_comma_positions(raw_text), None) is not None
 
 
+MAX_JSON_BYTES = 64 * 1024 * 1024
+
+
 def _read_text_preserving_newlines(path: Path) -> str:
-    with path.open(encoding="utf-8", newline="") as file_handle:
-        return file_handle.read()
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0))
+    try:
+        info = os.fstat(descriptor)
+        if not stat.S_ISREG(info.st_mode):
+            raise ValueError(f"JSON input must be a regular file: {path}")
+        if info.st_size > MAX_JSON_BYTES:
+            raise ValueError(f"JSON input exceeds the {MAX_JSON_BYTES}-byte size limit: {path}")
+        with os.fdopen(descriptor, "rb", closefd=False) as file_handle:
+            content = file_handle.read(MAX_JSON_BYTES + 1)
+        if len(content) > MAX_JSON_BYTES:
+            raise ValueError(f"JSON input exceeds the {MAX_JSON_BYTES}-byte size limit: {path}")
+        return content.decode("utf-8")
+    finally:
+        os.close(descriptor)
 
 
 def load_json_loose(path: Path) -> Dict[str, Any] | None:
@@ -279,7 +295,7 @@ _DEFAULT_ASSET_FOLDER_NAMES = {
 
 def ensure_default_asset_parent(project_root: Path, asset_kind: str, folder_prefix: str) -> str:
     """Resolve or create a deterministic logical folder for an unparented asset."""
-    from .path_safety import project_child_path
+    from .path_safety import project_child_path, project_file_path
 
     root = Path(project_root).resolve()
     yyp_path = find_yyp(root)
@@ -318,9 +334,8 @@ def ensure_default_asset_parent(project_root: Path, asset_kind: str, folder_pref
         resource_path = resource_id.get("path") if isinstance(resource_id, dict) else None
         if not isinstance(resource_path, str) or not resource_path.replace("\\", "/").startswith(resource_prefix):
             continue
-        normalized_path = resource_path.replace("\\", "/")
         try:
-            asset_path = project_child_path(*Path(normalized_path).parts, project_root=root, kind="asset path")
+            asset_path = project_file_path(resource_path, project_root=root, kind="asset path")
         except ValidationError:
             continue
         asset_data = load_json_loose(asset_path)
@@ -434,8 +449,7 @@ def create_dummy_png(file_path, width=64, height=64):
 def load_json(file_path):
     """Load and parse a JSON file, handling GameMaker's trailing commas."""
     try:
-        with open(file_path, "r", encoding="utf-8") as f:
-            content = f.read()
+        content = _read_text_preserving_newlines(Path(file_path))
 
         # GameMaker JSON files often have trailing commas, which Python's json module doesn't like
         # We'll try to parse as-is first, then clean up trailing commas if needed
@@ -896,7 +910,9 @@ def remove_folder_from_yyp(folder_path, force=False, dry_run=False):
             if resource_path:
                 try:
                     # Load the resource file to check its parent path
-                    resource_file_path = resource_path
+                    from .path_safety import project_file_path
+
+                    resource_file_path = project_file_path(resource_path, project_root=Path(yyp_file).resolve().parent)
                     if os.path.exists(resource_file_path):
                         resource_data = load_json(resource_file_path)
                         parent_path = resource_data.get("parent", {}).get("path", "")

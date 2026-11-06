@@ -21,7 +21,7 @@ from gms_helpers.runner_support.igor import RunnerIgorMixin
 class TestGameMakerMachineLock(unittest.TestCase):
     def test_cross_process_lock_waits_and_recovers_after_holder_exits(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
+            root = Path(temp_dir).resolve()
             lock_path = root / "runtime.lock"
             ready_path = root / "ready"
             release_path = root / "release"
@@ -87,7 +87,7 @@ class TestGameMakerMachineLock(unittest.TestCase):
             return True
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
+            root = Path(temp_dir).resolve()
             lock_path = root / "runtime.lock"
             runners = [GameMakerRunner(root / "one"), GameMakerRunner(root / "two")]
             results: list[bool] = []
@@ -208,7 +208,7 @@ class TestGameMakerMachineLock(unittest.TestCase):
         process.returncode = 0
 
         with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
+            root = Path(temp_dir).resolve()
             project_file = root / "game.yyp"
             project_file.write_text("{}", encoding="utf-8")
             runner = GameMakerRunner(root)
@@ -232,7 +232,7 @@ class TestGameMakerMachineLock(unittest.TestCase):
 
     def test_exception_releases_lock_for_next_operation(self):
         with tempfile.TemporaryDirectory() as temp_dir:
-            root = Path(temp_dir)
+            root = Path(temp_dir).resolve()
             with patch.dict(os.environ, {"GMS_MCP_MACHINE_LOCK_PATH": str(root / "runtime.lock")}):
                 with self.assertRaisesRegex(RuntimeError, "fault"):
                     with GameMakerMachineLock("fault", root, timeout_seconds=1):

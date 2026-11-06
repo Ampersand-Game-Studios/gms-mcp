@@ -7,6 +7,7 @@ import contextvars
 import hashlib
 import json
 import os
+import re
 import signal
 import shutil
 import subprocess
@@ -20,7 +21,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Dict, Iterable, Iterator, List, TextIO, TypeVar
 
 from .exceptions import GMSError, ValidationError
-from .gamemaker_machine_lock import GameMakerMachineLock
+from .gamemaker_machine_lock import GameMakerMachineLock, _lock_path
 from .utils import load_json_loose
 
 
@@ -77,6 +78,10 @@ class _TransactionJournalContext:
     journal_path: Path
     backup_root: Path
     seen_paths: set[str] = field(default_factory=set)
+    machine_lock_path: Path | None = None
+    # tempfile probes its candidate directories while holding a non-reentrant lock.
+    # Resolve this before activating the audit context, never from an open hook.
+    temporary_root: Path = field(default_factory=lambda: Path(tempfile.gettempdir()).resolve(strict=False))
 
 
 _ACTIVE_TRANSACTION: contextvars.ContextVar[_TransactionJournalContext | None] = contextvars.ContextVar(
@@ -193,13 +198,19 @@ def _lexical_absolute_path(raw_path: Any, dir_fd: Any = None) -> Path | None:
         if not path.is_absolute():
             base = Path.cwd()
             if isinstance(dir_fd, int) and dir_fd >= 0:
-                for fd_root in (Path("/proc/self/fd"), Path("/dev/fd")):
-                    fd_path = fd_root / str(dir_fd)
-                    try:
-                        base = fd_path.resolve(strict=True)
-                        break
-                    except OSError:
-                        continue
+                if sys.platform == "darwin":
+                    import fcntl
+
+                    raw_base = fcntl.fcntl(dir_fd, getattr(fcntl, "F_GETPATH", 50), b"\0" * 1024)
+                    base = Path(os.fsdecode(raw_base.split(b"\0", 1)[0]))
+                else:
+                    for fd_root in (Path("/proc/self/fd"), Path("/dev/fd")):
+                        fd_path = fd_root / str(dir_fd)
+                        if fd_path.is_symlink():
+                            base = fd_path.resolve(strict=True)
+                            break
+                    else:
+                        return None
             path = base / path
         return Path(os.path.abspath(path))
     except (OSError, TypeError, ValueError):
@@ -218,21 +229,52 @@ def _audit_absolute_path(raw_path: Any, dir_fd: Any = None) -> Path | None:
         return None
 
 
+def _is_bytecode_cache_path(resolved: Path) -> bool:
+    """Name what importing a module writes: the cache directory, the bytecode file and its atomic temporary."""
+    if sys.pycache_prefix and resolved.is_relative_to(Path(sys.pycache_prefix).resolve(strict=False)):
+        return True
+    if resolved.name == "__pycache__":
+        return True
+    return resolved.parent.name == "__pycache__" and re.fullmatch(r".+\.pyc(?:\.\d+)?", resolved.name) is not None
+
+
+def _is_tool_infrastructure_path(resolved: Path, temporary_root: Path) -> bool:
+    """Name the tool's own writes outside a project: private state, its temp directories and bytecode."""
+    if str(resolved) == os.devnull or _is_bytecode_cache_path(resolved):
+        return True
+    state_root = (Path.home() / ".gms-mcp").resolve(strict=False)
+    if resolved.is_relative_to(state_root):
+        # The user config chooses programs to run, so a project mutation must never reach it.
+        return resolved != state_root / "config.json"
+    lock_directory = os.environ.get("GMS_MCP_LOCK_DIR", "").strip()
+    if lock_directory and resolved.is_relative_to(Path(lock_directory).expanduser().resolve(strict=False)):
+        return True
+    if resolved.is_relative_to(temporary_root) and resolved != temporary_root:
+        return resolved.relative_to(temporary_root).parts[0].startswith("gms-mcp-")
+    return False
+
+
 def _journal_relative_path(
     context: _TransactionJournalContext,
     raw_path: Any,
     dir_fd: Any = None,
 ) -> str | None:
+    if isinstance(raw_path, int):
+        return None
     try:
-        raw_name = os.fsdecode(raw_path).replace("/", "\\").rsplit("\\", 1)[-1].rstrip(" .")
-        if os.name == "nt" and raw_name.split(".", 1)[0].casefold() in _WINDOWS_DEVICE_NAMES:
+        decoded = os.fsdecode(raw_path)
+        if os.name == "nt" and decoded.casefold() == os.devnull.casefold():
+            # Windows names the null device `nul`; subprocess DEVNULL opens it.
             return None
+        raw_name = decoded.replace("/", "\\").rsplit("\\", 1)[-1].rstrip(" .")
+        if os.name == "nt" and raw_name.split(".", 1)[0].casefold() in _WINDOWS_DEVICE_NAMES:
+            raise ValidationError("Project mutation blocked: Windows device paths are forbidden")
         lexical = _lexical_absolute_path(raw_path, dir_fd)
         if lexical is None:
-            return None
+            raise ValidationError("Project mutation blocked: cannot resolve write path")
         resolved = _audit_absolute_path(raw_path, dir_fd)
         if resolved is None:
-            return None
+            raise ValidationError("Project mutation blocked: cannot resolve write path")
         try:
             lexical.relative_to(context.project_root)
             lexical_is_project_path = True
@@ -243,16 +285,31 @@ def _journal_relative_path(
         except ValueError:
             if lexical_is_project_path:
                 raise ValidationError("Project mutation blocked: a project path resolves outside the approved root")
-            # Transaction infrastructure writes journals/backups outside the
-            # project. Those paths are intentionally outside this boundary.
-            return None
+            lock = context.machine_lock_path
+            if lock is not None and resolved.parent == lock.parent:
+                temporary = rf"\.{re.escape(lock.name)}\.delegation\.{os.getpid()}\.[0-9a-f]{{16}}\.tmp"
+                if resolved.name in {lock.name, lock.name + ".delegation"} or re.fullmatch(temporary, resolved.name):
+                    return None
+            if _is_tool_infrastructure_path(resolved, context.temporary_root):
+                return None
+            infrastructure = (
+                context.journal_path,
+                context.backup_root,
+                context.journal_path.parent / "participant.lock",
+            )
+            if any(
+                resolved == allowed or (allowed == context.backup_root and resolved.is_relative_to(allowed))
+                for allowed in infrastructure
+            ):
+                return None
+            raise ValidationError("Project mutation blocked: writes outside the approved project root are forbidden")
         try:
             lexical.resolve(strict=False).relative_to(context.project_root)
         except (OSError, ValueError):
             raise ValidationError("Project mutation blocked: a project path resolves outside the approved root")
         relative = resolved.relative_to(context.project_root).as_posix()
-    except (OSError, TypeError, ValueError):
-        return None
+    except (OSError, TypeError, ValueError) as exc:
+        raise ValidationError("Project mutation blocked: cannot resolve write path") from exc
     if not relative or relative == "." or _is_ignored_path(Path(relative)):
         return None
     return relative
@@ -447,6 +504,8 @@ def journaled_gms_cli_command(cli_arguments: List[str]) -> List[str]:
     """Build the Python CLI command that activates the inherited write journal."""
     return [
         sys.executable,
+        "-P",
+        "-B",
         "-u",
         "-c",
         "from gms_helpers.transactions import run_journaled_cli; run_journaled_cli()",
@@ -488,7 +547,7 @@ def inherited_transaction_context() -> Iterator[None]:
             raise ValidationError("Inherited transaction is no longer active")
         _load_journal_records(journal)
         _ensure_transaction_audit_hook()
-        context = _TransactionJournalContext(root, journal, backup)
+        context = _TransactionJournalContext(root, journal, backup, machine_lock_path=_lock_path())
         token = _ACTIVE_TRANSACTION.set(context)
         try:
             yield
@@ -1069,7 +1128,7 @@ def _compile_verification_process_pids(project_root: Path) -> set[int]:
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             text=True,
         )
         output, _stderr = process.communicate(timeout=2)
@@ -1253,7 +1312,7 @@ def _compile_verify_project_locked(
     cmd = (
         journaled_gms_cli_command(cli_arguments)
         if transaction_env
-        else [sys.executable, "-u", "-m", "gms_helpers.gms", *cli_arguments]
+        else [sys.executable, "-P", "-B", "-u", "-m", "gms_helpers.gms", *cli_arguments]
     )
     child_env = os.environ.copy()
     child_env.update(transaction_env)
@@ -1547,7 +1606,9 @@ class GameMakerProjectTransaction:
         if self._journal_path is None or self._backup_root is None:
             raise RuntimeError("Cannot activate a transaction before its journal is ready")
         _ensure_transaction_audit_hook()
-        context = _TransactionJournalContext(self.project_root, self._journal_path, self._backup_root)
+        context = _TransactionJournalContext(
+            self.project_root, self._journal_path, self._backup_root, machine_lock_path=_lock_path()
+        )
         self._journal_context = context
         self._context_token = _ACTIVE_TRANSACTION.set(context)
 

@@ -621,12 +621,12 @@ class TestRunnerGapCoverage(unittest.TestCase):
                     with patch.object(runner, "_run_igor_command", return_value=package_process):
                         with patch.object(runner, "_stream_igor_output", return_value=[]):
                             with patch.object(runner, "_find_launch_target", return_value=launch_path):
-                                with patch.object(runner, "_start_game_process", return_value=launch_process):
+                                with patch.object(runner, "_start_game_process", return_value=launch_process) as launch:
                                     result = runner._run_project_ide_temp_approach(
                                         platform_target="Windows", background=True
                                     )
-        self.assertTrue(result["ok"])
-        self.assertEqual(result["pid"], 777)
+        self.assertFalse(result)
+        launch.assert_not_called()
 
         classic_process = MagicMock()
         classic_process.pid = 1234

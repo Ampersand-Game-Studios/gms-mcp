@@ -423,7 +423,12 @@ class MCPToolSmokeRunner:
                     error = _error_text(result)
             except Exception as exc:  # noqa: BLE001 - capture for report
                 ok = False
-                error = _redact_diagnostic_text(f"{type(exc).__name__}: {exc}")
+                cause = exc.__cause__
+                detail = f"{type(exc).__name__}: {exc}"
+                if cause is not None:
+                    # The SDK wraps tool exceptions; without the cause, CI reports only the tool name.
+                    detail += f" (caused by {type(cause).__name__}: {cause})"
+                error = _redact_diagnostic_text(detail)
             finally:
                 try:
                     await self._best_effort_stop_run(workspace)

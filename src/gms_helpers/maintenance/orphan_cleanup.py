@@ -5,8 +5,10 @@ Removes orphaned asset files that are not referenced in the .yyp file.
 
 import os
 import shutil
-import json
 from pathlib import Path
+
+from ..path_safety import project_file_path
+from ..utils import load_json
 from typing import List, Set, Dict, Any, Optional
 
 from .orphans import find_orphaned_assets
@@ -120,13 +122,12 @@ def _get_sprite_companion_files(asset_file: str, project_root: str) -> List[str]
         List of companion file paths that belong to this specific sprite
     """
     companion_files = []
-    asset_path = Path(project_root) / asset_file
+    asset_path = project_file_path(asset_file, project_root=Path(project_root))
     asset_dir = asset_path.parent
 
     try:
         # Load the sprite's .yy file to get the correct UUIDs
-        with open(asset_path, "r", encoding="utf-8") as f:
-            sprite_data = json.load(f)
+        sprite_data = load_json(asset_path)
 
         # Extract frame UUIDs from the sprite data
         frame_uuids = set()

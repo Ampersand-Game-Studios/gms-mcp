@@ -629,42 +629,48 @@ class TestWorkflowWrappers(MCPToolTestCase):
 class TestRunnerWrappers(MCPToolTestCase):
     module = runner
 
-    def test_compile_and_foreground_run_use_fallback(self):
-        with patch(
-            "gms_mcp.server.tools.runner._run_with_fallback",
-            new=AsyncMock(return_value={"ok": True}),
-        ) as mock_fallback:
-            compile_result = self.call_tool(
-                "gm_compile",
-                platform="macOS",
-                runtime="YYC",
-                runtime_version="2024.11",
-                project_root="/tmp/project",
+    def test_compile_uses_fallback_and_foreground_run_uses_isolated_worker(self):
+        with (
+            patch(
+                "gms_mcp.server.tools.runner._run_with_fallback", new=AsyncMock(return_value={"ok": True})
+            ) as fallback,
+            patch(
+                "gms_mcp.server.tools.runner._run_direct",
+                return_value=ToolRunResult(ok=True, stdout="", stderr="", direct_used=True),
+            ) as direct,
+        ):
+            result = self.call_tool(
+                "gm_compile", platform="macOS", runtime="YYC", runtime_version="2024.11", project_root="/tmp/project"
             )
-            self.assertTrue(compile_result["ok"])
+            self.assertTrue(result["ok"])
             self.assertEqual(
-                mock_fallback.await_args_list[0].kwargs["cli_args"],
+                fallback.await_args.kwargs["cli_args"],
                 ["run", "compile", "--platform", "macOS", "--runtime", "YYC", "--runtime-version", "2024.11"],
             )
-
-            run_result = self.call_tool(
+            result = self.call_tool(
                 "gm_run",
                 platform="macOS",
                 runtime="VM",
                 background=False,
                 output_location="project",
                 project_root="/tmp/project",
+                enable_bridge=False,
             )
-            self.assertTrue(run_result["ok"])
-            self.assertEqual(
-                mock_fallback.await_args_list[1].kwargs["cli_args"],
-                ["run", "start", "--platform", "macOS", "--runtime", "VM", "--output-location", "project"],
-            )
+            self.assertTrue(result["ok"])
+            self.assertEqual(fallback.await_count, 1)
+            self.assertEqual(direct.call_args.args[0].__name__, "handle_runner_run")
+            args = direct.call_args.args[1]
+            self.assertEqual((args.platform, args.runtime, args.output_location), ("macOS", "VM", "project"))
+            self.assertEqual(args.bridge_environment, {})
 
     def test_background_run_and_status_paths(self):
+        resolution = patch("gms_mcp.server.tools.runner._resolve_project_directory", return_value=Path("/tmp/project"))
+        resolution.start()
+        self.addCleanup(resolution.stop)
         fake_bridge_server = MagicMock()
         fake_bridge_server.start.return_value = True
         fake_bridge_server.port = 6502
+        fake_bridge_server.token = "session-token"
 
         with (
             patch(

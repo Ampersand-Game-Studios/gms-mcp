@@ -177,11 +177,18 @@ The same `.gms-mcp.json` carries the project's own conventions for builds, tests
   "build": { "igor_attempts": 30, "max_parallel_builds": 4, "jobs": 4, "runtime_version": "2026.0.0.23" },
   "test": { "timeout_seconds": 120, "prelude_file": null, "script_name": "__agent_test" },
   "conventions": { "allow_root_assets": ["__agent_*"] },
+  "live_reload": { "status_file": null }
+}
+```
+
+Live-reload commands run programs, so a project cannot supply them. They are read only from the user config `~/.gms-mcp/config.json`; a `start`, `stop` or `status` entry in `.gms-mcp.json` is ignored with a warning:
+
+```json
+{
   "live_reload": {
     "start": ["gms-fire", "start", "--project", "{project}"],
     "stop": ["gms-fire", "stop", "--project", "{project}"],
-    "status": ["gms-fire", "status", "--json", "--project", "{project}"],
-    "status_file": null
+    "status": ["gms-fire", "status", "--json", "--project", "{project}"]
   }
 }
 ```
@@ -197,7 +204,8 @@ The same `.gms-mcp.json` carries the project's own conventions for builds, tests
 | `test.prelude_file` | built in | Project-relative GML file replacing the built-in test API; it must print the same marker lines. |
 | `test.result_marker`, `line_marker`, `started_marker`, `screenshot_prefix`, `runtime_error_patterns` | `[TEST_RESULT]`, `[TEST]`, `[TEST_SAVE_DIR]`, `__agent_shot_`, GameMaker's error banners | How a run log is read. |
 | `conventions.allow_root_assets` | `[]` | Name patterns `gm_project_check` accepts at the project root. |
-| `live_reload.*` | unset | Argument lists (never shell strings) for an external live-reload tool. `{project}` becomes the project directory. |
+| `live_reload.start`, `stop`, `status` | unset | User config only. Argument lists (never shell strings) for an external live-reload tool. `{project}` becomes the project directory. |
+| `live_reload.status_file` | unset | Project-relative JSON status file; absolute or escaping paths are rejected. |
 
 ### Shared locks
 
@@ -212,7 +220,7 @@ Isolated macOS runs (`gm_run`, `gm_game_start`, and `gm_test_run`) require `runt
 | Variable | Meaning |
 |----------|---------|
 | `GMS_MCP_STRICT_PROJECT_VALIDATION=1` | Any validation error blocks a mutation, including errors that predate it. |
-| `GMS_MCP_SNAPSHOT_WORK_DIR` | Where snapshots, Igor cache and output are staged (default: system temp). |
+| `GMS_MCP_SNAPSHOT_WORK_DIR` | Private directory for snapshots, Igor cache and output (default: `~/.gms-mcp/snapshots`). |
 | `GMS_MCP_BRIDGE_PORT` | Set by the server in the game's environment for live sessions; a game endpoint connects to it. |
 
 ## Configuration Resolution Order
@@ -399,3 +407,11 @@ When running or compiling a project, GMS-MCP will:
 3. If a valid prefabs path is found, add the `--pf` flag to Igor commands
 
 This ensures projects with prefab dependencies compile and run correctly via MCP.
+
+### Process diagnostics and local runtime trust
+
+Debug and bootstrap host logging are disabled by default. Set `GMS_MCP_DEBUG_LOG=1` explicitly to enable private, rotating debug logs; read-only mode still suppresses them. Persisted CLI stdout/stderr logs redact secrets and host paths. Oversized output lines are omitted from diagnostic logs while bounded command output remains available.
+
+Runtime discovery scans only known GameMaker cache families. On POSIX, runtime directories and executable components must belong to the current user or root and must not be group/other-writable. Every ancestor must also have trusted ownership; writable shared ancestors require the sticky bit so another account cannot replace a trusted child. Unsafe caches are rejected without changing their permissions. Install runtimes in an owner-controlled cache and select it with `GMS_MCP_RUNTIME_ROOT`. Skipped runtimes appear in discovery diagnostics. Exact recorded project versions take precedence over newer runtimes. Windows rejects symlinks and reparse points and verifies native owner SIDs and access-control lists on runtime components and their ancestors. Grants allowing another account to replace or modify a runtime are rejected. Private build and lock directories also reject access to their contents by other accounts; on Windows they are created with a protected access list that admits only the current user, SYSTEM and Administrators, because Windows ignores POSIX directory modes. Security descriptor lookup failures fail closed; POSIX mode bits are not used as Windows ACL evidence.
+
+Build/cache/temp directories now live below `~/.gms-mcp/build` with private permissions. Unsafe existing directories fail closed. Launching package output requires a successful build and a newly produced or updated executable.

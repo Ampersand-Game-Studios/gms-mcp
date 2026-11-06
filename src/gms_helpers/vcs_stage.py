@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import subprocess
 from pathlib import Path
+from gms_mcp.project_detection import safe_git_command
 from typing import Any, Iterable
 
 from . import yyp_registry
@@ -23,7 +24,7 @@ class VcsError(ValidationError):
 
 def _git(repo: Path, *args: str, input_text: str | None = None, check: bool = True) -> str:
     completed = subprocess.run(
-        ["git", "-C", str(repo), *args],
+        safe_git_command(repo, *args),
         input=input_text.encode("utf-8") if input_text is not None else None,
         capture_output=True,
         check=False,
@@ -51,7 +52,7 @@ def stage_paths(
     lock_timeout_seconds: float = 600.0,
 ) -> dict[str, Any]:
     root = Path(project_root).resolve()
-    top = subprocess.run(["git", "-C", str(root), "rev-parse", "--show-toplevel"], capture_output=True, check=False)
+    top = subprocess.run(safe_git_command(root, "rev-parse", "--show-toplevel"), capture_output=True, check=False)
     if top.returncode != 0:
         raise VcsError("This project is not inside a git repository, so there is nothing to stage.")
     repo = Path(top.stdout.decode("utf-8").strip()).resolve()
@@ -95,7 +96,7 @@ def stage_paths(
     try:
         # The project file as it is in the index before this call (kept registrations from earlier calls).
         indexed_before = subprocess.run(
-            ["git", "-C", str(repo), "show", f":{yyp_repo_path}"], capture_output=True, check=False
+            safe_git_command(repo, "show", f":{yyp_repo_path}"), capture_output=True, check=False
         )
         deleted = set(
             _git(repo, "diff", "--cached", "--name-only", "--diff-filter=D", "--no-renames", "-z").split("\0")
@@ -118,7 +119,7 @@ def stage_paths(
         staged_entries: list[str] = []
         if not whole_yyp:
             head = subprocess.run(
-                ["git", "-C", str(repo), "show", f"HEAD:{yyp_repo_path}"], capture_output=True, check=False
+                safe_git_command(repo, "show", f"HEAD:{yyp_repo_path}"), capture_output=True, check=False
             )
             if head.returncode != 0:
                 raise VcsError(

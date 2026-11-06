@@ -92,6 +92,24 @@ def _github_paths() -> tuple[Path, Path]:
     return Path(runner_temp), Path(github_env)
 
 
+def _runtime_root(runner_temp: Path) -> Path:
+    """Choose a runtime cache that gms-mcp's runtime trust checks accept on this runner."""
+    if os.name == "nt":
+        # Other accounts can replace children on the hosted runner's D: drive, so Windows
+        # runtimes live under the runner profile in an owner-only directory.
+        return Path.home() / ".gms-mcp-ci" / "runtimes"
+    return runner_temp / "gms-mcp-runtimes"
+
+
+def _create_runtime_root(runtime_root: Path) -> None:
+    if os.name == "nt":
+        from gms_helpers.path_safety import private_directory
+
+        private_directory(runtime_root)
+    else:
+        runtime_root.mkdir(parents=True)
+
+
 def _download_verified(url: str, expected_sha256: str, destination: Path) -> None:
     request = urllib.request.Request(url, headers={"User-Agent": "gms-mcp-ci"})
     digest = hashlib.sha256()
@@ -197,14 +215,14 @@ def install_runtime(runtime_version: str) -> str:
 
     host = detect_host_config()
     runner_temp, github_env = _github_paths()
-    runtime_root = runner_temp / "gms-mcp-runtimes"
+    runtime_root = _runtime_root(runner_temp)
     runtime_dir = runtime_root / f"runtime-{runtime_version}"
     user_dir = runner_temp / "gms-mcp-gamemaker-user"
     license_file = user_dir / "licence.plist"
 
     shutil.rmtree(runtime_root, ignore_errors=True)
     shutil.rmtree(user_dir, ignore_errors=True)
-    runtime_root.mkdir(parents=True)
+    _create_runtime_root(runtime_root)
     user_dir.mkdir(mode=0o700, parents=True)
 
     try:

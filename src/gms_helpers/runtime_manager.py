@@ -7,6 +7,7 @@ import os
 import platform
 import json
 import re
+import stat
 from pathlib import Path
 from dataclasses import dataclass, asdict
 from typing import List, Optional, Dict, Any
@@ -57,7 +58,67 @@ def _runtime_sort_key(version: str) -> tuple[int, ...]:
 def _runtime_roots(parent: Path) -> List[Path]:
     if not parent.exists():
         return []
-    return sorted(path for path in parent.glob("GameMakerStudio2*/Cache/runtimes") if path.is_dir())
+    names = (
+        "GameMakerStudio2",
+        "GameMakerStudio2-Beta",
+        "GameMakerStudio2-LTS",
+        "GameMakerStudio2-LTS2022",
+        "GameMakerStudio2-LTS2026",
+    )
+    return sorted(path for name in names if (path := parent / name / "Cache/runtimes").is_dir())
+
+
+def runtime_trust_issue(runtime_dir: Path, igor_path: Path | None) -> str | None:
+    """Check the cache root and every component through the executable."""
+    runtime_dir = Path(os.path.abspath(runtime_dir))
+    target = Path(os.path.abspath(igor_path)) if igor_path is not None else runtime_dir
+    try:
+        target.relative_to(runtime_dir)
+        components = [target]
+        while components[-1] != runtime_dir:
+            components.append(components[-1].parent)
+        for path in [*components, runtime_dir.parent]:
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
+                return "runtime component is a symlink or reparse point"
+            expected_file = path == target and igor_path is not None
+            if not (stat.S_ISREG(info.st_mode) if expected_file else stat.S_ISDIR(info.st_mode)):
+                return "runtime component is not a regular file or directory"
+    except (OSError, ValueError):
+        return "runtime trust could not be verified"
+    if os.name == "nt":
+        from .windows_security import windows_path_trust_issue
+
+        for path in components:
+            if issue := windows_path_trust_issue(path):
+                return issue
+        for path in runtime_dir.parents:
+            if getattr(path.lstat(), "st_file_attributes", 0) & 0x400:
+                return "runtime ancestor is a reparse point"
+            if issue := windows_path_trust_issue(path, ancestor=True):
+                return issue
+        return None
+    try:
+        for path in components:
+            info = path.lstat()
+            if info.st_uid not in {0, os.getuid()}:
+                return "runtime component has an untrusted owner"
+            if info.st_mode & 0o022:
+                return "runtime component is writable by other accounts"
+        for path in runtime_dir.parents:
+            info = path.lstat()
+            if stat.S_ISLNK(info.st_mode):
+                # System aliases such as macOS /var are replaceable only by root.
+                if info.st_uid != 0:
+                    return "runtime ancestor is an untrusted symlink"
+                info = path.stat()
+            if info.st_uid not in {0, os.getuid()} or not stat.S_ISDIR(info.st_mode):
+                return "runtime ancestor has an untrusted owner or type"
+            if info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX:
+                return "runtime ancestor permits replacement by other accounts"
+        return None
+    except (OSError, ValueError):
+        return "runtime trust could not be verified"
 
 
 class RuntimeManager:
@@ -70,6 +131,7 @@ class RuntimeManager:
 
     def __init__(self, project_root: Path):
         self.project_root = project_root
+        self.discovery_diagnostics: list[str] = []
         self._cached_runtimes: Optional[List[RuntimeInfo]] = None
 
     def list_installed(self) -> List[RuntimeInfo]:
@@ -99,7 +161,7 @@ class RuntimeManager:
                 *_runtime_roots(Path("/opt")),
             ]
 
-        possible_paths = list(dict.fromkeys(path.resolve() for path in possible_paths))
+        possible_paths = list(dict.fromkeys(path.absolute() for path in possible_paths))
 
         runtimes = []
         for base_path in possible_paths:
@@ -130,6 +192,11 @@ class RuntimeManager:
                     if candidate.exists():
                         igor_path = candidate
                         break
+
+                issue = runtime_trust_issue(runtime_dir, igor_path)
+                if issue:
+                    self.discovery_diagnostics.append(f"Skipped untrusted runtime {runtime_dir.name}: {issue}")
+                    continue
 
                 channel = classify_runtime_channel(version)
 
@@ -204,43 +271,39 @@ class RuntimeManager:
 
         if target_version:
             for r in installed:
-                if r.version == target_version:
+                if r.version == target_version and r.is_valid:
                     return r
             # If pinned version not found, we could fallback, but better to return None
             # or handle it in the caller. Let's return None to signal missing specific version.
             return None
 
-        # Default: match the project's recorded IDE family, otherwise prefer
-        # the newest stable runtime over beta/LTS installations.
-        valid = [r for r in installed if r.is_valid]
-        preferred_channel = self._project_release_channel()
-        if preferred_channel:
-            matching = [runtime for runtime in valid if runtime.release_channel == preferred_channel]
-            if matching:
-                return matching[0]
-        stable = [runtime for runtime in valid if runtime.release_channel == "stable"]
-        return stable[0] if stable else (valid[0] if valid else installed[0])
+        valid = [runtime for runtime in installed if runtime.is_valid]
+        for project_version in self._project_recorded_versions():
+            for runtime in valid:
+                if runtime.version == project_version:
+                    return runtime
+        return valid[0] if valid else None
 
-    def _project_release_channel(self) -> Optional[str]:
-        """Infer the intended runtime family from the project's recorded IDE version."""
+    def _project_recorded_versions(self) -> list[str]:
         try:
-            yyp_files = sorted(self.project_root.glob("*.yyp"))
-            if len(yyp_files) != 1:
-                return None
-            text = yyp_files[0].read_text(encoding="utf-8", errors="ignore")
-            match = re.search(r'"IDEVersion"\s*:\s*"([^"]+)"', text)
-            if not match:
-                return None
-            channel = classify_runtime_channel(match.group(1))
-            return channel if channel in {"stable", "beta", "lts"} else None
+            files = sorted(self.project_root.glob("*.yyp"))
+            if len(files) != 1:
+                return []
+            text = files[0].read_text(encoding="utf-8")
+            versions = []
+            for key in ("RuntimeVersion", "IDEVersion"):
+                match = re.search(r'"' + key + r'"\s*:\s*"([^"]+)"', text, re.IGNORECASE)
+                if match:
+                    versions.append(match.group(1).removeprefix("runtime-"))
+            return versions
         except OSError:
-            return None
+            return []
 
     def verify(self, version: Optional[str] = None) -> Dict[str, Any]:
         """Verify a runtime is valid and ready to use."""
         runtime = self.select(version)
         if not runtime:
-            return {"ok": False, "issues": ["No matching runtime found."]}
+            return {"ok": False, "issues": ["No matching runtime found.", *self.discovery_diagnostics]}
 
         issues = []
         if not runtime.is_valid:
@@ -263,4 +326,5 @@ class RuntimeManager:
                 "license_found": license_file is not None,
             },
             "issues": issues,
+            "discovery_diagnostics": self.discovery_diagnostics,
         }

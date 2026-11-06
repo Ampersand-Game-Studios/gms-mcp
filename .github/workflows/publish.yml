@@ -106,6 +106,9 @@ jobs:
     needs: [compute, build]
     if: needs.compute.outputs.should_publish == 'true'
     runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/project/gms-mcp/
     permissions:
       id-token: write
       contents: read

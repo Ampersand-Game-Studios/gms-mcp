@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 from ..telemetry import SUPPRESS_CLI_TELEMETRY_ENV_VAR
-from .project import _resolve_project_directory, _with_cli_pythonpath
+from .project import _resolve_project_directory
 from .results import ToolRunResult
 
 
@@ -117,15 +117,14 @@ def _request_value(value: Any) -> Any:
 def _worker_environment(module_root: Path | None) -> dict[str, str]:
     from gms_helpers.transactions import transaction_subprocess_environment
 
-    environment = _with_cli_pythonpath(os.environ.copy())
+    environment = os.environ.copy()
     environment[SUPPRESS_CLI_TELEMETRY_ENV_VAR] = "1"
     environment["PYTHONDONTWRITEBYTECODE"] = "1"
     environment.update(transaction_subprocess_environment())
-    if module_root is not None:
-        current = [part for part in environment.get("PYTHONPATH", "").split(os.pathsep) if part]
-        root_value = str(module_root)
-        if root_value not in current:
-            environment["PYTHONPATH"] = os.pathsep.join([root_value, *current])
+    environment["PYTHONSAFEPATH"] = "1"
+    environment["PYTHONPATH"] = os.pathsep.join(
+        dict.fromkeys([str(Path(__file__).resolve().parents[2]), *([str(module_root)] if module_root else [])])
+    )
     return environment
 
 
@@ -150,6 +149,7 @@ def _run_direct(
         ownership_manifest_path = None
         command = [
             sys.executable,
+            "-P",
             "-u",
             "-m",
             "gms_mcp.server.direct_worker",

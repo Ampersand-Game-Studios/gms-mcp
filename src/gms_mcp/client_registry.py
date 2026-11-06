@@ -21,19 +21,18 @@ class ClientSpec:
 
     def resolve_path(self, *, workspace_root: Path, scope: str, override: str | None) -> Path:
         if override:
-            p = Path(override).expanduser()
-            if p.is_absolute():
-                return p
-            return (workspace_root / p).resolve()
-
-        if scope == "workspace":
+            target = Path(override).expanduser()
+            if not target.is_absolute():
+                target = workspace_root / target
+        elif scope == "workspace":
             if not self.workspace_supported or not self.workspace_relpath:
                 raise ValueError(f"Client '{self.key}' does not support workspace scope.")
-            return workspace_root / self.workspace_relpath
-
-        if not self.global_supported or not self.global_relpath:
-            raise ValueError(f"Client '{self.key}' does not support global scope.")
-        return Path.home() / self.global_relpath
+            target = workspace_root / self.workspace_relpath
+        else:
+            if not self.global_supported or not self.global_relpath:
+                raise ValueError(f"Client '{self.key}' does not support global scope.")
+            target = Path.home() / self.global_relpath
+        return target
 
 
 CLIENT_SPECS: tuple[ClientSpec, ...] = (
