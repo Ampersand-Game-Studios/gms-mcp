@@ -262,7 +262,11 @@ def _journal_relative_path(
     if isinstance(raw_path, int):
         return None
     try:
-        raw_name = os.fsdecode(raw_path).replace("/", "\\").rsplit("\\", 1)[-1].rstrip(" .")
+        decoded = os.fsdecode(raw_path)
+        if os.name == "nt" and decoded.casefold() == os.devnull.casefold():
+            # Windows names the null device `nul`; subprocess DEVNULL opens it.
+            return None
+        raw_name = decoded.replace("/", "\\").rsplit("\\", 1)[-1].rstrip(" .")
         if os.name == "nt" and raw_name.split(".", 1)[0].casefold() in _WINDOWS_DEVICE_NAMES:
             raise ValidationError("Project mutation blocked: Windows device paths are forbidden")
         lexical = _lexical_absolute_path(raw_path, dir_fd)

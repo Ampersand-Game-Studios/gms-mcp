@@ -115,6 +115,18 @@ def test_c1_transaction_allows_tool_state_but_never_the_user_config(tmp_path, mo
             transactions._journal_relative_path(context, path)
 
 
+def test_c1_windows_null_device_is_allowed_but_other_devices_are_not(tmp_path, monkeypatch):
+    root = project(tmp_path)
+    context = transactions._TransactionJournalContext(root, tmp_path / "journal", tmp_path / "backup")
+    monkeypatch.setattr(transactions.os, "name", "nt")
+    monkeypatch.setattr(transactions.os, "devnull", "nul")
+    for path in ["nul", "NUL"]:
+        assert transactions._journal_relative_path(context, path) is None
+    for path in ["con", str(root / "nul"), str(root / "aux.txt")]:
+        with pytest.raises(ValidationError, match="device"):
+            transactions._journal_relative_path(context, path)
+
+
 def test_c1_transaction_allows_first_import_to_cache_bytecode(tmp_path, monkeypatch):
     root = project(tmp_path)
     package = tmp_path / "site-packages"
