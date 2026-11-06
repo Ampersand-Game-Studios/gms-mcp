@@ -14,6 +14,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from gms_helpers import transactions
+from gms_helpers.exceptions import ValidationError
 from gms_mcp.server import direct, direct_worker, subprocess_runner
 
 
@@ -61,7 +62,8 @@ def test_journal_helpers_reject_unsafe_paths_and_snapshot_failures(tmp_path: Pat
     context.journal_path.write_text('{"event":"open","path":"seen.txt","original":["absent"]}\n', encoding="utf-8")
 
     assert transactions._audit_absolute_path(object()) is None
-    assert transactions._journal_relative_path(context, tmp_path.parent / "outside.txt") is None
+    with pytest.raises(ValidationError, match="outside"):
+        transactions._journal_relative_path(context, tmp_path.parent / "outside.txt")
     assert transactions._journal_relative_path(context, tmp_path / ".git" / "config") is None
 
     transactions._append_journal_path(context, tmp_path / "seen.txt", "open")

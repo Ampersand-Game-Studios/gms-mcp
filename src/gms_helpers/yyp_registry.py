@@ -25,6 +25,7 @@ from .gm_order import (
     detect_ordering,
     insert_ordered,
 )
+from .path_safety import project_file_path, project_relative_path
 from .project_validation import ASSET_RESOURCE_TYPES, safe_project_path
 from .utils import find_yyp, load_json_loose, save_json
 
@@ -46,6 +47,10 @@ def load_yyp(project_root: str | Path) -> tuple[Path, dict[str, Any]]:
     for key in ("resources", "Folders", "IncludedFiles"):
         if key in data and not isinstance(data[key], list):
             raise ValidationError(f"{yyp_path.name}: '{key}' must be an array.")
+    for entry in data.get("resources", []):
+        ref = _resource_ref(entry)
+        if ref is not None:
+            project_relative_path(ref["path"], project_root=root, kind="resource path")
     return yyp_path, data
 
 
@@ -106,6 +111,7 @@ def register_assets(project_root: str | Path, asset_paths: Iterable[str]) -> dic
     registered: list[str] = []
     unchanged: list[str] = []
     for raw in asset_paths:
+        project_relative_path(raw, project_root=root, kind="asset path")
         path = _norm(raw)
         _kind, name = _asset_path_parts(path)
         target = safe_project_path(root, path)
@@ -134,8 +140,8 @@ def register_assets(project_root: str | Path, asset_paths: Iterable[str]) -> dic
         if existing and all(_resource_path(entry) == path for entry in existing):
             unchanged.append(path)
             continue
-        for entry in existing:
-            resources.remove(entry)
+        if existing:
+            raise ValidationError(f"Cannot register {name!r}: the name is already registered to a different path")
         insert_ordered(resources, {"id": {"name": name, "path": path}}, RESOURCE_ORDERINGS)
         registered.append(path)
     if registered:
@@ -740,7 +746,8 @@ def derive_yyp_entries(project_root: str | Path, base_text: str, changed_paths: 
             candidates = sorted(p for p in work_resources | base_resources if p.startswith(prefix))
             for candidate in candidates:
                 add(candidate)
-                asset = load_json_loose(root / candidate) if (root / candidate).is_file() else None
+                target = project_relative_path(candidate, project_root=root, kind="resource path")
+                asset = load_json_loose(project_file_path(candidate, project_root=root)) if target.exists() else None
                 parent = _as_dict(asset.get("parent")) if isinstance(asset, dict) else {}
                 parent_path = _norm(str(parent.get("path", "")))
                 if parent_path.startswith("folders/"):

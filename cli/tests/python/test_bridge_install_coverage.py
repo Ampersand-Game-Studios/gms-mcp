@@ -88,34 +88,35 @@ class TestBridgeServerCoverage(unittest.TestCase):
         server._running = True
         server._connected = True
         recv_socket = MagicMock()
-        recv_socket.recv.side_effect = [socket.timeout(), b"", OSError("recv fail")]
+        recv_socket.recv.side_effect = [socket.timeout(), b""]
         server._client_socket = recv_socket
-        _capture_output(server._receive_loop)
+        _capture_output(server._receive_loop, recv_socket)
+        self.assertFalse(server.is_connected)
 
         server._running = True
         server._connected = True
-        server._client_socket = None
-        _capture_output(server._receive_loop)
+        send_socket = MagicMock()
+        server._client_socket = send_socket
+        commands = MagicMock()
+
+        def empty_then_disconnect(*args, **kwargs):
+            server._connected = False
+            server._client_socket = None
+            raise queue.Empty()
+
+        commands.get.side_effect = empty_then_disconnect
+        server._send_loop(send_socket, commands)
 
         server._running = True
         server._connected = True
-        server._command_queue = MagicMock()
-        server._command_queue.get.side_effect = [queue.Empty(), StopIteration()]
-        with self.assertLogs("gms_helpers.bridge_server", level="ERROR") as logs:
-            server._send_loop()
-        self.assertTrue(any("Send loop error" in message for message in logs.output))
-
-        server._running = True
-        server._connected = True
-        server._command_queue = MagicMock()
-        server._command_queue.get.side_effect = [("cmd_2", "ping"), StopIteration()]
+        server._command_queue = queue.Queue()
+        server._command_queue.put(("cmd_2", "ping"))
         server._pending_commands = {"cmd_2": SimpleNamespace(error=None, completed_at=None)}
         server._client_socket = MagicMock()
         server._client_socket.sendall.side_effect = OSError("send fail")
-        with self.assertLogs("gms_helpers.bridge_server", level="ERROR") as logs:
-            server._send_loop()
-        self.assertTrue(any("Send error" in message for message in logs.output))
-        self.assertEqual(server._pending_commands["cmd_2"].error, "send fail")
+        server._send_loop(server._client_socket, server._command_queue)
+        self.assertFalse(server.is_connected)
+        self.assertEqual(server._pending_commands["cmd_2"].error, "Game disconnected")
 
         server.MAX_LOG_BUFFER = 1
         server._on_log = lambda _entry: (_ for _ in ()).throw(RuntimeError("log callback fail"))
@@ -159,7 +160,8 @@ class TestBridgeServerCoverage(unittest.TestCase):
         server = BridgeServer(port=6544)
         server._connected = True
         cmd_id = server.send_command_async("ping")
-        self.assertEqual(cmd_id, "cmd_1")
+        self.assertGreaterEqual(len(cmd_id), 32)
+        self.assertFalse(cmd_id.startswith("cmd_"))
         self.assertIsNotNone(server.get_command_result(cmd_id))
 
         server._running = True

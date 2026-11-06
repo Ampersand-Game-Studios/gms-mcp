@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import Dict, Any, List, Tuple, Optional
 
 # Direct imports - no complex fallbacks needed
+from .path_safety import project_child_path, validate_resource_name
 from .utils import (
     load_json_loose,
     save_pretty_json_gm,
@@ -1074,10 +1075,10 @@ def swap_sprite_png(
             f"{frame_count} frame(s) (valid: 0-{frame_count - 1})"
         )
 
-    frame_uuid = yy_data["frames"][frame_index]["name"]
-    layer_uuid = yy_data["layers"][0]["name"]
-    target_png = folder_path / f"{frame_uuid}.png"
-    layer_png = folder_path / "layers" / frame_uuid / f"{layer_uuid}.png"
+    frame_uuid = validate_resource_name(yy_data["frames"][frame_index]["name"], "sprite frame")
+    layer_uuid = validate_resource_name(yy_data["layers"][0]["name"], "sprite layer")
+    target_png = project_child_path(folder_path, f"{frame_uuid}.png", project_root=project_root)
+    layer_png = project_child_path(folder_path, "layers", frame_uuid, f"{layer_uuid}.png", project_root=project_root)
 
     png_source = Path(png_source)
     if not png_source.is_absolute():
@@ -1099,7 +1100,7 @@ def swap_sprite_png(
         pass
 
     # Windows can lock files; use a temp file + replace, with small retries.
-    tmp_png = target_png.with_name(target_png.name + ".swap_tmp")
+    tmp_png = project_child_path(folder_path, f"{frame_uuid}.png.swap_tmp", project_root=project_root)
     last_err: Exception | None = None
     for attempt in range(1, 6):
         try:

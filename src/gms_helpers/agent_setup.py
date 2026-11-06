@@ -32,7 +32,18 @@ def detect_shell():
 def test_gms_command():
     """Test if gms command is already available."""
     try:
-        result = subprocess.run(["gms", "--version"], capture_output=True, text=True, timeout=5)
+        executable = next(
+            (
+                found
+                for directory in os.environ.get("PATH", "").split(os.pathsep)
+                if directory and Path(directory).is_absolute() and Path(directory).resolve() != Path.cwd().resolve()
+                if (found := shutil.which(str(Path(directory) / "gms")))
+            ),
+            None,
+        )
+        if not executable:
+            raise FileNotFoundError("gms")
+        result = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=5)
         if result.returncode == 0 and "GMS Tools" in result.stdout:
             print("[OK] gms command is already available")
             return True
@@ -66,7 +77,11 @@ def setup_powershell_function():
 
     py_cmd = _preferred_python_command()
     # Create the PowerShell function (session-scoped)
-    function_def = f'function gms {{ & "{py_cmd}" "{gms_script}" $args }}'
+    quoted_python = py_cmd.replace("'", "''")
+    quoted_root = str(script_dir.parent).replace("'", "''")
+    function_def = (
+        f"function gms {{ $env:PYTHONPATH = '{quoted_root}'; & '{quoted_python}' -P -m gms_helpers.gms @args }}"
+    )
 
     print("[SETUP] For agents: Use this PowerShell function definition:")
     print(f"   {function_def}")
@@ -78,7 +93,12 @@ def setup_powershell_function():
     # Test direct script execution as fallback
     print("[TEST] Testing direct script execution...")
     try:
-        test_direct = subprocess.run([py_cmd, str(gms_script), "--version"], capture_output=True, text=True)
+        test_direct = subprocess.run(
+            [py_cmd, "-P", "-m", "gms_helpers.gms", "--version"],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONSAFEPATH": "1", "PYTHONPATH": str(script_dir.parent)},
+        )
 
         if test_direct.returncode == 0 and "GMS Tools" in test_direct.stdout:
             print("[OK] Direct script execution works")
@@ -112,25 +132,14 @@ def setup_bash_alias():
 
     py_cmd = _preferred_python_command()
     # Create the alias
-    alias_def = f"alias gms='{shlex.quote(py_cmd)} {shlex.quote(str(gms_script))}'"
+    command = shlex.join(["env", f"PYTHONPATH={script_dir.parent}", py_cmd, "-P", "-m", "gms_helpers.gms"])
+    alias_def = "alias gms=" + shlex.quote(command)
 
     print("[SETUP] Setting up bash alias...")
     print(f"   {alias_def}")
 
-    try:
-        # Set the alias for the current session
-        os.system(alias_def)
-
-        print("[OK] Bash alias created for current session")
-        print("[INFO] Note: This alias is temporary. For permanent setup, add to ~/.bashrc or ~/.zshrc")
-        return True
-
-    except Exception as e:
-        if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("GMS_TEST_SUITE"):
-            print(f"[EXPECTED ERROR] Error setting up bash alias: {e}")
-        else:
-            print(f"[ERROR] Error setting up bash alias: {e}")
-        return False
+    print("[INFO] Run the alias definition above in your shell, or add it to ~/.bashrc or ~/.zshrc.")
+    return True
 
 
 def auto_setup():
@@ -144,8 +153,12 @@ def auto_setup():
 
     # Try automatic installation for persistent setup first
     try:
-        install_script = Path(__file__).parent / "install.py"
-        subprocess.run([sys.executable, str(install_script), "--auto"], capture_output=True, text=True)
+        subprocess.run(
+            [sys.executable, "-P", "-m", "gms_helpers.install", "--auto"],
+            capture_output=True,
+            text=True,
+            env={**os.environ, "PYTHONSAFEPATH": "1", "PYTHONPATH": str(Path(__file__).resolve().parent.parent)},
+        )
     except Exception:
         pass  # Ignore if auto install fails - we'll fall back to session-only function
 

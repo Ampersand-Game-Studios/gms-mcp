@@ -2,6 +2,9 @@
   "name": "gms-mcp-telemetry-service",
   "private": true,
   "type": "module",
+  "engines": {
+    "node": "^22.23.4 || ^24.22.1 || ^26.12.1"
+  },
   "scripts": {
     "test": "node --test test/*.test.js",
     "check": "biome check src test",

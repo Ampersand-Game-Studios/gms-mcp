@@ -49,6 +49,22 @@ class RunnerArtifactMixin:
                 return candidate
         return None
 
+    @staticmethod
+    def _artifact_fingerprints(build_dir: Path) -> dict[Path, tuple[int, int, int, int]]:
+        fingerprints = {}
+        for path in build_dir.rglob("*"):
+            if path.is_file() and not path.is_symlink():
+                info = path.stat()
+                fingerprints[path] = (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns)
+        return fingerprints
+
+    @staticmethod
+    def _artifact_is_fresh(path: Path, baseline: dict) -> bool:
+        if path.is_symlink() or not path.is_file():
+            return False
+        info = path.stat()
+        return baseline.get(path) != (info.st_dev, info.st_ino, info.st_mtime_ns, info.st_ctime_ns)
+
     def _find_launch_target(self, build_dir: Path, project_name: str, platform_target: str) -> Optional[Path]:
         """Locate a runnable output artifact for the selected platform."""
         target = normalize_platform_target(platform_target)

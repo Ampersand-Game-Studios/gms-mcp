@@ -96,7 +96,10 @@ def gm_mcp_health(project_root: Optional[str] = None) -> MaintenanceResult:
                 id="runtime",
                 status="ok",
                 summary="Igor found.",
-                details=[f"Runtime: {runner.runtime_path.name if runner.runtime_path else 'Unknown'}"],
+                details=[
+                    f"Runtime: {runner.runtime_path.name if runner.runtime_path else 'Unknown'}",
+                    *runner._runtime_manager.discovery_diagnostics,
+                ],
                 data={"runtime": runner.runtime_path.name if runner.runtime_path else None},
             )
         )
@@ -106,7 +109,10 @@ def gm_mcp_health(project_root: Optional[str] = None) -> MaintenanceResult:
                 id="runtime",
                 status="error",
                 summary="GameMaker runtime or Igor not found.",
-                details=["Ensure GameMaker is installed and runtimes are downloaded."],
+                details=[
+                    "Ensure GameMaker is installed and runtimes are downloaded.",
+                    *runner._runtime_manager.discovery_diagnostics,
+                ],
             )
         )
 

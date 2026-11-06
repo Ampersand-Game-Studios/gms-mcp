@@ -5,6 +5,11 @@ import subprocess
 from pathlib import Path
 
 
+def safe_git_command(repo: Path, *args: str) -> list[str]:
+    """Disable repository-configured process hooks for local Git operations."""
+    return ["git", "-c", "core.fsmonitor=false", "-c", f"core.hooksPath={os.devnull}", "-C", str(repo), *args]
+
+
 def _list_yyp_files(directory: Path) -> list[Path]:
     try:
         return sorted(directory.glob("*.yyp"))
@@ -53,7 +58,7 @@ def _tracked_yyp_paths(directory: Path) -> list[Path] | None:
     workspace_root = directory.resolve()
     try:
         completed = subprocess.run(
-            ["git", "-C", str(directory), "ls-files", "-z", "--", "*.yyp"],
+            safe_git_command(directory, "ls-files", "-z", "--", "*.yyp"),
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
