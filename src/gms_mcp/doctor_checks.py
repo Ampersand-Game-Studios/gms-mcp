@@ -223,6 +223,8 @@ def _build_runtime_selection_check(project_directory: Path) -> DoctorCheck:
         )
 
     status = "ok" if verify.get("ok") else "error"
+    if status == "ok" and manager.exposure_warnings:
+        status = "warning"
     details = [f"Installed runtimes: {len(installed)}", *manager.discovery_diagnostics]
     if pinned:
         details.append(f"Pinned runtime: {pinned}")
@@ -244,7 +246,13 @@ def _build_runtime_selection_check(project_directory: Path) -> DoctorCheck:
             "pinned_version": pinned,
             "verification": verify,
         },
-        recommendation=["Verify the selected runtime in GameMaker and refresh runtimes."] if status == "error" else [],
+        recommendation=(
+            ["Verify the selected runtime in GameMaker and refresh runtimes."]
+            if status == "error"
+            else ["Restrict the runtime cache to your account, or set GMS_MCP_RUNTIME_ROOT to an owner-only cache."]
+            if status == "warning"
+            else []
+        ),
     )
 
 

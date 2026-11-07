@@ -164,6 +164,100 @@ def test_discovery_only_scans_known_cache_families(tmp_path):
     assert {path.parents[1].name for path in roots} == {"GameMakerStudio2", "GameMakerStudio2-LTS2026"}
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX trust checks")
+def test_default_cache_is_trusted_like_the_ide_and_warns_when_shared(tmp_path, monkeypatch):
+    root, runtime, igor = _runtime(tmp_path)
+    root.chmod(0o777)
+    monkeypatch.delenv("GMS_MCP_RUNTIME_ROOT", raising=False)
+    monkeypatch.setattr(runtime_manager.platform, "system", lambda: "Linux")
+    monkeypatch.setattr(runtime_manager, "default_runtime_roots", lambda system=None: [root.absolute()])
+    assert runtime_manager.runtime_trust_issue(runtime, igor) is None
+    (root / "runtime-2024.14.4.265/bin/igor/linux/x64").mkdir(parents=True)
+    (root / "runtime-2024.14.4.265/bin/igor/linux/x64/Igor").write_text("runtime")
+    manager = runtime_manager.RuntimeManager(tmp_path)
+    assert {runtime.version for runtime in manager.list_installed()} == {"2024.14.4.268", "2024.14.4.265"}
+    assert len(manager.exposure_warnings) == 1
+    assert str(root) in manager.exposure_warnings[0]
+    assert manager.discovery_diagnostics == manager.exposure_warnings
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX trust checks")
+def test_explicit_root_stays_strict_even_when_it_is_the_default_cache(tmp_path, monkeypatch):
+    root, runtime, igor = _runtime(tmp_path)
+    root.chmod(0o777)
+    monkeypatch.setattr(runtime_manager, "default_runtime_roots", lambda system=None: [root.absolute()])
+    monkeypatch.setenv("GMS_MCP_RUNTIME_ROOT", str(root))
+    assert not runtime_manager.is_default_cache_runtime(runtime)
+    assert runtime_manager.runtime_trust_issue(runtime, igor)
+
+
+@pytest.mark.parametrize("component", ["runtime", "binary"])
+def test_default_cache_still_rejects_symlinked_components(tmp_path, monkeypatch, component):
+    root, runtime, igor = _runtime(tmp_path)
+    monkeypatch.delenv("GMS_MCP_RUNTIME_ROOT", raising=False)
+    monkeypatch.setattr(runtime_manager, "default_runtime_roots", lambda system=None: [root.absolute()])
+    target = {"runtime": runtime, "binary": igor}[component]
+    moved = target.with_name(target.name + "-real")
+    target.rename(moved)
+    target.symlink_to(moved, target_is_directory=moved.is_dir())
+    assert runtime_manager.runtime_trust_issue(runtime, igor) == "runtime component is a symlink or reparse point"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink ownership")
+def test_default_cache_rejects_a_redirected_ancestor(tmp_path, monkeypatch):
+    real = tmp_path / "elsewhere"
+    _, runtime, igor = _runtime(real)
+    link = tmp_path / "GameMakerStudio2"
+    link.symlink_to(real, target_is_directory=True)
+    root = link / "runtimes"
+    monkeypatch.delenv("GMS_MCP_RUNTIME_ROOT", raising=False)
+    monkeypatch.setattr(runtime_manager, "default_runtime_roots", lambda system=None: [root.absolute()])
+    linked_runtime = root / runtime.name
+    linked_igor = linked_runtime / igor.relative_to(runtime)
+    assert runtime_manager.is_default_cache_runtime(linked_runtime)
+    issue = runtime_manager.runtime_trust_issue(linked_runtime, linked_igor)
+    if link.lstat().st_uid == 0:
+        assert issue is None
+    else:
+        assert issue == "runtime ancestor is an untrusted symlink"
+
+
+def test_default_cache_rejects_a_reparse_point_ancestor(tmp_path, monkeypatch):
+    root, runtime, igor = _runtime(tmp_path)
+    monkeypatch.delenv("GMS_MCP_RUNTIME_ROOT", raising=False)
+    monkeypatch.setattr(runtime_manager, "default_runtime_roots", lambda system=None: [root.absolute()])
+    original = Path.lstat
+
+    def junction(path, *args, **kwargs):
+        info = original(path, *args, **kwargs)
+        if path == tmp_path:
+            return SimpleNamespace(st_mode=info.st_mode, st_uid=info.st_uid, st_file_attributes=0x400)
+        return info
+
+    with mock.patch.object(Path, "lstat", junction):
+        assert runtime_manager.runtime_trust_issue(runtime, igor) == "runtime ancestor is a reparse point"
+
+
+def test_doctor_warns_about_a_shared_runtime_cache(tmp_path):
+    from gms_mcp.doctor_checks import _build_runtime_selection_check
+
+    active = runtime_manager.RuntimeInfo("2024.14.4.268", "path", "igor", True, "stable")
+    warning = "Other accounts can modify GameMaker's runtime cache at /shared"
+    manager = SimpleNamespace(
+        list_installed=lambda: [active],
+        select=lambda: active,
+        get_pinned=lambda: None,
+        verify=lambda: {"ok": True},
+        discovery_diagnostics=[warning],
+        exposure_warnings=[warning],
+    )
+    with mock.patch("gms_helpers.runtime_manager.RuntimeManager", return_value=manager):
+        check = _build_runtime_selection_check(tmp_path)
+    assert check.status == "warning"
+    assert warning in check.details
+    assert "GMS_MCP_RUNTIME_ROOT" in check.recommendation[0]
+
+
 def test_exact_recorded_version_precedes_newest(tmp_path):
     (tmp_path / "game.yyp").write_text('{"MetaData":{"IDEVersion":"2024.14.4.268"}}')
     manager = runtime_manager.RuntimeManager(tmp_path)
