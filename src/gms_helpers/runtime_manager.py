@@ -124,8 +124,22 @@ def runtime_trust_issue(runtime_dir: Path, igor_path: Path | None) -> str | None
     if issue or components is None:
         return issue
     if is_default_cache_runtime(runtime_dir):
-        return None
+        return _redirected_ancestor_issue(runtime_dir)
     return _runtime_permission_issue(runtime_dir, components)
+
+
+def _redirected_ancestor_issue(runtime_dir: Path) -> str | None:
+    """Reject a default cache reached through a redirected folder; root-owned POSIX aliases are allowed."""
+    try:
+        for path in runtime_dir.parents:
+            info = path.lstat()
+            if getattr(info, "st_file_attributes", 0) & 0x400:
+                return "runtime ancestor is a reparse point"
+            if stat.S_ISLNK(info.st_mode) and info.st_uid != 0:
+                return "runtime ancestor is an untrusted symlink"
+    except OSError:
+        return "runtime trust could not be verified"
+    return None
 
 
 def runtime_exposure_issue(runtime_dir: Path, igor_path: Path | None) -> str | None:
