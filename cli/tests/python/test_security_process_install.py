@@ -203,6 +203,41 @@ def test_default_cache_still_rejects_symlinked_components(tmp_path, monkeypatch,
     assert runtime_manager.runtime_trust_issue(runtime, igor) == "runtime component is a symlink or reparse point"
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX symlink ownership")
+def test_default_cache_rejects_a_redirected_ancestor(tmp_path, monkeypatch):
+    real = tmp_path / "elsewhere"
+    _, runtime, igor = _runtime(real)
+    link = tmp_path / "GameMakerStudio2"
+    link.symlink_to(real, target_is_directory=True)
+    root = link / "runtimes"
+    monkeypatch.delenv("GMS_MCP_RUNTIME_ROOT", raising=False)
+    monkeypatch.setattr(runtime_manager, "default_runtime_roots", lambda system=None: [root.absolute()])
+    linked_runtime = root / runtime.name
+    linked_igor = linked_runtime / igor.relative_to(runtime)
+    assert runtime_manager.is_default_cache_runtime(linked_runtime)
+    issue = runtime_manager.runtime_trust_issue(linked_runtime, linked_igor)
+    if link.lstat().st_uid == 0:
+        assert issue is None
+    else:
+        assert issue == "runtime ancestor is an untrusted symlink"
+
+
+def test_default_cache_rejects_a_reparse_point_ancestor(tmp_path, monkeypatch):
+    root, runtime, igor = _runtime(tmp_path)
+    monkeypatch.delenv("GMS_MCP_RUNTIME_ROOT", raising=False)
+    monkeypatch.setattr(runtime_manager, "default_runtime_roots", lambda system=None: [root.absolute()])
+    original = Path.lstat
+
+    def junction(path, *args, **kwargs):
+        info = original(path, *args, **kwargs)
+        if path == tmp_path:
+            return SimpleNamespace(st_mode=info.st_mode, st_uid=info.st_uid, st_file_attributes=0x400)
+        return info
+
+    with mock.patch.object(Path, "lstat", junction):
+        assert runtime_manager.runtime_trust_issue(runtime, igor) == "runtime ancestor is a reparse point"
+
+
 def test_doctor_warns_about_a_shared_runtime_cache(tmp_path):
     from gms_mcp.doctor_checks import _build_runtime_selection_check
 
