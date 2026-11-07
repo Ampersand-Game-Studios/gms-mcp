@@ -68,9 +68,32 @@ def _runtime_roots(parent: Path) -> List[Path]:
     return sorted(path for name in names if (path := parent / name / "Cache/runtimes").is_dir())
 
 
-def runtime_trust_issue(runtime_dir: Path, igor_path: Path | None) -> str | None:
-    """Check the cache root and every component through the executable."""
-    runtime_dir = Path(os.path.abspath(runtime_dir))
+def default_runtime_roots(system: str | None = None) -> List[Path]:
+    """GameMaker's own runtime caches for this platform; the IDE builds from these."""
+    system = system or platform.system()
+    if system == "Windows":
+        program_data = Path(os.environ.get("PROGRAMDATA", "C:/ProgramData"))
+        app_data = Path(os.environ.get("APPDATA", str(Path.home() / "AppData/Roaming")))
+        roots = [*_runtime_roots(program_data), *_runtime_roots(app_data)]
+    elif system == "Darwin":
+        roots = [*_runtime_roots(Path("/Users/Shared")), *_runtime_roots(Path.home() / "Library/Application Support")]
+    else:
+        roots = [
+            *_runtime_roots(Path.home() / ".local/share"),
+            *_runtime_roots(Path("/var/opt")),
+            *_runtime_roots(Path("/opt")),
+        ]
+    return list(dict.fromkeys(path.absolute() for path in roots))
+
+
+def is_default_cache_runtime(runtime_dir: Path) -> bool:
+    """Whether a runtime sits in GameMaker's default cache and no explicit root was chosen."""
+    if os.environ.get(RuntimeManager.RUNTIME_ROOT_ENV_VAR) is not None:
+        return False
+    return Path(os.path.abspath(runtime_dir)).parent in default_runtime_roots()
+
+
+def _runtime_components(runtime_dir: Path, igor_path: Path | None) -> tuple[list[Path] | None, str | None]:
     target = Path(os.path.abspath(igor_path)) if igor_path is not None else runtime_dir
     try:
         target.relative_to(runtime_dir)
@@ -80,12 +103,41 @@ def runtime_trust_issue(runtime_dir: Path, igor_path: Path | None) -> str | None
         for path in [*components, runtime_dir.parent]:
             info = path.lstat()
             if stat.S_ISLNK(info.st_mode) or getattr(info, "st_file_attributes", 0) & 0x400:
-                return "runtime component is a symlink or reparse point"
+                return None, "runtime component is a symlink or reparse point"
             expected_file = path == target and igor_path is not None
             if not (stat.S_ISREG(info.st_mode) if expected_file else stat.S_ISDIR(info.st_mode)):
-                return "runtime component is not a regular file or directory"
+                return None, "runtime component is not a regular file or directory"
     except (OSError, ValueError):
-        return "runtime trust could not be verified"
+        return None, "runtime trust could not be verified"
+    return components, None
+
+
+def runtime_trust_issue(runtime_dir: Path, igor_path: Path | None) -> str | None:
+    """Return why a runtime must not be used, or None.
+
+    GameMaker's default caches are trusted as the IDE trusts them: the IDE runs Igor
+    from the same shared folders, so refusing them would protect nothing. Every
+    other location must also pass ownership and permission checks.
+    """
+    runtime_dir = Path(os.path.abspath(runtime_dir))
+    components, issue = _runtime_components(runtime_dir, igor_path)
+    if issue or components is None:
+        return issue
+    if is_default_cache_runtime(runtime_dir):
+        return None
+    return _runtime_permission_issue(runtime_dir, components)
+
+
+def runtime_exposure_issue(runtime_dir: Path, igor_path: Path | None) -> str | None:
+    """Return how other accounts could modify a runtime, regardless of where it lives."""
+    runtime_dir = Path(os.path.abspath(runtime_dir))
+    components, issue = _runtime_components(runtime_dir, igor_path)
+    if issue or components is None:
+        return issue
+    return _runtime_permission_issue(runtime_dir, components)
+
+
+def _runtime_permission_issue(runtime_dir: Path, components: list[Path]) -> str | None:
     if os.name == "nt":
         from .windows_security import windows_path_trust_issue
 
@@ -132,6 +184,7 @@ class RuntimeManager:
     def __init__(self, project_root: Path):
         self.project_root = project_root
         self.discovery_diagnostics: list[str] = []
+        self.exposure_warnings: list[str] = []
         self._cached_runtimes: Optional[List[RuntimeInfo]] = None
 
     def list_installed(self) -> List[RuntimeInfo]:
@@ -145,25 +198,13 @@ class RuntimeManager:
             # An explicit root is authoritative and fail-closed: do not silently
             # scan unrelated machine-wide GameMaker installations if it is wrong.
             possible_paths = [Path(explicit_runtime_root).expanduser()]
-        elif system == "Windows":
-            program_data = Path(os.environ.get("PROGRAMDATA", "C:/ProgramData"))
-            app_data = Path(os.environ.get("APPDATA", str(Path.home() / "AppData/Roaming")))
-            possible_paths = [*_runtime_roots(program_data), *_runtime_roots(app_data)]
-        elif system == "Darwin":  # macOS
-            possible_paths = [
-                *_runtime_roots(Path("/Users/Shared")),
-                *_runtime_roots(Path.home() / "Library/Application Support"),
-            ]
-        else:  # Linux
-            possible_paths = [
-                *_runtime_roots(Path.home() / ".local/share"),
-                *_runtime_roots(Path("/var/opt")),
-                *_runtime_roots(Path("/opt")),
-            ]
+        else:
+            possible_paths = default_runtime_roots(system)
 
         possible_paths = list(dict.fromkeys(path.absolute() for path in possible_paths))
 
         runtimes = []
+        warned_roots: set[Path] = set()
         for base_path in possible_paths:
             if not base_path.exists():
                 continue
@@ -197,6 +238,16 @@ class RuntimeManager:
                 if issue:
                     self.discovery_diagnostics.append(f"Skipped untrusted runtime {runtime_dir.name}: {issue}")
                     continue
+                exposed = explicit_runtime_root is None and runtime_dir.parent not in warned_roots
+                if exposed and (exposure := runtime_exposure_issue(runtime_dir, igor_path)):
+                    warned_roots.add(runtime_dir.parent)
+                    warning = (
+                        f"Other accounts can modify GameMaker's runtime cache at {runtime_dir.parent} "
+                        f"({exposure}); the GameMaker IDE builds from it too. Restrict it to your account, or set "
+                        f"{self.RUNTIME_ROOT_ENV_VAR} to an owner-only cache."
+                    )
+                    self.exposure_warnings.append(warning)
+                    self.discovery_diagnostics.append(warning)
 
                 channel = classify_runtime_channel(version)
 
