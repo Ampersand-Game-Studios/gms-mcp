@@ -2,105 +2,67 @@
 Orphan Detection - Find assets that exist on disk but aren't referenced in the project
 """
 
-import os
 import glob
 from pathlib import Path
-from typing import List, Set, Tuple
+from typing import List, Optional, Tuple
 
-from ..utils import load_json, find_yyp_file, find_yyp
+from ..utils import load_json, find_yyp
 from ..path_safety import assert_project_tree_contained, project_relative_path
+from .path_utils import is_options_path
+
+
+def _project_root_path(project_root: Optional[str]) -> Path:
+    """Resolve the project to scan; "." means the working directory, never an env override."""
+    if not project_root or str(project_root) == ".":
+        return assert_project_tree_contained(Path.cwd())
+    return assert_project_tree_contained(Path(project_root))
 
 
 def find_orphaned_assets(project_root: str = ".") -> List[Tuple[str, str]]:
     """
     Find assets that exist on disk but aren't referenced in the .yyp file.
 
+    Raises on unreadable projects instead of reporting a clean result.
+
     Returns:
         List of (asset_path, asset_type) tuples for orphaned assets
     """
-    if not project_root or project_root == ".":
-        from ..utils import resolve_project_directory
+    root = _project_root_path(project_root)
+    yyp_data = load_json(find_yyp(root))
 
-        project_root = str(resolve_project_directory())
-    project_root = str(assert_project_tree_contained(Path(project_root)))
+    # Compare case-insensitively: GameMaker resolves resource paths that way on
+    # Windows/macOS, so a case-only difference is not an orphan.
+    referenced_paths = set()
+    for resource in yyp_data.get("resources", []):
+        resource_id = resource.get("id", {}) if isinstance(resource, dict) else {}
+        path = resource_id.get("path", "") if isinstance(resource_id, dict) else ""
+        if path:
+            referenced_paths.add(path.replace("\\", "/").casefold())
+
+    asset_patterns = [
+        "scripts/**/*.yy",
+        "objects/**/*.yy",
+        "sprites/**/*.yy",
+        "rooms/**/*.yy",
+        "sounds/**/*.yy",
+        "fonts/**/*.yy",
+        "shaders/**/*.yy",
+        "animcurves/**/*.yy",
+        "folders/**/*.yy",
+    ]
+
     orphans = []
+    escaped_root = Path(glob.escape(str(root)))
+    for pattern in asset_patterns:
+        for asset_file in glob.glob(str(escaped_root / pattern), recursive=True):
+            # Retain the real spelling for cleanup on case-sensitive filesystems.
+            actual_path = Path(asset_file).relative_to(root).as_posix()
+            if actual_path.casefold() in referenced_paths:
+                continue
+            project_relative_path(actual_path, project_root=root, kind="orphan path")
+            orphans.append((actual_path, _get_asset_type_from_path(actual_path)))
 
-    try:
-        # Ensure we have the correct GameMaker project root
-        if not project_root or project_root == ".":
-            # Use proper project root detection if not specified or using current dir
-            from ..utils import resolve_project_directory
-
-            project_root = str(resolve_project_directory())
-
-        # Change to project directory temporarily to use find_yyp_file()
-        original_cwd = os.getcwd()
-        os.chdir(project_root)
-        try:
-            yyp_path = find_yyp_file()
-            yyp_data = load_json(yyp_path)
-        finally:
-            os.chdir(original_cwd)
-
-        # Get all referenced asset paths
-        referenced_paths = set()
-        resources = yyp_data.get("resources", [])
-
-        for resource in resources:
-            resource_id = resource.get("id", {})
-            path = resource_id.get("path", "")
-            if path:
-                # Normalize path separators and convert to lowercase for case-insensitive comparison
-                normalized_path = path.replace("\\", "/").lower()
-                referenced_paths.add(normalized_path)
-
-        # Find all asset files on disk
-        asset_patterns = [
-            "scripts/**/*.yy",
-            "objects/**/*.yy",
-            "sprites/**/*.yy",
-            "rooms/**/*.yy",
-            "sounds/**/*.yy",
-            "fonts/**/*.yy",
-            "shaders/**/*.yy",
-            "animcurves/**/*.yy",
-            "folders/**/*.yy",
-        ]
-
-        for pattern in asset_patterns:
-            full_pattern = str(Path(project_root) / pattern)
-            asset_files = glob.glob(full_pattern, recursive=True)
-
-            for asset_file in asset_files:
-                # Normalize path for comparison and convert to lowercase
-                normalized_file = asset_file.replace("\\", "/").lower()
-                relative_path = normalized_file
-
-                # Make relative to project root if it's absolute
-                if os.path.isabs(asset_file):  # Use original path for isabs check
-                    try:
-                        relative_path = os.path.relpath(asset_file, project_root).replace("\\", "/").lower()
-                    except ValueError:
-                        # Can't make relative, use as-is
-                        pass
-
-                # Check if this asset is referenced in the .yyp (case-insensitive comparison)
-                if relative_path not in referenced_paths:
-                    asset_type = _get_asset_type_from_path(relative_path)
-                    # Compare case-insensitively, but retain the real spelling
-                    # for cleanup on case-sensitive filesystems.
-                    actual_path = Path(asset_file).relative_to(project_root).as_posix()
-                    project_relative_path(actual_path, project_root=Path(project_root), kind="orphan path")
-                    orphans.append((actual_path, asset_type))
-
-        return orphans
-
-    except Exception as e:
-        if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("GMS_TEST_SUITE"):
-            print(f"[EXPECTED ERROR] Error finding orphaned assets: {e}")
-        else:
-            print(f"Error finding orphaned assets: {e}")
-        return []
+    return orphans
 
 
 def _get_asset_type_from_path(path: str) -> str:
@@ -130,45 +92,31 @@ def find_missing_assets(project_root: str = ".") -> List[Tuple[str, str]]:
     """
     Find assets referenced in .yyp but missing from disk.
 
+    Raises on unreadable projects instead of reporting a clean result.
+
     Returns:
         List of (asset_path, asset_type) tuples for missing assets
     """
-    root = assert_project_tree_contained(Path(project_root))
+    root = _project_root_path(project_root)
+    yyp_data = load_json(find_yyp(root))
+
     missing = []
+    for resource in yyp_data.get("resources", []):
+        resource_id = resource.get("id", {}) if isinstance(resource, dict) else {}
+        path = resource_id.get("path", "") if isinstance(resource_id, dict) else ""
+        # Options files have a special format and location.
+        if not path or is_options_path(path):
+            continue
 
-    try:
-        # Load .yyp file
-        yyp_path = str(find_yyp(root))
-        yyp_data = load_json(yyp_path)
+        asset_type = _get_asset_type_from_path(path)
+        # Folders are logical-only; they should not have physical files.
+        if asset_type == "folder":
+            continue
 
-        resources = yyp_data.get("resources", [])
+        if not project_relative_path(path, project_root=root, kind="resource path").exists():
+            missing.append((path, asset_type))
 
-        for resource in resources:
-            resource_id = resource.get("id", {})
-            path = resource_id.get("path", "")
-
-            if path:
-                # Skip options files - they have special format
-                if "options" in path.lower():
-                    continue
-
-                asset_type = _get_asset_type_from_path(path)
-                # Folders are logical-only; they should not have physical files.
-                if asset_type == "folder":
-                    continue  # Never treat folders as missing
-
-                # Check if file exists
-                if not project_relative_path(path, project_root=root, kind="resource path").exists():
-                    missing.append((path, asset_type))
-
-        return missing
-
-    except Exception as e:
-        if os.environ.get("PYTEST_CURRENT_TEST") or os.environ.get("GMS_TEST_SUITE"):
-            print(f"[EXPECTED ERROR] Error finding missing assets: {e}")
-        else:
-            print(f"Error finding missing assets: {e}")
-        return []
+    return missing
 
 
 def print_orphan_report(orphans: List[Tuple[str, str]], missing: List[Tuple[str, str]]):

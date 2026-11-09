@@ -288,6 +288,92 @@ class TestTextureGroups(unittest.TestCase):
         ref = parse_group_ref(tileset["ConfigValues"]["desktop"]["textureGroupId"])
         self.assertEqual(ref["name"], "missing_group")
 
+    def _set_yyp(self, mutate) -> None:
+        data = load_json_loose(self.project_root / "TestGame.yyp")
+        mutate(data)
+        (self.project_root / "TestGame.yyp").write_text(json.dumps(data, indent=2), encoding="utf-8")
+
+    def test_rename_and_delete_use_canonical_name_and_object_group_parents(self):
+        def nest_fonts_under_game(data):
+            fonts = next(g for g in data["TextureGroups"] if g["name"] == "fonts")
+            fonts["groupParent"] = {"name": "game", "path": "texturegroups/game"}
+
+        self._set_yyp(nest_fonts_under_game)
+        res = texture_group_rename(self.project_root, "GAME", "world", dry_run=False)
+        self.assertTrue(res.get("ok"), res)
+        groups = {g["name"]: g for g in load_json_loose(self.project_root / "TestGame.yyp")["TextureGroups"]}
+        self.assertEqual(groups["fonts"]["groupParent"], {"name": "world", "path": "texturegroups/world"})
+        tileset = load_json_loose(self.project_root / "tilesets" / "ts_test" / "ts_test.yy")
+        self.assertEqual(tileset["textureGroupId"]["name"], "world")
+
+        res = texture_group_delete(self.project_root, "WORLD", reassign_to="default", dry_run=False)
+        self.assertTrue(res.get("ok"), res)
+        groups = {g["name"]: g for g in load_json_loose(self.project_root / "TestGame.yyp")["TextureGroups"]}
+        self.assertNotIn("world", groups)
+        self.assertEqual(groups["fonts"]["groupParent"], {"name": "Default", "path": "texturegroups/Default"})
+
+    def test_default_group_cannot_be_renamed_or_deleted(self):
+        self.assertFalse(texture_group_rename(self.project_root, "default", "Main")["ok"])
+        res = texture_group_delete(self.project_root, "Default", reassign_to="game")
+        self.assertFalse(res["ok"])
+        self.assertIn("Default texture group cannot be deleted", res["error"])
+
+    def test_update_rejects_unknown_fields_and_configs(self):
+        res = texture_group_update(self.project_root, "game", patch={"resourceType": "GMSprite"})
+        self.assertFalse(res["ok"])
+        res = texture_group_update(self.project_root, "game", patch={"border": 4}, configs=["switch"])
+        self.assertFalse(res["ok"])
+        res = texture_group_update(self.project_root, "game", patch={"groupParent": "missing"})
+        self.assertFalse(res["ok"])
+        res = texture_group_update(self.project_root, "game", patch={"groupParent": "fonts"}, dry_run=True)
+        self.assertTrue(res["ok"], res)
+
+    def test_assign_folder_prefix_matches_logical_parent_and_skips_non_texture_assets(self):
+        def add_assets(data):
+            data["resources"].append({"id": {"name": "spr_ui", "path": "sprites/spr_ui/spr_ui.yy"}})
+            data["resources"].append({"id": {"name": "scr_ui", "path": "scripts/scr_ui/scr_ui.yy"}})
+
+        self._set_yyp(add_assets)
+        for folder, name, data in (
+            (
+                "sprites",
+                "spr_ui",
+                {"resourceType": "GMSprite", "textureGroupId": {"name": "Default", "path": "texturegroups/Default"}},
+            ),
+            ("scripts", "scr_ui", {"resourceType": "GMScript"}),
+        ):
+            (self.project_root / folder / name).mkdir(parents=True, exist_ok=True)
+            data = {**data, "name": name, "parent": {"name": "UI", "path": "folders/Game/UI.yy"}}
+            (self.project_root / folder / name / f"{name}.yy").write_text(json.dumps(data), encoding="utf-8")
+
+        res = texture_group_assign(
+            self.project_root, "game", folder_prefix="folders/Game", include_top_level=True, dry_run=True
+        )
+        self.assertTrue(res["ok"], res)
+        self.assertEqual(res["changed_files"], ["sprites/spr_ui/spr_ui.yy"])
+        self.assertIn("scr_ui", res["details"]["assets_skipped"])
+
+        # "Gam" is a substring of the path but not a logical folder prefix.
+        res = texture_group_assign(self.project_root, "game", folder_prefix="Gam", dry_run=True)
+        self.assertEqual(res["changed_files"], [])
+
+        res = texture_group_assign(self.project_root, "game", configs=["switch"], dry_run=True)
+        self.assertFalse(res["ok"])
+
+    def test_cli_set_rejects_malformed_items(self):
+        from types import SimpleNamespace
+
+        from gms_helpers.commands.texture_group_commands import handle_texture_groups_update
+
+        before = (self.project_root / "TestGame.yyp").read_text(encoding="utf-8")
+        for item in ("border", "=4"):
+            with self.subTest(item=item):
+                result = handle_texture_groups_update(
+                    SimpleNamespace(project_root=str(self.project_root), name="game", set=[item], dry_run=False)
+                )
+                self.assertFalse(result.success)
+        self.assertEqual((self.project_root / "TestGame.yyp").read_text(encoding="utf-8"), before)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -21,7 +21,8 @@ def tile_integer(value: Any, name: str = "tile") -> int:
 
 
 def is_empty_tile(raw: int) -> bool:
-    return raw == TILE_EMPTY
+    # TileDataFormat 0 rooms may store the empty marker unsigned (2147483648) rather than signed.
+    return (int(raw) & 0xFFFFFFFF) == 0x80000000
 
 
 def tile_index(raw: int) -> int:

@@ -38,6 +38,6 @@ Set `dry_run=false` to apply. Writes use the project lock and durable transactio
 
 ## Validate
 
-`gm_room_map_validate()` checks tile layers in every registered room, including nested layers. Pass `room_name` to inspect one room. It reports malformed compressed data, invalid sizes, missing tilesets and tile indices outside the tileset's range. Failures return `ok=false` with structured issues.
+`gm_room_map_validate()` checks tile layers in every registered room, including nested layers. Pass `room_name` to inspect one room. It reports malformed compressed data, invalid sizes, missing or unreadable tilesets and tile indices outside the tileset's range. A bad layer (or, in a whole-project check, an unreadable room) is reported as an issue and checking continues. Failures return `ok=false` with structured issues.
 
 Adapted from [ngocdh383's map contribution](https://github.com/ngocdh383/gms-mcp/commit/95140c44cc5ff8de9536141be1d5d8031c85349d), using the current project's safety and serialization systems.

@@ -45,6 +45,12 @@ class TestResourceToolValidation(unittest.TestCase):
         )
         self.sandbox.start()
         self.addCleanup(self.sandbox.stop)
+        # The validation holds the project lock; keep the optional team lock (which
+        # shells out) out of tests that patch subprocess.run.
+        self.lock_environment = patch.dict(os.environ)
+        self.lock_environment.start()
+        self.addCleanup(self.lock_environment.stop)
+        os.environ.pop("GMS_MCP_LOCK_DIR", None)
 
     def tearDown(self) -> None:
         self.temp_dir.cleanup()
@@ -182,6 +188,24 @@ class TestResourceToolValidation(unittest.TestCase):
         self.assertFalse(result["ok"])
         self.assertTrue(result["evidence"]["rewritten_copy"])
         self.assertEqual((self.project / "script.gml").read_text(encoding="utf-8"), "show_debug_message('hello');")
+
+    @unittest.skipIf(os.name == "nt", "POSIX flock probe")
+    def test_holds_the_project_lock_and_ignores_tool_state_written_by_other_agents(self) -> None:
+        import fcntl
+
+        def concurrent_tool_state(command, **_kwargs):
+            lock_path = self.project / ".gms_mcp" / "locks" / "project-mutation.lock"
+            with lock_path.open("a+", encoding="utf-8") as probe:
+                with self.assertRaises(BlockingIOError):
+                    fcntl.flock(probe.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            (self.project / ".gms_mcp" / "verification_state.json").write_text("{}", encoding="utf-8")
+            return subprocess.CompletedProcess(args=command, returncode=0, stdout="", stderr="")
+
+        with patch("gms_mcp.resourcetool_validation.subprocess.run", side_effect=concurrent_tool_state):
+            result = validate_with_resourcetool(self.project, environ=self.environment)
+
+        self.assertEqual(result["status"], "validated")
+        self.assertEqual(result["evidence"]["file_count"], 2)
 
     def test_detects_attempted_source_rewrite_even_when_the_process_reports_success(self) -> None:
         def rewrite_source(command, **_kwargs):

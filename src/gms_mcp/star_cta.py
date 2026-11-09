@@ -7,6 +7,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, TextIO
 
+from .ci_detection import is_ci_environment
+
 REPO_URL = "https://github.com/Ampersand-Game-Studios/gms-mcp"
 STAR_CTA_DISABLE_ENV = "GMS_MCP_DISABLE_STAR_ASK"
 HELP_EPILOG = f"Project: {REPO_URL} | If gms-mcp is useful, you can star the repo on GitHub."
@@ -32,9 +34,7 @@ def _default_state_path() -> Path:
 def _load_state(path: Path) -> dict[str, Any]:
     try:
         raw = path.read_text(encoding="utf-8")
-    except FileNotFoundError:
-        return {}
-    except OSError:
+    except (OSError, UnicodeDecodeError):
         return {}
 
     try:
@@ -58,12 +58,6 @@ def _env_truthy(name: str, env: dict[str, str]) -> bool:
     return env.get(name, "").strip().lower() in _TRUE_VALUES
 
 
-def _is_ci(env: dict[str, str]) -> bool:
-    if env.get("BUILD_BUILDID", "").strip():
-        return True
-    return any(_env_truthy(name, env) for name in ("CI", "GITHUB_ACTIONS"))
-
-
 def _is_interactive(stream: TextIO) -> bool:
     return bool(getattr(stream, "isatty", lambda: False)())
 
@@ -79,7 +73,7 @@ def maybe_print_star_cta(
     runtime_env = dict(os.environ if env is None else env)
     path = state_path if state_path is not None else _default_state_path()
 
-    if no_star_ask or _env_truthy(STAR_CTA_DISABLE_ENV, runtime_env) or _is_ci(runtime_env):
+    if no_star_ask or _env_truthy(STAR_CTA_DISABLE_ENV, runtime_env) or is_ci_environment(runtime_env):
         return False
     if not _is_interactive(output):
         return False

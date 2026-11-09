@@ -13,7 +13,7 @@ class GMLScanner:
     # Regex patterns for symbol detection
     PATTERNS = {
         # function name(args) { or function name(args) constructor {
-        "function": re.compile(r"^\s*function\s+(\w+)\s*\(([^)]*)\)\s*(constructor)?\s*\{?", re.MULTILINE),
+        "function": re.compile(r"^\s*function\s+(\w+)\s*\(", re.MULTILINE),
         # enum EnumName { VALUE1, VALUE2 }
         "enum": re.compile(r"^\s*enum\s+(\w+)\s*\{([^}]*)\}", re.MULTILINE | re.DOTALL),
         # #macro NAME value
@@ -75,30 +75,122 @@ class GMLScanner:
         self.symbols: List[Symbol] = []
         self.references: List[SymbolReference] = []
 
+    @staticmethod
+    def mask_comments_and_strings(content: str) -> str:
+        """Blank out comments and string literals, keeping every offset and newline.
+
+        Each masked character becomes a space (newlines are kept), so match
+        positions and line numbers in the masked text equal those in the source.
+        String quotes are kept so literals still read as empty strings.
+        Handles ``//`` and ``/* */`` comments, "..." strings with escapes,
+        GML verbatim strings (@"..." / @'...') and multi-line template strings
+        ($"...") without interpolation analysis.
+        """
+        out = list(content)
+        i = 0
+        n = len(content)
+
+        def blank(start: int, end: int) -> None:
+            for k in range(start, end):
+                if out[k] != "\n":
+                    out[k] = " "
+
+        while i < n:
+            ch = content[i]
+            nxt = content[i + 1] if i + 1 < n else ""
+            if ch == "/" and nxt == "/":
+                end = content.find("\n", i)
+                end = n if end == -1 else end
+                blank(i, end)
+                i = end
+            elif ch == "/" and nxt == "*":
+                end = content.find("*/", i + 2)
+                end = n if end == -1 else end + 2
+                blank(i, end)
+                i = end
+            elif ch == "@" and nxt in ("'", '"'):
+                quote = nxt
+                end = content.find(quote, i + 2)
+                end = n if end == -1 else end
+                blank(i + 2, end)
+                i = end + 1
+            elif ch in ("'", '"'):
+                j = i + 1
+                while j < n and content[j] != ch and content[j] != "\n":
+                    j += 2 if content[j] == "\\" else 1
+                end = min(j, n)
+                blank(i + 1, end)
+                i = end + 1
+            else:
+                i += 1
+        return "".join(out)
+
+    @staticmethod
+    def split_parameters(params_str: str, source: Optional[str] = None) -> List[str]:
+        """Split a parameter list on top-level commas only.
+
+        ``params_str`` should be masked text (see ``mask_comments_and_strings``);
+        pieces are cut from ``source`` (the unmasked text at the same offsets) when
+        given. Default values may contain calls, arrays, structs or strings
+        (``a = max(1, 2), b = "x,y"``); only top-level commas separate parameters.
+        """
+        source = params_str if source is None else source
+        params: List[str] = []
+        depth = 0
+        start = 0
+        for index, ch in enumerate(params_str):
+            if ch in "([{":
+                depth += 1
+            elif ch in ")]}":
+                depth = max(0, depth - 1)
+            elif ch == "," and depth == 0:
+                params.append(source[start:index].strip())
+                start = index + 1
+        params.append(source[start:].strip())
+        return [p for p in params if p]
+
+    @staticmethod
+    def _balanced_close(text: str, open_index: int) -> int:
+        """Return the index of the bracket closing ``text[open_index]``, or -1."""
+        pairs = {"(": ")", "[": "]", "{": "}"}
+        stack = [pairs[text[open_index]]]
+        for index in range(open_index + 1, len(text)):
+            ch = text[index]
+            if ch in pairs:
+                stack.append(pairs[ch])
+            elif stack and ch == stack[-1]:
+                stack.pop()
+                if not stack:
+                    return index
+        return -1
+
     def scan_content(self, content: str, file_path: Path) -> Tuple[List[Symbol], List[SymbolReference]]:
         """Scan provided GML content for symbols and references."""
         self.symbols = []
         self.references = []
 
         lines = content.split("\n")
+        # Symbol and reference scans run on masked text so comments and strings
+        # cannot produce symbols; offsets stay aligned with ``content``.
+        masked = self.mask_comments_and_strings(content)
 
-        # Extract doc comments for functions
+        # Extract doc comments for functions (from the real text)
         doc_comments = self._extract_doc_comments(lines)
 
         # Find function definitions
-        self._scan_functions(content, file_path, doc_comments)
+        self._scan_functions(masked, file_path, doc_comments, content)
 
         # Find enum definitions
-        self._scan_enums(content, file_path)
+        self._scan_enums(masked, file_path)
 
         # Find macro definitions
-        self._scan_macros(content, file_path)
+        self._scan_macros(masked, file_path)
 
         # Find globalvar declarations
-        self._scan_globalvars(content, file_path)
+        self._scan_globalvars(masked, file_path)
 
         # Find references (word tokens that could be symbol usages)
-        self._scan_references(content, file_path, lines)
+        self._scan_references(masked, file_path, lines)
 
         return self.symbols, self.references
 
@@ -147,18 +239,26 @@ class GMLScanner:
 
         return doc_comments
 
-    def _scan_functions(self, content: str, file_path: Path, doc_comments: dict):
-        """Scan for function definitions."""
+    def _scan_functions(self, content: str, file_path: Path, doc_comments: dict, source: Optional[str] = None):
+        """Scan for function definitions in masked ``content``.
+
+        ``source`` is the unmasked text, used to read default-value literals.
+        """
+        source = content if source is None else source
         for match in self.PATTERNS["function"].finditer(content):
             name = match.group(1)
-            params_str = match.group(2)
-            is_constructor = match.group(3) is not None
+            open_index = content.find("(", match.end(1))
+            close_index = self._balanced_close(content, open_index) if open_index != -1 else -1
+            if close_index == -1:
+                continue
+            after = content[close_index + 1 :]
+            is_constructor = re.match(r"\s*(?::\s*\w+\s*\([^)]*\)\s*)?constructor\b", after) is not None
 
-            # Parse parameters
-            params = [p.strip() for p in params_str.split(",") if p.strip()]
+            # Parse parameters on top-level commas
+            params = self.split_parameters(content[open_index + 1 : close_index], source[open_index + 1 : close_index])
 
             # Calculate line number
-            line_num = content[: match.start()].count("\n") + 1
+            line_num = content[: match.start(1)].count("\n") + 1
 
             # Check for doc comment
             doc = doc_comments.get(line_num - 1) or doc_comments.get(line_num)
@@ -169,7 +269,9 @@ class GMLScanner:
                 name=name,
                 kind=kind,
                 location=SymbolLocation(
-                    file_path=file_path, line=line_num, column=match.start() - content.rfind("\n", 0, match.start())
+                    file_path=file_path,
+                    line=line_num,
+                    column=content.rfind("function", 0, match.start(1)) - content.rfind("\n", 0, match.start(1)),
                 ),
                 doc_comment=doc,
                 parameters=params,
@@ -182,7 +284,7 @@ class GMLScanner:
             enum_name = match.group(1)
             enum_body = match.group(2)
 
-            line_num = content[: match.start()].count("\n") + 1
+            line_num = content[: match.start(1)].count("\n") + 1
 
             # Add the enum itself
             self.symbols.append(
@@ -191,14 +293,16 @@ class GMLScanner:
                 )
             )
 
-            # Parse enum values
-            # Handle: VALUE, VALUE = 0, VALUE = "string"
-            value_pattern = re.compile(r"(\w+)\s*(?:=\s*[^,}]+)?")
-            for value_match in value_pattern.finditer(enum_body):
-                value_name = value_match.group(1)
-                if value_name:
-                    # Calculate approximate line for the value
-                    value_line = line_num + enum_body[: value_match.start()].count("\n")
+            # Parse enum values on top-level commas: VALUE, VALUE = 0, VALUE = max(1, 2)
+            body_offset = match.start(2)
+            offset = 0
+            for item in self.split_parameters(enum_body):
+                item_index = enum_body.find(item, offset)
+                offset = item_index + len(item)
+                name_match = re.match(r"([A-Za-z_]\w*)", item)
+                if name_match:
+                    value_name = name_match.group(1)
+                    value_line = content[: body_offset + item_index].count("\n") + 1
                     self.symbols.append(
                         Symbol(
                             name=value_name,
@@ -212,7 +316,7 @@ class GMLScanner:
         """Scan for macro definitions."""
         for match in self.PATTERNS["macro"].finditer(content):
             name = match.group(1)
-            line_num = content[: match.start()].count("\n") + 1
+            line_num = content[: match.start(1)].count("\n") + 1
 
             self.symbols.append(
                 Symbol(name=name, kind=SymbolKind.MACRO, location=SymbolLocation(file_path=file_path, line=line_num))
@@ -222,7 +326,7 @@ class GMLScanner:
         """Scan for globalvar declarations."""
         for match in self.PATTERNS["globalvar"].finditer(content):
             name = match.group(1)
-            line_num = content[: match.start()].count("\n") + 1
+            line_num = content[: match.start(1)].count("\n") + 1
 
             self.symbols.append(
                 Symbol(
@@ -231,24 +335,12 @@ class GMLScanner:
             )
 
     def _scan_references(self, content: str, file_path: Path, lines: List[str]):
-        """Scan for potential symbol references."""
+        """Scan masked ``content`` for potential symbol references (context from ``lines``)."""
         # Get names of symbols defined in this file to help with filtering
         defined_here = {s.name for s in self.symbols}
 
-        for line_num, line in enumerate(lines, start=1):
-            # Skip comment lines
-            stripped = line.strip()
-            if stripped.startswith("//") or stripped.startswith("/*") or stripped.startswith("*"):
-                continue
-
-            # Remove string literals to avoid false positives
-            clean_line = re.sub(r'"[^"]*"', '""', line)
-            clean_line = re.sub(r"'[^']*'", "''", clean_line)
-
-            # Remove inline comments
-            if "//" in clean_line:
-                clean_line = clean_line[: clean_line.index("//")]
-
+        for line_num, clean_line in enumerate(content.split("\n"), start=1):
+            line = lines[line_num - 1] if line_num - 1 < len(lines) else clean_line
             for match in self.WORD_PATTERN.finditer(clean_line):
                 word = match.group(1)
 

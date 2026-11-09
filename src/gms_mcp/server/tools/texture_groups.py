@@ -19,10 +19,12 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     globals()["TextureGroupDecision"] = TextureGroupDecision
 
     async def resolve_texture_group_delete(
-        ctx: Context, name: str, reassign_to: str | None = None, dry_run: bool = False, project_root: str = "."
+        ctx: Context, name: str, reassign_to: str | None = None, dry_run: bool = True, project_root: str = "."
     ):
         try:
-            return await resolution_runtime.texture_group_resolver()(name, reassign_to, dry_run, project_root, ctx)
+            return await resolution_runtime.texture_group_resolver("gm_texture_group_delete")(
+                name, reassign_to, dry_run, project_root, ctx
+            )
         except ProjectAccessError:
             return TextureGroupDecision(action="cancel")
 
@@ -136,11 +138,11 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         name: str,
         template: str = "Default",
         patch: Optional[Dict[str, Any]] = None,
-        dry_run: bool = False,
+        dry_run: bool = True,
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Create a new texture group by cloning an existing template group."""
+        """Create a new texture group by cloning an existing template group (previews by default; pass dry_run=false to write)."""
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
         from gms_helpers.texture_group.mutations import texture_group_create
@@ -158,11 +160,11 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         patch: Dict[str, Any],
         configs: Optional[List[str]] = None,
         update_existing_configs: bool = True,
-        dry_run: bool = False,
+        dry_run: bool = True,
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Update an existing texture group entry."""
+        """Update an existing texture group entry (previews by default; pass dry_run=false to write)."""
         _ = ctx
         if not dry_run and _requires_dry_run_for_tool("gm_texture_group_update"):
             return _dry_run_policy_blocked_result(
@@ -191,11 +193,11 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         old_name: str,
         new_name: str,
         update_references: bool = True,
-        dry_run: bool = False,
+        dry_run: bool = True,
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Rename a texture group and (optionally) rewrite asset references."""
+        """Rename a texture group and (optionally) rewrite asset references (previews by default; pass dry_run=false to write)."""
         _ = ctx
         if not dry_run and _requires_dry_run_for_tool("gm_texture_group_rename"):
             return _dry_run_policy_blocked_result(
@@ -222,12 +224,12 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     def gm_texture_group_delete(
         name: str,
         reassign_to: Optional[str] = None,
-        dry_run: bool = False,
+        dry_run: bool = True,
         project_root: str = ".",
         resolution: TextureGroupDeleteResolution = None,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Delete a texture group (blocks by default if referenced unless reassign_to is provided)."""
+        """Delete a texture group (previews by default; pass dry_run=false to write). Blocks if referenced unless reassign_to is provided."""
         _ = ctx
         if resolution.action == "cancel":
             return {
@@ -265,11 +267,11 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         configs: Optional[List[str]] = None,
         include_top_level: bool = True,
         update_existing_configs: bool = True,
-        dry_run: bool = False,
+        dry_run: bool = True,
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Assign assets to a texture group."""
+        """Assign assets to a texture group (previews by default; pass dry_run=false to write)."""
         _ = ctx
         if not dry_run and _requires_dry_run_for_tool("gm_texture_group_assign"):
             return _dry_run_policy_blocked_result(

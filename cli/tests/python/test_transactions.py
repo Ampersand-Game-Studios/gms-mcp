@@ -661,5 +661,94 @@ class TestGameMakerProjectTransactions(unittest.TestCase):
             asyncio.run(exercise(root))
 
 
+class TestTransactionRecoveryAndCoordination(unittest.TestCase):
+    def _interrupted(self, parent: Path) -> Path:
+        """A project whose transaction wrote an owned file and then "crashed" (lock gone, no commit)."""
+        root = parent / "project"
+        root.mkdir()
+        (root / "game.yyp").write_text(json.dumps({"name": "game", "resources": [], "Folders": []}))
+        (root / "tracked.txt").write_text("original")
+        tx = GameMakerProjectTransaction(root, "crash")
+        tx.begin()
+        (root / "tracked.txt").write_text("interrupted")
+        mark_transaction_path_owned(root / "tracked.txt")
+        tx._deactivate_context()
+        tx._project_lock.release()
+        return root
+
+    def test_recovery_follows_a_project_renamed_after_the_crash(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            moved = self._interrupted(Path(temp_dir)).rename(Path(temp_dir) / "renamed")
+            tx = GameMakerProjectTransaction(moved, "after-rename")
+            tx.begin()
+            try:
+                self.assertEqual((moved / "tracked.txt").read_text(), "original")
+                tx.commit()
+            finally:
+                tx.cleanup()
+
+    def test_recovery_of_an_unprovable_root_explains_both_choices(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = self._interrupted(Path(temp_dir))
+            (state_file,) = (root / ".gms_mcp" / "transactions").glob("tx-*/state.json")
+            state = json.loads(state_file.read_text())
+            state["project_root"] = str(Path(temp_dir) / "elsewhere")
+            state["project_root_identity"] = None
+            state_file.write_text(json.dumps(state))
+            with self.assertRaisesRegex(ValidationError, 'set "project_root".*delete the directory'):
+                GameMakerProjectTransaction(root, "copy").begin()
+            self.assertEqual((root / "tracked.txt").read_text(), "interrupted")
+
+    def test_project_lock_wait_times_out_naming_the_holder(self):
+        from gms_helpers.agent_locks import LockTimeoutError
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "game.yyp").write_text("{}")
+            holder = subprocess.Popen(
+                [
+                    sys.executable,
+                    "-c",
+                    "import sys, time; from gms_helpers.transactions import project_mutation_lock\n"
+                    "with project_mutation_lock(sys.argv[1], 'other-agent'):\n"
+                    "    print('held', flush=True); time.sleep(30)",
+                    str(root),
+                ],
+                stdout=subprocess.PIPE,
+                text=True,
+                env={**os.environ, "PYTHONPATH": os.pathsep.join(sys.path)},
+            )
+            try:
+                self.assertEqual(holder.stdout.readline().strip(), "held")
+                with patch.dict(os.environ, {"GMS_MCP_PROJECT_LOCK_TIMEOUT_SECONDS": "0.3"}):
+                    with self.assertRaisesRegex(LockTimeoutError, "other-agent"):
+                        GameMakerProjectTransaction(root, "waiter").begin()
+            finally:
+                holder.kill()
+                holder.wait(timeout=5)
+
+    def test_begin_warns_when_the_gamemaker_ide_has_the_project_open(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir).resolve()
+            (root / "game.yyp").write_text(json.dumps({"name": "game", "resources": [], "Folders": []}))
+            ide = {77: f"/Applications/GameMaker.app/Contents/MacOS/GameMaker {root / 'game.yyp'}"}
+            transactions_module._IDE_CHECK_CACHE.clear()
+            with (
+                patch.dict(os.environ, {"GMS_MCP_DETECT_GAMEMAKER_IDE": "1"}),
+                patch.object(transactions_module.sys, "platform", "darwin"),
+                patch.object(transactions_module, "_macos_ide_processes", return_value=ide),
+            ):
+                tx = GameMakerProjectTransaction(root, "ide-check")
+                tx.begin()
+                try:
+                    result = tx.commit()
+                finally:
+                    tx.cleanup()
+            transactions_module._IDE_CHECK_CACHE.clear()
+        self.assertTrue(result["gamemaker_ide"]["project_open"])
+        self.assertEqual(result["gamemaker_ide"]["pids"], [77])
+        self.assertIn("has this project open", result["warnings"][0])
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -88,6 +88,25 @@ class TestGMSResults(unittest.TestCase):
         self.assertIn("<host-path>", uncommon_host_paths)
         self.assertNotIn("/Users/private", str(uncommon_host_paths))
 
+    def test_public_mcp_result_never_rewrites_code_or_log_text(self):
+        project_root = Path("/Users/private/studio/game")
+        code = {
+            "division": "var half = (room_width)/2;",
+            "spaced": "x = a /2;",
+            "identifier": "speed = distance/time_step;",
+            "comment": "// draw the HUD",
+            "block": "/* see notes */",
+            "relative": "Updated objects/o_player/Create_0.gml",
+            "unc_like": "ratio = w/h/2",
+        }
+
+        self.assertEqual(public_mcp_result(code, project_root=project_root), code)
+        redacted = public_mcp_result(
+            {"line": "error in /Users/private/Documents/x.gml line 3", "var": "Wrote /var/folders/tmp/x.log"},
+            project_root=project_root,
+        )
+        self.assertEqual(redacted, {"line": "error in <host-path>", "var": "Wrote <host-path>"})
+
     def test_public_mcp_result_exposes_raw_diagnostics_only_when_explicitly_enabled(self):
         payload = {"cwd": "/Users/private/studio/game", "pid": 123}
 

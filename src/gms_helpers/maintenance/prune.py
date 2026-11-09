@@ -2,16 +2,22 @@
 Asset Pruning - Remove missing asset references from project file
 """
 
-import os
-from typing import List, Tuple, Dict, Any
+from pathlib import Path
+from typing import List, Tuple
 
+from ..path_safety import assert_project_tree_contained, project_relative_path
 from ..transactions import transactional_copy2
-from ..utils import load_json, save_json, find_yyp_file
+from ..utils import load_json, save_json, find_yyp
+from .path_utils import find_case_variant, is_options_path
 
 
 def prune_missing_assets(project_root: str = ".", dry_run: bool = False) -> List[Tuple[str, str]]:
     """
     Remove references to missing assets from the .yyp file.
+
+    An asset whose files exist under a different letter case is not missing: it is
+    reported as a case mismatch and kept, because unregistering it would orphan a
+    live asset on case-sensitive filesystems.
 
     Args:
         project_root: Root directory of the project
@@ -20,97 +26,62 @@ def prune_missing_assets(project_root: str = ".", dry_run: bool = False) -> List
     Returns:
         List of (asset_path, asset_type) tuples for removed entries
     """
-    removed_entries = []
+    root = assert_project_tree_contained(Path(project_root))
+    yyp_path = find_yyp(root)
+    yyp_data = load_json(yyp_path)
 
-    try:
-        # Load .yyp file
-        yyp_path = find_yyp_file()
-        yyp_data = load_json(yyp_path)
+    removed_entries: List[Tuple[str, str]] = []
+    case_mismatches: List[Tuple[str, str]] = []
 
-        # Process resources array
-        original_resources = yyp_data.get("resources", [])
-        valid_resources = []
+    original_resources = yyp_data.get("resources", [])
+    valid_resources = []
+    for resource in original_resources:
+        resource_id = resource.get("id", {}) if isinstance(resource, dict) else {}
+        path = resource_id.get("path", "") if isinstance(resource_id, dict) else ""
+        if not path or is_options_path(path):
+            valid_resources.append(resource)
+            continue
 
-        for resource in original_resources:
-            resource_id = resource.get("id", {})
-            path = resource_id.get("path", "")
+        asset_type = _get_asset_type_from_path(path)
+        # Folders are logical only - treat them as always existing
+        if asset_type == "folder":
+            valid_resources.append(resource)
+            continue
 
-            if path:
-                # Skip options files - they have special format and locations
-                if "options" in path.lower():
-                    valid_resources.append(resource)
-                    continue
+        normalized = path.replace("\\", "/")
+        project_relative_path(normalized, project_root=root, kind="resource path")
+        actual = find_case_variant(root, normalized)
+        if actual == normalized:
+            valid_resources.append(resource)
+        elif actual is not None:
+            case_mismatches.append((path, actual))
+            valid_resources.append(resource)
+        else:
+            removed_entries.append((path, asset_type))
 
-                # Determine asset type first
-                asset_type = _get_asset_type_from_path(path)
-                # Folders are logical only - treat them as always existing
-                if asset_type == "folder":
-                    valid_resources.append(resource)
-                    continue
+    for registered, actual in case_mismatches:
+        print(f"[WARN]  Case mismatch (kept, fix the spelling): {registered} -> {actual}")
 
-                # Check if file exists for non-folder assets
-                if os.path.exists(path):
-                    valid_resources.append(resource)
-                else:
-                    # File is missing - mark for removal
-                    removed_entries.append((path, asset_type))
-            else:
-                # Keep resources without paths (shouldn't happen but be safe)
-                valid_resources.append(resource)
+    removed_paths = {path.replace("\\", "/") for path, _ in removed_entries}
 
-        # Process resourceOrder array (if it exists)
-        original_resource_order = yyp_data.get("resourceOrder", [])
-        valid_resource_order = []
+    def _order_path(entry) -> str:
+        if isinstance(entry, str):
+            return entry.replace("\\", "/")
+        if isinstance(entry, dict):
+            return str(entry.get("path", "")).replace("\\", "/")
+        return ""
 
-        for order_entry in original_resource_order:
-            # Resource order entries can be strings or objects
-            if isinstance(order_entry, str):
-                path = order_entry
-            elif isinstance(order_entry, dict):
-                path = order_entry.get("path", "")
-            else:
-                # Unknown format, keep it
-                valid_resource_order.append(order_entry)
-                continue
+    original_resource_order = yyp_data.get("resourceOrder", [])
+    valid_resource_order = [entry for entry in original_resource_order if _order_path(entry) not in removed_paths]
 
-            if path:
-                # Skip options files
-                if "options" in path.lower():
-                    valid_resource_order.append(order_entry)
-                    continue
+    if not dry_run and removed_entries:
+        transactional_copy2(yyp_path, f"{yyp_path}.bak")
+        yyp_data["resources"] = valid_resources
+        if "resourceOrder" in yyp_data:
+            yyp_data["resourceOrder"] = valid_resource_order
+        save_json(yyp_data, yyp_path)
 
-                asset_type = _get_asset_type_from_path(path)
-                if asset_type == "folder":
-                    valid_resource_order.append(order_entry)
-                    continue
-
-                # Check if file exists
-                if os.path.exists(path):
-                    valid_resource_order.append(order_entry)
-                # If missing, don't add to valid list (effectively removes it)
-            else:
-                # Keep entries without paths
-                valid_resource_order.append(order_entry)
-
-        # Apply changes if not dry run
-        if not dry_run and removed_entries:
-            # Create backup
-            backup_path = yyp_path + ".bak"
-            transactional_copy2(yyp_path, backup_path)
-
-            # Update the data
-            yyp_data["resources"] = valid_resources
-            if "resourceOrder" in yyp_data:
-                yyp_data["resourceOrder"] = valid_resource_order
-
-            # Save the updated file
-            save_json(yyp_data, yyp_path)
-
-        return removed_entries
-
-    except Exception as e:
-        print(f"Error during asset pruning: {e}")
-        return []
+    return removed_entries
 
 
 def _get_asset_type_from_path(path: str) -> str:

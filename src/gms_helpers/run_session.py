@@ -13,15 +13,16 @@ the game process because the GameMakerRunner instance was recreated.
 """
 
 import json
+import sys
 import os
 import threading
 import time
 import subprocess
 import platform
-from dataclasses import dataclass, asdict, field
+from dataclasses import dataclass, asdict, field, fields
 from datetime import datetime
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple
 
 from .utils import atomic_write_text
 from .mac_runtime import project_identity
@@ -43,6 +44,7 @@ class RunSession:
     isolated_runtime: bool = False
     runtime_label: Optional[str] = None
     runtime_work_dir: Optional[str] = None
+    runtime_work_root: Optional[str] = None
     runtime_save_dir: Optional[str] = None
     macos_igor_pid: Optional[int] = None
     macos_igor_command: Optional[str] = None
@@ -52,13 +54,77 @@ class RunSession:
     macos_tail_commands: Dict[str, str] = field(default_factory=dict)
     macos_runner_starts: Dict[str, str] = field(default_factory=dict)
     macos_tail_starts: Dict[str, str] = field(default_factory=dict)
+    # Birth identity of ``pid`` recorded at launch. Signals are sent only while both still match,
+    # so a recycled PID is never mistaken for the game.
+    process_started: Optional[str] = None
+    process_exe: Optional[str] = None
 
     def to_dict(self) -> Dict[str, Any]:
         return asdict(self)
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "RunSession":
-        return cls(**data)
+        # Sessions written by other gms-mcp versions may carry keys this version does not know.
+        known = {item.name for item in fields(cls)}
+        return cls(**{key: value for key, value in data.items() if key in known})
+
+
+def _windows_process_identity(pid: int) -> Optional[Tuple[str, str]]:
+    import ctypes
+    from ctypes import wintypes
+
+    kernel32 = getattr(ctypes, "windll").kernel32
+    process_query_limited_information = 0x1000
+    still_active = 259
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        return None
+    try:
+        exit_code = wintypes.DWORD()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)) or exit_code.value != still_active:
+            return None
+        creation, exited, kernel, user = (wintypes.FILETIME() for _ in range(4))
+        if not kernel32.GetProcessTimes(
+            handle, ctypes.byref(creation), ctypes.byref(exited), ctypes.byref(kernel), ctypes.byref(user)
+        ):
+            return None
+        size = wintypes.DWORD(32768)
+        buffer = ctypes.create_unicode_buffer(size.value)
+        if not kernel32.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
+            return None
+        return str((creation.dwHighDateTime << 32) | creation.dwLowDateTime), buffer.value
+    finally:
+        kernel32.CloseHandle(handle)
+
+
+def process_identity(pid: int) -> Optional[Tuple[str, str]]:
+    """Return ``(start time, executable)`` for a live process, or None when it is gone or unreadable."""
+    if not isinstance(pid, int) or pid <= 0:
+        return None
+    if platform.system() == "Windows":
+        return _windows_process_identity(pid)
+    proc = Path("/proc") / str(pid)
+    if proc.is_dir():
+        try:
+            # Field 22 (starttime) counts from field 3, the first one after the parenthesised name.
+            started = (proc / "stat").read_text(encoding="utf-8", errors="replace").rsplit(")", 1)[1].split()[19]
+            return started, os.readlink(proc / "exe")
+        except (OSError, IndexError):
+            return None
+    try:
+        result = subprocess.run(
+            ["ps", "-p", str(pid), "-o", "lstart=", "-o", "comm="],
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return None
+    parts = result.stdout.strip().split(None, 5)
+    if result.returncode != 0 or len(parts) < 6:
+        return None
+    return " ".join(parts[:5]), parts[5]
 
 
 class RunSessionManager:
@@ -90,6 +156,14 @@ class RunSessionManager:
         """Get path to current session file."""
         return self.sessions_dir / self.CURRENT_SESSION_FILE
 
+    def new_log_path(self, keep: int = 10) -> Path:
+        """Return a fresh log path for a background run's output, keeping only the newest ``keep`` logs."""
+        sessions_dir = self._ensure_sessions_dir()
+        logs = sorted(sessions_dir.glob("run_*.log"), key=lambda path: path.name)
+        for old in logs[: max(0, len(logs) - (keep - 1))]:
+            old.unlink(missing_ok=True)
+        return sessions_dir / f"{self._generate_run_id()}.log"
+
     def _generate_run_id(self) -> str:
         """Generate a unique run ID."""
         # On Windows, time.time_ns() can return the same value for back-to-back calls in
@@ -114,6 +188,7 @@ class RunSessionManager:
         isolated_runtime: bool = False,
         runtime_label: Optional[str] = None,
         runtime_work_dir: Optional[str] = None,
+        runtime_work_root: Optional[str] = None,
         runtime_save_dir: Optional[str] = None,
         macos_igor_pid: Optional[int] = None,
         macos_igor_command: Optional[str] = None,
@@ -139,6 +214,8 @@ class RunSessionManager:
             The created RunSession
         """
         self._ensure_sessions_dir()
+        # Isolated macOS sessions record their own runner identities (macos_runner_*).
+        identity = None if isolated_runtime else process_identity(pid)
 
         session = RunSession(
             run_id=self._generate_run_id(),
@@ -153,6 +230,7 @@ class RunSessionManager:
             isolated_runtime=isolated_runtime,
             runtime_label=runtime_label,
             runtime_work_dir=runtime_work_dir,
+            runtime_work_root=runtime_work_root,
             runtime_save_dir=runtime_save_dir,
             macos_igor_pid=macos_igor_pid,
             macos_igor_command=macos_igor_command,
@@ -162,13 +240,15 @@ class RunSessionManager:
             macos_tail_commands=dict(macos_tail_commands or {}),
             macos_runner_starts=dict(macos_runner_starts or {}),
             macos_tail_starts=dict(macos_tail_starts or {}),
+            process_started=identity[0] if identity else None,
+            process_exe=identity[1] if identity else None,
         )
 
         # Write session to disk
         session_path = self._current_session_path()
         atomic_write_text(session_path, json.dumps(session.to_dict(), indent=2) + "\n")
 
-        print(f"[SESSION] Created session {session.run_id} (PID: {pid})")
+        print(f"[SESSION] Created session {session.run_id} (PID: {pid})", file=sys.stderr)
         return session
 
     def get_current_session(self) -> Optional[RunSession]:
@@ -191,23 +271,30 @@ class RunSessionManager:
                 raise ValueError("Session belongs to a different project")
             return session
         except (ValueError, KeyError, TypeError) as e:
-            print(f"[SESSION] Failed to read session file: {e}")
+            print(f"[SESSION] Failed to read session file: {e}", file=sys.stderr)
             return None
 
-    def clear_session(self) -> bool:
+    def clear_session(self, run_id: str) -> bool:
         """
-        Clear the current session file.
+        Clear the current session file if it still records ``run_id``.
+
+        A newer run that replaced it is left alone, and concurrent stops may both try.
 
         Returns:
-            True if cleared, False if no session existed
+            True if cleared, False if no matching session existed
         """
-        session_path = self._current_session_path()
+        current = self.get_current_session()
+        if current is None or current.run_id != run_id:
+            return False
+        self._current_session_path().unlink(missing_ok=True)
+        print("[SESSION] Cleared current session", file=sys.stderr)
+        return True
 
-        if session_path.exists():
-            session_path.unlink()
-            print("[SESSION] Cleared current session")
-            return True
-        return False
+    def owns_process(self, session: RunSession) -> bool:
+        """True only while ``session.pid`` is still the process recorded at launch."""
+        if not session.process_started or not session.process_exe:
+            return False
+        return process_identity(session.pid) == (session.process_started, session.process_exe)
 
     def is_process_alive(self, pid: int) -> bool:
         """
@@ -239,17 +326,20 @@ class RunSessionManager:
         except Exception:
             return False
 
-    def kill_process(self, pid: int, force: bool = False) -> bool:
+    def kill_process(self, session: RunSession, force: bool = False) -> bool:
         """
-        Kill a process by PID.
+        Kill the session's process (and its children) if it is still the recorded process.
 
         Args:
-            pid: Process ID to kill
+            session: Session whose launch identity must still match
             force: If True, force kill immediately
 
         Returns:
-            True if process was killed, False otherwise
+            True if a signal was sent, False otherwise
         """
+        pid = session.pid
+        if not self.owns_process(session):
+            return False
         try:
             if platform.system() == "Windows":
                 # Use taskkill on Windows
@@ -285,7 +375,7 @@ class RunSessionManager:
                     os.kill(pid, sig)
                 return True
         except Exception as e:
-            print(f"[SESSION] Failed to kill process {pid}: {e}")
+            print(f"[SESSION] Failed to kill process {pid}: {e}", file=sys.stderr)
             return False
 
     def get_session_status(self) -> Dict[str, Any]:
@@ -311,7 +401,7 @@ class RunSessionManager:
             owned, _ = runner._tracked_macos_helper_pids(session, runner._snapshot_macos_processes())
             is_running = session.pid in owned
         else:
-            is_running = self.is_process_alive(session.pid)
+            is_running = self.owns_process(session)
 
         return {
             "has_session": True,
@@ -344,9 +434,9 @@ class RunSessionManager:
 
         pid = session.pid
 
-        if not self.is_process_alive(pid):
-            # Process already dead, just clean up session
-            self.clear_session()
+        if not self.owns_process(session):
+            # The game exited, or its PID now belongs to an unrelated process: never signal it.
+            self.clear_session(session.run_id)
             return {
                 "ok": True,
                 "message": f"Game (PID: {pid}) was already stopped. Cleaned up session.",
@@ -355,12 +445,12 @@ class RunSessionManager:
         # Try graceful termination first
         print(f"[STOP] Stopping game (PID: {pid})...")
 
-        if self.kill_process(pid, force=False):
+        if self.kill_process(session, force=False):
             # Wait a moment for graceful shutdown
             time.sleep(0.5)
 
-            if not self.is_process_alive(pid):
-                self.clear_session()
+            if not self.owns_process(session):
+                self.clear_session(session.run_id)
                 return {
                     "ok": True,
                     "message": f"Game (PID: {pid}) stopped successfully.",
@@ -368,13 +458,16 @@ class RunSessionManager:
 
         # Force kill if still running
         print(f"[STOP] Forcing kill of game (PID: {pid})...")
-        if self.kill_process(pid, force=True):
+        if self.kill_process(session, force=True):
             time.sleep(0.3)
-            self.clear_session()
+            self.clear_session(session.run_id)
             return {
                 "ok": True,
                 "message": f"Game (PID: {pid}) force-killed.",
             }
+        if not self.owns_process(session):
+            self.clear_session(session.run_id)
+            return {"ok": True, "message": f"Game (PID: {pid}) stopped."}
 
         return {
             "ok": False,

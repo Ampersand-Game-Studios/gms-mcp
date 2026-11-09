@@ -5,7 +5,7 @@ from pathlib import Path
 from typing import Any, Dict
 
 from ..base_asset import BaseAsset
-from ..utils import atomic_write_text
+from ..utils import atomic_write_text, find_yyp
 from .naming import get_config
 
 
@@ -244,11 +244,7 @@ class FolderAsset(BaseAsset):
             folder_path = f"{clean_parent}/{name}.yy"
 
         # Load the .yyp file
-        yyp_files = list(project_root.glob("*.yyp"))
-        if not yyp_files:
-            raise FileNotFoundError("No .yyp file found in project root")
-
-        yyp_file = yyp_files[0]
+        yyp_file = find_yyp(project_root)
         from ..project_validation import safe_project_path
 
         if safe_project_path(project_root, yyp_file.name) is None:
@@ -272,14 +268,19 @@ class FolderAsset(BaseAsset):
             raise ValueError(f"Missing enclosing folder: {enclosing}.yy")
         from ..exceptions import AssetExistsError
 
-        if any(
-            isinstance(folder, dict)
-            and (
-                str(folder.get("name") or "").casefold() == name.casefold()
-                or str(folder.get("folderPath") or "").replace("\\", "/").casefold() == folder_path.casefold()
+        # Folder names only need to be unique among siblings that share a parent path.
+        def _same_destination(folder: Any) -> bool:
+            if not isinstance(folder, dict):
+                return False
+            existing_path = str(folder.get("folderPath") or "").replace("\\", "/")
+            if existing_path.casefold() == folder_path.casefold():
+                return True
+            return (
+                Path(existing_path).parent.as_posix().casefold() == enclosing.casefold()
+                and str(folder.get("name") or "").casefold() == name.casefold()
             )
-            for folder in folders
-        ):
+
+        if any(_same_destination(folder) for folder in folders):
             raise AssetExistsError(
                 f"Folder destination collision for '{name}'; provide a replacement name. "
                 "Existing folders are never reused."

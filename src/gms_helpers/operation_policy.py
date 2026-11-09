@@ -4,6 +4,7 @@ CLI and MCP use the same canonical names. Imported images/templates are inputs,
 not project destinations, and intentionally may live outside the project.
 """
 
+import os
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
@@ -35,8 +36,11 @@ PROJECT_MUTATIONS = frozenset(
         "room-ops-delete",
         "room-layer-add",
         "room-layer-remove",
+        "room-layer-reorder",
         "room-instance-add",
         "room-instance-remove",
+        "room-instance-modify",
+        "room-instance-set-creation-code",
         "room-tilemap-patch",
         "texture-group-create",
         "texture-group-update",
@@ -52,6 +56,9 @@ PROJECT_MUTATIONS = frozenset(
         "maintenance-clean-old-files",
         "maintenance-clean-orphans",
         "maintenance-fix-issues",
+        "maintenance-purge",
+        "maintenance-remove-folder",
+        "maintenance-restore-trash",
         "bridge-install",
         "bridge-uninstall",
         "bridge-enable-one-shot",
@@ -68,6 +75,14 @@ PROJECT_MUTATIONS = frozenset(
         "game-bridge-install",
     }
 )
+_READ_ONLY_TRUTHY = frozenset({"1", "true", "yes", "on"})
+
+
+def read_only_mode_enabled() -> bool:
+    """``GMS_MCP_READ_ONLY`` as every CLI, server and index path reads it."""
+    return os.environ.get("GMS_MCP_READ_ONLY", "").strip().lower() in _READ_ONLY_TRUTHY
+
+
 _FIX_OPERATIONS = frozenset(
     {"maintenance-auto", "maintenance-lint", "maintenance-sync-events", "maintenance-normalize-names"}
 )
@@ -178,7 +193,7 @@ def is_project_mutation(tool_name: str, args: Any) -> bool:
         return values.get("fix") is True
     if name in _DELETE_OPERATIONS:
         return values.get("delete") is True
-    if name == "safe-delete" and "apply" in values:
+    if name in {"safe-delete", "maintenance-purge"} and "apply" in values:
         return values["apply"] is True
     return True
 

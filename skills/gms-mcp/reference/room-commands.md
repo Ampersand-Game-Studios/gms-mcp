@@ -43,7 +43,8 @@ gms room ops delete r_obsolete --dry-run
 ```bash
 gms room layer add r_level instance Instances --depth 0
 ```
-- `--depth` - Layer depth (default: 0). Lower = drawn on top.
+- `--depth` - Layer depth. Lower = drawn on top. Without it the layer goes on top of the existing layers.
+- `--tileset` - Tileset name; required for `tile` layers, which are sized to the room's tile grid.
 
 **Depth conventions:**
 - Background: 1000+

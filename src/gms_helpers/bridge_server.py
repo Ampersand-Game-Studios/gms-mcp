@@ -442,6 +442,11 @@ class BridgeServer:
         Returns:
             CommandResult with success/failure and result
         """
+        if "\n" in command or "\r" in command:
+            # The protocol is line-framed; a line break would split this into several commands.
+            return CommandResult(
+                command_id="", command=command, success=False, error="A bridge command must be a single line"
+            )
         if not self._connected:
             return CommandResult(command_id="", command=command, success=False, error="Not connected to game")
 
@@ -488,8 +493,13 @@ class BridgeServer:
             command: Command string to send
 
         Returns:
-            Command ID for tracking
+            Command ID for tracking, or "" when not connected
+
+        Raises:
+            ValueError: if the command contains a line break
         """
+        if "\n" in command or "\r" in command:
+            raise ValueError("A bridge command must be a single line")
         if not self._connected:
             return ""
 

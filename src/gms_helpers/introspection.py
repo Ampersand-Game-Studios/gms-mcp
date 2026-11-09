@@ -14,9 +14,9 @@ from pathlib import Path, PureWindowsPath
 from typing import Dict, List, Any, Optional, Set, Tuple
 from dataclasses import dataclass, field
 
-from .utils import load_json_loose
+from .utils import find_yyp, load_json_loose
 from .bounded_regex import search_many
-from .exceptions import ValidationError
+from .exceptions import ProjectNotFoundError, ValidationError
 from .path_safety import project_child_path
 
 
@@ -145,18 +145,12 @@ def _safe_project_relative(project_root: Path, raw_path: str | Path) -> Optional
 
 
 def _find_yyp(project_root: Path) -> Optional[Path]:
-    """Find the .yyp file in the project root."""
+    """The project's single .yyp, or None when there is none; several .yyp files raise."""
     try:
-        yyp_files = [
-            safe_path
-            for candidate in sorted(project_root.glob("*.yyp"))
-            if (safe_path := _safe_project_path(project_root, candidate.name)) is not None and safe_path.is_file()
-        ]
-        if not yyp_files:
-            return None
-        return yyp_files[0]
-    except Exception:
+        candidate = find_yyp(project_root)
+    except ProjectNotFoundError:
         return None
+    return _safe_project_path(project_root, candidate.name)
 
 
 def _safe_load_yyp(project_root: Path) -> Tuple[Optional[Path], Optional[Dict[str, Any]]]:
@@ -236,10 +230,9 @@ def list_assets_by_type(
         if name_filter and name_filter not in name.lower():
             continue
 
-        # Apply folder filter (on the path relative to project root)
+        # Apply folder filter: a path prefix, or whole path segments inside it (never a partial name).
         if folder_filter and not safe_path.lower().startswith(folder_filter):
-            # Also check if it's just inside a folder of that name
-            if folder_filter not in safe_path.lower():
+            if f"/{folder_filter.strip('/')}/" not in f"/{safe_path.lower()}":
                 continue
 
         if inferred_type not in assets:
@@ -266,8 +259,8 @@ def list_assets_by_type(
                 if name_filter and name_filter not in name.lower():
                     continue
 
-                # Apply folder filter
-                full_path = file_path or f"datafiles/{name}"
+                # Apply folder filter. GameMaker stores the containing directory in filePath.
+                full_path = f"{(file_path or 'datafiles').rstrip('/')}/{name}"
                 safe_path = _safe_project_relative(project_root, full_path)
                 if safe_path is None:
                     continue
@@ -392,7 +385,7 @@ def search_references(
     skip_dirs = {".git", "node_modules", ".cursor", ".gms_mcp", "__pycache__"}
     for pattern_glob in file_patterns:
         for file_path in project_root.glob(pattern_glob):
-            if any(part in skip_dirs for part in file_path.parts):
+            if any(part in skip_dirs for part in file_path.relative_to(project_root).parts):
                 continue
             safe_path = _safe_project_path(project_root, file_path.relative_to(project_root))
             if safe_path is None or not safe_path.is_file():
@@ -604,17 +597,20 @@ def _extract_yy_references(asset: Dict, yy_data: Dict, add_edge):
 
     # Room references
     elif asset_type == "room":
-        # Check layers for object instances
-        for layer in yy_data.get("layers", []):
-            for instance in layer.get("instances", []):
-                obj_ref = instance.get("objectId")
-                if obj_ref and obj_ref.get("name"):
+        for layer in _iter_room_layers(yy_data.get("layers", [])):
+            for instance in layer.get("instances") or []:
+                obj_ref = instance.get("objectId") if isinstance(instance, dict) else None
+                if isinstance(obj_ref, dict) and obj_ref.get("name"):
                     add_edge(asset_name, obj_ref["name"], "contains")
 
             # Background sprite
             bg_sprite = layer.get("spriteId")
-            if bg_sprite and bg_sprite.get("name"):
+            if isinstance(bg_sprite, dict) and bg_sprite.get("name"):
                 add_edge(asset_name, bg_sprite["name"], "background")
+
+            tileset = layer.get("tilesetId")
+            if isinstance(tileset, dict) and tileset.get("name"):
+                add_edge(asset_name, tileset["name"], "tileset")
 
     # Sequence tracks
     elif asset_type == "sequence":
@@ -629,6 +625,16 @@ def _extract_yy_references(asset: Dict, yy_data: Dict, add_edge):
                 func_name = func.get("name")
                 if func_name:
                     add_edge(asset_name, func_name, "defines_function")
+
+
+def _iter_room_layers(layers: Any):
+    """Every layer of a room, including layers nested inside folder layers."""
+    if not isinstance(layers, list):
+        return
+    for layer in layers:
+        if isinstance(layer, dict):
+            yield layer
+            yield from _iter_room_layers(layer.get("layers"))
 
 
 def _extract_sequence_track_refs(seq_name: str, track: Dict, add_edge):
@@ -655,7 +661,7 @@ def _scan_gml_references(project_root: Path, asset_names: Dict[str, str], add_ed
 
     for gml_path in gml_files:
         # Skip ignored directories
-        if any(part in {".git", "node_modules", ".cursor"} for part in gml_path.parts):
+        if any(part in {".git", "node_modules", ".cursor"} for part in gml_path.relative_to(project_root).parts):
             continue
 
         safe_gml_path = _safe_project_path(project_root, gml_path.relative_to(project_root))
@@ -671,8 +677,9 @@ def _scan_gml_references(project_root: Path, asset_names: Dict[str, str], add_ed
 
             # Extract source asset name from path
             source_asset = None
+            # Room and instance creation code lives in rooms/<room>/*.gml and belongs to the room.
             if len(parts) >= 2:
-                if parts[0] in ("scripts", "objects"):
+                if parts[0] in ("scripts", "objects", "rooms"):
                     source_asset = parts[1]
 
             if not source_asset:

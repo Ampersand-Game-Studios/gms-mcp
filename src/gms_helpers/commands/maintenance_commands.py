@@ -79,6 +79,15 @@ def handle_maintenance_dedupe_resources(args):
     return _maintenance_result(maint_dedupe_resources_command(args), "Resource deduplication")
 
 
+def handle_maintenance_restore_trash(args):
+    """Move a maintenance trash batch back to its original project paths."""
+    from ..maintenance.trash import restore_from_trash
+
+    return _maintenance_result(
+        restore_from_trash(getattr(args, "project_root", None) or ".", args.trash_name), "Trash restore"
+    )
+
+
 def handle_maintenance_normalize_names(args):
     """Handle opt-in asset naming normalization."""
     result = normalize_asset_names(

@@ -359,7 +359,7 @@ class TestSwapSpriteFrame(TestSpriteMultiframeBase):
     def _create_test_sprite(self, name: str, frame_count: int = 1):
         """Helper to create a test sprite."""
         asset = SpriteAsset()
-        asset.create_files(self.project_root, name, "", frame_count=frame_count)
+        asset.create_files(self.project_root, name, "", frame_count=frame_count, width=32, height=32)
         return f"sprites/{name}/{name}.yy"
 
     def _create_test_png(self, name: str = "test.png"):
@@ -583,6 +583,90 @@ class TestSpriteMultiframeIntegration(TestSpriteMultiframeBase):
         # Verify keyframe keys are contiguous
         keys = sorted([kf["Key"] for kf in keyframes])
         self.assertEqual(keys, [0.0, 1.0, 2.0])
+
+
+class TestSpriteFrameSafety(TestSpriteMultiframeBase):
+    """Frame edits keep sprite images, layers and paths consistent."""
+
+    def _sprite(self, name: str, **kwargs) -> str:
+        return SpriteAsset().create_files(self.project_root, name, "", width=8, height=8, **kwargs)
+
+    def _png(self, name: str, width: int = 8, height: int = 8) -> Path:
+        from gms_helpers.utils import create_dummy_png
+
+        path = self.project_root / name
+        create_dummy_png(path, width=width, height=height)
+        return path
+
+    def test_keyframe_path_uses_registered_folder_casing(self):
+        from gms_helpers.sprite_frames import add_frame
+
+        sprite_path = self._sprite("sPlayer")
+        add_frame(self.project_root, sprite_path)
+        data = load_json_loose(self.project_root / sprite_path)
+        paths = {kf["Channels"]["0"]["Id"]["path"] for kf in data["sequence"]["tracks"][0]["keyframes"]["Keyframes"]}
+        self.assertEqual(paths, {sprite_path})
+
+    def test_source_image_must_exist_and_match_sprite_size(self):
+        from gms_helpers.exceptions import ValidationError
+        from gms_helpers.sprite_frames import add_frame
+
+        sprite_path = self._sprite("spr_sized")
+        with self.assertRaises(FileNotFoundError):
+            add_frame(self.project_root, sprite_path, source_png=self.project_root / "missing.png")
+        with self.assertRaises(ValidationError):
+            add_frame(self.project_root, sprite_path, source_png=self._png("big.png", 16, 16))
+        self.assertEqual(len(load_json_loose(self.project_root / sprite_path)["frames"]), 1)
+        self.assertTrue(add_frame(self.project_root, sprite_path, source_png=self._png("ok.png"))["success"])
+
+    def test_multi_layer_and_layerless_sprites(self):
+        from gms_helpers.exceptions import ValidationError
+        from gms_helpers.sprite_frames import add_frame, duplicate_frame
+        from gms_helpers.workflow import swap_sprite_png
+
+        sprite_path = self._sprite("spr_layers")
+        yy = self.project_root / sprite_path
+        data = load_json_loose(yy)
+        second_layer = dict(data["layers"][0], name=generate_uuid(), **{"%Name": ""})
+        second_layer["%Name"] = second_layer["name"]
+        data["layers"].append(second_layer)
+        frame = data["frames"][0]["name"]
+        layer_dir = yy.parent / "layers" / frame
+        (layer_dir / f"{second_layer['name']}.png").write_bytes(
+            (layer_dir / f"{data['layers'][0]['name']}.png").read_bytes()
+        )
+        yy.write_text(json.dumps(data), encoding="utf-8")
+
+        with self.assertRaises(ValidationError):
+            add_frame(self.project_root, sprite_path, source_png=self._png("one.png"))
+        with self.assertRaises(ValidationError):
+            swap_sprite_png(self.project_root, sprite_path, self._png("swap.png"))
+        result = duplicate_frame(self.project_root, sprite_path, 0)
+        for layer in data["layers"]:
+            self.assertTrue((yy.parent / "layers" / result["frame_uuid"] / f"{layer['name']}.png").is_file())
+
+        data = load_json_loose(yy)
+        data["layers"] = []
+        yy.write_text(json.dumps(data), encoding="utf-8")
+        with self.assertRaises(ValidationError):
+            add_frame(self.project_root, sprite_path)
+
+    def test_import_refuses_frame_total_above_limit(self):
+        from unittest.mock import patch
+
+        from gms_helpers.exceptions import ValidationError
+        from gms_helpers.sprite_import import import_frames_to_existing_sprite
+
+        sprite_path = self._sprite("spr_limit")
+        strip = self._png("strip.png", 16, 8)
+        with patch("gms_helpers.sprite_frames.get_frame_count", return_value=4095):
+            try:
+                import PIL  # noqa: F401
+            except ImportError:
+                self.skipTest("Pillow not installed")
+            with self.assertRaises(ValidationError):
+                import_frames_to_existing_sprite(self.project_root, sprite_path, strip, frame_width=8)
+        self.assertEqual(len(load_json_loose(self.project_root / sprite_path)["frames"]), 1)
 
 
 if __name__ == "__main__":

@@ -125,6 +125,13 @@ class TestRunSession(unittest.TestCase):
         self.assertEqual(session.pid, 54321)
         self.assertEqual(session.exe_path, "/restored/game.exe")
 
+    def test_run_session_from_dict_ignores_keys_from_other_versions(self):
+        data = RunSession(
+            run_id="newer", pid=1, exe_path="/g", project_root="/p", started_at="2026-01-01T00:00:00"
+        ).to_dict()
+        data["field_added_later"] = {"x": 1}
+        self.assertEqual(RunSession.from_dict(data).run_id, "newer")
+
     def test_run_session_round_trip(self):
         """Test that to_dict -> from_dict preserves all data."""
         original = RunSession(
@@ -242,21 +249,29 @@ class TestRunSessionManager(unittest.TestCase):
     def test_clear_session(self):
         """Test clearing the current session."""
         # Create a session
-        self.manager.create_session(pid=22222, exe_path="/clear/test.exe")
+        session = self.manager.create_session(pid=22222, exe_path="/clear/test.exe")
 
         # Verify it exists
         self.assertIsNotNone(self.manager.get_current_session())
 
         # Clear it
-        result = self.manager.clear_session()
+        result = self.manager.clear_session(session.run_id)
 
         self.assertTrue(result)
         self.assertIsNone(self.manager.get_current_session())
+        # A second (concurrent) stop clearing the same run is harmless.
+        self.assertFalse(self.manager.clear_session(session.run_id))
 
     def test_clear_session_returns_false_when_empty(self):
         """Test clear_session returns False when no session exists."""
-        result = self.manager.clear_session()
+        result = self.manager.clear_session("run_missing")
         self.assertFalse(result)
+
+    def test_clear_session_keeps_a_newer_run(self):
+        old = self.manager.create_session(pid=22222, exe_path="/old.exe")
+        new = self.manager.create_session(pid=33333, exe_path="/new.exe")
+        self.assertFalse(self.manager.clear_session(old.run_id))
+        self.assertEqual(self.manager.get_current_session().run_id, new.run_id)
 
     def test_generate_run_id_unique(self):
         """Test that generated run IDs are unique."""
@@ -309,6 +324,43 @@ class TestRunSessionManagerProcessChecks(unittest.TestCase):
         result = self.manager.is_process_alive(12345)
         self.assertFalse(result)
 
+    def test_create_session_records_process_identity(self):
+        session = self.manager.create_session(pid=os.getpid(), exe_path="/identity/test.exe")
+        self.assertTrue(session.process_started)
+        self.assertTrue(session.process_exe)
+        self.assertTrue(self.manager.owns_process(session))
+
+    def test_recycled_pid_is_not_owned_or_signalled(self):
+        session = self.manager.create_session(pid=os.getpid(), exe_path="/identity/test.exe")
+        session.process_started = "an earlier process"
+        with (
+            patch("gms_helpers.run_session.process_identity", return_value=("a later process", session.process_exe)),
+            patch("gms_helpers.run_session.os.kill") as mock_kill,
+            patch("gms_helpers.run_session.os.killpg", create=True) as mock_killpg,
+            patch("gms_helpers.run_session.subprocess.run") as mock_taskkill,
+        ):
+            self.assertFalse(self.manager.owns_process(session))
+            self.assertFalse(self.manager.kill_process(session, force=True))
+        mock_kill.assert_not_called()
+        mock_killpg.assert_not_called()
+        mock_taskkill.assert_not_called()
+
+    def test_stop_never_signals_a_reused_pid(self):
+        session = self.manager.create_session(pid=os.getpid(), exe_path="/identity/test.exe")
+        data = session.to_dict()
+        data["process_exe"] = "/some/other/program"
+        (self.manager.sessions_dir / "current.json").write_text(json.dumps(data), encoding="utf-8")
+        with patch.object(self.manager, "kill_process") as mock_kill:
+            result = self.manager.stop_game()
+        mock_kill.assert_not_called()
+        self.assertTrue(result["ok"])
+        self.assertIsNone(self.manager.get_current_session())
+
+    def test_session_without_recorded_identity_is_not_owned(self):
+        session = self.manager.create_session(pid=os.getpid(), exe_path="/identity/test.exe")
+        session.process_started = None
+        self.assertFalse(self.manager.owns_process(session))
+
     @patch("gms_helpers.run_session.os.kill")
     @patch("gms_helpers.run_session.os.killpg", create=True)
     @patch("gms_helpers.run_session.os.getpgrp", return_value=900, create=True)
@@ -316,13 +368,26 @@ class TestRunSessionManagerProcessChecks(unittest.TestCase):
     @patch("gms_helpers.run_session.platform.system", return_value="Darwin")
     def test_kill_process_uses_process_group(self, mock_system, mock_getpgid, mock_getpgrp, mock_killpg, mock_kill):
         """Test Unix kill_process targets the process group when available."""
-        self.manager.kill_process(12345, force=True)
+        session = RunSession(
+            run_id="r", pid=12345, exe_path="/g", project_root="/p", started_at="", process_started="t", process_exe="e"
+        )
+        with patch.object(self.manager, "owns_process", return_value=True):
+            self.manager.kill_process(session, force=True)
         expected_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
 
         mock_getpgid.assert_called_once_with(12345)
         mock_getpgrp.assert_called_once_with()
         mock_killpg.assert_called_once_with(1000, expected_signal)
         mock_kill.assert_not_called()
+
+    def test_new_log_path_prunes_old_logs(self):
+        paths = []
+        for _ in range(4):
+            path = self.manager.new_log_path(keep=2)
+            path.write_text("log", encoding="utf-8")
+            paths.append(path)
+        remaining = sorted(self.manager.sessions_dir.glob("run_*.log"))
+        self.assertEqual(remaining, paths[-2:])
 
 
 class TestRunSessionManagerStatus(unittest.TestCase):

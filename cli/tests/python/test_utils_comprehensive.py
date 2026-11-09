@@ -46,7 +46,7 @@ from gms_helpers.utils import (
     remove_folder_from_yyp,
     list_folders_in_yyp,
 )
-from gms_helpers.exceptions import GMSError, ProjectNotFoundError, ValidationError
+from gms_helpers.exceptions import AmbiguousProjectError, GMSError, ProjectNotFoundError, ValidationError
 
 
 class TestUtilsComprehensive(unittest.TestCase):
@@ -362,10 +362,10 @@ class TestProjectManagement(TestUtilsComprehensive):
         yyp1 = self._create_test_yyp_file("Project1")
         yyp2 = self._create_test_yyp_file("Project2")
 
-        # Should return the first one found
-        result = find_yyp(self.project_root)
-        self.assertIn(result, [yyp1, yyp2])
-        self.assertTrue(result.exists())
+        # Two project files make the project ambiguous: refuse instead of guessing.
+        with self.assertRaises(AmbiguousProjectError) as raised:
+            find_yyp(self.project_root)
+        self.assertEqual(raised.exception.details["yyp_files"], sorted([yyp1.name, yyp2.name]))
 
     def test_find_yyp_file_function(self):
         """Test the find_yyp_file function."""
@@ -385,12 +385,12 @@ class TestProjectManagement(TestUtilsComprehensive):
             os.chdir(original_cwd)
 
     def test_find_yyp_file_missing(self):
-        """Test find_yyp_file when no .yyp exists - should raise FileNotFoundError."""
+        """Test find_yyp_file when no .yyp exists - should raise ProjectNotFoundError."""
         original_cwd = os.getcwd()
         try:
             os.chdir(self.project_root)
 
-            with self.assertRaises(FileNotFoundError):
+            with self.assertRaises(ProjectNotFoundError):
                 find_yyp_file()
 
         finally:
@@ -1140,3 +1140,71 @@ class TestUtilsFullCoverage(unittest.TestCase):
         # Should handle gracefully - no duplicates to remove
         self.assertEqual(removed_count, 0)
         self.assertEqual(len(modified_data["resources"]), 2)
+
+
+class TestChangedUtilityContracts(TestUtilsComprehensive):
+    def test_dedupe_keeps_the_chosen_entry_and_groups_names_case_insensitively(self):
+        yyp_data = {
+            "resources": [
+                {"id": {"name": "o_player", "path": "objects/o_player/o_player.yy"}},
+                {"id": {"name": "other", "path": "scripts/other/other.yy"}},
+                {"id": {"name": "O_Player", "path": "objects/O_Player/O_Player.yy"}},
+            ]
+        }
+        with patch("builtins.input", return_value="1"):
+            result, removed, _report = dedupe_resources(yyp_data, interactive=True)
+        self.assertEqual(removed, 1)
+        self.assertEqual(
+            [entry["id"]["path"] for entry in result["resources"]],
+            ["scripts/other/other.yy", "objects/O_Player/O_Player.yy"],
+        )
+
+    @unittest.skipIf(os.name == "nt", "POSIX permission bits")
+    def test_atomic_write_keeps_the_replaced_files_permissions(self):
+        from gms_helpers.utils import atomic_write_text
+
+        target = self.project_root / "shared.txt"
+        target.write_text("old")
+        target.chmod(0o644)
+        atomic_write_text(target, "new")
+        self.assertEqual(target.read_text(), "new")
+        self.assertEqual(stat.S_IMODE(target.stat().st_mode), 0o644)
+        fresh = self.project_root / "fresh.txt"
+        atomic_write_text(fresh, "x")
+        umask = os.umask(0)
+        os.umask(umask)
+        self.assertEqual(stat.S_IMODE(fresh.stat().st_mode), 0o666 & ~umask)
+
+    def test_remove_folder_refuses_subfolders_and_unreadable_assets(self):
+        (self.project_root / "game.yyp").write_text(
+            json.dumps(
+                {
+                    "Folders": [
+                        {"folderPath": "folders/A.yy", "name": "A"},
+                        {"folderPath": "folders/A/B.yy", "name": "B"},
+                    ],
+                    "resources": [{"id": {"name": "broken", "path": "scripts/broken/broken.yy"}}],
+                }
+            )
+        )
+        (self.project_root / "scripts" / "broken").mkdir()
+        (self.project_root / "scripts" / "broken" / "broken.yy").write_text("not json")
+        original_cwd = os.getcwd()
+        try:
+            os.chdir(self.project_root)
+            ok, message, _assets = remove_folder_from_yyp("folders/A.yy")
+            self.assertFalse(ok)
+            self.assertIn("folders/A/B.yy", message)
+            self.assertIn("could not be read", message)
+            ok, message, _assets = remove_folder_from_yyp("folders/A.yy", force=True)
+            self.assertTrue(ok)
+            self.assertEqual(load_json(Path("game.yyp"))["Folders"], [])
+        finally:
+            os.chdir(original_cwd)
+
+    def test_resource_names_with_surrounding_whitespace_are_refused(self):
+        from gms_helpers.path_safety import validate_resource_name
+
+        self.assertEqual(validate_resource_name("My Note", "note"), "My Note")
+        with self.assertRaisesRegex(ValidationError, "whitespace"):
+            validate_resource_name("My Note ", "note")

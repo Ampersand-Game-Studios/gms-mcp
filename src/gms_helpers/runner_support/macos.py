@@ -630,7 +630,7 @@ class RunnerMacOSMixin:
                 now = time.monotonic()
                 quiet_since = now if quiet_since is None else quiet_since
                 if now - quiet_since >= 1.5:
-                    self._session_manager.clear_session()
+                    self._session_manager.clear_session(session.run_id)
                     message = (
                         f"macOS local run (PID: {session.pid}) stopped successfully."
                         if stop_ok
@@ -660,7 +660,7 @@ class RunnerMacOSMixin:
         current_processes = self._snapshot_macos_processes()
         remaining_runner_pids, remaining_tail_pids = self._tracked_macos_helper_pids(session, current_processes)
         remaining_igor_pid = self._tracked_macos_igor_pid(session, current_processes)
-        self._session_manager.clear_session()
+        self._session_manager.clear_session(session.run_id)
 
         if remaining_runner_pids or remaining_tail_pids or remaining_igor_pid is not None:
             return {

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import hashlib
 import json
 import ntpath
 import os
@@ -82,7 +83,9 @@ def test_telemetry_spawn_uses_safe_package_path(monkeypatch):
     monkeypatch.setenv("PYTHONPATH", ".")
     with (
         mock.patch.object(
-            telemetry, "resolve_state", return_value=SimpleNamespace(ci=False, test_env=False, enabled=True)
+            telemetry,
+            "resolve_state",
+            return_value=SimpleNamespace(ci=False, test_env=False, enabled=True, source="config"),
         ),
         mock.patch.object(telemetry, "count_spool_events", return_value=1),
         mock.patch.object(telemetry.subprocess, "Popen") as popen,
@@ -300,7 +303,8 @@ def test_launch_requires_success_and_current_build_artifact(tmp_path, target, re
     (project / "Game.yyp").write_text("{}")
     runner = GameMakerRunner(project)
     root = tmp_path / "private"
-    artifact = root / "GameMakerStudio2/Game" / ("Game.exe" if target == "Windows" else "Game")
+    project_key = hashlib.sha256(str((project / "Game.yyp").resolve()).encode()).hexdigest()[:16]
+    artifact = root / "GameMakerStudio2" / project_key / "Game" / ("Game.exe" if target == "Windows" else "Game")
     artifact.parent.mkdir(parents=True)
     artifact.write_text("old")
     process = mock.Mock(returncode=returncode)
@@ -390,7 +394,11 @@ def test_json_writes_merge_and_backup(tmp_path, client):
     assert merged["theme"] == "dark"
     assert merged["mcpServers"]["other"] == original["mcpServers"]["other"]
     assert merged["mcpServers"]["gms"]["command"] == "server"
-    assert json.loads(next(path.parent.glob(path.name + ".bak.*")).read_text()) == original
+    assert not list(path.parent.glob(path.name + ".bak.*"))
+    (backup,) = common._config_backups(path)
+    assert json.loads(backup.read_text()) == original
+    if os.name != "nt":
+        assert stat.S_IMODE(backup.stat().st_mode) == 0o600
 
 
 @pytest.mark.parametrize(
@@ -412,9 +420,12 @@ def test_codex_merge_preserves_unrelated_tables_with_backup(tmp_path, header):
     )
     parsed = tomllib.loads(path.read_text())
     assert parsed["mcp_servers"]["gms"]["command"] == "new"
-    assert "OLD" not in parsed["mcp_servers"]["gms"]["env"]
+    # User-added env survives; installer-owned keys are refreshed.
+    assert parsed["mcp_servers"]["gms"]["env"]["OLD"] == "1"
+    assert parsed["mcp_servers"]["gms"]["env"]["GM_PROJECT_ROOT"] == "."
     assert 'value = "keep"' in path.read_text()
-    assert next(path.parent.glob("config.toml.bak.*")).read_text() == original
+    (backup,) = common._config_backups(path)
+    assert backup.read_text() == original
 
 
 def test_config_destinations_refuse_links_and_workspace_escape(tmp_path):
@@ -678,3 +689,335 @@ def test_app_setup_dry_run_does_not_install_skills(tmp_path):
     assert result == 0
     assert skills.call_args.kwargs["enable"] is False
     assert list(tmp_path.iterdir()) == []
+
+
+_FAKE_OPENCLAW = """#!/bin/sh
+# Stand-in for the OpenClaw CLI: `mcp set` stores the JSON, `mcp show --json` returns it with env redacted.
+store="$OPENCLAW_FAKE_STORE"
+if [ "$1 $2" = "mcp set" ]; then printf '%s' "$4" > "$store"; exit 0; fi
+if [ "$1 $2" = "mcp show" ]; then
+  [ -f "$store" ] || { echo "unknown server $3" >&2; exit 1; }
+  sed -E 's/("(PYTHONUNBUFFERED|GM_PROJECT_ROOT)": *)"[^"]*"/\\1"__OPENCLAW_REDACTED__"/g' "$store"; exit 0
+fi
+exit 2
+"""
+
+
+def _openclaw_global_flow(tmp_path, action, *, dry_run=False):
+    return flow._run_canonical_flow(
+        client="openclaw",
+        scope="global",
+        action=action,
+        workspace_root=tmp_path / "workspace",
+        gm_project_root=tmp_path / "workspace",
+        server_name="gms",
+        command="server",
+        args_prefix=["--stdio"],
+        dry_run=dry_run,
+        safe_profile=False,
+        config_path_override=None,
+        openclaw_install_skills=False,
+        openclaw_skills_project=False,
+    )
+
+
+@pytest.mark.skipif(os.name == "nt", reason="The stand-in OpenClaw CLI is a POSIX shell script")
+def test_openclaw_global_setup_saves_through_openclaw_cli(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "workspace").mkdir()
+    bin_dir = tmp_path / "bin"
+    bin_dir.mkdir()
+    fake = bin_dir / "openclaw"
+    fake.write_text(_FAKE_OPENCLAW)
+    fake.chmod(0o755)
+    store = tmp_path / "saved.json"
+    monkeypatch.setenv("OPENCLAW_FAKE_STORE", str(store))
+    monkeypatch.setenv("PATH", os.pathsep.join([str(bin_dir), "/usr/bin", "/bin"]))
+
+    _openclaw_global_flow(tmp_path, "check")
+    assert "Ready for openclaw: no" in capsys.readouterr().out
+    assert _openclaw_global_flow(tmp_path, "setup") == 0
+
+    saved = json.loads(store.read_text())
+    workspace = str((tmp_path / "workspace").resolve())
+    assert saved["command"] == "server"
+    assert saved["args"] == ["--stdio"]
+    assert saved["cwd"] == workspace
+    assert saved["env"]["GM_PROJECT_ROOT"] == workspace
+    assert saved["env"]["PYTHONUNBUFFERED"] == "1"
+    assert not (tmp_path / "home" / ".openclaw").exists()
+
+    capsys.readouterr()
+    assert _openclaw_global_flow(tmp_path, "check-json") == 0
+    assert json.loads(capsys.readouterr().out)["ready"] is True
+
+
+def test_openclaw_global_setup_without_cli_fails_without_writing(tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    (tmp_path / "workspace").mkdir()
+    monkeypatch.setenv("PATH", str(tmp_path / "empty-bin"))
+    assert _openclaw_global_flow(tmp_path, "setup") == 2
+    assert "`openclaw`" in capsys.readouterr().out
+    assert not (tmp_path / "home" / ".openclaw").exists()
+
+
+def _yyp_workspace(tmp_path):
+    workspace = tmp_path / "workspace"
+    (workspace / "game").mkdir(parents=True)
+    (workspace / "game" / "game.yyp").write_text("{}")
+    return workspace
+
+
+def test_codex_dry_run_only_never_prompts_or_queues_telemetry(tmp_path, monkeypatch):
+    from gms_mcp import install
+
+    monkeypatch.setenv("HOME", str(tmp_path / "home"))
+    workspace = _yyp_workspace(tmp_path)
+    with (
+        mock.patch.object(install, "queue_event") as queue,
+        mock.patch.object(install, "maybe_start_background_flush") as flush,
+        mock.patch.object(install, "prompt_for_consent") as prompt,
+        mock.patch.object(flow, "should_prompt_for_consent", return_value=True),
+    ):
+        assert install.main(["--workspace-root", str(workspace), "--codex-dry-run-only"]) == 0
+        assert install.main(["--workspace-root", str(workspace), "--dry-run", "--cursor"]) == 0
+    queue.assert_not_called()
+    flush.assert_not_called()
+    prompt.assert_not_called()
+    assert not (tmp_path / "home" / ".gms-mcp").exists()
+    assert not (workspace / ".codex").exists()
+
+
+@pytest.mark.parametrize("name", ["GMS Local", "gms.local", "gms]x", ""])
+def test_server_name_must_be_a_bare_toml_key(tmp_path, name):
+    from gms_mcp import install
+
+    with pytest.raises(SystemExit) as exited:
+        install.main(["--workspace-root", str(tmp_path), "--server-name", name, "--dry-run", "--codex"])
+    assert exited.value.code == 2
+    with pytest.raises(ValueError, match="Invalid server name"):
+        client_configs._make_codex_mcp_config(
+            server_name=name, command="gms-mcp", args=[], gm_project_root=None, workspace_root=tmp_path
+        )
+
+
+def test_config_replace_refuses_concurrent_external_edit(tmp_path):
+    path = tmp_path / "mcp.json"
+    path.write_text('{"mcpServers": {}}')
+
+    def render(existing):
+        path.write_text('{"mcpServers": {"edited": {}}, "changed": true}')
+        return '{"mcpServers": {"gms": {}}}\n'
+
+    with pytest.raises(RuntimeError, match="changed while"):
+        common._update_config_text(output_path=path, render=render, dry_run=False)
+    assert json.loads(path.read_text())["changed"] is True
+
+
+def test_config_lock_serializes_installers(tmp_path):
+    path = tmp_path / "mcp.json"
+    with common._config_lock(path):
+        with pytest.raises(RuntimeError, match="Another gms-mcp installer"):
+            with common._config_lock(path, timeout=0.1):
+                pass
+
+
+@pytest.mark.skipif(os.name == "nt", reason="The stand-in interpreter is a POSIX shell script")
+def test_python_module_launcher_probes_interpreter(tmp_path):
+    broken = tmp_path / "python-without-gms"
+    broken.write_text("#!/bin/sh\nexit 1\n")
+    broken.chmod(0o755)
+    with pytest.raises(ValueError, match="cannot import gms_mcp"):
+        common._resolve_launcher(mode="python-module", python_command=str(broken))
+    assert common._default_python_command() == sys.executable
+
+
+def test_python_module_default_does_not_warn(tmp_path, capsys):
+    from gms_mcp import install
+
+    workspace = _yyp_workspace(tmp_path)
+    assert install.main(["--workspace-root", str(workspace), "--mode", "python-module", "--dry-run"]) == 0
+    assert "not found; using" not in capsys.readouterr().out
+
+
+@pytest.mark.skipif(os.name == "nt", reason="The stand-in launcher is a POSIX shell script")
+def test_command_mode_writes_absolute_launcher_when_on_path(tmp_path, monkeypatch):
+    binary = tmp_path / "bin" / "gms-mcp"
+    binary.parent.mkdir()
+    binary.write_text("#!/bin/sh\n")
+    binary.chmod(0o755)
+    monkeypatch.setenv("PATH", str(binary.parent))
+    command, args = common._resolve_launcher(mode="command", python_command="")
+    assert command == str(binary)
+    assert args == []
+
+
+def test_explicit_project_root_is_resolved_and_validated(tmp_path):
+    workspace = _yyp_workspace(tmp_path)
+    selected, _ = common._select_gm_project_root(
+        workspace_root=workspace, requested_root="game/game.yyp", non_interactive=True
+    )
+    assert selected == (workspace / "game").resolve()
+    (workspace / "empty").mkdir()
+    with pytest.raises(ValueError, match="containing a .yyp"):
+        common._select_gm_project_root(workspace_root=workspace, requested_root="empty", non_interactive=True)
+    outside = tmp_path / "outside"
+    outside.mkdir()
+    (outside / "other.yyp").write_text("{}")
+    with pytest.raises(ValueError, match="inside the workspace"):
+        common._select_gm_project_root(workspace_root=workspace, requested_root=str(outside), non_interactive=True)
+    link = tmp_path / "workspace-link"
+    link.symlink_to(workspace, target_is_directory=True)
+    selected, _ = common._select_gm_project_root(
+        workspace_root=workspace.resolve(), requested_root=str(link / "game"), non_interactive=True
+    )
+    assert common._relpath_posix_or_none(selected, link) == "game"
+
+
+def test_existing_entry_keeps_user_settings_and_reports_removed_keys(tmp_path, capsys):
+    path = tmp_path / "mcp.json"
+    existing = {
+        "mcpServers": {
+            "gms": {
+                "command": "old",
+                "args": ["--old"],
+                "disabled": False,
+                "env": {"GMS_MCP_GMS_PATH": "/opt/gms", "GM_PROJECT_ROOT": "/pinned", "PYTHONUNBUFFERED": "1"},
+            }
+        }
+    }
+    path.write_text(json.dumps(existing))
+    common._write_json(
+        path, {"mcpServers": {"gms": {"command": "new", "args": [], "env": {"PYTHONUNBUFFERED": "1"}}}}, dry_run=False
+    )
+    entry = json.loads(path.read_text())["mcpServers"]["gms"]
+    assert entry == {
+        "command": "new",
+        "args": [],
+        "disabled": False,
+        "env": {"GMS_MCP_GMS_PATH": "/opt/gms", "PYTHONUNBUFFERED": "1"},
+    }
+    assert "env.GM_PROJECT_ROOT" in capsys.readouterr().out
+
+
+def test_codex_merge_keeps_user_keys_and_comments(tmp_path):
+    path = tmp_path / "config.toml"
+    path.write_text(
+        '[mcp_servers.gms]\n# keep me\ncommand = "old"\nstartup_timeout_sec = 30\n'
+        '[mcp_servers.gms.env]\nGMS_MCP_GMS_PATH = "/opt/gms"\nGM_PROJECT_ROOT = "/pinned"\n'
+    )
+    client_configs._generate_codex_config(
+        workspace_root=tmp_path,
+        output_path=path,
+        server_name="gms",
+        command="new",
+        args_prefix=[],
+        gm_project_root=None,
+        dry_run=False,
+        include_project_root=False,
+    )
+    text = path.read_text()
+    entry = tomllib.loads(text)["mcp_servers"]["gms"]
+    assert entry["command"] == "new"
+    assert entry["startup_timeout_sec"] == 30
+    assert entry["env"]["GMS_MCP_GMS_PATH"] == "/opt/gms"
+    assert "GM_PROJECT_ROOT" not in entry["env"]
+    assert "# keep me" in text
+
+
+def test_backups_live_outside_workspace_with_bounded_rotation(tmp_path, private_installer_state):
+    path = tmp_path / ".cursor" / "mcp.json"
+    path.parent.mkdir()
+    path.write_text("{}")
+    for index in range(common._BACKUPS_KEPT_PER_CONFIG + 3):
+        common._write_json(path, {"mcpServers": {"gms": {"command": str(index)}}}, dry_run=False)
+    backups = common._config_backups(path)
+    assert len(backups) == common._BACKUPS_KEPT_PER_CONFIG
+    assert all(backup.is_relative_to(private_installer_state) for backup in backups)
+    assert sorted(item.name for item in path.parent.iterdir()) == ["mcp.json"]
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
+def test_replaced_config_keeps_file_mode(tmp_path):
+    path = tmp_path / "mcp.json"
+    path.write_text("{}")
+    path.chmod(0o640)
+    common._write_json(path, {"mcpServers": {"gms": {"command": "gms-mcp"}}}, dry_run=False)
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
+
+
+def test_dry_run_rejects_malformed_existing_config(tmp_path, capsys):
+    target = tmp_path / ".cursor" / "mcp.json"
+    target.parent.mkdir()
+    target.write_text('{"mcpServers": {}, // comment\n}')
+    result = flow._run_setup_for_client(
+        client="cursor",
+        scope="workspace",
+        workspace_root=tmp_path,
+        gm_project_root=None,
+        server_name="gms",
+        command="gms-mcp",
+        args_prefix=[],
+        dry_run=True,
+        safe_profile=False,
+        config_path_override=None,
+    )
+    assert result == 2
+    assert "Malformed JSON" in capsys.readouterr().out
+
+
+def test_claude_desktop_install_validates_before_copying_assets(tmp_path, capsys):
+    plugin_dir = tmp_path / "plugin"
+    plugin_dir.mkdir()
+    (plugin_dir / ".mcp.json").write_text("not json")
+    result = flow._run_setup_for_client(
+        client="claude-desktop",
+        scope="global",
+        workspace_root=tmp_path,
+        gm_project_root=None,
+        server_name="gms",
+        command="gms-mcp",
+        args_prefix=[],
+        dry_run=False,
+        safe_profile=False,
+        config_path_override=str(plugin_dir),
+    )
+    assert result == 2
+    assert sorted(item.name for item in plugin_dir.iterdir()) == [".mcp.json"]
+
+
+def test_bundle_copy_refuses_symlinks(tmp_path):
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "real.txt").write_text("x")
+    (source / "link.txt").symlink_to(source / "real.txt")
+    with pytest.raises(ValueError, match="symlink"):
+        client_configs._copy_tree(source=source, destination=tmp_path / "dest", dry_run=False, written=[])
+
+
+def test_foreign_plugin_manifest_requires_force(tmp_path):
+    manifest = tmp_path / ".claude-plugin" / "plugin.json"
+    manifest.parent.mkdir()
+    manifest.write_text('{"name": "my-own-plugin"}')
+    kwargs = dict(plugin_dir=tmp_path, server_name="gms", command="gms-mcp", args_prefix=[], dry_run=False)
+    with pytest.raises(ValueError, match="--force"):
+        client_configs._generate_claude_code_plugin(**kwargs)
+    assert json.loads(manifest.read_text()) == {"name": "my-own-plugin"}
+    client_configs._generate_claude_code_plugin(**kwargs, force=True)
+    assert json.loads(manifest.read_text())["name"] == "gms-mcp"
+
+
+def test_client_global_paths_and_keys(tmp_path, monkeypatch):
+    monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
+    monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
+    assert resolve_client_spec("codex").global_path() == tmp_path / "codex-home" / "config.toml"
+    monkeypatch.delenv("CODEX_HOME")
+    assert resolve_client_spec("codex").global_path() == tmp_path / ".codex" / "config.toml"
+    assert resolve_client_spec("windsurf").global_path() == tmp_path / ".codeium" / "windsurf" / "mcp_config.json"
+    assert resolve_client_spec("vscode").global_path().parts[-2:] == ("User", "mcp.json")
+    vscode = common._make_server_config(
+        client="vscode", server_name="gms", command="gms-mcp", args=[], gm_project_root_rel_posix=None
+    )
+    assert list(vscode) == ["servers"]
+    assert vscode["servers"]["gms"]["type"] == "stdio"

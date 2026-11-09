@@ -29,12 +29,12 @@ Optional:
 | `claude-code` | `claude` | yes | no | `.mcp.json` | setup, check, check-json, app-setup |
 | `claude-desktop` | `claude-code-global` | no | yes | plugin dir + `.mcp.json` | setup, check, check-json, app-setup |
 | `antigravity` | `gemini` | yes | yes | JSON (`mcpServers`) | setup, check, check-json, app-setup |
-| `vscode` | - | yes | yes | JSON (`mcpServers`) | setup, check, check-json, app-setup |
+| `vscode` | - | yes | yes | JSON (`servers`, `"type": "stdio"`) | setup, check, check-json, app-setup |
 | `windsurf` | - | yes | yes | JSON (`mcpServers`) | setup, check, check-json, app-setup |
-| `openclaw` | - | yes | yes | JSON (`mcpServers`) | setup, check, check-json, app-setup |
+| `openclaw` | - | yes | yes | Workspace: JSON example (`mcpServers`); global: `mcp.servers` via `openclaw mcp set` | setup, check, check-json, app-setup |
 | `generic` | - | yes | yes | JSON (`mcpServers`) | setup, check, check-json, app-setup |
 
-All generated configurations use `stdio`. Streamable HTTP is a manually configured, local-only alternative; see [MCP Server Runtime](CONFIGURATION.md#mcp-server-runtime).
+All generated configurations use `stdio`. Global targets: VS Code writes the user-profile `mcp.json` (`~/Library/Application Support/Code/User` on macOS, `%APPDATA%\Code\User` on Windows, `~/.config/Code/User` on Linux); Windsurf writes `~/.codeium/windsurf/mcp_config.json`; Codex writes `$CODEX_HOME/config.toml` (default `~/.codex/config.toml`). OpenClaw global setup runs `openclaw mcp set` (the OpenClaw Gateway must be stopped) and check reads `openclaw mcp show --json`, so the `openclaw` CLI must be on PATH; `--config-path` writes a plain JSON file instead. Streamable HTTP is a manually configured, local-only alternative; see [MCP Server Runtime](CONFIGURATION.md#mcp-server-runtime).
 
 ## Runtime Capability Contract
 

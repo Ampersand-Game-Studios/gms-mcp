@@ -2,12 +2,16 @@ from __future__ import annotations
 # pyright: reportAttributeAccessIssue=false
 
 import subprocess
+import threading
 from pathlib import Path
 from typing import Any, Dict, Optional
 
+from ..agent_locks import DirectoryLock
 from ..gamemaker_machine_lock import GameMakerMachineLock
-from .security import private_directory
+from ..mac_runtime import project_run_lock
 from .targets import ensure_igor_supported_runtime_type, normalize_platform_target
+
+_PROJECT_LEASE_TIMEOUT_SECONDS = 5.0
 
 
 class RunnerExecutionMixin:
@@ -81,7 +85,10 @@ class RunnerExecutionMixin:
                 return result
             self.retried_infrastructure_failure = True
             try:
-                self._reset_igor_transient_state()
+                # Another project's Igor may be using the shared runtime; clear our cache only while
+                # holding the machine lock, like the build that will use it.
+                with GameMakerMachineLock("run-retry-reset", self.project_root):
+                    self._reset_igor_transient_state()
             except OSError as exc:
                 message = f"Could not clear GameMaker transient state before retry: {exc}"
                 self._remember_failure(message)
@@ -97,6 +104,31 @@ class RunnerExecutionMixin:
 
         return False
 
+    def _acquire_project_run_lease(self) -> DirectoryLock:
+        """Hold this project's single game lease (the one macOS live sessions use) for the whole run."""
+        session = self._session_manager.get_current_session()
+        if session is not None and not session.isolated_runtime and self._session_manager.owns_process(session):
+            raise RuntimeError(
+                f"A game is already running for this project (PID {session.pid}). Stop it with gm_run_stop first."
+            )
+        lease = project_run_lock(self.project_root)
+        lease.acquire(timeout_seconds=_PROJECT_LEASE_TIMEOUT_SECONDS)
+        return lease
+
+    def _hold_lease_until_exit(self, process: subprocess.Popen, lease: DirectoryLock) -> None:
+        """Release a background run's lease when its process exits.
+
+        If this process ends first, the lease stays bound to the game and is reclaimed once it exits.
+        """
+
+        def _wait() -> None:
+            try:
+                process.wait()
+            finally:
+                lease.release()
+
+        threading.Thread(target=_wait, daemon=True, name=f"gms-run-{process.pid}").start()
+
     def _run_project_ide_temp_approach(self, platform_target="Windows", runtime_type="VM", background=False):
         """
         Run the project using IDE-temp approach:
@@ -108,8 +140,11 @@ class RunnerExecutionMixin:
         if platform_target == "macOS":
             return self.run_project_direct(platform_target, runtime_type, background, "temp")
         machine_lock = GameMakerMachineLock("run-start", self.project_root)
+        lease: Optional[DirectoryLock] = None
+        lease_owned_by_watcher = False
 
         try:
+            lease = self._acquire_project_run_lease()
             machine_lock.acquire()
             print("[RUN] Starting game using IDE-temp approach...")
             self._clear_last_result("package/export")
@@ -117,13 +152,8 @@ class RunnerExecutionMixin:
             # Step 1: Build PackageZip command to compile to IDE temp directory
             print("[PACKAGE] Packaging project to IDE temp directory...")
 
-            project_file = self.find_project_file()
-            system_temp = self._system_temp_root()
-            project_name = project_file.stem
-
-            # Use IDE temp directory structure
-            ide_temp_dir = system_temp / "GameMakerStudio2" / project_name
-            private_directory(private_directory(system_temp / "GameMakerStudio2") / project_name)
+            project_name = self.find_project_file().stem
+            ide_temp_dir = self._igor_output_dir()
 
             target_app_zip = None
             extra_args = [f"/of={ide_temp_dir / project_name}"]
@@ -209,6 +239,7 @@ class RunnerExecutionMixin:
             print("[RUN] Starting game...")
 
             self.game_process = self._start_game_process(launch_path)
+            lease.bind_process(self.game_process.pid)
 
             print(f"[OK] Game started! PID: {self.game_process.pid}")
 
@@ -222,6 +253,8 @@ class RunnerExecutionMixin:
             machine_lock.release()
 
             if background:
+                self._hold_lease_until_exit(self.game_process, lease)
+                lease_owned_by_watcher = True
                 # Background mode: return immediately without waiting
                 print("[OK] Game running in background mode.")
                 print(f"   Session ID: {session.run_id}")
@@ -243,7 +276,7 @@ class RunnerExecutionMixin:
             self.game_process.wait()
 
             # Clean up session after game exits
-            self._session_manager.clear_session()
+            self._session_manager.clear_session(session.run_id)
 
             if self.game_process.returncode == 0:
                 print("[OK] Game finished successfully!")
@@ -257,6 +290,8 @@ class RunnerExecutionMixin:
             return False
         finally:
             machine_lock.release()
+            if lease is not None and not lease_owned_by_watcher:
+                lease.release()
 
     def _run_project_classic_approach(self, platform_target="Windows", runtime_type="VM", background=False):
         """Run non-macOS targets through Igor; macOS uses the owned runtime engine."""
@@ -264,31 +299,41 @@ class RunnerExecutionMixin:
         if platform_target == "macOS":
             return self.run_project_direct(platform_target, runtime_type, background, "project")
         machine_lock = GameMakerMachineLock("run-start", self.project_root)
+        lease: Optional[DirectoryLock] = None
+        lease_owned_by_watcher = False
         try:
+            lease = self._acquire_project_run_lease()
             machine_lock.acquire()
             self._clear_last_result("local run")
             self._wait_for_igor_idle()
             cmd = self._build_platform_action_command("Run", platform_target, runtime_type)
             project_file = self.find_project_file()
-            self.game_process = self._run_igor_command(cmd)
+            # Nobody reads a background run's pipe, so its Igor output goes to the session log instead.
+            log_file = self._session_manager.new_log_path() if background else None
+            self.game_process = self._run_igor_command(cmd, output_file=log_file)
+            lease.bind_process(self.game_process.pid)
             session = self._session_manager.create_session(
                 pid=self.game_process.pid,
                 exe_path=str(project_file),
                 platform_target=platform_target,
                 runtime_type=runtime_type,
+                log_file=str(log_file) if log_file else None,
             )
             machine_lock.release()
             if background:
+                self._hold_lease_until_exit(self.game_process, lease)
+                lease_owned_by_watcher = True
                 return {
                     "ok": True,
                     "background": True,
                     "pid": self.game_process.pid,
                     "run_id": session.run_id,
-                    "message": f"Game started in background (PID: {self.game_process.pid})",
+                    "log_file": str(log_file),
+                    "message": f"Game started in background (PID: {self.game_process.pid}); Igor output: {log_file}",
                 }
             output_lines = self._stream_igor_output(self.game_process, "local run")
             self.game_process.wait()
-            self._session_manager.clear_session()
+            self._session_manager.clear_session(session.run_id)
             if self.game_process.returncode == 0:
                 return True
             failure_message = self._build_stage_failure_message("local run", self.game_process.returncode, output_lines)
@@ -301,6 +346,8 @@ class RunnerExecutionMixin:
             return False
         finally:
             machine_lock.release()
+            if lease is not None and not lease_owned_by_watcher:
+                lease.release()
 
     def stop_game(self) -> Dict[str, Any]:
         """

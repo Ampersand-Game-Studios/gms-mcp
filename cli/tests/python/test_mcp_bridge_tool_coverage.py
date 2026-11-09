@@ -82,7 +82,7 @@ class TestBridgeToolWrappers(unittest.TestCase):
             with patch("gms_mcp.server.tools.bridge._resolve_project_directory", return_value=project_root):
                 result = self.call_tool("gm_bridge_enable_one_shot", project_root=str(project_root))
             self.assertFalse(result["ok"])
-            self.assertIn("No .yyp found", result["error"])
+            self.assertIn("No .yyp file found", result["error"])
 
             yyp_path = project_root / "game.yyp"
             yyp_path.write_text("{}", encoding="utf-8")

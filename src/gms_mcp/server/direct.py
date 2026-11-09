@@ -5,12 +5,14 @@ from __future__ import annotations
 import argparse
 import asyncio
 import contextlib
+import contextvars
 import inspect
 import json
 import os
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -21,6 +23,11 @@ from .results import ToolRunResult
 
 
 _DirectThreadResult = TypeVar("_DirectThreadResult")
+_CANCEL_POLL_SECONDS = 0.2
+# Set by the shielded runner; worker threads inherit it through the copied context.
+_DIRECT_CANCELLATION: contextvars.ContextVar[threading.Event | None] = contextvars.ContextVar(
+    "gms_mcp_direct_cancellation", default=None
+)
 
 
 async def _run_direct_thread_shielded(
@@ -28,11 +35,21 @@ async def _run_direct_thread_shielded(
     *args: Any,
     **kwargs: Any,
 ) -> _DirectThreadResult:
-    """Finish isolated worker management before propagating task cancellation."""
-    worker = asyncio.create_task(asyncio.to_thread(callable_to_run, *args, **kwargs))
+    """Finish isolated worker management before propagating task cancellation.
+
+    Cancellation terminates the worker's process tree, so a cancelled call never
+    waits for a long-running child (such as a foreground game) to exit on its own.
+    """
+    cancellation_requested = threading.Event()
+    token = _DIRECT_CANCELLATION.set(cancellation_requested)
+    try:
+        worker = asyncio.create_task(asyncio.to_thread(callable_to_run, *args, **kwargs))
+    finally:
+        _DIRECT_CANCELLATION.reset(token)
     try:
         return await asyncio.shield(worker)
     except asyncio.CancelledError as cancellation:
+        cancellation_requested.set()
         try:
             await worker
         finally:
@@ -171,12 +188,26 @@ def _run_direct(
             start_new_session=os.name != "nt",
             creationflags=(getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0x00000200) if os.name == "nt" else 0),
         )
-        try:
-            response, worker_stderr = process.communicate(
-                json.dumps(request, ensure_ascii=False).encode("utf-8"),
-                timeout=timeout_seconds if timeout_seconds and timeout_seconds > 0 else None,
-            )
-        except subprocess.TimeoutExpired:
+        cancellation_requested = _DIRECT_CANCELLATION.get()
+        deadline = started + timeout_seconds if timeout_seconds and timeout_seconds > 0 else None
+        request_bytes: bytes | None = json.dumps(request, ensure_ascii=False).encode("utf-8")
+        stop_reason: str | None = None
+        while True:
+            wait_seconds = None if deadline is None else max(0.0, deadline - time.monotonic())
+            if cancellation_requested is not None:
+                wait_seconds = _CANCEL_POLL_SECONDS if wait_seconds is None else min(wait_seconds, _CANCEL_POLL_SECONDS)
+            try:
+                response, worker_stderr = process.communicate(request_bytes, timeout=wait_seconds)
+                break
+            except subprocess.TimeoutExpired:
+                # communicate() may be retried, but input is only sent on the first call.
+                request_bytes = None
+                if cancellation_requested is not None and cancellation_requested.is_set():
+                    stop_reason = "cancelled"
+                elif deadline is not None and time.monotonic() >= deadline:
+                    stop_reason = "timeout"
+                else:
+                    continue
             from .subprocess_runner import _terminate_process_tree
             from .macos_runner_timeout import cleanup_macos_ownership_manifest
 
@@ -189,14 +220,18 @@ def _run_direct(
                 stderr="",
                 direct_used=True,
                 exit_code=process.returncode,
-                error=f"Direct worker timed out after {timeout_seconds} seconds",
+                error=(
+                    "Direct worker was cancelled"
+                    if stop_reason == "cancelled"
+                    else f"Direct worker timed out after {timeout_seconds} seconds"
+                ),
                 pid=process.pid,
                 elapsed_seconds=elapsed,
-                timed_out=True,
+                timed_out=stop_reason == "timeout",
                 command=command,
                 cwd=str(project_directory),
                 execution_mode="direct:isolated",
-                result={"terminated": terminated},
+                result={"terminated": terminated, "cancelled": stop_reason == "cancelled"},
             )
 
         elapsed = time.monotonic() - started

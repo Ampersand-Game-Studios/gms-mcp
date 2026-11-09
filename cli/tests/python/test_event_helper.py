@@ -23,7 +23,6 @@ from gms_helpers.event_helper import (
     add_event,
     duplicate_event,
     list_events,
-    main,
     remove_event,
 )
 from gms_helpers.exceptions import AssetNotFoundError, ValidationError
@@ -177,6 +176,37 @@ class TestEventHelper(unittest.TestCase):
             wall_event["collisionObjectId"],
             {"name": "o_wall", "path": "objects/o_wall/o_wall.yy"},
         )
+
+    def test_draw_and_other_subtypes_are_whitelisted(self):
+        with self.assertRaises(ValidationError):
+            add_event("o_test", "draw:5")
+        with self.assertRaises(ValidationError):
+            add_event("o_test", "other:90")
+        self.assertFalse((self.test_dir / "objects" / "o_test" / "Draw_5.gml").exists())
+        self.assertTrue(add_event("o_test", "draw_gui"))
+
+    def test_orphan_file_never_silently_replaces_template(self):
+        orphan = self.test_dir / "objects" / "o_test" / "Step_0.gml"
+        orphan.write_text("// old\n", encoding="utf-8")
+        with self.assertRaises(ValidationError):
+            add_event("o_test", "step", template="// new\n")
+        self.assertEqual(load_json_loose(self.yy_path)["eventList"], [])
+        self.assertTrue(add_event("o_test", "step"))
+        self.assertEqual(orphan.read_text(encoding="utf-8"), "// old\n")
+
+    def test_keep_file_renames_code_out_of_the_event_namespace(self):
+        add_event("o_test", "step", template="// keep me\n")
+        self.assertTrue(remove_event("o_test", "step", keep_file=True))
+        obj_dir = self.test_dir / "objects" / "o_test"
+        self.assertFalse((obj_dir / "Step_0.gml").exists())
+        self.assertEqual((obj_dir / "Step_0.removed.gml").read_text(encoding="utf-8"), "// keep me\n")
+
+    def test_legacy_object_format_is_refused(self):
+        self.yy_path.write_text(
+            json.dumps({"name": "o_test", "eventList": [], "resourceType": "GMObject", "resourceVersion": "1.0"})
+        )
+        with self.assertRaises(ValidationError):
+            add_event("o_test", "create")
 
 
 if __name__ == "__main__":

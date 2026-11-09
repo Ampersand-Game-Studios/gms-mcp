@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import os
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -18,6 +20,17 @@ class ClientSpec:
     workspace_relpath: str | None = None
     global_relpath: str | None = None
     description: str = ""
+    servers_key: str = "mcpServers"
+    stdio_type_required: bool = False
+
+    def global_path(self) -> Path:
+        if not self.global_supported or not self.global_relpath:
+            raise ValueError(f"Client '{self.key}' does not support global scope.")
+        if self.key == "codex":
+            return codex_home() / "config.toml"
+        if self.key == "vscode":
+            return vscode_user_dir() / "mcp.json"
+        return Path.home() / self.global_relpath
 
     def resolve_path(self, *, workspace_root: Path, scope: str, override: str | None) -> Path:
         if override:
@@ -29,10 +42,26 @@ class ClientSpec:
                 raise ValueError(f"Client '{self.key}' does not support workspace scope.")
             target = workspace_root / self.workspace_relpath
         else:
-            if not self.global_supported or not self.global_relpath:
-                raise ValueError(f"Client '{self.key}' does not support global scope.")
-            target = Path.home() / self.global_relpath
+            target = self.global_path()
         return target
+
+
+def codex_home() -> Path:
+    """Codex reads its user config from $CODEX_HOME (default ~/.codex)."""
+    configured = os.environ.get("CODEX_HOME", "").strip()
+    return Path(configured).expanduser() if configured else Path.home() / ".codex"
+
+
+def vscode_user_dir() -> Path:
+    """VS Code's user profile folder, which holds the user-level mcp.json."""
+    if os.name == "nt":
+        appdata = os.environ.get("APPDATA", "").strip()
+        base = Path(appdata) if appdata else Path.home() / "AppData" / "Roaming"
+        return base / "Code" / "User"
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Code" / "User"
+    config_home = os.environ.get("XDG_CONFIG_HOME", "").strip()
+    return (Path(config_home) if config_home else Path.home() / ".config") / "Code" / "User"
 
 
 CLIENT_SPECS: tuple[ClientSpec, ...] = (
@@ -91,8 +120,11 @@ CLIENT_SPECS: tuple[ClientSpec, ...] = (
         workspace_supported=True,
         global_supported=True,
         workspace_relpath="mcp-configs/vscode.mcp.json",
-        global_relpath=".vscode/mcp.json",
+        # Resolved by vscode_user_dir(); recorded relative to the macOS home for display.
+        global_relpath="Library/Application Support/Code/User/mcp.json",
         description="VSCode MCP JSON config",
+        servers_key="servers",
+        stdio_type_required=True,
     ),
     ClientSpec(
         key="windsurf",
@@ -101,7 +133,7 @@ CLIENT_SPECS: tuple[ClientSpec, ...] = (
         workspace_supported=True,
         global_supported=True,
         workspace_relpath="mcp-configs/windsurf.mcp.json",
-        global_relpath=".codeium/windsurf/mcp.json",
+        global_relpath=".codeium/windsurf/mcp_config.json",
         description="Windsurf MCP JSON config",
     ),
     ClientSpec(
@@ -111,8 +143,8 @@ CLIENT_SPECS: tuple[ClientSpec, ...] = (
         workspace_supported=True,
         global_supported=True,
         workspace_relpath="mcp-configs/openclaw.mcp.json",
-        global_relpath=".openclaw/mcp.json",
-        description="OpenClaw MCP JSON config",
+        global_relpath=".openclaw/openclaw.json",
+        description="OpenClaw MCP config (global scope saves through `openclaw mcp set`)",
     ),
     ClientSpec(
         key="generic",
