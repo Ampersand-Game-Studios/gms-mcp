@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import io
+import json
 import sys
 import tempfile
 import unittest
@@ -18,6 +19,7 @@ SRC_ROOT = PROJECT_ROOT / "src"
 if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
+from gms_helpers.exceptions import ProjectNotFoundError
 from gms_helpers.commands.doc_commands import (
     handle_doc_cache_clear,
     handle_doc_cache_stats,
@@ -423,11 +425,22 @@ class TestPruneMaintenanceBehavior(unittest.TestCase):
         self.assertEqual(_get_asset_type_from_path("folders/Scripts.yy"), "folder")
         self.assertEqual(_get_asset_type_from_path("misc/data.bin"), "unknown")
 
+    def _prune_project(self, root, yyp_data):
+        (root / "TestGame.yyp").write_text(json.dumps(yyp_data), encoding="utf-8")
+        existing = root / "scripts" / "existing"
+        existing.mkdir(parents=True)
+        (existing / "existing.yy").write_text("{}", encoding="utf-8")
+        # IDE exact-case folder registered with different case: a case mismatch, not missing.
+        case_dir = root / "scripts" / "CaseOnly"
+        case_dir.mkdir(parents=True)
+        (case_dir / "CaseOnly.yy").write_text("{}", encoding="utf-8")
+
     def test_prune_missing_assets_dry_run_filters_missing_entries(self):
         yyp_data = {
             "resources": [
                 {"id": {"path": "scripts/existing/existing.yy"}},
                 {"id": {"path": "scripts/missing/missing.yy"}},
+                {"id": {"path": "scripts/caseonly/caseonly.yy"}},
                 {"id": {"path": "folders/Keep.yy"}},
                 {"id": {"path": "options/main/options_main.yy"}},
                 {"id": {}},
@@ -435,71 +448,46 @@ class TestPruneMaintenanceBehavior(unittest.TestCase):
             "resourceOrder": [
                 "scripts/existing/existing.yy",
                 "scripts/missing/missing.yy",
-                {"path": "rooms/missing_room/missing_room.yy"},
                 {"path": "folders/Keep.yy"},
                 123,
             ],
         }
-        with (
-            patch("gms_helpers.maintenance.prune.find_yyp_file", return_value="TestGame.yyp"),
-            patch(
-                "gms_helpers.maintenance.prune.load_json",
-                return_value=yyp_data,
-            ),
-            patch(
-                "gms_helpers.maintenance.prune.os.path.exists",
-                side_effect=lambda path: path == "scripts/existing/existing.yy",
-            ),
-            patch("gms_helpers.maintenance.prune.transactional_copy2") as mock_copy,
-            patch("gms_helpers.maintenance.prune.save_json") as mock_save,
-        ):
-            removed = prune_missing_assets(dry_run=True)
-
-        self.assertEqual(
-            removed,
-            [
-                ("scripts/missing/missing.yy", "script"),
-            ],
-        )
-        mock_copy.assert_not_called()
-        mock_save.assert_not_called()
-
-    def test_prune_missing_assets_apply_writes_cleaned_project(self):
-        yyp_data = {"resources": [{"id": {"path": "scripts/missing/missing.yy"}}], "resourceOrder": []}
-        saved_payload = {}
-
-        def _save_json(data, path):
-            saved_payload["data"] = data
-            saved_payload["path"] = path
-
-        with (
-            patch("gms_helpers.maintenance.prune.find_yyp_file", return_value="TestGame.yyp"),
-            patch(
-                "gms_helpers.maintenance.prune.load_json",
-                return_value=yyp_data,
-            ),
-            patch(
-                "gms_helpers.maintenance.prune.os.path.exists",
-                return_value=False,
-            ),
-            patch("gms_helpers.maintenance.prune.transactional_copy2") as mock_copy,
-            patch(
-                "gms_helpers.maintenance.prune.save_json",
-                side_effect=_save_json,
-            ),
-        ):
-            removed = prune_missing_assets(dry_run=False)
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._prune_project(root, yyp_data)
+            before = (root / "TestGame.yyp").read_text(encoding="utf-8")
+            removed, output = _capture_output(prune_missing_assets, str(root), dry_run=True)
+            self.assertEqual((root / "TestGame.yyp").read_text(encoding="utf-8"), before)
+            self.assertFalse((root / "TestGame.yyp.bak").exists())
 
         self.assertEqual(removed, [("scripts/missing/missing.yy", "script")])
-        mock_copy.assert_called_once_with("TestGame.yyp", "TestGame.yyp.bak")
-        self.assertEqual(saved_payload["data"]["resources"], [])
-        self.assertEqual(saved_payload["path"], "TestGame.yyp")
+        self.assertIn("Case mismatch", output)
+        self.assertIn("scripts/caseonly/caseonly.yy -> scripts/CaseOnly/CaseOnly.yy", output)
+
+    def test_prune_missing_assets_apply_writes_cleaned_project(self):
+        yyp_data = {
+            "resources": [
+                {"id": {"path": "scripts/missing/missing.yy"}},
+                {"id": {"path": "scripts/existing/existing.yy"}},
+            ],
+            "resourceOrder": ["scripts/missing/missing.yy", "scripts/existing/existing.yy"],
+        }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            self._prune_project(root, yyp_data)
+            removed = prune_missing_assets(str(root), dry_run=False)
+            saved = json.loads((root / "TestGame.yyp").read_text(encoding="utf-8"))
+            self.assertTrue((root / "TestGame.yyp.bak").exists())
+
+        self.assertEqual(removed, [("scripts/missing/missing.yy", "script")])
+        self.assertEqual(saved["resources"], [{"id": {"path": "scripts/existing/existing.yy"}}])
+        self.assertEqual(saved["resourceOrder"], ["scripts/existing/existing.yy"])
 
     def test_prune_missing_assets_handles_exceptions_and_reports_output(self):
-        with patch("gms_helpers.maintenance.prune.find_yyp_file", side_effect=RuntimeError("boom")):
-            removed, error_output = _capture_output(prune_missing_assets, dry_run=False)
-        self.assertEqual(removed, [])
-        self.assertIn("Error during asset pruning: boom", error_output)
+        # An unreadable project is an error, never an empty "nothing to prune" result.
+        with tempfile.TemporaryDirectory() as temp_dir:
+            with self.assertRaises(ProjectNotFoundError):
+                prune_missing_assets(temp_dir, dry_run=False)
 
         _, report_output = _capture_output(
             print_prune_report,

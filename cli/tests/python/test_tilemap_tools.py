@@ -107,6 +107,14 @@ class TestTilemapCodec(unittest.TestCase):
         with self.assertRaises(ValidationError):
             decompress_tile_data([3, 1, 2], expected_len=3)
 
+    def test_unsigned_empty_marker_is_empty(self):
+        from gms_helpers.tilemap_codec import is_empty_tile
+
+        self.assertTrue(is_empty_tile(2147483648))
+        self.assertTrue(is_empty_tile(TILE_EMPTY))
+        self.assertFalse(is_empty_tile(0x10000090))
+        self.assertEqual(tile_index(2147483648), 0)
+
     def test_tile_flags(self):
         raw = 0x10000090
         self.assertEqual(tile_index(raw), 0x90)
@@ -485,3 +493,18 @@ class TestTilemapOps(unittest.TestCase):
         bad = validate_maps(room_name="r_map", project_root=self.temp)
         self.assertFalse(bad["ok"])
         self.assertTrue(any(issue["code"] == "index_oob" for issue in bad["issues"]))
+
+    def test_validate_reports_each_bad_layer_and_continues(self):
+        room_path = self.temp / "rooms/r_map/r_map.yy"
+        data = load_json_loose(room_path)
+        good = deepcopy(data["layers"][0])
+        bad_size = deepcopy(good) | {"name": "Bad_Size", "%Name": "Bad_Size"}
+        bad_size["tiles"] = dict(bad_size["tiles"], SerialiseWidth="wide")
+        bad_tileset = deepcopy(good) | {"name": "Bad_Tileset", "%Name": "Bad_Tileset"}
+        bad_tileset["tilesetId"] = {"name": "ts_x", "path": "../outside.yy"}
+        data["layers"] = [bad_size, bad_tileset, good]
+        save_json_loose(room_path, data)
+        result = validate_maps(room_name="r_map", project_root=self.temp)
+        self.assertEqual(result["layers_checked"], 3)
+        codes = {(issue["layer"], issue["code"]) for issue in result["issues"]}
+        self.assertEqual(codes, {("Bad_Size", "invalid_size"), ("Bad_Tileset", "tileset_invalid")})

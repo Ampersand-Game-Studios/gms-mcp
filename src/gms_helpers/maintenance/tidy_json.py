@@ -9,9 +9,10 @@ from pathlib import Path
 from typing import List, Tuple
 
 from ..utils import load_json, save_json
+from .path_utils import is_options_path
 
 
-def validate_file(file_path: str) -> Tuple[bool, str]:
+def validate_file(file_path: str, project_root: str = ".") -> Tuple[bool, str]:
     """
     Validate JSON syntax in a file without modifying it.
 
@@ -20,7 +21,7 @@ def validate_file(file_path: str) -> Tuple[bool, str]:
     """
     try:
         # Skip options files - they have special format
-        if "options" in file_path.lower():
+        if is_options_path(file_path, project_root):
             return True, "Skipped (options file)"
 
         # Try to parse the JSON content using our load_json function that handles trailing commas
@@ -57,7 +58,7 @@ def validate_project_json(project_root: str = ".") -> List[Tuple[str, bool, str]
     all_files = yy_files + yyp_files
 
     for file_path in all_files:
-        is_valid, message = validate_file(file_path)
+        is_valid, message = validate_file(file_path, project_root)
         results.append((file_path, is_valid, message))
 
     return results

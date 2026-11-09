@@ -53,7 +53,7 @@ from gms_helpers.texture_groups import (
     texture_group_scan,
     texture_group_update,
 )
-from gms_helpers.utils import load_json_loose, save_pretty_json
+from gms_helpers.utils import create_dummy_png, load_json_loose, save_pretty_json
 from gms_helpers.workflow import (
     _c,
     _collect_incoming_dependencies,
@@ -324,12 +324,14 @@ class TestTextureGroups95Coverage(unittest.TestCase):
                 ],
             }
         )
-        create_res = texture_group_create(
+        rejected = texture_group_create(
             self.project_root,
             "ui",
             patch={"name": "wrong", "%Name": "wrong", "border": 4},
             dry_run=False,
         )
+        self.assertFalse(rejected["ok"])
+        create_res = texture_group_create(self.project_root, "ui", patch={"border": 4}, dry_run=False)
         self.assertTrue(create_res["ok"])
         created_groups = load_json_loose(self.yyp_path)["textureGroups"]
         self.assertEqual(created_groups[-1]["name"], "ui")
@@ -586,7 +588,7 @@ class TestWorkflow95Coverage(unittest.TestCase):
         sprite_dir.mkdir(parents=True)
         sprite_yy = sprite_dir / "spr_test.yy"
         sprite_yy.write_text(
-            json.dumps({"frames": [{"name": "frame"}], "layers": [{"name": "layer"}]}),
+            json.dumps({"frames": [{"name": "frame"}], "layers": [{"name": "layer"}], "width": 1, "height": 1}),
             encoding="utf-8",
         )
 
@@ -601,7 +603,7 @@ class TestWorkflow95Coverage(unittest.TestCase):
             swap_sprite_png(self.project_root, "sprites/spr_test/spr_test.yy", Path("relative_missing.png"))
 
         png_source = self.project_root / "input.png"
-        png_source.write_bytes(b"png")
+        create_dummy_png(png_source, width=1, height=1)
         (sprite_dir / "frame.png").write_bytes(b"old")
 
         with patch("gms_helpers.workflow.shutil.copy2", side_effect=RuntimeError("copy failed")):

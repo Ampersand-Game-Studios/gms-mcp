@@ -1,11 +1,9 @@
-#!/usr/bin/env python3
 """
 GameMaker Studio Event Helper
-Provides CLI and library functions for managing object events.
+Library functions for managing object events. The ``gms event`` CLI and MCP
+tools call these inside the project lock, write journal and validation.
 """
 
-import argparse
-import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -19,10 +17,10 @@ from .event_model import (
     resolve_collision_object_reference,
 )
 from .exceptions import AssetNotFoundError, GMSError, ValidationError
-from .maintenance.event_sync import sync_object_events
 from .path_safety import project_child_path, validate_resource_name
-from .transactions import transactional_unlink
-from .utils import atomic_write_text, load_json_loose, save_json_loose, validate_working_directory
+from .reference_scanner import read_gml_source
+from .transactions import transactional_rename, transactional_unlink
+from .utils import atomic_write_text, load_json_loose, save_json_loose
 
 # ------------------------------------------------------------------
 # Internal Helpers
@@ -117,10 +115,19 @@ def add_event(object_name: str, event_spec: str, template: str = "", project_roo
             return True
 
     # Create the GML file
-    new_event = build_event_entry(spec, collision_reference)
+    new_event = build_event_entry(spec, collision_reference, object_data=data)
     filename = event_filename_from_entry(new_event)
     gml_path = obj_dir / filename
-    if not gml_path.exists():
+    if gml_path.exists():
+        # An orphaned file is adopted as the event's code. It never silently
+        # replaces requested template content.
+        if template and read_gml_source(gml_path) != template:
+            raise ValidationError(
+                f"{filename} already exists in {object_name} without an event entry and differs from the "
+                "given template. Remove or edit that file, or add the event without a template to adopt it."
+            )
+        print(f"[OK] Adopted existing event file: {gml_path}")
+    else:
         content = template if template else f"// {filename} event\n"
         atomic_write_text(gml_path, content)
         print(f"[OK] Created event file: {gml_path}")
@@ -163,10 +170,19 @@ def remove_event(
     data["eventList"] = new_event_list
     save_json_loose(obj_path, data)
 
-    if not keep_file:
-        filename = event_filename_from_entry(matching_events[0])
-        gml_path = obj_dir / filename
-        if gml_path.exists():
+    filename = event_filename_from_entry(matching_events[0])
+    gml_path = obj_dir / filename
+    if gml_path.exists():
+        if keep_file:
+            # A file with an event filename but no event entry is an orphaned
+            # event, which GameMaker and project validation reject. Keep the
+            # code under a name that is not an event filename.
+            kept_path = obj_dir / f"{gml_path.stem}.removed.gml"
+            if kept_path.exists():
+                raise ValidationError(f"Cannot keep removed event code; {kept_path.name} already exists")
+            transactional_rename(gml_path, kept_path)
+            print(f"[OK] Kept event code as: {kept_path}")
+        else:
             transactional_unlink(gml_path)
             print(f"[OK] Deleted event file: {gml_path}")
 
@@ -210,8 +226,8 @@ def duplicate_event(
     if target_spec.collision_object is not None:
         target_collision_reference = resolve_collision_object_reference(root, target_spec.collision_object)
 
-    source_entry = build_event_entry(source_spec, source_collision_reference)
-    target_entry = build_event_entry(target_spec, target_collision_reference)
+    source_entry = build_event_entry(source_spec, source_collision_reference, object_data=data)
+    target_entry = build_event_entry(target_spec, target_collision_reference, object_data=data)
     source_filename = event_filename_from_entry(source_entry)
     target_filename = event_filename_from_entry(target_entry)
 
@@ -228,11 +244,16 @@ def duplicate_event(
     # Copy or create the target GML file
     src_gml = obj_dir / source_filename
     dst_gml = obj_dir / target_filename
-    if not dst_gml.exists():
-        if src_gml.exists():
-            atomic_write_text(dst_gml, src_gml.read_text(encoding="utf-8"))
-        else:
-            atomic_write_text(dst_gml, f"// {target_filename} event\n")
+    source_code = read_gml_source(src_gml) if src_gml.exists() else f"// {target_filename} event\n"
+    if dst_gml.exists():
+        if src_gml.exists() and read_gml_source(dst_gml) != source_code:
+            raise ValidationError(
+                f"{target_filename} already exists in {object_name} without an event entry and differs from "
+                f"{source_filename}. Remove or edit that file before duplicating."
+            )
+        print(f"[OK] Adopted existing event file: {dst_gml}")
+    else:
+        atomic_write_text(dst_gml, source_code)
         print(f"[OK] Created event file: {dst_gml}")
 
     if "eventList" not in data or data["eventList"] is None:
@@ -242,115 +263,3 @@ def duplicate_event(
 
     print(f"[OK] Duplicated event {source_event_spec} -> {target_event_spec} for {object_name}")
     return True
-
-
-# ------------------------------------------------------------------
-# CLI Handlers
-# ------------------------------------------------------------------
-
-
-def handle_list(args):
-    events = list_events(args.object)
-    # Return True to indicate success (even if no events found)
-    return True
-
-
-def handle_add(args):
-    return add_event(args.object, args.event, args.template)
-
-
-def handle_remove(args):
-    return remove_event(args.object, args.event, args.keep_file)
-
-
-def handle_validate(args):
-    object_name, obj_dir = _object_dir(args.object)
-    results = sync_object_events(str(obj_dir), dry_run=True)
-    print(f"\nValidation Report for {object_name}")
-    print("-" * 60)
-    if results["orphaned_found"] == 0 and results["missing_found"] == 0:
-        print("[OK] All events are valid!")
-    else:
-        if results["orphaned_found"] > 0:
-            print(f"[ERROR] Found {results['orphaned_found']} orphaned GML files")
-        if results["missing_found"] > 0:
-            print(f"[ERROR] Found {results['missing_found']} missing GML files")
-    return True
-
-
-def handle_fix(args):
-    object_name, obj_dir = _object_dir(args.object)
-    results = sync_object_events(str(obj_dir), dry_run=False)
-    print(f"\nFix Report for {object_name}")
-    print("-" * 60)
-    print(f"Files created: {results['missing_created']}")
-    print(f"Events added: {results['orphaned_fixed']}")
-    if results["missing_created"] == 0 and results["orphaned_fixed"] == 0:
-        print("[OK] No issues found to fix!")
-    else:
-        print("[OK] Object events fixed successfully!")
-    return True
-
-
-def main():
-    parser = argparse.ArgumentParser(description="GameMaker Studio Event Helper")
-    subparsers = parser.add_subparsers(dest="command", help="Event operation")
-
-    # List
-    list_parser = subparsers.add_parser("list", help="List all events for an object")
-    list_parser.add_argument("object", help="Object name")
-    list_parser.set_defaults(func=handle_list)
-
-    # Add
-    add_parser = subparsers.add_parser("add", help="Add a new event")
-    add_parser.add_argument("object", help="Object name")
-    add_parser.add_argument("event", help="Event spec (e.g. create, step, alarm:0)")
-    add_parser.add_argument("--template", help="Optional GML code template")
-    add_parser.set_defaults(func=handle_add)
-
-    # Remove
-    remove_parser = subparsers.add_parser("remove", help="Remove an event")
-    remove_parser.add_argument("object", help="Object name")
-    remove_parser.add_argument("event", help="Event spec")
-    remove_parser.add_argument("--keep-file", action="store_true", help="Don't delete the GML file")
-    remove_parser.set_defaults(func=handle_remove)
-
-    # Validate
-    val_parser = subparsers.add_parser("validate", help="Check for orphaned or missing event files")
-    val_parser.add_argument("object", help="Object name")
-    val_parser.set_defaults(func=handle_validate)
-
-    # Fix
-    fix_parser = subparsers.add_parser("fix", help="Fix orphaned or missing event files")
-    fix_parser.add_argument("object", help="Object name")
-    fix_parser.set_defaults(func=handle_fix)
-
-    if len(sys.argv) == 1:
-        parser.print_help()
-        return False
-
-    validate_working_directory()
-    args = parser.parse_args()
-
-    if hasattr(args, "func"):
-        try:
-            return args.func(args)
-        except GMSError as e:
-            print(f"[ERROR] {e.message}")
-            raise
-        except Exception as e:
-            print(f"[ERROR] Unexpected error: {e}")
-            return False
-    else:
-        parser.print_help()
-        return False
-
-
-if __name__ == "__main__":
-    try:
-        success = main()
-        sys.exit(0 if success else 1)
-    except GMSError as e:
-        sys.exit(e.exit_code)
-    except Exception:
-        sys.exit(1)

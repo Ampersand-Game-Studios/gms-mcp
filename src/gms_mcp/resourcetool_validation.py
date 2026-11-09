@@ -8,6 +8,7 @@ The original project is never passed to the executable.
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import json
 import os
@@ -69,6 +70,9 @@ _PRIVATE_FILENAMES = {
 }
 _PRIVATE_SUFFIXES = {".key", ".mobileprovision", ".p12", ".pem", ".pfx"}
 _OFFICIAL_ARGUMENTS = ["resourcetool", "eval", "resource list", "{project_copy_yyp}"]
+# Tool state (locks, transactions, verification markers) is not project content,
+# and other agents update it while this validation holds the project lock.
+_TOOL_STATE_DIRECTORY = ".gms_mcp"
 
 
 def _safe_text(value: object, *, private_paths: tuple[Path, ...] = ()) -> str:
@@ -95,6 +99,8 @@ def _manifest(project_root: Path) -> dict[str, str]:
     entries: dict[str, str] = {}
     for current_root, directory_names, file_names in os.walk(project_root, followlinks=False):
         current = Path(current_root)
+        if current == project_root:
+            directory_names[:] = [name for name in directory_names if name != _TOOL_STATE_DIRECTORY]
         for directory_name in directory_names:
             if (current / directory_name).is_symlink():
                 raise ValueError("The project contains a filesystem link and cannot be isolated safely.")
@@ -307,13 +313,58 @@ def validate_with_resourcetool(
         )
 
     timeout = _bounded_timeout(timeout_seconds)
+    from gms_helpers.agent_locks import LockTimeoutError
+
+    try:
+        # Other agents' edits during the run must not be blamed on ResourceTool.
+        with _project_mutation_lock(source):
+            return _validate_isolated_copy(source, project_files[0], command_template, environment, timeout)
+    except LockTimeoutError:
+        return _public_result(
+            ok=False,
+            status="project_busy",
+            executed=False,
+            evidence={"copy_created": False, "cleanup_completed": True},
+        )
+
+
+@contextlib.contextmanager
+def _project_mutation_lock(source: Path):
+    """Hold the shared project-mutation lock for the whole copy, run and comparison."""
+    from gms_helpers.transactions import _ProjectMutationLock, transaction_is_active
+
+    if transaction_is_active(source):
+        yield  # This thread's transaction already owns the lock.
+        return
+    lock = _ProjectMutationLock(source, "resourcetool-validate")
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
+
+
+def _validate_isolated_copy(
+    source: Path,
+    project_file: Path,
+    command_template: list[str],
+    environment: Mapping[str, str],
+    timeout: int,
+) -> dict[str, Any]:
     with tempfile.TemporaryDirectory(prefix="gms-mcp-resourcetool-") as temporary_directory:
         temporary_root = Path(temporary_directory)
         copy_root = temporary_root / "project"
         private_paths = (source, copy_root, temporary_root)
         try:
             source_before = _manifest(source)
-            shutil.copytree(source, copy_root, copy_function=shutil.copy2)
+            shutil.copytree(
+                source,
+                copy_root,
+                copy_function=shutil.copy2,
+                ignore=lambda directory, names: (
+                    [_TOOL_STATE_DIRECTORY] if Path(directory) == source and _TOOL_STATE_DIRECTORY in names else []
+                ),
+            )
             copied = _manifest(copy_root)
         except (OSError, ValueError) as error:
             return _public_result(
@@ -339,7 +390,7 @@ def validate_with_resourcetool(
 
         before = copied
 
-        command = _copy_only_command(command_template, copy_root / project_files[0].name)
+        command = _copy_only_command(command_template, copy_root / project_file.name)
         sandboxed_command = _sandboxed_command(command, source=source, temporary_root=temporary_root)
         if sandboxed_command is None:
             return _public_result(

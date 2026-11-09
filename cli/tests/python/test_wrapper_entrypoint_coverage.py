@@ -24,6 +24,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from gms_helpers import cli as helpers_cli
+from gms_helpers.exceptions import AssetNotFoundError
 from gms_helpers.commands import (
     asset_commands,
     event_commands,
@@ -316,19 +317,40 @@ class TestCommandWrappers(unittest.TestCase):
             self.assertEqual(result.data["events"], ["create"])
         list_events.assert_called_once_with("o_player")
 
-        with patch.object(
-            event_commands,
-            "sync_object_events",
-            side_effect=[
-                {"orphaned_found": 0, "missing_found": 0},
-                {"orphaned_found": 1, "missing_found": 0},
-                {"orphaned_found": 2, "missing_found": 3},
-            ],
-        ) as sync_object_events:
+        def registered(_root, name, _type):
+            return {"name": name, "path": f"objects/{name}/{name}.yy"}
+
+        with (
+            patch.object(event_commands, "resolve_asset_reference", side_effect=registered),
+            patch.object(
+                event_commands,
+                "sync_object_events",
+                side_effect=[
+                    {"orphaned_found": 0, "missing_found": 0},
+                    {"orphaned_found": 1, "missing_found": 0},
+                ],
+            ) as sync_object_events,
+            patch.object(event_commands, "fix_orphaned_gml_files", return_value=(2, 0)) as fix_orphans,
+            patch.object(event_commands, "create_missing_gml_files", return_value=(3, 3)) as create_missing,
+        ):
             self.assertTrue(event_commands.handle_event_validate(SimpleNamespace(object="o_good")))
             self.assertFalse(event_commands.handle_event_validate(SimpleNamespace(object="o_bad")))
-            self.assertTrue(event_commands.handle_event_fix(SimpleNamespace(object="o_fix")))
-        self.assertEqual(sync_object_events.call_count, 3)
+            fixed = event_commands.handle_event_fix(SimpleNamespace(object="o_fix"))
+            self.assertTrue(fixed)
+            self.assertTrue(fixed.warnings)
+            event_commands.handle_event_fix(SimpleNamespace(object="o_fix", safe_mode=False))
+        self.assertEqual(sync_object_events.call_count, 2)
+        # Safe mode (default) only reports orphans; --no-safe-mode registers them.
+        self.assertEqual([call.kwargs["dry_run"] for call in fix_orphans.call_args_list], [True, False])
+        self.assertTrue(all(call.kwargs["dry_run"] is False for call in create_missing.call_args_list))
+
+        with patch.object(
+            event_commands,
+            "resolve_asset_reference",
+            side_effect=AssetNotFoundError("Reference 'o_missing' is not a registered GMObject"),
+        ):
+            self.assertFalse(event_commands.handle_event_fix(SimpleNamespace(object="o_missing")))
+            self.assertFalse(event_commands.handle_event_validate(SimpleNamespace(object="o_missing")))
 
     def test_maintenance_wrappers_and_health(self):
         result_obj = SimpleNamespace(has_errors=False)
@@ -386,7 +408,7 @@ class TestCommandWrappers(unittest.TestCase):
                     SimpleNamespace(room_name="r_main", layer_name="Actors", layer_type="instances", depth=42)
                 )
             )
-        add_layer.assert_called_once_with("r_main", "Actors", "instance", 42)
+        add_layer.assert_called_once_with("r_main", "Actors", "instance", 42, tileset_name=None)
 
         with patch.object(room_commands, "remove_layer", return_value=True) as remove_layer:
             self.assertTrue(
@@ -817,12 +839,12 @@ class TestEventTools(MCPToolTestCase):
                 (
                     "gm_event_add",
                     {"object": "o_player", "event": "create", "template": "basic", "project_root": "/tmp/project"},
-                    ["event", "add", "o_player", "create", "--template", "basic"],
+                    ["event", "add", "--template", "basic", "--", "o_player", "create"],
                 ),
                 (
                     "gm_event_remove",
                     {"object": "o_player", "event": "destroy", "keep_file": True, "project_root": "/tmp/project"},
-                    ["event", "remove", "o_player", "destroy", "--keep-file"],
+                    ["event", "remove", "--keep-file", "--", "o_player", "destroy"],
                 ),
                 (
                     "gm_event_duplicate",
@@ -832,22 +854,22 @@ class TestEventTools(MCPToolTestCase):
                         "target_event": "create:2",
                         "project_root": "/tmp/project",
                     },
-                    ["event", "duplicate", "o_player", "create", "create:2"],
+                    ["event", "duplicate", "--", "o_player", "create", "create:2"],
                 ),
                 (
                     "gm_event_list",
                     {"object": "o_player", "project_root": "/tmp/project"},
-                    ["event", "list", "o_player"],
+                    ["event", "list", "--", "o_player"],
                 ),
                 (
                     "gm_event_validate",
                     {"object": "o_player", "project_root": "/tmp/project"},
-                    ["event", "validate", "o_player"],
+                    ["event", "validate", "--", "o_player"],
                 ),
                 (
                     "gm_event_fix",
                     {"object": "o_player", "safe_mode": False, "project_root": "/tmp/project"},
-                    ["event", "fix", "o_player", "--no-safe-mode"],
+                    ["event", "fix", "--no-safe-mode", "--", "o_player"],
                 ),
             ]
             for tool_name, kwargs, cli_args in cases:
@@ -875,12 +897,12 @@ class TestCodeIntelTools(MCPToolTestCase):
                 (
                     "gm_find_definition",
                     {"project_root": "/tmp/project", "symbol_name": "player_move"},
-                    ["symbol", "find-definition", "player_move"],
+                    ["symbol", "find-definition", "--", "player_move"],
                 ),
                 (
                     "gm_find_references",
                     {"project_root": "/tmp/project", "symbol_name": "player_move", "max_results": 25},
-                    ["symbol", "find-references", "player_move", "--max-results", "25"],
+                    ["symbol", "find-references", "--max-results", "25", "--", "player_move"],
                 ),
                 (
                     "gm_list_symbols",

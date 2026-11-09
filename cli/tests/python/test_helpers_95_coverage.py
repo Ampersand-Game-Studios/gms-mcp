@@ -18,8 +18,6 @@ sys.path.insert(0, str(SRC_ROOT))
 from gms_helpers.event_helper import (
     add_event,
     duplicate_event,
-    handle_remove,
-    main as event_main,
     remove_event,
 )
 from gms_helpers.exceptions import AssetNotFoundError, GMSError, ValidationError
@@ -68,11 +66,6 @@ class TestEventHelper95Coverage(unittest.TestCase):
             with self.assertRaises(GMSError):
                 remove_event("o_test", "create")
 
-        args = SimpleNamespace(object="o_test", event="create", keep_file=True)
-        with patch("gms_helpers.event_helper.remove_event", return_value=True) as mock_remove:
-            self.assertTrue(handle_remove(args))
-        mock_remove.assert_called_once_with("o_test", "create", True)
-
     def test_duplicate_event_remaining_paths(self):
         with self.assertRaises(ValidationError):
             duplicate_event("o_test", "invalid", "invalid:1")
@@ -94,12 +87,6 @@ class TestEventHelper95Coverage(unittest.TestCase):
                 self.assertTrue(duplicate_event("o_test", "step:0", "step:1"))
         saved_data = mock_save.call_args.args[1]
         self.assertEqual(saved_data["eventList"][0]["eventNum"], 1)
-
-    def test_main_without_handler_returns_false(self):
-        with patch("gms_helpers.event_helper.validate_working_directory"):
-            with patch("gms_helpers.event_helper.sys.argv", ["event_helper", "list", "o_test"]):
-                with patch("argparse.ArgumentParser.parse_args", return_value=SimpleNamespace()):
-                    self.assertFalse(event_main())
 
 
 class TestFetcher95Coverage(unittest.TestCase):

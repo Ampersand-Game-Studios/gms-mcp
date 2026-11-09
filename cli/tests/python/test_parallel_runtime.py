@@ -24,6 +24,31 @@ def wait_until(check, timeout=5):
         time.sleep(0.02)
 
 
+def test_persisted_work_dir_is_checked_against_the_launching_work_root(tmp_path, monkeypatch):
+    from gms_helpers.run_session import RunSessionManager
+
+    monkeypatch.setattr(Path, "home", lambda: tmp_path)
+    root = tmp_path / "project"
+    save = tmp_path / "Library/Application Support" / f"com.gmsmcp.game.p{mac_runtime.project_identity(root)}"
+    staging = save / "session_owned"
+    staging.mkdir(parents=True)
+    launch_root = tmp_path / "launcher-work"
+    work = launch_root / "owned"
+    work.mkdir(parents=True)
+    # This process was started with a different GMS_MCP_SNAPSHOT_WORK_DIR than the launcher.
+    monkeypatch.setattr(snapshot_build, "_work_root", lambda: tmp_path / "this-process-work")
+    persisted = RunSessionManager(root).create_session(
+        pid=os.getpid(),
+        exe_path=str(staging / "game.ios"),
+        isolated_runtime=True,
+        runtime_save_dir=str(save),
+        runtime_work_dir=str(work),
+        runtime_work_root=str(launch_root),
+        log_file=str(staging / "debug.txt"),
+    )
+    assert live_session._persisted_paths(root, persisted)[3] == work
+
+
 def test_bundle_and_staging_identity_is_project_scoped(tmp_path, monkeypatch):
     monkeypatch.setattr(Path, "home", lambda: tmp_path)
     original = tmp_path / "official.app"
@@ -36,17 +61,28 @@ def test_bundle_and_staging_identity_is_project_scoped(tmp_path, monkeypatch):
     calls = []
     monkeypatch.setattr(mac_runtime.subprocess, "run", lambda command, **options: calls.append(command))
     first = mac_runtime.prepare_mac_runtime(executable, tmp_path / "one/game", "same")
+    assert (
+        plistlib.loads((first.runner.parents[1] / "Info.plist").read_bytes())["CFBundleIdentifier"] == first.bundle_id
+    )
     second = mac_runtime.prepare_mac_runtime(executable, tmp_path / "two/game", "same")
     repeat = mac_runtime.prepare_mac_runtime(executable, tmp_path / "one/game", "same")
     assert first.save_dir != second.save_dir
     assert first.bundle_id != second.bundle_id
     assert first.save_dir == repeat.save_dir and first.staging != repeat.staging
     assert first.staging.parent == first.save_dir
+    # The caller holds the project lease, so an earlier staging of the same project is abandoned.
+    assert not first.staging.exists() and second.staging.exists()
     assert plistlib.loads(plist.read_bytes()) == info
-    assert (
-        plistlib.loads((first.runner.parents[1] / "Info.plist").read_bytes())["CFBundleIdentifier"] == first.bundle_id
-    )
     assert len(calls) == 3 and all(str(original) not in call for call in calls)
+
+
+def test_project_identity_ignores_path_letter_case_on_case_insensitive_volumes(tmp_path):
+    project = tmp_path / "Game"
+    project.mkdir()
+    swapped = Path(str(project).swapcase())
+    if not swapped.exists():
+        pytest.skip("volume is case-sensitive")
+    assert mac_runtime.project_identity(swapped) == mac_runtime.project_identity(project)
 
 
 def test_project_leases_exclude_other_agents_but_not_other_projects(tmp_path, monkeypatch):
@@ -200,6 +236,7 @@ def test_dead_server_recovery_archives_and_cleans_only_matching_session(tmp_path
         isolated_runtime=True,
         runtime_label=None,
         runtime_work_dir=str(work),
+        runtime_work_root=str(work.parent),
         runtime_save_dir=str(save),
         log_file=str(log),
     )
@@ -426,6 +463,7 @@ def test_invalid_persisted_paths_preserve_files_and_processes(tmp_path, monkeypa
         isolated_runtime=True,
         runtime_save_dir=str(save),
         runtime_work_dir=str(work),
+        runtime_work_root=str(work_root),
         log_file=str(log),
     )
     monkeypatch.setattr(GameMakerRunner, "_terminate_pid", lambda *args: pytest.fail("signalled before validation"))
@@ -556,7 +594,7 @@ def test_start_rechecks_predecessor_after_waiting_for_lease(tmp_path, monkeypatc
 
     def archive(root, predecessor):
         events.append("archived")
-        manager.clear_session()
+        manager.clear_session(predecessor.run_id)
 
     def start(root, **kwargs):
         assert manager.get_current_session() is None
@@ -755,3 +793,23 @@ def test_startup_rollback_closes_bridge_and_releases_both_leases(tmp_path, monke
     assert not mac_runtime.project_run_lock(root).path.exists()
     assert not snapshot_build.pipeline_lock(root, "rollback").path.exists()
     assert live_session.get_session(root) is None
+
+
+def test_owned_runner_takes_the_projects_retina_option(tmp_path, monkeypatch):
+    app = tmp_path / "Runner.app"
+    (app / "Contents" / "MacOS").mkdir(parents=True)
+    executable = app / "Contents" / "MacOS" / "Mac_Runner"
+    executable.write_text("")
+    (app / "Contents" / "Info.plist").write_bytes(plistlib.dumps({"CFBundleExecutable": "Mac_Runner"}))
+    monkeypatch.setattr(mac_runtime.subprocess, "run", lambda command, **options: None)
+    for value in (True, False):
+        project = tmp_path / f"retina_{value}"
+        (project / "options" / "mac").mkdir(parents=True)
+        (project / "options" / "mac" / "options_mac.yy").write_text(
+            '{\n  "option_mac_enable_retina":%s,\n}' % ("true" if value else "false")
+        )
+        owned = mac_runtime.prepare_mac_runtime(executable, project, "x")
+        info = plistlib.loads((owned.runner.parents[1] / "Info.plist").read_bytes())
+        assert info["YYMacUseRetina"] is value
+    bare = mac_runtime.prepare_mac_runtime(executable, tmp_path / "no_options", "x")
+    assert "YYMacUseRetina" not in plistlib.loads((bare.runner.parents[1] / "Info.plist").read_bytes())

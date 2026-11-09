@@ -22,11 +22,16 @@ from ..asset_types import (
 from .context import validate_asset_directory_structure
 
 
+def _validate_project_structure(args) -> None:
+    """Refuse to create any asset outside a recognisable GameMaker project."""
+    gamemaker_root = validate_asset_directory_structure(getattr(args, "project_root", None))
+    print(f"[OK] GameMaker project validated: {gamemaker_root.name}")
+
+
 def create_script(args):
     """Create a new script asset."""
     try:
-        gamemaker_root = validate_asset_directory_structure()
-        print(f"[OK] GameMaker project validated: {gamemaker_root.name}")
+        _validate_project_structure(args)
         return create_project_asset(
             args,
             asset=ScriptAsset(),
@@ -43,6 +48,7 @@ def create_script(args):
 def create_object(args):
     """Create a new object asset."""
     try:
+        _validate_project_structure(args)
         kwargs = {}
         if args.sprite_id:
             kwargs["sprite_id"] = args.sprite_id
@@ -58,6 +64,7 @@ def create_object(args):
 def create_sprite(args):
     """Create a new sprite asset."""
     try:
+        _validate_project_structure(args)
         frame_count = getattr(args, "frame_count", 1)
         return create_project_asset(
             args,
@@ -78,6 +85,7 @@ def create_sprite(args):
 def create_room(args):
     """Create a new room asset."""
     try:
+        _validate_project_structure(args)
         return create_project_asset(
             args,
             asset=RoomAsset(),
@@ -94,6 +102,7 @@ def create_room(args):
 def create_folder(args):
     """Create a new folder asset."""
     try:
+        _validate_project_structure(args)
         precheck = run_pre_creation_maintenance(args, f"Folder '{args.name}' creation")
         if precheck is not True:
             return precheck
@@ -113,6 +122,7 @@ def create_folder(args):
 def create_font(args):
     """Create a new font asset."""
     try:
+        _validate_project_structure(args)
         kwargs = {
             "font_name": args.font_name,
             "size": args.size,
@@ -142,6 +152,7 @@ def create_font(args):
 def create_shader(args):
     """Create a new shader asset."""
     try:
+        _validate_project_structure(args)
         return create_project_asset(
             args,
             asset=ShaderAsset(),
@@ -163,6 +174,7 @@ def create_shader(args):
 def create_animcurve(args):
     """Create a new animation curve asset."""
     try:
+        _validate_project_structure(args)
         return create_project_asset(
             args,
             asset=AnimCurveAsset(),
@@ -180,6 +192,7 @@ def create_animcurve(args):
 def create_sound(args):
     """Create a new sound asset."""
     try:
+        _validate_project_structure(args)
         kwargs = {
             "volume": args.volume,
             "pitch": args.pitch,
@@ -210,6 +223,7 @@ def create_sound(args):
 def create_path(args):
     """Create a new path asset."""
     try:
+        _validate_project_structure(args)
         return create_project_asset(
             args,
             asset=PathAsset(),
@@ -227,6 +241,7 @@ def create_path(args):
 def create_tileset(args):
     """Create a new tileset asset."""
     try:
+        _validate_project_structure(args)
         kwargs = {
             "tile_width": args.tile_width,
             "tile_height": args.tile_height,
@@ -260,6 +275,7 @@ def create_tileset(args):
 def create_timeline(args):
     """Create a new timeline asset."""
     try:
+        _validate_project_structure(args)
         return create_project_asset(
             args,
             asset=TimelineAsset(),
@@ -276,6 +292,7 @@ def create_timeline(args):
 def create_sequence(args):
     """Create a new sequence asset."""
     try:
+        _validate_project_structure(args)
         return create_project_asset(
             args,
             asset=SequenceAsset(),
@@ -293,6 +310,7 @@ def create_sequence(args):
 def create_note(args):
     """Create a new note asset."""
     try:
+        _validate_project_structure(args)
         return create_project_asset(
             args,
             asset=NoteAsset(),

@@ -9,6 +9,7 @@ from typing import Any, Dict
 from ..base_asset import BaseAsset
 from ..utils import atomic_write_bytes, atomic_write_text
 from .naming import get_config
+from .ranges import require_int, require_number
 
 
 class SoundAsset(BaseAsset):
@@ -66,8 +67,8 @@ class SoundAsset(BaseAsset):
 
     def create_yy_data(self, name: str, parent_path: str, **kwargs) -> Dict[str, Any]:
         # Sound configuration parameters
-        volume = kwargs.get("volume", 1.0)
-        sample_rate = kwargs.get("sample_rate", 44100)
+        volume = require_number(kwargs.get("volume", 1.0), "volume", 0.0, 1.0)
+        sample_rate = require_int(kwargs.get("sample_rate", 44100), "sample_rate", 1)
         sound_format = kwargs.get("format", 0)  # 0=OGG, 1=MP3, 2=WAV
         sound_file_ext = self._placeholder_extension(sound_format)
 
@@ -137,7 +138,7 @@ class PathAsset(BaseAsset):
     def create_yy_data(self, name: str, parent_path: str, **kwargs) -> Dict[str, Any]:
         # Path configuration parameters
         closed = kwargs.get("closed", False)
-        precision = kwargs.get("precision", 4)
+        precision = require_int(kwargs.get("precision", 4), "precision", 0)
         path_type = kwargs.get("path_type", "straight")  # straight, smooth
 
         # Create basic path points based on type
@@ -207,12 +208,12 @@ class TileSetAsset(BaseAsset):
 
     def create_yy_data(self, name: str, parent_path: str, **kwargs) -> Dict[str, Any]:
         # Tileset configuration parameters
-        tile_width = kwargs.get("tile_width", 32)
-        tile_height = kwargs.get("tile_height", 32)
-        tile_xsep = kwargs.get("tile_xsep", 0)
-        tile_ysep = kwargs.get("tile_ysep", 0)
-        tile_xoff = kwargs.get("tile_xoff", 0)
-        tile_yoff = kwargs.get("tile_yoff", 0)
+        tile_width = require_int(kwargs.get("tile_width", 32), "tile_width", 1)
+        tile_height = require_int(kwargs.get("tile_height", 32), "tile_height", 1)
+        tile_xsep = require_int(kwargs.get("tile_xsep", 0), "tile_xsep", 0)
+        tile_ysep = require_int(kwargs.get("tile_ysep", 0), "tile_ysep", 0)
+        tile_xoff = require_int(kwargs.get("tile_xoff", 0), "tile_xoff", 0)
+        tile_yoff = require_int(kwargs.get("tile_yoff", 0), "tile_yoff", 0)
         sprite_id = kwargs.get("sprite_id", None)
 
         sprite_ref = None
@@ -378,8 +379,8 @@ class SequenceAsset(BaseAsset):
 
     def create_yy_data(self, name: str, parent_path: str, **kwargs) -> Dict[str, Any]:
         # Sequence configuration parameters
-        length = kwargs.get("length", 60.0)  # 60 frames default
-        playback_speed = kwargs.get("playback_speed", 30.0)  # 30 FPS
+        length = require_number(kwargs.get("length", 60.0), "length", 0.0)  # 60 frames default
+        playback_speed = require_number(kwargs.get("playback_speed", 30.0), "playback_speed", 0.0)  # 30 FPS
 
         return {
             "$GMSequence": "v1",

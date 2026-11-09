@@ -13,9 +13,13 @@ def validate_resource_name(name: Any, kind: str) -> str:
     if name is None:
         raise ValidationError(f"Invalid {kind} name: cannot be empty")
 
-    candidate = str(name).strip()
-    if not candidate:
+    candidate = str(name)
+    if not candidate.strip():
         raise ValidationError(f"Invalid {kind} name: cannot be empty")
+    if candidate != candidate.strip():
+        # A stripped copy would be checked while the caller writes the original ("My Note "),
+        # so the name is refused instead of silently normalised.
+        raise ValidationError(f"Invalid {kind} name: {name!r} has leading or trailing whitespace")
 
     windows_path = PureWindowsPath(candidate)
     if (

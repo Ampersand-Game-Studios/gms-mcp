@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 import urllib.error
 from pathlib import Path
 from unittest.mock import patch
@@ -277,3 +278,157 @@ def test_disable_waits_for_inflight_upload_and_no_later_batch_sends(telemetry_ho
     assert disabled.is_set()
     assert t.count_spool_events() == 0
     assert not queue()
+
+
+def test_client_schema_matches_ingest_service_schema():
+    schema_path = Path(__file__).resolve().parents[3] / "services" / "telemetry" / "src" / "event-schema.json"
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    assert schema["schema_version"] == t.SCHEMA_VERSION
+    assert schema["fields"] == t.EVENT_FIELD_RULES
+    assert schema["token_pattern"] == t.EVENT_TOKEN_PATTERN
+    assert schema["event_surfaces"] == t.EVENT_SURFACES
+    assert schema["results"] == list(t.EVENT_RESULTS)
+    assert schema["error_families"] == list(t.EVENT_ERROR_FAMILIES)
+    assert schema["duration_buckets"] == list(t.EVENT_DURATION_BUCKETS)
+    assert schema["max_duration_ms"] == t.EVENT_MAX_DURATION_MS
+    assert schema["max_event_age_ms"] == t.EVENT_MAX_AGE_MS
+    assert schema["max_clock_skew_ms"] == t.EVENT_MAX_CLOCK_SKEW_MS
+    assert schema["version_pattern"] == t.EVENT_VERSION_PATTERN
+    assert schema["python_version_pattern"] == t.EVENT_PYTHON_VERSION_PATTERN
+    assert schema["timestamp_pattern"] == t.EVENT_TIMESTAMP_PATTERN
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("tool_name", "x" * 65),
+        ("tool_family", "x" * 33),
+        ("event_type", "arbitrary"),
+        ("event_type", "mcp.tool"),
+        ("error_family", "secret"),
+        ("duration_bucket", "secret"),
+        ("duration_ms", 7 * 86400000 + 1),
+        ("python_version", "private-value"),
+        ("gms_mcp_version", "private-value"),
+        ("timestamp", "2026-01-01T00:00:00+00:00"),
+    ],
+)
+def test_client_rejects_what_the_service_would_reject(telemetry_home, field, value):
+    payload = event()
+    payload[field] = value
+    assert not t._valid_spool_event(payload)
+
+
+def test_queue_does_not_wait_for_inflight_upload(telemetry_home):
+    assert queue()
+    started = threading.Event()
+    release = threading.Event()
+
+    def upload(*_):
+        started.set()
+        assert release.wait(5)
+
+    with patch.object(t, "_post_batch", side_effect=upload):
+        flushing = threading.Thread(target=t.flush_spool)
+        flushing.start()
+        try:
+            assert started.wait(5)
+            began = time.monotonic()
+            assert queue()
+            assert time.monotonic() - began < 1
+        finally:
+            release.set()
+            flushing.join(5)
+    assert not flushing.is_alive()
+    assert t.count_spool_events() == 0
+
+
+def test_queue_gives_up_quickly_when_state_lock_is_busy(telemetry_home):
+    holding = threading.Event()
+    release = threading.Event()
+
+    def hold():
+        with t._state_guard():
+            holding.set()
+            release.wait(5)
+
+    holder = threading.Thread(target=hold)
+    holder.start()
+    try:
+        assert holding.wait(5)
+        began = time.monotonic()
+        assert not queue()
+        assert time.monotonic() - began < 2
+    finally:
+        release.set()
+        holder.join(5)
+
+
+@pytest.mark.parametrize("status,kept", [(400, 0), (413, 0), (429, 1), (408, 1), (503, 1)])
+def test_permanent_client_rejection_drops_batch_but_retryable_keeps_it(telemetry_home, status, kept):
+    assert queue()
+    error = urllib.error.HTTPError("https://example.com", status, "rejected", {}, None)
+    with patch.object(t, "_post_batch", side_effect=error):
+        result = t.flush_spool()
+    assert result.ok is (kept == 0)
+    assert t.count_spool_events() == kept
+
+
+def test_consent_event_honours_per_run_off(telemetry_home, monkeypatch):
+    t.clear_spool()
+    monkeypatch.setenv("GMS_MCP_TELEMETRY", "off")
+    with patch.object(t, "maybe_start_background_flush") as flush:
+        t.emit_consent_changed("enable")
+    assert t.count_spool_events() == 0
+    flush.assert_not_called()
+    monkeypatch.delenv("GMS_MCP_TELEMETRY")
+    with patch.object(t, "maybe_start_background_flush") as flush:
+        t.emit_consent_changed("enable", cli_override="off")
+    assert t.count_spool_events() == 0
+    flush.assert_not_called()
+
+
+def test_cli_override_reaches_background_flush_process(telemetry_home):
+    t.save_config(consent=None, include_install_hash=False, install_hash=None)
+    assert queue_with_state(t.resolve_state("on"))
+    with patch.object(t.subprocess, "Popen") as popen:
+        assert t.maybe_start_background_flush(force=True, cli_override="on")
+    assert popen.call_args.kwargs["env"]["GMS_MCP_TELEMETRY"] == "on"
+
+
+def queue_with_state(state):
+    return t.queue_event(
+        state=state,
+        surface="cli",
+        event_type="cli.command",
+        action="asset.create",
+        tool_name="asset.create",
+        tool_family="asset",
+        result="ok",
+    )
+
+
+def test_prompt_without_stdin_does_not_crash_or_record_a_decision(telemetry_home):
+    t.save_config(consent=None, include_install_hash=False, install_hash=None)
+    with patch("builtins.input", side_effect=EOFError):
+        assert t.prompt_for_consent() is False
+    assert t.load_config().consent is None
+
+
+@pytest.mark.parametrize(
+    "env,expected",
+    [
+        ({}, False),
+        ({"CI": "false"}, False),
+        ({"CI": "0"}, False),
+        ({"CI": "true"}, True),
+        ({"CI": "1"}, True),
+        ({"GITHUB_ACTIONS": "true"}, True),
+        ({"BUILD_BUILDID": "42"}, True),
+        ({"JENKINS_URL": "https://ci.example"}, True),
+    ],
+)
+def test_shared_ci_detection(env, expected):
+    from gms_mcp.ci_detection import is_ci_environment
+
+    assert is_ci_environment(env) is expected

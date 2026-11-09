@@ -96,6 +96,45 @@ class TestMCPProfiles(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "READ_ONLY"):
                 build_server()
 
+    def test_unrecognised_post_mutation_verify_fails_at_server_startup(self):
+        from gms_mcp.server.register_all import ServerConfigurationError
+
+        with patch.dict(os.environ, {"GMS_MCP_POST_MUTATION_VERIFY": "smrat"}, clear=False):
+            with self.assertRaisesRegex(ServerConfigurationError, "GMS_MCP_POST_MUTATION_VERIFY"):
+                build_server()
+
+    def test_configuration_errors_are_reported_as_configuration_errors(self):
+        import io
+        from contextlib import redirect_stderr
+
+        from gms_mcp import gamemaker_mcp_server
+
+        stderr = io.StringIO()
+        with (
+            patch.dict(os.environ, {"GMS_MCP_TOOLSETS": "made-up-domain"}, clear=False),
+            redirect_stderr(stderr),
+        ):
+            result = gamemaker_mcp_server.main([])
+        self.assertEqual(result, 2)
+        self.assertIn("configuration is invalid", stderr.getvalue())
+        self.assertIn("made-up-domain", stderr.getvalue())
+        self.assertNotIn("approved GameMaker project", stderr.getvalue())
+
+    def test_destructive_tools_preview_by_default(self):
+        specs = {tool.name: tool for tool in _tools("all")}
+        for name in (
+            "gm_maintenance_prune_missing",
+            "gm_maintenance_dedupe_resources",
+            "gm_room_ops_delete",
+            "gm_texture_group_create",
+            "gm_texture_group_update",
+            "gm_texture_group_rename",
+            "gm_texture_group_delete",
+            "gm_texture_group_assign",
+            "gm_safe_delete",
+        ):
+            self.assertIs(specs[name].input_schema["properties"]["dry_run"]["default"], True, name)
+
 
 if __name__ == "__main__":
     unittest.main()

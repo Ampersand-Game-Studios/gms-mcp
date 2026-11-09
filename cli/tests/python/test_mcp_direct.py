@@ -47,6 +47,12 @@ def handle_runner_run(_args):
     return True
 
 
+def _direct_sleep_until_killed(args):
+    Path(args.entered_path).write_text("started", encoding="utf-8")
+    time.sleep(60)
+    return True
+
+
 class TestCaptureOutputSystemExit(unittest.TestCase):
     def test_system_exit_nonzero_captured(self):
         def _fn():
@@ -119,6 +125,29 @@ class TestCaptureOutputSystemExit(unittest.TestCase):
             self.assertTrue(finished.is_set())
 
         asyncio.run(exercise())
+
+    def test_cancellation_terminates_a_long_running_direct_worker(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "Probe.yyp").write_text("{}", encoding="utf-8")
+            entered = root / "entered.txt"
+            args = argparse.Namespace(entered_path=str(entered))
+
+            async def exercise():
+                task = asyncio.create_task(
+                    _run_direct_thread_shielded(_run_direct, _direct_sleep_until_killed, args, str(root), 120)
+                )
+                deadline = time.monotonic() + 20
+                while not entered.exists() and time.monotonic() < deadline:
+                    await asyncio.sleep(0.05)
+                self.assertTrue(entered.exists())
+                started = time.monotonic()
+                task.cancel()
+                with self.assertRaises(asyncio.CancelledError):
+                    await task
+                return time.monotonic() - started
+
+            self.assertLess(asyncio.run(exercise()), 10)
 
 
 class TestDirectResultNormalization(unittest.TestCase):
@@ -399,14 +428,7 @@ class TestRunWithFallbackDefaults(unittest.TestCase):
         self.assertTrue(mock_direct.called)
         self.assertFalse(mock_cli.called)
 
-    def test_direct_infrastructure_failure_still_falls_back_to_cli(self):
-        direct_result = ToolRunResult(
-            ok=False,
-            stdout="",
-            stderr="",
-            direct_used=True,
-            error="Traceback (most recent call last):\nImportError: helper unavailable",
-        )
+    def _run_direct_failure(self, direct_result, cli_args, direct_args=None):
         cli_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=False)
 
         async def _fake_cli(*_args, **_kwargs):
@@ -421,20 +443,104 @@ class TestRunWithFallbackDefaults(unittest.TestCase):
                         result = asyncio.run(
                             server._run_with_fallback(
                                 direct_handler=lambda _args: True,
-                                direct_args=argparse.Namespace(),
-                                cli_args=["asset", "create", "object", "o_player"],
+                                direct_args=direct_args or argparse.Namespace(),
+                                cli_args=cli_args,
                                 project_root=".",
                                 prefer_cli=False,
                                 output_mode="full",
                                 quiet=True,
                             )
                         )
+        self.assertTrue(mock_direct.called)
+        return result, mock_cli
+
+    def test_direct_infrastructure_failure_of_a_reader_still_falls_back_to_cli(self):
+        direct_result = ToolRunResult(
+            ok=False,
+            stdout="",
+            stderr="",
+            direct_used=True,
+            error="Traceback (most recent call last):\nImportError: helper unavailable",
+        )
+        result, mock_cli = self._run_direct_failure(direct_result, ["event", "list", "--", "o_player"])
 
         self.assertTrue(result["ok"])
         self.assertFalse(result["direct_used"])
         self.assertEqual(result["direct_error"], direct_result.error)
-        self.assertTrue(mock_direct.called)
         self.assertTrue(mock_cli.called)
+
+    def test_direct_infrastructure_failure_of_a_writer_never_reruns_through_cli(self):
+        direct_result = ToolRunResult(
+            ok=False,
+            stdout="",
+            stderr="",
+            direct_used=True,
+            error="Traceback (most recent call last):\nImportError: helper unavailable",
+        )
+        result, mock_cli = self._run_direct_failure(
+            direct_result, ["asset", "create", "object", "--parent-path", "folders/Objects.yy", "--", "o_player"]
+        )
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["fallback_skipped_reason"], "project_mutation")
+        self.assertFalse(mock_cli.called)
+
+    def test_direct_timeout_never_reruns_through_cli(self):
+        direct_result = ToolRunResult(
+            ok=False, stdout="", stderr="", direct_used=True, error="Direct worker timed out", timed_out=True
+        )
+        result, mock_cli = self._run_direct_failure(direct_result, ["event", "list", "--", "o_player"])
+
+        self.assertFalse(result["ok"])
+        self.assertEqual(result["fallback_skipped_reason"], "direct_timeout")
+        self.assertFalse(mock_cli.called)
+
+    def test_dash_leading_values_are_data_and_parser_exits_never_escape(self):
+        direct_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=True)
+        with patch.dict(os.environ, {"GMS_MCP_ENABLE_DIRECT": "1"}, clear=True):
+            from gms_mcp.execution_policy import PolicyManager
+
+            with patch("gms_mcp.server.dispatch.policy_manager", PolicyManager()):
+                with patch("gms_mcp.server.dispatch._run_direct", return_value=direct_result) as mock_direct:
+                    as_data = asyncio.run(
+                        server._run_with_fallback(
+                            direct_handler=lambda _args: True,
+                            direct_args=argparse.Namespace(),
+                            cli_args=["room", "layer", "remove", "--", "r_main", "-h"],
+                            project_root=".",
+                            prefer_cli=False,
+                            quiet=True,
+                        )
+                    )
+                    unparseable = asyncio.run(
+                        server._run_with_fallback(
+                            direct_handler=lambda _args: True,
+                            direct_args=argparse.Namespace(),
+                            cli_args=["room", "layer", "remove", "r_main", "-h"],
+                            project_root=".",
+                            prefer_cli=False,
+                            quiet=True,
+                        )
+                    )
+
+        self.assertTrue(as_data["ok"])
+        self.assertEqual(mock_direct.call_count, 1)
+        self.assertFalse(unparseable["ok"])
+        self.assertIn("could not be parsed", unparseable["error"])
+
+    def test_every_operation_policy_writer_is_blocked_from_cli(self):
+        from gms_mcp.server.destructive_policy import is_real_destructive_cli_workflow
+
+        for name in (
+            "event-add",
+            "event-duplicate",
+            "sprite-frames-add",
+            "sprite-frames-duplicate",
+            "room-layer-add",
+            "room-instance-add",
+        ):
+            self.assertTrue(is_real_destructive_cli_workflow(name, argparse.Namespace()), name)
+        self.assertFalse(is_real_destructive_cli_workflow("room-ops-delete", argparse.Namespace(dry_run=True)))
 
     def test_real_destructive_default_uses_direct_not_cli(self):
         direct_result = ToolRunResult(ok=True, stdout="", stderr="", direct_used=True)

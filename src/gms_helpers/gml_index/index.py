@@ -8,6 +8,7 @@ from typing import Dict, List, Optional, Set
 
 from .symbols import Symbol, SymbolKind, SymbolLocation, SymbolReference
 from .scanner import GMLScanner
+from ..operation_policy import read_only_mode_enabled
 
 
 class GMLIndex:
@@ -78,7 +79,7 @@ class GMLIndex:
         Returns:
             Dict with build statistics
         """
-        read_only = not persist or os.environ.get("GMS_MCP_READ_ONLY", "").strip() == "1"
+        read_only = not persist or read_only_mode_enabled()
         if not read_only:
             self._remove_legacy_project_cache()
         cache_path = self.cache_path

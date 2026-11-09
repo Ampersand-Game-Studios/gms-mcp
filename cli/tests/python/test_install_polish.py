@@ -1201,7 +1201,8 @@ class TestClaudeCodeSupport(unittest.TestCase):
             self.assertTrue((workspace / ".codex" / "mcp.toml").exists())
             workspace_config = (workspace / ".codex" / "mcp.toml").read_text(encoding="utf-8")
             self.assertIn('GM_PROJECT_ROOT = "."', workspace_config)
-            self.assertNotIn(str(workspace), workspace_config)
+            # The relative project root is resolved from the pinned server cwd.
+            self.assertIn(f"cwd = {json.dumps(workspace.resolve().as_posix())}", workspace_config)
             self.assertIn("[INFO] Codex config written to:", output)
             self.assertIn("[INFO] Codex app setup global preview target:", output)
             self.assertIn("[INFO] Active server entry 'gms-app' source:", output)
@@ -1278,6 +1279,8 @@ class TestClaudeCodeSupport(unittest.TestCase):
         self.assertNotIn("version", marketplace["plugins"][0])
         self.assertEqual(set(mcp_config), {"mcpServers"})
         self.assertIn("gms", mcp_config["mcpServers"])
+        self.assertTrue((repo_root / manifest["icon"]).is_file())
+        self.assertNotIn("icon", marketplace["plugins"][0])
 
     def test_generate_claude_code_plugin_with_bundle_assets_copies_hooks(self):
         with tempfile.TemporaryDirectory() as tmpdir:

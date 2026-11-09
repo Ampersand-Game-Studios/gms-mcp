@@ -1,8 +1,9 @@
 """Regular-expression matching with a hard time limit for caller-supplied patterns.
 
 Python's ``re`` engine backtracks, so a valid pattern such as ``(a+)+$`` can take exponential time.
-Patterns that contain repetition run in an isolated child interpreter that is killed at the deadline;
-patterns without repetition cannot backtrack catastrophically and run in-process.
+Alternation backtracks too: ``(a|a)`` repeated twenty times explores a million paths per position
+without a single quantifier. Patterns that contain repetition or alternation run in an isolated child
+interpreter that is killed at the deadline; patterns with neither match in linear time and run in-process.
 """
 
 from __future__ import annotations
@@ -17,7 +18,8 @@ from collections.abc import Sequence
 MAX_PATTERN_LENGTH = 1000
 DEFAULT_TIMEOUT_SECONDS = 5.0
 
-_REPETITION = re.compile(r"[*+?{]")
+# Repetition or alternation, the two sources of backtracking (escaped characters included, conservatively).
+_BACKTRACKING = re.compile(r"[*+?{|]")
 
 _CHILD_SOURCE = """
 import json, re, sys
@@ -59,7 +61,7 @@ def search_many(
     Stops after ``max_matches`` matches. Raises ``RegexTimeoutError`` when matching exceeds ``timeout``.
     """
     prog = compile_pattern(pattern, flags)
-    if not _REPETITION.search(pattern):
+    if not _BACKTRACKING.search(pattern):
         found: list[tuple[int, str]] = []
         for index, text in enumerate(texts):
             match = prog.search(text)

@@ -156,7 +156,7 @@ def register(mcp: Any, ContextType: Any) -> None:
 
     @mcp.tool()
     async def gm_maintenance_prune_missing(
-        dry_run: bool = False,
+        dry_run: bool = True,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: OutputMode = "full",
@@ -164,7 +164,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Remove missing asset references from project file."""
+        """Remove missing asset references from project file (previews by default; pass dry_run=false to write)."""
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.maintenance_commands import handle_maintenance_prune_missing
@@ -233,7 +233,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_maintenance_dedupe_resources(
         auto: bool = True,
-        dry_run: bool = False,
+        dry_run: bool = True,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: OutputMode = "full",
@@ -241,7 +241,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Remove duplicate resource entries from .yyp."""
+        """Remove duplicate resource entries from .yyp (previews by default; pass dry_run=false to write)."""
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.maintenance_commands import handle_maintenance_dedupe_resources

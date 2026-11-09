@@ -187,13 +187,20 @@ class RunnerDiscoveryMixin:
             if not base_path.exists():
                 continue
 
-            # Look for user directories (usually username_number format)
-            user_dirs = [d for d in base_path.iterdir() if d.is_dir()]
-
-            for user_dir in user_dirs:
-                license_file = _find_in_directory(user_dir)
-                if license_file:
-                    return license_file
+            # Look for user directories (usually username_number format). With several signed-in
+            # accounts, take the most recently written licence (the account GameMaker used last),
+            # breaking ties by path, and say which one was chosen.
+            user_dirs = sorted(d for d in base_path.iterdir() if d.is_dir())
+            candidates = [found for user_dir in user_dirs if (found := _find_in_directory(user_dir))]
+            if candidates:
+                candidates.sort(key=lambda path: (-path.stat().st_mtime, str(path)))
+                if len(candidates) > 1:
+                    print(
+                        f"[INFO] Found GameMaker licences for {len(candidates)} accounts under {base_path}; "
+                        f"using the most recently updated one: {candidates[0]}. "
+                        "Set GMS_MCP_LICENSE_FILE to choose another."
+                    )
+                return candidates[0]
 
             # Some installs store licence directly under the base path or nested subfolder.
             license_file = _find_in_directory(base_path)

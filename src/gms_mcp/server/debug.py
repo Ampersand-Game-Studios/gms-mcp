@@ -5,6 +5,8 @@ import os
 import threading
 import time
 from pathlib import Path
+
+from gms_helpers.operation_policy import read_only_mode_enabled
 from typing import List, Optional
 
 from .log_paths import diagnostic_log_dir, secure_private_file
@@ -55,7 +57,7 @@ def _dbg(hypothesis_id: str, location: str, message: str, data: dict) -> None:
     """Append one bounded, redacted NDJSON line to the private rotating debug log."""
     if os.environ.get("GMS_MCP_DEBUG_LOG") != "1":
         return
-    if os.environ.get("GMS_MCP_READ_ONLY", "").strip().lower() in {"1", "true", "yes", "on"}:
+    if read_only_mode_enabled():
         return
     try:
         log_path = _get_debug_log_path()

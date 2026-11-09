@@ -16,6 +16,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     def gm_bridge_install(
         port: int = 6502,
         project_root: str = ".",
+        force: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
@@ -37,6 +38,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         Args:
             port: Port for bridge server (default: 6502)
             project_root: Path to project root
+            force: Replace bridge files that were edited or lack the gms-mcp marker
 
         Returns:
             Installation result with ok, message, and details
@@ -45,7 +47,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         from gms_helpers.bridge_installer import install_bridge
 
         try:
-            result = install_bridge(project_root, port)
+            result = install_bridge(project_root, port, force)
             return result
         except Exception as e:
             return {"ok": False, "error": str(e), "message": f"Installation failed: {e}"}
@@ -53,6 +55,7 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     def gm_bridge_uninstall(
         project_root: str = ".",
+        force: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
@@ -66,6 +69,7 @@ def register(mcp: Any, ContextType: Any) -> None:
 
         Args:
             project_root: Path to project root
+            force: Remove bridge files that were edited or lack the gms-mcp marker
 
         Returns:
             Uninstallation result with ok, message, and details
@@ -74,7 +78,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         from gms_helpers.bridge_installer import uninstall_bridge
 
         try:
-            result = uninstall_bridge(project_root)
+            result = uninstall_bridge(project_root, force)
             return result
         except Exception as e:
             return {"ok": False, "error": str(e), "message": f"Uninstallation failed: {e}"}
@@ -155,15 +159,15 @@ def register(mcp: Any, ContextType: Any) -> None:
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
 
-        from gms_helpers.utils import load_json_loose
+        from gms_helpers.utils import find_yyp, load_json_loose
         from gms_helpers.bridge_installer import install_bridge, BRIDGE_OBJECT_NAME
         from gms_helpers.room_layer_helper import add_layer
         from gms_helpers.room_instance_helper import add_instance
 
-        yyp_files = sorted(project_directory.glob("*.yyp"))
-        if not yyp_files:
-            return {"ok": False, "error": f"No .yyp found in {project_directory}"}
-        yyp_path = yyp_files[0]
+        try:
+            yyp_path = find_yyp(project_directory)
+        except Exception as e:
+            return {"ok": False, "error": str(e)}
         yyp_data = load_json_loose(yyp_path) or {}
 
         def _detect_startup_room() -> str:

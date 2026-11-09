@@ -2,6 +2,7 @@
 import unittest
 import sys
 import os
+import tempfile
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -10,6 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from gms_helpers.exceptions import (
+    AmbiguousProjectError,
     GMSError,
     ProjectNotFoundError,
     AssetExistsError,
@@ -80,13 +82,25 @@ class TestUtilsRefactor(unittest.TestCase):
         with self.assertRaises(ProjectNotFoundError):
             find_yyp(Path("/fake/path"))
 
-    @patch("os.listdir")
-    def test_validate_working_directory_raises_exception(self, mock_listdir):
-        """Test that validate_working_directory now raises ProjectNotFoundError."""
-        mock_listdir.return_value = ["not_a_project.txt"]
+    def test_validate_working_directory_raises_exception(self):
+        """validate_working_directory raises instead of exiting: none or several .yyp files."""
+        old_cwd = os.getcwd()
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "not_a_project.txt").write_text("", encoding="utf-8")
+            os.chdir(root)
+            try:
+                with self.assertRaises(ProjectNotFoundError):
+                    validate_working_directory()
 
-        with self.assertRaises(ProjectNotFoundError):
-            validate_working_directory()
+                (root / "a.yyp").write_text("{}", encoding="utf-8")
+                self.assertEqual(validate_working_directory(), "a.yyp")
+
+                (root / "b.yyp").write_text("{}", encoding="utf-8")
+                with self.assertRaises(AmbiguousProjectError):
+                    validate_working_directory()
+            finally:
+                os.chdir(old_cwd)
 
 
 if __name__ == "__main__":

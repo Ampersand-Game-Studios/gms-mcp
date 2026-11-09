@@ -43,18 +43,22 @@ def _parse_csv(value: Optional[str]) -> Optional[List[str]]:
 
 
 def _parse_set_kv(pairs: Optional[List[str]]) -> Dict[str, Any]:
-    """Parse repeated --set key=value items into a patch dict with basic typing."""
+    """Parse repeated --set key=value items into a patch dict with basic typing.
+
+    Raises ValueError for items that are not ``key=value`` with a non-empty key,
+    so a typo is reported instead of silently dropped.
+    """
     patch: Dict[str, Any] = {}
     if not pairs:
         return patch
     for item in pairs:
         if not isinstance(item, str) or "=" not in item:
-            continue
+            raise ValueError(f"Invalid --set item {item!r}; expected key=value")
         key, raw = item.split("=", 1)
         key = key.strip()
         raw = raw.strip()
         if not key:
-            continue
+            raise ValueError(f"Invalid --set item {item!r}; the key is empty")
         low = raw.lower()
         if low in ("true", "false"):
             patch[key] = low == "true"
@@ -169,7 +173,11 @@ def handle_texture_groups_create(args) -> OperationResult:
     project_root = Path(getattr(args, "project_root", ".")).resolve()
     name = getattr(args, "name", "")
     template = getattr(args, "template", "Default")
-    patch = _parse_set_kv(getattr(args, "set", None))
+    try:
+        patch = _parse_set_kv(getattr(args, "set", None))
+    except ValueError as exc:
+        print(f"[ERROR] {exc}")
+        return _texture_fail(str(exc), {"set": getattr(args, "set", None)}, code="texture_group_invalid_patch")
     dry_run = bool(getattr(args, "dry_run", False))
     result = texture_group_create(project_root, name, template=template, patch=patch or None, dry_run=dry_run)
     if not result.get("ok"):
@@ -187,7 +195,11 @@ def handle_texture_groups_create(args) -> OperationResult:
 def handle_texture_groups_update(args) -> OperationResult:
     project_root = Path(getattr(args, "project_root", ".")).resolve()
     name = getattr(args, "name", "")
-    patch = _parse_set_kv(getattr(args, "set", None))
+    try:
+        patch = _parse_set_kv(getattr(args, "set", None))
+    except ValueError as exc:
+        print(f"[ERROR] {exc}")
+        return _texture_fail(str(exc), {"set": getattr(args, "set", None)}, code="texture_group_invalid_patch")
     configs = _parse_csv(getattr(args, "configs", None))
     update_existing_configs = bool(getattr(args, "update_existing_configs", True))
     dry_run = bool(getattr(args, "dry_run", False))

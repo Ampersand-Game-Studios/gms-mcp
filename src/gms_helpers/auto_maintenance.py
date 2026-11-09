@@ -110,6 +110,8 @@ class MaintenanceResult:
         self.multi_asset_dirs: List[str] = []
         self.has_errors: bool = False
         self.degraded_mode: bool = False
+        self.destructive_fixes_skipped: bool = False
+        self.scan_errors: List[str] = []
         self.summary: str = ""
 
     def set_comma_fixes(self, issues: List[Tuple[str, bool, str]]):
@@ -204,8 +206,19 @@ def run_auto_maintenance(
     # Step 4: Check for orphaned/missing assets
     if verbose:
         print("\n[4] Checking for orphaned/missing assets...")
-    orphaned = find_orphaned_assets(project_root)
-    missing = find_missing_assets(project_root)
+
+    def guarded(label: str, func, default):
+        # A scanner that cannot read the project is an error, never a clean report.
+        try:
+            return func()
+        except Exception as exc:
+            result.scan_errors.append(f"{label}: {exc}")
+            result.has_errors = True
+            print(f"   [ERROR] {label} failed: {exc}")
+            return default
+
+    orphaned = guarded("Orphan scan", lambda: find_orphaned_assets(project_root), [])
+    missing = guarded("Missing-asset scan", lambda: find_missing_assets(project_root), [])
     result.set_orphan_data(orphaned, missing)
 
     if verbose:
@@ -214,20 +227,37 @@ def run_auto_maintenance(
         if missing:
             print(f"   [ERROR] Found {len(missing)} missing asset(s)")
 
+    # Steps 5-8 write, move or delete files. Never run them on a project whose
+    # validation (steps 1-4) already reported errors: the scanners' view of
+    # what is "unused" or "orphaned" cannot be trusted then.
+    apply_fixes = fix_issues and not result.has_errors
+    if fix_issues and not apply_fixes:
+        result.destructive_fixes_skipped = True
+        print("[WARN]  Validation reported errors; destructive fixes skipped (steps 5-8 report only).")
+
     # Step 5: Synchronize object events (fix orphaned/missing)
     if verbose:
         print("\n[5] Synchronizing object events...")
 
     from .maintenance.event_sync import sync_all_object_events
 
-    event_stats = sync_all_object_events(project_root, dry_run=not fix_issues)
+    empty_event_stats = {
+        "objects_processed": 0,
+        "orphaned_found": 0,
+        "orphaned_fixed": 0,
+        "missing_found": 0,
+        "missing_created": 0,
+    }
+    event_stats = guarded(
+        "Event sync", lambda: sync_all_object_events(project_root, dry_run=not apply_fixes), empty_event_stats
+    )
 
     if verbose:
         if event_stats["orphaned_found"] > 0:
-            action = "FIXED" if fix_issues else "FOUND"
+            action = "FIXED" if apply_fixes else "FOUND"
             print(f"   [SCAN] Orphaned GML files: {event_stats['orphaned_found']} {action}")
         if event_stats["missing_found"] > 0:
-            action = "REMOVED" if fix_issues else "FOUND"
+            action = "CREATED" if apply_fixes else "FOUND"
             print(f"   [ERROR] Missing GML files: {event_stats['missing_found']} {action}")
         if event_stats["orphaned_found"] == 0 and event_stats["missing_found"] == 0:
             print("   [OK] All object events are synchronized")
@@ -235,6 +265,7 @@ def run_auto_maintenance(
     result.event_sync_stats = event_stats
 
     # Step 6: Clean unused asset folders
+    apply_fixes = apply_fixes and not result.has_errors
     if verbose:
         print("\n[6] Cleaning unused asset folders...")
     from .maintenance.clean_unused_assets import clean_unused_folders
@@ -245,22 +276,34 @@ def run_auto_maintenance(
     for asset_type in asset_types:
         if verbose:
             print(f"  Scanning {asset_type}/ for unused folders...")
-        found, deleted = clean_unused_folders(project_root, asset_type, do_delete=fix_issues)
+        found, deleted = guarded(
+            f"Unused {asset_type} scan",
+            lambda asset_type=asset_type: clean_unused_folders(project_root, asset_type, do_delete=apply_fixes),
+            (0, 0),
+        )
         total_found += found
         total_deleted += deleted
 
     # Step 7: Clean up .old.yy files
+    apply_fixes = apply_fixes and not result.has_errors
     if verbose:
         print("\n[7] Cleaning up .old.yy files...")
     from .maintenance.clean_unused_assets import clean_old_yy_files
 
-    old_files_found, old_files_deleted = clean_old_yy_files(project_root, do_delete=fix_issues)
+    old_files_found, old_files_deleted = guarded(
+        ".old.yy scan", lambda: clean_old_yy_files(project_root, do_delete=apply_fixes), (0, 0)
+    )
     result.old_files_stats = {"found": old_files_found, "deleted": old_files_deleted}
 
     # Step 8: Clean up orphaned asset files
+    apply_fixes = apply_fixes and not result.has_errors
     if verbose:
         print("\n[8] Cleaning up orphaned asset files...")
-    orphan_cleanup_result = delete_orphan_files(project_root, fix_issues=fix_issues, skip_types={"folder"})
+    orphan_cleanup_result = guarded(
+        "Orphan cleanup",
+        lambda: delete_orphan_files(project_root, fix_issues=apply_fixes, skip_types={"folder"}),
+        {"errors": [], "total_deleted": 0, "deleted_files": [], "deleted_directories": []},
+    )
     result.orphan_cleanup_stats = orphan_cleanup_result
 
     # Step 9: Detect multi-asset directories

@@ -2,9 +2,11 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import re
 import shutil
 import sys
+import tempfile
 import time
 import urllib.request
 from calendar import timegm
@@ -21,6 +23,9 @@ UPDATE_STATUS_FILE = "update_status.json"
 CACHE_TTL_SECONDS = 24 * 60 * 60
 NOTIFY_TTL_SECONDS = 24 * 60 * 60
 REQUEST_TIMEOUT_SECONDS = 3
+FAILURE_BACKOFF_SECONDS = 60 * 60
+UPDATE_CHECK_DISABLE_ENV = "GMS_MCP_DISABLE_UPDATE_CHECK"
+_TRUE_VALUES = {"1", "true", "yes", "on"}
 PYPI_RELEASE_URL = "https://pypi.org/project/gms-mcp/"
 GITHUB_RELEASE_URL = "https://github.com/Ampersand-Game-Studios/gms-mcp/releases/latest"
 PYPI_JSON_URL = "https://pypi.org/pypi/gms-mcp/json"
@@ -35,6 +40,12 @@ class _CachedUpdateState(TypedDict):
     url: str | None
     checked_at: str
     last_notified_at: str | None
+    last_failure_at: str | None
+
+
+# Per-process state for callers that must not write the cache file (persist=False),
+# keyed by cache path so separate homes never share results.
+_MEMORY_STATE: dict[Path, _CachedUpdateState] = {}
 
 
 def _default_python_command() -> str:
@@ -239,6 +250,7 @@ def _load_cached_state() -> _CachedUpdateState | None:
                 "url": _optional_string_value(payload.get("url")),
                 "checked_at": _string_value(payload.get("checked_at"), ""),
                 "last_notified_at": _optional_string_value(payload.get("last_notified_at")),
+                "last_failure_at": _optional_string_value(payload.get("last_failure_at")),
             }
     except Exception as exc:
         logger.debug("Failed to read update cache: %s", exc)
@@ -247,11 +259,32 @@ def _load_cached_state() -> _CachedUpdateState | None:
 
 def _save_cached_state(payload: _CachedUpdateState) -> None:
     path = _cache_path()
+    temp_path: Path | None = None
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(json.dumps(payload, indent=2, sort_keys=True), encoding="utf-8")
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False
+        ) as handle:
+            temp_path = Path(handle.name)
+            json.dump(payload, handle, indent=2, sort_keys=True)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temp_path, path)
+        temp_path = None
     except Exception as exc:
         logger.debug("Failed to write update cache: %s", exc)
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+
+
+def update_check_disabled() -> bool:
+    return os.environ.get(UPDATE_CHECK_DISABLE_ENV, "").strip().lower() in _TRUE_VALUES
+
+
+def _in_failure_backoff(cached: _CachedUpdateState | None) -> bool:
+    failed_at = _iso_to_ts(cached.get("last_failure_at")) if cached else None
+    return failed_at is not None and (_utc_now() - failed_at) < FAILURE_BACKOFF_SECONDS
 
 
 def _build_info_from_cache(cached: _CachedUpdateState, *, current: str, used_cache: bool) -> dict[str, Any]:
@@ -287,6 +320,7 @@ def _fetch_update_status(current: str) -> _CachedUpdateState | None:
             "url": PYPI_RELEASE_URL,
             "checked_at": checked_at,
             "last_notified_at": None,
+            "last_failure_at": None,
         }
         return payload
 
@@ -300,6 +334,7 @@ def _fetch_update_status(current: str) -> _CachedUpdateState | None:
             "url": GITHUB_RELEASE_URL,
             "checked_at": checked_at,
             "last_notified_at": None,
+            "last_failure_at": None,
         }
         return payload
 
@@ -312,41 +347,14 @@ def _fetch_update_status(current: str) -> _CachedUpdateState | None:
             "url": None,
             "checked_at": checked_at,
             "last_notified_at": None,
+            "last_failure_at": None,
         }
         return payload
 
     return None
 
 
-def check_for_updates(*, force_refresh: bool = False, persist: bool = True) -> dict[str, Any]:
-    """
-    Check if a newer version of gms-mcp is available.
-
-    Results are cached for 24 hours under ~/.gms-mcp/doctor/update_status.json.
-    """
-    current = get_current_version()
-    cached = _load_cached_state()
-
-    if cached and not force_refresh and _is_cache_fresh(cached):
-        return _build_info_from_cache(cached, current=current, used_cache=True)
-
-    fetched = _fetch_update_status(current)
-    if fetched is not None:
-        payload: _CachedUpdateState = {
-            "status": fetched["status"],
-            "latest_version": fetched["latest_version"],
-            "source": fetched["source"],
-            "url": fetched["url"],
-            "checked_at": fetched["checked_at"],
-            "last_notified_at": cached.get("last_notified_at") if cached else None,
-        }
-        if persist:
-            _save_cached_state(payload)
-        return _build_info_from_cache(payload, current=current, used_cache=False)
-
-    if cached:
-        return _build_info_from_cache(cached, current=current, used_cache=True)
-
+def _unknown_info(current: str) -> dict[str, Any]:
     return _build_update_info(
         current=current,
         latest=current,
@@ -359,6 +367,69 @@ def check_for_updates(*, force_refresh: bool = False, persist: bool = True) -> d
     )
 
 
+def check_for_updates(*, force_refresh: bool = False, persist: bool = True) -> dict[str, Any]:
+    """
+    Check if a newer version of gms-mcp is available.
+
+    Results are cached for 24 hours under ~/.gms-mcp/doctor/update_status.json; a failed
+    check is retried after an hour. ``persist=False`` keeps results in memory only.
+    Set GMS_MCP_DISABLE_UPDATE_CHECK=1 to never contact PyPI or GitHub.
+    """
+    current = get_current_version()
+    path = _cache_path()
+    cached = _MEMORY_STATE.get(path) if not persist else None
+    cached = cached or _load_cached_state()
+
+    if update_check_disabled():
+        return _build_info_from_cache(cached, current=current, used_cache=True) if cached else _unknown_info(current)
+
+    if cached and not force_refresh and (_is_cache_fresh(cached) or _in_failure_backoff(cached)):
+        if cached.get("checked_at") or cached.get("status") != "unknown":
+            return _build_info_from_cache(cached, current=current, used_cache=True)
+        return _unknown_info(current)
+
+    fetched = _fetch_update_status(current)
+    if fetched is not None:
+        payload: _CachedUpdateState = {
+            "status": fetched["status"],
+            "latest_version": fetched["latest_version"],
+            "source": fetched["source"],
+            "url": fetched["url"],
+            "checked_at": fetched["checked_at"],
+            "last_notified_at": cached.get("last_notified_at") if cached else None,
+            "last_failure_at": None,
+        }
+        _store_state(path, payload, persist=persist)
+        return _build_info_from_cache(payload, current=current, used_cache=False)
+
+    failed: _CachedUpdateState = (
+        {**cached}
+        if cached
+        else {
+            "status": "unknown",
+            "latest_version": current,
+            "source": None,
+            "url": None,
+            "checked_at": "",
+            "last_notified_at": None,
+            "last_failure_at": None,
+        }
+    )
+    failed["last_failure_at"] = _ts_to_iso(_utc_now())
+    _store_state(path, failed, persist=persist)
+    if cached:
+        return _build_info_from_cache(cached, current=current, used_cache=True)
+    return _unknown_info(current)
+
+
+def _store_state(path: Path, payload: _CachedUpdateState, *, persist: bool) -> None:
+    if persist:
+        _MEMORY_STATE.pop(path, None)
+        _save_cached_state(payload)
+    else:
+        _MEMORY_STATE[path] = payload
+
+
 def mark_update_notified(info: dict[str, Any]) -> None:
     """Persist the notification timestamp after a reminder is emitted."""
     timestamp = _ts_to_iso(_utc_now())
@@ -369,6 +440,7 @@ def mark_update_notified(info: dict[str, Any]) -> None:
         "url": None,
         "checked_at": "",
         "last_notified_at": None,
+        "last_failure_at": None,
     }
     cached["status"] = _string_value(info.get("status"), cached["status"])
     cached["latest_version"] = _string_value(

@@ -34,7 +34,7 @@ from gms_helpers.assets import (
     TileSetAsset,
     TimelineAsset,
 )
-from gms_helpers.exceptions import InvalidAssetTypeError, JSONParseError
+from gms_helpers.exceptions import InvalidAssetTypeError, JSONParseError, ProjectNotFoundError
 from gms_helpers.texture_groups import (
     _asset_supports_texture_groups,
     _iter_resource_assets,
@@ -53,7 +53,7 @@ from gms_helpers.texture_groups import (
     texture_group_rename,
     texture_group_update,
 )
-from gms_helpers.utils import load_json_loose, save_pretty_json
+from gms_helpers.utils import create_dummy_png, load_json_loose, save_pretty_json
 from gms_helpers.workflow import (
     _asset_from_path,
     _patch_gml_stub,
@@ -148,6 +148,29 @@ class TestAssetsGapCoverage(unittest.TestCase):
         with patch("gms_helpers.assets.get_config", return_value=_fake_config(rule={})):
             self.assertTrue(note_asset.validate_name("Note_Name"))
 
+    def test_folder_names_are_unique_per_parent_only(self):
+        from gms_helpers.exceptions import AssetExistsError
+
+        yyp_path = self.project_root / "TestGame.yyp"
+        save_pretty_json(yyp_path, {"Folders": []})
+        asset = FolderAsset()
+        asset.create_files(self.project_root, "Audio")
+        asset.create_files(self.project_root, "Music")
+        asset.create_files(self.project_root, "UI")
+        # Same name under different parents is fine, as in the GameMaker IDE.
+        self.assertEqual(asset.create_files(self.project_root, "Common", "folders/Audio.yy"), "folders/Audio/Common.yy")
+        self.assertEqual(asset.create_files(self.project_root, "Common", "folders/UI.yy"), "folders/UI/Common.yy")
+        with self.assertRaises(AssetExistsError):
+            asset.create_files(self.project_root, "common", "folders/UI.yy")
+
+    def test_asset_constructors_reject_out_of_range_numbers(self):
+        for kwargs in ({"tile_width": 0}, {"tile_height": -1}, {"tile_xsep": -1}, {"tile_width": True}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                TileSetAsset().create_yy_data("ts_bad", self.parent_path, **kwargs)
+        for kwargs in ({"size": 0}, {"aa_level": 4}, {"font_name": ""}):
+            with self.subTest(kwargs=kwargs), self.assertRaises(ValueError):
+                FontAsset().create_yy_data("fnt_bad", self.parent_path, **kwargs)
+
     def test_folder_asset_path_variants_and_create_files(self):
         asset = FolderAsset()
         self.assertEqual(asset.create_yy_data("UI")["folderPath"], "folders/UI.yy")
@@ -173,7 +196,7 @@ class TestAssetsGapCoverage(unittest.TestCase):
 
         empty_root = Path(tempfile.mkdtemp())
         try:
-            with self.assertRaises(FileNotFoundError):
+            with self.assertRaises(ProjectNotFoundError):
                 asset.create_files(empty_root, "Missing")
         finally:
             shutil.rmtree(empty_root, ignore_errors=True)
@@ -357,16 +380,24 @@ class TestTextureGroupGapCoverage(unittest.TestCase):
         self.assertFalse(result["ok"])
 
         result = texture_group_create(self.project_root, "ui", patch="bad")
+        self.assertFalse(result["ok"])
+        self.assertIn("patch must be a dict", result["error"])
+        result = texture_group_create(self.project_root, "ui", patch={"resourceType": "GMSprite"})
+        self.assertFalse(result["ok"])
+        self.assertIn("Unsupported texture group field", result["error"])
+        result = texture_group_create(self.project_root, "ui")
         self.assertTrue(result["ok"])
-        self.assertTrue(any("patch was not a dict" in warning for warning in result["warnings"]))
 
         result = texture_group_update(self.project_root, "missing", patch={})
         self.assertFalse(result["ok"])
         result = texture_group_update(self.project_root, "Default", patch="bad")  # type: ignore[arg-type]
         self.assertFalse(result["ok"])
         result = texture_group_update(self.project_root, "Default", patch={"name": "bad"})
-        self.assertTrue(result["ok"])
-        self.assertTrue(any("ignored" in warning for warning in result["warnings"]))
+        self.assertFalse(result["ok"])
+        self.assertIn("use rename", result["error"])
+        result = texture_group_update(self.project_root, "Default", patch={"border": 1}, configs=["nope"])
+        self.assertFalse(result["ok"])
+        self.assertIn("Unknown project config", result["error"])
 
         result = texture_group_rename(self.project_root, "missing", "new")
         self.assertFalse(result["ok"])
@@ -445,7 +476,7 @@ class TestWorkflowGapCoverage(unittest.TestCase, WorkflowProjectMixin):
             layer_png = layer_dir / "layer0.png"
             layer_png.write_bytes(b"png")
             (sprite_dir / "spr_test.yy").write_text(
-                json.dumps({"frames": [{"name": "frame0"}], "layers": [{"name": "layer0"}]}),
+                json.dumps({"frames": [{"name": "frame0"}], "layers": [{"name": "layer0"}], "width": 1, "height": 1}),
                 encoding="utf-8",
             )
 
@@ -457,7 +488,7 @@ class TestWorkflowGapCoverage(unittest.TestCase, WorkflowProjectMixin):
                 swap_sprite_png(project_root, "sprites/spr_test/spr_test.yy", frame_png, frame_index=2)
 
             source_png = project_root / "replacement.png"
-            source_png.write_bytes(b"replacement")
+            create_dummy_png(source_png, width=1, height=1)
             with patch("gms_helpers.workflow.shutil.copy2", side_effect=PermissionError("locked")):
                 with patch("gms_helpers.workflow.time.sleep", return_value=None):
                     with self.assertRaises(PermissionError):

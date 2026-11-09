@@ -405,7 +405,13 @@ class TestWorkflowEnhanced(unittest.TestCase):
 
             # Use reference scanner to find all references
             scanner = ReferenceScanner(proj.dir)
-            references = scanner.find_all_asset_references(old_name, new_name, "sprite")
+            references = scanner.find_all_asset_references(
+                old_name,
+                new_name,
+                "sprite",
+                old_path=f"sprites/{old_name}/{old_name}.yy",
+                new_path=f"sprites/{new_name}/{new_name}.yy",
+            )
 
             # CRITICAL: Must find references in multiple file types
             reference_types = [ref.reference_type for ref in references]
@@ -456,7 +462,14 @@ class TestWorkflowEnhanced(unittest.TestCase):
             )
 
             # Use comprehensive rename (this includes validation)
-            success = comprehensive_rename_asset(proj.dir, old_name, new_name, "object")
+            success = comprehensive_rename_asset(
+                proj.dir,
+                old_name,
+                new_name,
+                "object",
+                old_path=f"objects/{old_name}/{old_name}.yy",
+                new_path=f"objects/{new_name}/{new_name}.yy",
+            )
 
             # CRITICAL: Should return True (no stale references)
             self.assertTrue(success, "Comprehensive rename failed - stale references remain!")
@@ -970,7 +983,13 @@ class TestWorkflowEnhanced(unittest.TestCase):
 
             # Test reference scanner catches the .yy filename reference
             scanner = ReferenceScanner(project.dir)
-            references = scanner.find_all_asset_references(old_name, new_name, "sprite")
+            references = scanner.find_all_asset_references(
+                old_name,
+                new_name,
+                "sprite",
+                old_path=f"sprites/{old_name}/{old_name}.yy",
+                new_path=f"sprites/{new_name}/{new_name}.yy",
+            )
 
             # Should find the keyframe path reference (full path, not just filename)
             yy_path_refs = [ref for ref in references if ref.reference_type == "sprite_keyframe_path"]
@@ -1034,7 +1053,13 @@ class TestReferenceScanner(unittest.TestCase):
             sprite_yy = proj.create_sprite_with_sequences(sprite_name)
 
             scanner = ReferenceScanner(proj.dir)
-            references = scanner.find_all_asset_references(sprite_name, "spr_new", "sprite")
+            references = scanner.find_all_asset_references(
+                sprite_name,
+                "spr_new",
+                "sprite",
+                old_path=f"sprites/{sprite_name}/{sprite_name}.yy",
+                new_path="sprites/spr_new/spr_new.yy",
+            )
 
             # Should find sequence name references
             sequence_refs = [ref for ref in references if ref.reference_type == "sprite_sequence_name"]
@@ -1054,7 +1079,13 @@ class TestReferenceScanner(unittest.TestCase):
             sprite_yy = proj.create_sprite_with_sequences(old_name)
 
             scanner = ReferenceScanner(proj.dir)
-            references = scanner.find_all_asset_references(old_name, new_name, "sprite")
+            references = scanner.find_all_asset_references(
+                old_name,
+                new_name,
+                "sprite",
+                old_path=f"sprites/{old_name}/{old_name}.yy",
+                new_path=f"sprites/{new_name}/{new_name}.yy",
+            )
 
             # Apply updates
             files_updated, total_updates = scanner.update_all_references(references)

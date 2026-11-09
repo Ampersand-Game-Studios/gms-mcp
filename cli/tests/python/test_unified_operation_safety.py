@@ -112,7 +112,7 @@ def test_all_cli_resource_mutators_have_policy_classification():
         name = canonical_operation_name("-".join(route))
         assert name in PROJECT_MUTATIONS or name in read_routes, route
         checked += 1
-    assert checked == 61
+    assert checked == 62
 
 
 def test_real_parser_namespaces_match_every_exposed_route():
@@ -381,15 +381,23 @@ def test_direct_cleaning_positive_and_dry_run_paths(project):
     (project / "Test.yyp").write_text(json.dumps({"resources": []}))
     unused = project / "objects/o_unused"
     unused.mkdir(parents=True)
+    (unused / "o_unused.yy").write_text("{}")
     backup = unused / "o_unused.old.yy"
     backup.write_text("{}")
+    # A folder without a parseable <name>/<name>.yy is user data, never "unused".
+    user_data = project / "objects/notes"
+    user_data.mkdir()
+    (user_data / "todo.txt").write_text("keep")
     before = _tree_state(project)
-    assert clean_unused_folders(project, "objects") == (1, 0)
+    assert clean_unused_folders(project, "objects") == (2, 0)
     assert clean_old_yy_files(project) == (1, 0)
     assert _tree_state(project) == before
     assert clean_old_yy_files(project, do_delete=True) == (1, 1)
-    assert clean_unused_folders(project, "objects", do_delete=True) == (1, 1)
+    assert clean_unused_folders(project, "objects", do_delete=True) == (2, 1)
     assert not unused.exists()
+    assert (user_data / "todo.txt").read_text() == "keep"
+    trashed = list((project / ".maintenance_trash").rglob("o_unused.yy"))
+    assert len(trashed) == 1
 
 
 def _tree_state(root):
@@ -741,7 +749,7 @@ def test_mcp_central_policy_denies_sync_and_async_destructive_tools(preview_proj
         async with Client(build_server(), mode="2026-07-28") as client:
             before = _tree_state(preview_project)
             for name, values in [
-                ("gm_texture_group_update", {"name": "Default", "patch": {"autocrop": True}}),
+                ("gm_texture_group_update", {"name": "Default", "patch": {"autocrop": True}, "dry_run": False}),
                 ("gm_event_remove", {"object": "o_keep", "event": "create"}),
                 ("gm_bridge_uninstall", {}),
                 ("gm_runtime_unpin", {}),

@@ -21,7 +21,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from gms_helpers import asset_helper
-from gms_helpers.exceptions import GMSError, ProjectNotFoundError
+from gms_helpers.exceptions import AssetNotFoundError, GMSError, ProjectNotFoundError
 
 
 def _capture_output(func, *args, **kwargs):
@@ -126,6 +126,41 @@ class TestGameMakerContext(unittest.TestCase):
 
 
 class TestCreateCommands(unittest.TestCase):
+    def setUp(self):
+        # Creation commands check the working directory is a GameMaker project; these tests
+        # exercise the wrappers, so they must not depend on where the test run happens to be.
+        patcher = patch(
+            "gms_helpers.asset_cli.create.validate_asset_directory_structure", return_value=Path("/tmp/project")
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
+    def test_create_room_appends_room_order_node(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            for folder in ("objects", "sprites", "scripts", "rooms"):
+                (root / folder).mkdir()
+            (root / "demo.yyp").write_text(
+                json.dumps(
+                    {
+                        "resources": [],
+                        "Folders": [{"name": "Rooms", "folderPath": "folders/Rooms.yy"}],
+                        "RoomOrderNodes": [],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            args = _create_args(
+                "r_first", parent_path="folders/Rooms.yy", skip_maintenance=True, project_root=str(root)
+            )
+            result, _output = _capture_output(asset_helper.create_room, args)
+            project = json.loads((root / "demo.yyp").read_text(encoding="utf-8"))
+
+        self.assertTrue(result)
+        self.assertEqual(
+            project["RoomOrderNodes"], [{"roomId": {"name": "r_first", "path": "rooms/r_first/r_first.yy"}}]
+        )
+
     def test_create_script_success_covers_validation_and_maintenance(self):
         args = _create_args("PlayerData", constructor=True)
         with ExitStack() as stack:
@@ -359,6 +394,10 @@ class TestCreateCommands(unittest.TestCase):
                     update_yyp = stack.enter_context(
                         patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=True)
                     )
+                    # Mocked creation writes nothing; never let it touch a real .yyp.
+                    stack.enter_context(
+                        patch("gms_helpers.asset_creation_flow.append_room_order_node", return_value=True)
+                    )
                     asset_cls = stack.enter_context(patch(f"gms_helpers.asset_cli.create.{case['class_name']}"))
                     asset_instance = asset_cls.return_value
                     asset_instance.create_files.return_value = case["path"]
@@ -437,6 +476,32 @@ class TestCreateCommands(unittest.TestCase):
 
 
 class TestDeleteAndMain(unittest.TestCase):
+    def _delete_args(self, asset_type, name, *, dry_run=False):
+        return SimpleNamespace(
+            asset_type=asset_type,
+            name=name,
+            dry_run=dry_run,
+            skip_maintenance=False,
+            no_auto_fix=False,
+            maintenance_verbose=True,
+        )
+
+    def _run_delete(self, root, args, maintenance_results=2):
+        old_cwd = Path.cwd()
+        os.chdir(root)
+        try:
+            with (
+                patch(
+                    "gms_helpers.asset_cli.delete.run_auto_maintenance",
+                    side_effect=[_maintenance_result() for _ in range(maintenance_results)],
+                ) as maintenance,
+                patch("gms_helpers.asset_cli.delete.validate_asset_creation_safe", return_value=True),
+            ):
+                result, output = _capture_output(asset_helper.delete_asset, args)
+        finally:
+            os.chdir(old_cwd)
+        return result, output, maintenance
+
     def test_delete_asset_dry_run_lists_files(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
@@ -444,75 +509,74 @@ class TestDeleteAndMain(unittest.TestCase):
             asset_dir.mkdir(parents=True)
             (asset_dir / "scr_demo.yy").write_text("{}", encoding="utf-8")
             (asset_dir / "scr_demo.gml").write_text("// test", encoding="utf-8")
-            args = SimpleNamespace(
-                asset_type="script",
-                name="scr_demo",
-                dry_run=True,
-                skip_maintenance=False,
-                no_auto_fix=False,
-                maintenance_verbose=True,
-            )
             project_data = {"resources": [{"id": {"name": "scr_demo", "path": "scripts/scr_demo/scr_demo.yy"}}]}
+            (root / "demo.yyp").write_text(json.dumps(project_data), encoding="utf-8")
 
-            old_cwd = Path.cwd()
-            os.chdir(root)
-            try:
-                with (
-                    patch("gms_helpers.utils.find_yyp_file", return_value=root / "demo.yyp"),
-                    patch("gms_helpers.utils.load_json", return_value=project_data),
-                    patch(
-                        "gms_helpers.asset_cli.delete.run_auto_maintenance", return_value=_maintenance_result()
-                    ) as maintenance,
-                    patch("gms_helpers.asset_cli.delete.validate_asset_creation_safe", return_value=True),
-                ):
-                    result, output = _capture_output(asset_helper.delete_asset, args)
-                    maintenance.assert_called_once_with(".", fix_issues=False, verbose=False)
-            finally:
-                os.chdir(old_cwd)
+            result, output, maintenance = self._run_delete(
+                root, self._delete_args("script", "scr_demo", dry_run=True), maintenance_results=1
+            )
+            self.assertEqual(maintenance.call_args.kwargs["fix_issues"], False)
+            self.assertTrue(asset_dir.exists())
 
         self.assertTrue(result)
         self.assertIn("[DRY-RUN] Would delete asset 'scr_demo' (script)", output)
         self.assertIn("scripts/scr_demo", output)
 
-    def test_delete_asset_updates_project_and_runs_post_maintenance(self):
+    def test_delete_asset_updates_project_and_runs_report_only_maintenance(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir)
-            asset_dir = root / "objects" / "o_enemy"
+            # IDE-style exact-case folder; the path comes from the registration, not the name.
+            asset_dir = root / "objects" / "O_Enemy"
             asset_dir.mkdir(parents=True)
-            (asset_dir / "o_enemy.yy").write_text("{}", encoding="utf-8")
-            (asset_dir / "o_enemy_Create_0.gml").write_text("// create", encoding="utf-8")
-            args = SimpleNamespace(
-                asset_type="object",
-                name="o_enemy",
-                dry_run=False,
-                skip_maintenance=False,
-                no_auto_fix=False,
-                maintenance_verbose=True,
-            )
-            project_data = {"resources": [{"id": {"name": "o_enemy", "path": "objects/o_enemy/o_enemy.yy"}}]}
+            (asset_dir / "O_Enemy.yy").write_text("{}", encoding="utf-8")
+            (asset_dir / "Create_0.gml").write_text("// create", encoding="utf-8")
+            project_data = {"resources": [{"id": {"name": "O_Enemy", "path": "objects/O_Enemy/O_Enemy.yy"}}]}
+            (root / "demo.yyp").write_text(json.dumps(project_data), encoding="utf-8")
 
-            old_cwd = Path.cwd()
-            os.chdir(root)
-            try:
-                with (
-                    patch(
-                        "gms_helpers.asset_cli.delete.run_auto_maintenance",
-                        side_effect=[_maintenance_result(), _maintenance_result()],
-                    ) as run_maintenance,
-                    patch("gms_helpers.asset_cli.delete.validate_asset_creation_safe", return_value=True),
-                    patch("gms_helpers.utils.find_yyp_file", return_value=root / "demo.yyp"),
-                    patch("gms_helpers.utils.load_json", return_value=json.loads(json.dumps(project_data))),
-                    patch("gms_helpers.utils.save_json") as save_json,
-                ):
-                    result, output = _capture_output(asset_helper.delete_asset, args)
-            finally:
-                os.chdir(old_cwd)
+            result, output, maintenance = self._run_delete(root, self._delete_args("object", "O_Enemy"))
+            saved = json.loads((root / "demo.yyp").read_text(encoding="utf-8"))
+            self.assertFalse(asset_dir.exists())
 
         self.assertTrue(result)
-        self.assertIn("Asset 'o_enemy' deleted successfully", output)
-        self.assertFalse(asset_dir.exists())
-        save_json.assert_called_once()
-        self.assertEqual(run_maintenance.call_count, 2)
+        self.assertIn("Asset 'O_Enemy' deleted successfully", output)
+        self.assertEqual(saved["resources"], [])
+        self.assertEqual(maintenance.call_count, 2)
+        self.assertTrue(all(call.kwargs["fix_issues"] is False for call in maintenance.call_args_list))
+
+    def test_delete_asset_requires_matching_type(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            asset_dir = root / "objects" / "o_player"
+            asset_dir.mkdir(parents=True)
+            (asset_dir / "o_player.yy").write_text("{}", encoding="utf-8")
+            project_data = {"resources": [{"id": {"name": "o_player", "path": "objects/o_player/o_player.yy"}}]}
+            (root / "demo.yyp").write_text(json.dumps(project_data), encoding="utf-8")
+
+            result, output, _ = self._run_delete(root, self._delete_args("script", "o_player"), maintenance_results=1)
+            saved = json.loads((root / "demo.yyp").read_text(encoding="utf-8"))
+            self.assertTrue(asset_dir.exists())
+
+        self.assertFalse(result)
+        self.assertIn("is not a script", output)
+        self.assertEqual(saved["resources"], project_data["resources"])
+
+    def test_delete_room_removes_room_order_entry(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            asset_dir = root / "rooms" / "r_old"
+            asset_dir.mkdir(parents=True)
+            (asset_dir / "r_old.yy").write_text("{}", encoding="utf-8")
+            project_data = {
+                "resources": [{"id": {"name": "r_old", "path": "rooms/r_old/r_old.yy"}}],
+                "RoomOrderNodes": [{"roomId": {"name": "r_old", "path": "rooms/r_old/r_old.yy"}}],
+            }
+            (root / "demo.yyp").write_text(json.dumps(project_data), encoding="utf-8")
+
+            result, _output, _ = self._run_delete(root, self._delete_args("room", "r_old"))
+            saved = json.loads((root / "demo.yyp").read_text(encoding="utf-8"))
+
+        self.assertTrue(result)
+        self.assertEqual(saved["RoomOrderNodes"], [])
 
     def test_delete_asset_rejects_unknown_type(self):
         args = SimpleNamespace(
@@ -672,20 +736,40 @@ class TestMaintenanceCommands(unittest.TestCase):
         run_maintenance.assert_called_once_with(".", fix_issues=True, verbose=True)
 
     def test_sync_events_command_handles_specific_and_all_objects(self):
-        with (
-            patch(
-                "gms_helpers.maintenance.event_sync.sync_object_events",
-                return_value={"orphaned_found": 1, "orphaned_fixed": 1, "missing_found": 1, "missing_created": 1},
-            ),
-            patch("gms_helpers.asset_cli.maintenance.os.path.exists", return_value=True),
-        ):
-            result, output = _capture_output(
-                asset_helper.maint_sync_events_command,
-                SimpleNamespace(fix=True, object="o_player"),
-            )
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            object_yy = root / "objects" / "O_Player" / "o_player.yy"
+            object_yy.parent.mkdir(parents=True)
+            object_yy.write_text("{}", encoding="utf-8")
+            with (
+                patch(
+                    "gms_helpers.project_validation.resolve_asset_reference",
+                    return_value={"name": "o_player", "path": "objects/O_Player/o_player.yy"},
+                ),
+                patch(
+                    "gms_helpers.maintenance.event_sync.sync_object_events",
+                    return_value={"orphaned_found": 1, "orphaned_fixed": 1, "missing_found": 1, "missing_created": 1},
+                ) as sync_object,
+            ):
+                result, output = _capture_output(
+                    asset_helper.maint_sync_events_command,
+                    SimpleNamespace(fix=True, object="o_player", project_root=str(root)),
+                )
+            self.assertEqual(Path(sync_object.call_args.args[0]), object_yy.resolve())
         self.assertTrue(result)
         self.assertIn("o_player", output)
         self.assertIn("CREATED", output)
+
+        with patch(
+            "gms_helpers.project_validation.resolve_asset_reference",
+            side_effect=AssetNotFoundError("Reference 'o_missing' is not a registered object"),
+        ):
+            result, output = _capture_output(
+                asset_helper.maint_sync_events_command,
+                SimpleNamespace(fix=False, object="o_missing"),
+            )
+        self.assertFalse(result)
+        self.assertIn("not found", output)
 
         with patch(
             "gms_helpers.maintenance.event_sync.sync_all_object_events",
@@ -781,7 +865,6 @@ class TestMaintenanceCommands(unittest.TestCase):
             self.assertEqual(saved["counts"]["truly_orphan"], 2)
 
         with (
-            patch("gms_helpers.asset_cli.maintenance.resolve_project_directory", return_value=Path("/tmp/project")),
             patch(
                 "gms_helpers.asset_cli.maintenance.find_orphaned_assets",
                 return_value=[("objects/o_ghost/o_ghost.yy", "object")],
@@ -800,7 +883,8 @@ class TestMaintenanceCommands(unittest.TestCase):
                 asset_helper.maint_purge_command,
                 SimpleNamespace(apply=True, delete=True, keep=[], project_root="/tmp/project"),
             )
-        self.assertTrue(result)
+        # A move error is a failed purge, not a success.
+        self.assertFalse(result)
         self.assertIn("Final deletion from trash folder not yet implemented", output)
         self.assertIn("[ERROR] warn", output)
 
@@ -839,7 +923,6 @@ class TestMaintenanceCommands(unittest.TestCase):
         self.assertIn("Maintenance system initialized", output)
 
         with (
-            patch("gms_helpers.asset_cli.maintenance.resolve_project_directory", return_value=Path("/tmp/project")),
             patch("gms_helpers.asset_cli.maintenance.find_orphaned_assets", return_value=[]),
         ):
             result, output = _capture_output(

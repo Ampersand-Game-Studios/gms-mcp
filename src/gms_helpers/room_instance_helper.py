@@ -47,6 +47,25 @@ def _save_room_data(room_path: Path, data: Dict[str, Any]):
     save_json_loose(room_path, data)
 
 
+def require_current_room_format(room_data: Dict[str, Any], room_name: str) -> None:
+    """New room entries are written in the GameMaker 2023+ shape ($GM* tags, resourceVersion 2.0).
+
+    A room saved by an older IDE uses a different shape; adding 2023+ entries to it would produce
+    a file that IDE cannot load, so such rooms are refused instead.
+    """
+    if "$GMRoom" not in room_data or str(room_data.get("resourceVersion")) != "2.0":
+        raise ValidationError(
+            f"Room '{room_name}' uses the pre-2023 GameMaker room format (resourceVersion "
+            f"{room_data.get('resourceVersion')!r}, no $GMRoom tag), which this tool does not write. Open the "
+            "project in GameMaker 2023.4 or later and save it to upgrade the format, then retry."
+        )
+
+
+def creation_code_path(room_path: Path, instance_name: str) -> Path:
+    """GameMaker reads an instance's creation code from rooms/<room>/InstanceCreationCode_<instance>.gml."""
+    return project_child_path(room_path.parent, f"InstanceCreationCode_{instance_name}.gml", kind="creation code path")
+
+
 def _find_layer_by_name(room_data: Dict[str, Any], layer_name: str) -> Dict[str, Any]:
     """Find a layer by name in room data."""
     for layer in _iter_layers(room_data.get("layers", [])):
@@ -87,6 +106,7 @@ def add_instance(
     object_name = validate_resource_name(object_name, "object")
     room_path = _find_room_file(room_name, project_root)
     room_data = _load_room_data(room_path)
+    require_current_room_format(room_data, room_name)
 
     from .project_validation import resolve_asset_reference
 
@@ -198,10 +218,10 @@ def remove_instance(room_name: str, instance_id: str):
         room_data["instanceCreationOrder"] = [e for e in creation_order if _keep(e)]
 
     # Check for and remove creation code file if it exists
-    creation_code_path = project_child_path(room_path.parent, f"{instance_id}.gml", kind="creation code path")
-    if creation_code_path.exists():
-        transactional_unlink(creation_code_path)
-        print(f"[OK] Removed creation code file: {creation_code_path}")
+    code_path = creation_code_path(room_path, instance_id)
+    if code_path.exists():
+        transactional_unlink(code_path)
+        print(f"[OK] Removed creation code file: {code_path}")
 
     _save_room_data(room_path, room_data)
     print(f"[OK] Removed instance '{instance_id}' from room '{room_name}'")
@@ -326,7 +346,7 @@ def set_creation_code(room_name: str, instance_id: str, code: str):
         raise AssetNotFoundError(f"Instance '{instance_id}' not found in room '{room_name}'")
 
     # Create the code file
-    code_path = project_child_path(room_path.parent, f"{instance_id}.gml", kind="creation code path")
+    code_path = creation_code_path(room_path, instance_id)
     atomic_write_text(code_path, code)
 
     # Update instance to indicate it has code
@@ -420,24 +440,43 @@ def main():
     code_parser.add_argument("--code", required=True, help="GML code")
     code_parser.set_defaults(func=handle_set_creation_code)
 
+    return run_room_helper_cli(
+        parser,
+        "instance",
+        {
+            "add-instance": "add",
+            "remove-instance": "remove",
+            "list-instances": "list",
+            "modify-instance": "modify",
+            "set-creation-code": "set-creation-code",
+        },
+    )
+
+
+def run_room_helper_cli(parser: argparse.ArgumentParser, room_category: str, actions: Dict[str, str]):
+    """Run a room helper subcommand under the same lock, journal and validation as ``gms room ...``."""
     if len(sys.argv) == 1:
         parser.print_help()
         return False
 
     validate_working_directory()
     args = parser.parse_args()
-
-    if hasattr(args, "func"):
-        try:
-            return args.func(args)
-        except GMSError as e:
-            print(f"[ERROR] {e.message}")
-            raise
-        except Exception as e:
-            print(f"[ERROR] Unexpected error: {e}")
-            return False
-    else:
+    if not hasattr(args, "func"):
         parser.print_help()
+        return False
+    args.category = "room"
+    args.room_category = room_category
+    setattr(args, f"{room_category}_action", actions[args.command])
+    args.project_root = str(Path.cwd())
+    from .gms import _execute_project_command
+
+    try:
+        return _execute_project_command(args)
+    except GMSError as e:
+        print(f"[ERROR] {e.message}")
+        raise
+    except Exception as e:
+        print(f"[ERROR] Unexpected error: {e}")
         return False
 
 
