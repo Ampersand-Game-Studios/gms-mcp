@@ -93,6 +93,21 @@ _EVENT_LABEL_TO_ID = {label.lower(): event_type for event_type, label in EVENT_T
 _EVENT_ID_TO_SPEC = {event_type: type_name for type_name, event_type in EVENT_TYPE_IDS.items()}
 
 
+# Subtypes GameMaker defines for event types whose numbers are not open ranges.
+_DRAW_SUBTYPES = frozenset({0, 64, 65, 72, 73, 74, 75, 76, 77})
+_OTHER_SUBTYPES = frozenset(
+    {
+        *range(0, 26),  # room/game/path/animation events and user events 0-15
+        30,  # close button
+        *range(40, 48),  # outside view 0-7
+        *range(50, 58),  # intersect view boundary 0-7
+        *range(58, 77),  # animation update/event, async events, broadcast message
+        80,  # async audio playback ended
+    }
+)
+_KEY_EVENT_TYPES = frozenset({5, 9, 10})
+
+
 def validate_event_numbers(event_type: int, event_num: int) -> None:
     """Validate stable event ranges shared by supported GameMaker releases."""
     if type(event_type) is not int or event_type not in EVENT_TYPE_NAMES or type(event_num) is not int:
@@ -101,6 +116,12 @@ def validate_event_numbers(event_type: int, event_num: int) -> None:
         raise ValidationError("Invalid event subtype")
     if (event_type == 2 and event_num > 11) or (event_type == 3 and event_num > 2):
         raise ValidationError("Invalid alarm or step subtype")
+    if event_type == 8 and event_num not in _DRAW_SUBTYPES:
+        raise ValidationError(f"Invalid draw event subtype {event_num}")
+    if event_type == 7 and event_num not in _OTHER_SUBTYPES:
+        raise ValidationError(f"Invalid other event subtype {event_num}")
+    if event_type in _KEY_EVENT_TYPES and event_num > 255:
+        raise ValidationError(f"Invalid key code {event_num}; keyboard events use codes 0-255")
 
 
 @dataclass(frozen=True)
@@ -228,15 +249,26 @@ def event_matches(event: Mapping[str, Any], spec: EventSpec) -> bool:
     return event.get("eventNum") == spec.event_num
 
 
-def rewrite_collision_event_target(event: dict[str, Any], old_name: str, new_name: str) -> bool:
-    """Rewrite one exact collision target reference and its canonical event identity."""
+def rewrite_collision_event_target(
+    event: dict[str, Any],
+    old_name: str,
+    new_name: str,
+    *,
+    old_path: str,
+    new_path: str,
+) -> bool:
+    """Rewrite one exact collision target reference and its canonical event identity.
+
+    ``old_path``/``new_path`` are the registered ``.yy`` paths of the target
+    object; folder casing differs between IDE-created and tool-created assets.
+    """
     if event.get("eventType") != EVENT_TYPE_IDS["collision"]:
         return False
     reference = event.get("collisionObjectId")
     if not isinstance(reference, Mapping):
         return False
 
-    old_path = f"objects/{old_name}/{old_name}.yy"
+    old_path = old_path.replace("\\", "/")
     name_matches = reference.get("name") == old_name
     path_matches = str(reference.get("path") or "").replace("\\", "/") == old_path
     if not name_matches and not path_matches:
@@ -253,15 +285,40 @@ def rewrite_collision_event_target(event: dict[str, Any], old_name: str, new_nam
     new_identity = f"Collision_{new_name}"
     event["%Name"] = new_identity
     event["name"] = new_identity
-    event["collisionObjectId"] = {
-        "name": new_name,
-        "path": f"objects/{new_name}/{new_name}.yy",
-    }
+    event["collisionObjectId"] = {"name": new_name, "path": new_path.replace("\\", "/")}
     return True
 
 
-def build_event_entry(spec: EventSpec, collision_reference: Mapping[str, str] | None = None) -> dict[str, Any]:
-    """Build a modern GMEvent entry from a parsed specification."""
+def event_format_for_object(object_data: Mapping[str, Any]) -> str:
+    """Return the ``$GMEvent`` tag used by an object's GameMaker format.
+
+    Only the 2023+ ``$GM*`` JSON format is written. Older objects are refused
+    instead of receiving event entries in a format their IDE cannot read.
+    """
+    if "$GMObject" not in object_data and str(object_data.get("resourceVersion", "")).startswith("1."):
+        raise ValidationError(
+            "This object uses the pre-2023 GameMaker file format (resourceVersion 1.x, no $GMObject tag). "
+            "Open and save the project in GameMaker 2023.2 or later before editing events."
+        )
+    for event in object_data.get("eventList") or []:
+        if isinstance(event, Mapping) and "$GMEvent" in event:
+            return str(event["$GMEvent"])
+    # Current IDEs write "$GMEvent": "v1" even inside "$GMObject": "" files.
+    return "v1"
+
+
+def build_event_entry(
+    spec: EventSpec,
+    collision_reference: Mapping[str, str] | None = None,
+    *,
+    object_data: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build a modern GMEvent entry from a parsed specification.
+
+    When the owning object's data is given, its format decides the event tag
+    and legacy formats are refused.
+    """
+    event_tag = "v1" if object_data is None else event_format_for_object(object_data)
     if spec.collision_object is not None:
         if collision_reference is None or collision_object_name(collision_reference) != spec.collision_object:
             raise ValidationError(f"Collision event target '{spec.collision_object}' is not resolved")
@@ -272,7 +329,7 @@ def build_event_entry(spec: EventSpec, collision_reference: Mapping[str, str] | 
     filename = event_filename(spec.event_type, spec.event_num, collision_object_id)
     event_name = filename.removesuffix(".gml")
     return {
-        "$GMEvent": "v1",
+        "$GMEvent": event_tag,
         "%Name": event_name,
         "collisionObjectId": collision_object_id,
         "eventNum": spec.event_num,

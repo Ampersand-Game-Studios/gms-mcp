@@ -195,21 +195,23 @@ Live-reload commands run programs, so a project cannot supply them. They are rea
 
 | Key | Default | Meaning |
 |-----|---------|---------|
-| `verification.post_mutation` | server default (`smart`) | `off`, `smart` or `always`: whether a mutation is followed by a compile. `GMS_MCP_POST_MUTATION_VERIFY` overrides it. Large or shared projects use `off` and verify with `gm_snapshot_compile` / `gm_test_run`. |
+| `verification.post_mutation` | server default (`smart`) | `off`, `smart` or `always`: whether a mutation is followed by a compile. `GMS_MCP_POST_MUTATION_VERIFY` overrides it; an unrecognised value there stops the server at startup, and an unrecognised project value verifies as `smart` with a warning. Large or shared projects use `off` and verify with `gm_snapshot_compile` / `gm_test_run`. |
 | `build.igor_attempts` | `10` | Attempts when Igor aborts with `System.AccessViolationException` (snapshot builds). Env: `GMS_MCP_SNAPSHOT_IGOR_ATTEMPTS`. |
 | `build.max_parallel_builds` | `4` | Machine-wide Igor build slots. Env: `GMS_MCP_MAX_PARALLEL_BUILDS`. |
 | `build.jobs` | `4` | Igor `-j`. |
 | `build.runtime_version` | newest installed | Runtime used by snapshot builds. |
 | `test.timeout_seconds` | `120` | Default wait for a test's result line. |
 | `test.prelude_file` | built in | Project-relative GML file replacing the built-in test API; it must print the same marker lines. |
-| `test.result_marker`, `line_marker`, `started_marker`, `screenshot_prefix`, `runtime_error_patterns` | `[TEST_RESULT]`, `[TEST]`, `[TEST_SAVE_DIR]`, `__agent_shot_`, GameMaker's error banners | How a run log is read. |
+| `test.result_marker`, `line_marker`, `started_marker`, `screenshot_prefix`, `runtime_error_patterns` | `[TEST_RESULT]`, `[TEST]`, `[TEST_SAVE_DIR]`, `__agent_shot_`, GameMaker's error banners | How a run log is read. Markers and the prefix are non-empty strings; `runtime_error_patterns` is a list of non-empty literal strings. |
 | `conventions.allow_root_assets` | `[]` | Name patterns `gm_project_check` accepts at the project root. |
 | `live_reload.start`, `stop`, `status` | unset | User config only. Argument lists (never shell strings) for an external live-reload tool. `{project}` becomes the project directory. |
 | `live_reload.status_file` | unset | Project-relative JSON status file; absolute or escaping paths are rejected. |
 
+Values are checked against these types when the configuration is read: numbers must be positive (numeric strings such as `"30"` are accepted), lists must be lists of strings, sections must be objects. A wrong value stops the tool with an error naming the setting and the file. Invalid `naming.rules` patterns are reported when the configuration loads and refuse name validation with a clear error; the configuration is re-read whenever `.gms-mcp.json` or `~/.gms-mcp/config.json` changes.
+
 ### Shared locks
 
-Build capacity, commits and mobile packaging cooperate through `mkdir` locks in `~/.gms-mcp/locks` (`build_slot_<n>`, `repo.lock`, `ios_build.lock`). macOS game sessions use `game_<project hash>.lock` plus `runlabel_<project-and-label hash>.lock`: different canonical project paths can run concurrently; one project's saves and one labelled artifact directory have one writer. Each macOS session copies the installed runner into an owned bundle, assigns `com.gmsmcp.game.p<project hash>`, and ad-hoc signs the copy. Its persistent saves and screenshots live under `~/Library/Application Support/<bundle ID>/`; unique staging children hold the runner, data and debug log. No installed runtime or other game's files are changed.
+Build capacity, commits and mobile packaging cooperate through `mkdir` locks in `~/.gms-mcp/locks` (`build_slot_<n>`, `repo.lock`, `ios_build.lock`). Each lock's owner record is the sibling file `<name>.owner`, replaced atomically; a record older than its lock directory (left behind when a lock was removed by hand) is ignored. `gm_vcs_stage` also holds the project's mutation lock, so staging never interleaves with a project mutation. macOS game sessions use `game_<project hash>.lock` plus `runlabel_<project-and-label hash>.lock`: different canonical project paths can run concurrently; one project's saves and one labelled artifact directory have one writer. Each macOS session copies the installed runner into an owned bundle, assigns `com.gmsmcp.game.p<project hash>`, and ad-hoc signs the copy. Its persistent saves and screenshots live under `~/Library/Application Support/<bundle ID>/`; unique staging children hold the runner, data and debug log. No installed runtime or other game's files are changed.
 
 Leases record the actual game PID and the supervisor PID. Natural game exit archives logs/screenshots and releases leases. If the server exits first, the running game keeps its lease and can be stopped from its persisted command/start identity; a later stop/start recovers artifacts and dead-owner leases. New manual sessions survive server exit. Session authority is stored under `~/.gms-mcp/sessions/<project hash>/current.json`; project-local session files are not read. Stop sessions created by older versions through their original launcher before upgrading. Legacy `gamerun.lock` is reported for existing older servers, but isolated sessions never acquire or remove it. `gm_lock_status` includes dynamic project/label leases. `GMS_MCP_LOCK_DIR` selects a shared coordination directory; do not change it to bypass an active project lease. Linux/Windows snapshot execution remains unsupported; native parallel runtime verification currently covers macOS only.
 
@@ -222,6 +224,21 @@ Isolated macOS runs (`gm_run`, `gm_game_start`, and `gm_test_run`) require `runt
 | `GMS_MCP_STRICT_PROJECT_VALIDATION=1` | Any validation error blocks a mutation, including errors that predate it. |
 | `GMS_MCP_SNAPSHOT_WORK_DIR` | Private directory for snapshots, Igor cache and output (default: `~/.gms-mcp/snapshots`). |
 | `GMS_MCP_BRIDGE_PORT` | Set by the server in the game's environment for live sessions; a game endpoint connects to it. |
+| `GMS_MCP_PROJECT_LOCK_TIMEOUT_SECONDS` | How long a mutation (or `gm_vcs_stage`) waits for another one on the same project before failing with the holder's details (default `600`). |
+| `GMS_MCP_DETECT_GAMEMAKER_IDE=0` | Skip the check at the start of each mutation for a running GameMaker IDE (macOS and Windows). When the IDE is running, the transaction result carries a `gamemaker_ide` record and a warning; mutations are never blocked. |
+| `GMS_MCP_DISABLE_UPDATE_CHECK=1` | Never contact PyPI or GitHub for update checks; doctor and update status report the last cached result or "unknown". |
+
+The built-in `agent_test_step` callback uses a global time source: it runs after Begin Step
+and before Step, not after player movement or End Step. Check completed movement on the next
+callback against target state retained from the preceding callback. Simulated input must
+span real frames; custom transform systems may need their explicit update before isolated checks.
+If End Step clears an input field, assert its documented previous-frame sample instead of
+the cleared field. Place collision fixtures from the sprite's actual origin and mask bounds,
+not an assumed centered origin or nominal sprite width/height.
+
+`GMS_MCP_SNAPSHOT_WORK_DIR` moves the snapshot and compiler cache, but labelled logs still
+publish to the project's `.gms_mcp/runs/` directory. If publication fails (for example ENOSPC),
+the tool reports the retained compiler-log path and preserves that work directory for recovery.
 
 ## Configuration Resolution Order
 

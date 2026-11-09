@@ -165,6 +165,25 @@ def _project_relative_string(value: str, project_root: str | Path | None) -> str
     return None
 
 
+_HOST_ROOT_NAMES = (
+    "Applications|Library|Network|System|Users|Volumes|bin|cores|dev|etc|home|media|mnt|nix|opt|private|root|run"
+    "|sbin|snap|srv|tmp|usr|var"
+)
+_PATH_SEGMENT = r"[A-Za-z0-9_~@+-][A-Za-z0-9_.~@+-]*"
+# Redact only text that is unambiguously a host path. Known filesystem roots
+# consume the rest of the line (host paths often contain spaces); any other
+# absolute POSIX path must be a multi-segment path or a rooted file name, and
+# must not follow an identifier, bracket or URL/relative-path character, so
+# code such as ``(room_width)/2`` or ``a /b`` is never rewritten.
+_HOST_PATH_PATTERNS = (
+    re.compile(r"(?i)(?<![A-Z0-9])[A-Z]:[\\/][^\r\n\"'<>]*"),
+    re.compile(r"(?i)(?<![A-Z0-9])\\\\[^\\/\r\n\"'<>]+\\[^\r\n\"'<>]*"),
+    re.compile(rf"(?i)(?<![A-Z0-9])\\(?:{_HOST_ROOT_NAMES})\\[^\r\n\"'<>]*"),
+    re.compile(rf"(?<![\w.:/~)\]}}-])/(?:{_HOST_ROOT_NAMES})(?![\w.~@+-])(?:/[^\r\n\"'<>]*)?"),
+    re.compile(rf"(?<![\w.:/~)\]}}-])/{_PATH_SEGMENT}(?:(?:/{_PATH_SEGMENT})+/?|\.[A-Za-z0-9]{{1,10}})(?![\w/])"),
+)
+
+
 def _redact_host_text(value: str, project_root: str | Path | None) -> str:
     if "Traceback (most recent call last)" in value:
         return "Internal tool error; host details were withheld."
@@ -173,9 +192,7 @@ def _redact_host_text(value: str, project_root: str | Path | None) -> str:
     if exact_relative is not None:
         return exact_relative
 
-    posix_value = PurePosixPath(value.replace("\\", "/"))
-    windows_value = PureWindowsPath(value.replace("/", "\\"))
-    if Path(value).is_absolute() or posix_value.is_absolute() or windows_value.is_absolute() or windows_value.root:
+    if any(pattern.fullmatch(value) for pattern in _HOST_PATH_PATTERNS):
         return "<host-path>"
 
     redacted = value
@@ -189,17 +206,8 @@ def _redact_host_text(value: str, project_root: str | Path | None) -> str:
             if substitutions:
                 redacted = redacted.replace("\\", "/")
 
-    # Consume the rest of a line after a private/local filesystem root. This is
-    # intentionally conservative: normal MCP output should not teach a remote
-    # client anything about the host layout.
-    host_path_patterns = (
-        r"(?i)(?<![A-Z0-9])[A-Z]:[\\/][^\r\n\"'<>]*",
-        r"(?i)(?<![A-Z0-9])\\\\[^\\/\r\n\"'<>]+\\[^\r\n\"'<>]*",
-        r"(?i)(?<![A-Z0-9])\\(?:Applications|Library|System|Users|Volumes|etc|home|media|mnt|opt|private|root|srv|tmp|usr|var)\\[^\r\n\"'<>]*",
-        r"(?<![:/.A-Za-z0-9])/(?![/\s])[^\r\n\"'<>]*",
-    )
-    for pattern in host_path_patterns:
-        redacted = re.sub(pattern, "<host-path>", redacted)
+    for pattern in _HOST_PATH_PATTERNS:
+        redacted = pattern.sub("<host-path>", redacted)
     return redacted
 
 

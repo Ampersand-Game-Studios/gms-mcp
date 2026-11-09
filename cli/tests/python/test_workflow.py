@@ -25,9 +25,9 @@ from gms_helpers.commands.workflow_commands import (
     handle_workflow_rename,
     handle_workflow_safe_delete,
 )
-from gms_helpers.exceptions import JSONParseError
+from gms_helpers.exceptions import JSONParseError, ValidationError
 from gms_helpers.utils import save_pretty_json, load_json_loose
-from gms_helpers.assets import ScriptAsset
+from gms_helpers.assets import NoteAsset, ObjectAsset, ScriptAsset, SpriteAsset
 
 
 class TempProject:
@@ -385,6 +385,237 @@ class TestWorkflow(unittest.TestCase):
             self.assertIn("scr_target", updated)
             self.assertNotIn("undefined", updated)
             self.assertTrue(any("unresolved" in warning for warning in result["warnings"]))
+
+
+class TestWorkflowRegisteredPaths(unittest.TestCase):
+    """Assets are resolved from their registered path, whatever the folder casing."""
+
+    def _create(self, proj: Path, asset, name: str, **kwargs) -> str:
+        rel_path = asset.create_files(proj, name, "", **kwargs)
+        project_data = load_json_loose(proj / "test.yyp") or {}
+        project_data.setdefault("resources", []).append({"id": {"name": name, "path": rel_path}})
+        save_pretty_json(proj / "test.yyp", project_data)
+        return rel_path
+
+    def _move_to_ide_casing(self, proj: Path, name: str, directory: str) -> str:
+        """Re-home a tool-created asset in the IDE's exact-case folder."""
+        (proj / directory / name.lower()).rename(proj / directory / f"{name}.tmp")
+        (proj / directory / f"{name}.tmp").rename(proj / directory / name)
+        ide_path = f"{directory}/{name}/{name}.yy"
+        text = (proj / "test.yyp").read_text(encoding="utf-8")
+        (proj / "test.yyp").write_text(text.replace(f"{directory}/{name.lower()}/", f"{directory}/{name}/"))
+        return ide_path
+
+    def _assert_committed(self, result):
+        self.assertTrue(result.success, getattr(result, "message", result))
+        self.assertTrue(result.data["transaction"]["committed"], result.data["transaction"])
+
+    def test_tool_created_mixed_case_asset_duplicates_renames_and_deletes(self):
+        with TempProject() as proj:
+            sprite_path = self._create(proj, SpriteAsset(), "sPlayer")
+            self.assertEqual(sprite_path, "sprites/splayer/sPlayer.yy")
+            object_path = self._create(proj, ObjectAsset(), "oPlayer", sprite_id="sPlayer")
+
+            self._assert_committed(
+                handle_workflow_duplicate(
+                    SimpleNamespace(project_root=str(proj), asset_path=object_path, new_name="oCopy", yes=True)
+                )
+            )
+            self._assert_committed(
+                handle_workflow_rename(
+                    SimpleNamespace(project_root=str(proj), asset_path=sprite_path, new_name="sHero")
+                )
+            )
+            for holder in ("objects/oplayer/oPlayer.yy", "objects/ocopy/oCopy.yy"):
+                self.assertEqual(
+                    load_json_loose(proj / holder)["spriteId"], {"name": "sHero", "path": "sprites/shero/sHero.yy"}
+                )
+            result = delete_asset(proj, "objects/ocopy/oCopy.yy")
+            self.assertTrue(result.success)
+            self.assertFalse((proj / "objects" / "ocopy").exists())
+
+    def test_ide_cased_asset_rename_rewrites_references_to_registered_path(self):
+        with TempProject() as proj:
+            self._create(proj, SpriteAsset(), "sPlayer")
+            self._create(proj, ObjectAsset(), "oPlayer", sprite_id="sPlayer")
+            ide_path = self._move_to_ide_casing(proj, "sPlayer", "sprites")
+            holder = proj / "objects" / "oplayer" / "oPlayer.yy"
+            holder.write_text(
+                holder.read_text(encoding="utf-8").replace("sprites/splayer/", "sprites/sPlayer/"), encoding="utf-8"
+            )
+            sprite_yy = proj / ide_path
+            sprite_yy.write_text(
+                sprite_yy.read_text(encoding="utf-8").replace("sprites/splayer/", "sprites/sPlayer/"),
+                encoding="utf-8",
+            )
+
+            self._assert_committed(
+                handle_workflow_rename(SimpleNamespace(project_root=str(proj), asset_path=ide_path, new_name="sHero"))
+            )
+
+            self.assertEqual(load_json_loose(holder)["spriteId"]["path"], "sprites/shero/sHero.yy")
+            renamed = (proj / "sprites" / "shero" / "sHero.yy").read_text(encoding="utf-8")
+            self.assertNotIn("sPlayer", renamed)
+
+    def test_duplicate_renames_self_collision_event_code(self):
+        from gms_helpers.event_helper import add_event
+
+        with TempProject() as proj:
+            object_path = self._create(proj, ObjectAsset(), "oBall")
+            add_event("oBall", "collision:oBall", project_root=proj)
+
+            self._assert_committed(
+                handle_workflow_duplicate(
+                    SimpleNamespace(project_root=str(proj), asset_path=object_path, new_name="oBall2", yes=True)
+                )
+            )
+
+            copy_dir = proj / "objects" / "oball2"
+            self.assertTrue((copy_dir / "Collision_oBall2.gml").is_file())
+            self.assertFalse((copy_dir / "Collision_oBall.gml").exists())
+
+    def test_note_text_moves_with_rename_and_duplicate(self):
+        with TempProject() as proj:
+            note_path = self._create(proj, NoteAsset(), "Readme")
+            self._assert_committed(
+                handle_workflow_duplicate(
+                    SimpleNamespace(project_root=str(proj), asset_path=note_path, new_name="Guide", yes=True)
+                )
+            )
+            self._assert_committed(
+                handle_workflow_rename(SimpleNamespace(project_root=str(proj), asset_path=note_path, new_name="Intro"))
+            )
+            self.assertTrue((proj / "notes" / "guide" / "Guide.txt").is_file())
+            self.assertTrue((proj / "notes" / "intro" / "Intro.txt").is_file())
+            self.assertFalse((proj / "notes" / "intro" / "Readme.txt").exists())
+
+    def test_duplicating_script_with_extra_global_function_is_refused(self):
+        with TempProject() as proj:
+            script_path = self._create(proj, ScriptAsset(), "scr_tools")
+            (proj / "scripts" / "scr_tools" / "scr_tools.gml").write_text(
+                "function scr_tools() {}\nfunction tool_helper() {}\n", encoding="utf-8"
+            )
+            with self.assertRaises(ValidationError) as ctx:
+                duplicate_asset(proj, script_path, "scr_tools_copy")
+            self.assertIn("function tool_helper", str(ctx.exception))
+            self.assertFalse((proj / "scripts" / "scr_tools_copy").exists())
+
+    def test_forced_delete_detaches_structural_references_and_commits(self):
+        with TempProject() as proj:
+            self._create(proj, SpriteAsset(), "sGone")
+            object_path = self._create(proj, ObjectAsset(), "oUser", sprite_id="sGone")
+
+            result = handle_workflow_safe_delete(
+                SimpleNamespace(project_root=str(proj), asset_type="sprite", asset_name="sGone", force=True, apply=True)
+            )
+
+            self._assert_committed(result)
+            self.assertIsNone(load_json_loose(proj / object_path)["spriteId"])
+
+    def test_rename_preserves_crlf_and_refuses_non_utf8_before_moving(self):
+        with TempProject() as proj:
+            target_path = self._create(proj, ScriptAsset(), "scr_target")
+            self._create(proj, ScriptAsset(), "scr_caller")
+            caller = proj / "scripts" / "scr_caller" / "scr_caller.gml"
+            caller.write_bytes(b"function scr_caller() {\r\n    scr_target();\r\n}\r\n")
+
+            rename_asset(proj, target_path, "scr_moved")
+            self.assertEqual(caller.read_bytes(), b"function scr_caller() {\r\n    scr_moved();\r\n}\r\n")
+
+            caller.write_bytes(b"// caf\xe9\nscr_moved();\n")
+            with self.assertRaises(ValidationError):
+                rename_asset(proj, "scripts/scr_moved/scr_moved.yy", "scr_again")
+            self.assertTrue((proj / "scripts" / "scr_moved" / "scr_moved.yy").exists())
+
+    def test_rename_fails_before_moving_when_any_yy_is_unparseable(self):
+        with TempProject() as proj:
+            target_path = self._create(proj, ScriptAsset(), "scr_target")
+            broken = proj / "objects" / "o_broken"
+            broken.mkdir()
+            (broken / "o_broken.yy").write_text("{ not json", encoding="utf-8")
+
+            with self.assertRaises(ValidationError):
+                rename_asset(proj, target_path, "scr_moved")
+            self.assertTrue((proj / target_path).exists())
+
+    def test_lint_reports_malformed_resource_entries(self):
+        with TempProject() as proj:
+            save_pretty_json(proj / "test.yyp", {"resources": [{"id": {"name": "x"}}], "Folders": []})
+            result = lint_project(proj)
+            self.assertFalse(result.success)
+            self.assertTrue(any("Malformed .yyp resource entry" in problem for problem in result.details))
+
+
+class TestReferenceRewriteRules(unittest.TestCase):
+    def test_project_dir_prefixed_paths_are_rewritten_and_counted(self):
+        from gms_helpers.reference_scanner import count_json_resource_references, rewrite_json_asset_references
+
+        data = {
+            "name": "rMain",
+            "creationCodeFile": "${project_dir}/rooms/rMain/RoomCreationCode.gml",
+            "parentRoom": {"name": "rMain", "path": "rooms/rMain/rMain.yy"},
+        }
+        rewrite_json_asset_references(
+            data,
+            "rMain",
+            "rCopy",
+            "room",
+            old_path="rooms/rMain/rMain.yy",
+            new_path="rooms/rcopy/rCopy.yy",
+            own_asset=True,
+        )
+        self.assertEqual(data["creationCodeFile"], "${project_dir}/rooms/rcopy/RoomCreationCode.gml")
+        self.assertEqual(data["parentRoom"], {"name": "rCopy", "path": "rooms/rcopy/rCopy.yy"})
+        self.assertEqual(
+            count_json_resource_references(
+                {"file": "${project_dir}/rooms/rcopy/rCopy.yy"}, "rooms/rcopy/rCopy.yy", "x"
+            ),
+            1,
+        )
+
+    def test_template_string_interpolations_are_code(self):
+        from gms_helpers.reference_scanner import count_gml_identifier, rewrite_gml_asset_identifiers
+
+        source = 'show_debug_message($"hp {oEnemy.hp} of oEnemy {$"{oEnemy}"}");'
+        rewritten, count = rewrite_gml_asset_identifiers(source, {"oEnemy": "oFoe"})
+        self.assertEqual(count, 2)
+        self.assertEqual(rewritten, 'show_debug_message($"hp {oFoe.hp} of oEnemy {$"{oFoe}"}");')
+        self.assertEqual(count_gml_identifier('var s = "oEnemy";', "oEnemy"), 0)
+
+    def test_build_outputs_are_ignored_only_at_project_root(self):
+        from gms_helpers.reference_scanner import is_ignored_project_path
+
+        self.assertTrue(is_ignored_project_path(Path("build/x.gml")))
+        self.assertFalse(is_ignored_project_path(Path("scripts/build/build.gml")))
+        self.assertTrue(is_ignored_project_path(Path("scripts/x/.git/y.gml")))
+
+    def test_room_duplicate_keeps_inherited_instance_identities(self):
+        from gms_helpers.workflow import _regenerate_duplicate_identities
+
+        room = {
+            "layers": [
+                {
+                    "instances": [
+                        {"resourceType": "GMRInstance", "name": "inst_LOCAL"},
+                        {
+                            "resourceType": "GMRInstance",
+                            "name": "inst_PARENT",
+                            "inheritedItemId": {"name": "inst_PARENT", "path": "rooms/rBase/rBase.yy"},
+                        },
+                    ]
+                }
+            ],
+            "instanceCreationOrder": [
+                {"name": "inst_LOCAL", "path": "rooms/rMain/rMain.yy"},
+                {"name": "inst_PARENT", "path": "rooms/rBase/rBase.yy"},
+            ],
+        }
+        updated, identities = _regenerate_duplicate_identities("room", room)
+        self.assertEqual(list(identities), ["inst_LOCAL"])
+        inherited = updated["layers"][0]["instances"][1]
+        self.assertEqual(inherited["name"], "inst_PARENT")
+        self.assertEqual(inherited["inheritedItemId"]["name"], "inst_PARENT")
+        self.assertEqual(updated["instanceCreationOrder"][1]["name"], "inst_PARENT")
 
 
 if __name__ == "__main__":

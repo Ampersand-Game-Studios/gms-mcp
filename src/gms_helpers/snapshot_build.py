@@ -43,7 +43,7 @@ from .exceptions import ValidationError
 from .project_config import project_setting
 from gms_mcp.project_detection import safe_git_command
 from .path_safety import private_directory, project_file_path, project_relative_path, validate_git_ref
-from .utils import find_yyp
+from .utils import _read_text_preserving_newlines, find_yyp
 
 ACCESS_VIOLATION_MARKER = "AccessViolationException"
 _COMPILE_FINISHED_MARKER = "Final Compile finished"
@@ -52,6 +52,7 @@ _WARNING_LINE = re.compile(r"Warning : ")
 _LABEL = re.compile(r"[^A-Za-z0-9_]")
 _SNAPSHOT_IGNORED = {".git", ".gms_mcp", ".gms-mcp", "output", "__pycache__", ".pytest_cache", ".gml_index_cache"}
 _MAX_TEST_BYTES = 2 * 1024 * 1024
+_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
 
 # The test API every injected test can rely on. A project may replace this file through
 # ``test.prelude_file`` in .gms-mcp.json; a replacement must print the same marker lines.
@@ -91,13 +92,18 @@ time_source_start(global.__agent_test_ts);
 
 TEST_API_HELP = (
     "A test is GML that defines `function agent_test_step(_frame) { ... }`, called once per frame from "
-    "frame 1. Helpers: test_log(value), test_check(condition, label) (any failed check fails the run), "
+    "frame 1 by a global time source, after Begin Step and before Step (not after movement or End Step). "
+    "Compare completed movement on the next callback, retaining the preceding frame's target state. "
+    "Simulated input needs a real frame to reach Step; transforms may need their system update. "
+    "Helpers: test_log(value), test_check(condition, label) (any failed check fails the run), "
     "test_shot(name) (screenshot), test_end() (prints the result and quits; always call it)."
 )
 
 
 class SnapshotError(ValidationError):
     """A snapshot build could not be prepared; the message says what to change."""
+
+    retain_work_dir = False
 
 
 @dataclass
@@ -200,8 +206,10 @@ def discover_toolchain(project_root: str | Path, runtime_version: str | None = N
 # ----------------------------------------------------------------------
 # Snapshots
 # ----------------------------------------------------------------------
-def _git(repo: Path, *args: str, input_bytes: bytes | None = None) -> subprocess.CompletedProcess:
-    return subprocess.run(safe_git_command(repo, *args), input=input_bytes, capture_output=True, check=False)
+def _git(
+    repo: Path, *args: str, input_bytes: bytes | None = None, env: dict[str, str] | None = None
+) -> subprocess.CompletedProcess:
+    return subprocess.run(safe_git_command(repo, *args), input=input_bytes, capture_output=True, check=False, env=env)
 
 
 def git_context(project_root: str | Path) -> tuple[Path, str]:
@@ -214,8 +222,14 @@ def git_context(project_root: str | Path) -> tuple[Path, str]:
             "Omit isolate_paths to build the working tree as it is, or commit the project to git first."
         )
     repo = Path(result.stdout.decode("utf-8").strip()).resolve()
-    relative = root.relative_to(repo).as_posix()
-    return repo, "" if relative == "." else relative
+    # Compare directory identity, not spelling: on a case-insensitive volume git may report
+    # the top level with different letter case than the path the project was opened with.
+    for ancestor in (root, *root.parents):
+        with contextlib.suppress(OSError):
+            if os.path.samefile(ancestor, repo):
+                relative = root.relative_to(ancestor).as_posix()
+                return repo, "" if relative == "." else relative
+    raise SnapshotError(f"git reported repository root {repo}, which does not contain the project at {root}.")
 
 
 def _project_relative(path: str, project_prefix: str) -> str:
@@ -228,9 +242,19 @@ def _project_relative(path: str, project_prefix: str) -> str:
     return normalized
 
 
+def _snapshot_ignored(root: Path, directory: str | Path, names: Iterable[str]) -> set[str]:
+    """Names a snapshot never copies: tool/VCS folders at the project root and bytecode caches."""
+    if Path(directory) == root:
+        return {name for name in names if name in _SNAPSHOT_IGNORED}
+    return {name for name in names if name == "__pycache__"}
+
+
 def _check_copy_source(source: Path, root: Path) -> None:
     project_relative_path(source.relative_to(root).as_posix(), project_root=root, kind="snapshot input")
     for directory, dirs, files in os.walk(source, followlinks=False):
+        skipped = _snapshot_ignored(root, directory, dirs + files)
+        dirs[:] = [name for name in dirs if name not in skipped]
+        files = [name for name in files if name not in skipped]
         for name in dirs + files:
             child = Path(directory) / name
             project_relative_path(child.relative_to(root).as_posix(), project_root=root, kind="snapshot input")
@@ -251,40 +275,71 @@ def _read_git_tree(repo: Path, sha: str, staging: Path, prefix: str) -> None:
         if not record:
             continue
         metadata, raw_path = record.split(b"\t", 1)
-        mode, kind, oid = metadata.decode("ascii").split()
+        mode, kind, _oid = metadata.decode("ascii").split()
         path = os.fsdecode(raw_path)
         target = project_relative_path(path, project_root=staging, kind="Git tree path")
         if mode not in {"100644", "100755"} or kind != "blob":
             raise SnapshotError(f"Snapshot revision contains an unsupported symlink or submodule: {path}")
-        entries.append((mode, oid, target))
-    blobs = _git(repo, "cat-file", "--batch", input_bytes="".join(oid + "\n" for _, oid, _ in entries).encode("ascii"))
-    if blobs.returncode:
-        raise SnapshotError("git could not read snapshot blobs")
-    offset = 0
-    for mode, oid, target in entries:
-        end = blobs.stdout.find(b"\n", offset)
-        header = blobs.stdout[offset:end].decode("ascii").split()
-        if len(header) != 3 or header[:2] != [oid, "blob"]:
-            raise SnapshotError("Invalid git cat-file response")
-        size = int(header[2])
-        offset = end + 1
-        data = blobs.stdout[offset : offset + size]
-        if len(data) != size or blobs.stdout[offset + size : offset + size + 1] != b"\n":
-            raise SnapshotError("Truncated git cat-file response")
-        offset += size + 1
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_bytes(data)
+        entries.append((mode, raw_path, target, path))
+    # A checkout from a private index applies the repository's smudge filters (Git LFS included)
+    # and end-of-line conversion, so the snapshot matches what checking out this revision gives.
+    index_dir = Path(tempfile.mkdtemp(prefix="gms-mcp-index-", dir=staging.parent))
+    environment = {**os.environ, "GIT_INDEX_FILE": str(index_dir / "index")}
+    try:
+        if _git(repo, "read-tree", sha, env=environment).returncode:
+            raise SnapshotError("git could not read the snapshot tree into an index")
+        checkout = _git(
+            repo,
+            "checkout-index",
+            f"--prefix={staging}{os.sep}",
+            "--stdin",
+            "-z",
+            input_bytes=b"".join(raw_path + b"\0" for _, raw_path, _, _ in entries),
+            env=environment,
+        )
+    finally:
+        shutil.rmtree(index_dir, ignore_errors=True)
+    if checkout.returncode:
+        detail = checkout.stderr.decode("utf-8", "replace").strip()
+        raise SnapshotError(f"git could not check out the snapshot revision{': ' + detail if detail else ''}")
+    for mode, _raw_path, target, path in entries:
+        if not target.is_file() or target.is_symlink():
+            raise SnapshotError(f"git did not write {path} into the snapshot")
+        with target.open("rb") as handle:
+            if handle.read(len(_LFS_POINTER_PREFIX)) == _LFS_POINTER_PREFIX:
+                raise SnapshotError(
+                    f"{path} is a Git LFS pointer in revision {sha[:12]}, and git did not replace it with the "
+                    "file. Install Git LFS (git lfs install) so the snapshot gets real file contents, or build "
+                    "the working tree by omitting isolate_paths and base_only."
+                )
         target.chmod(0o700 if mode == "100755" else 0o600)
 
 
 def _copy_tree(source: Path, destination: Path) -> None:
-    def ignore(directory: str, names: list[str]) -> set[str]:
-        if Path(directory) == source:
-            return {name for name in names if name in _SNAPSHOT_IGNORED}
-        return {name for name in names if name == "__pycache__"}
-
     _check_copy_source(source, source)
-    shutil.copytree(source, destination, ignore=ignore, symlinks=False, dirs_exist_ok=True)
+    shutil.copytree(
+        source,
+        destination,
+        ignore=lambda directory, names: _snapshot_ignored(source, directory, names),
+        symlinks=False,
+        dirs_exist_ok=True,
+    )
+
+
+@contextlib.contextmanager
+def _project_mutation_lock(root: Path):
+    """Hold the project-mutation lock so a copy never mixes files from before and after a write."""
+    from .transactions import _ProjectMutationLock, transaction_is_active
+
+    if transaction_is_active(root):
+        yield  # This thread's transaction already owns the lock.
+        return
+    lock = _ProjectMutationLock(root, "snapshot")
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def create_snapshot(
@@ -330,7 +385,8 @@ def create_snapshot(
                 "yyp_entries only applies to an isolated snapshot. Pass isolate_paths as well, or drop "
                 "yyp_entries to build the working tree as it is."
             )
-        _copy_tree(root, dest)
+        with _project_mutation_lock(root):
+            _copy_tree(root, dest)
         return {"mode": "working-tree", "isolated_paths": [], "yyp_entries": [], "ref": None}
 
     repo, prefix = git_context(root)
@@ -348,26 +404,37 @@ def create_snapshot(
                 "Choose a revision that has this project."
             )
         relative_paths = [_project_relative(path, prefix) for path in paths]
-        for relative in relative_paths:
-            source = project_relative_path(relative, project_root=root, kind="isolate source")
-            target = project_relative_path(relative, project_root=base_project, kind="isolate target")
-            _check_copy_source(root / relative, root)
-            if target.is_dir() and not target.is_symlink():
-                shutil.rmtree(target)
-            elif target.exists() or target.is_symlink():
-                target.unlink()
-            if source.is_dir():
-                shutil.copytree(source, target, symlinks=False)
-            elif source.is_file():
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copy2(source, target)
-        base_text = (base_project / yyp_name).read_text(encoding="utf-8")
-        entries = [str(entry) for entry in (yyp_entries or []) if str(entry).strip()]
-        if not entries and relative_paths:
-            entries = yyp_registry.derive_yyp_entries(root, base_text, relative_paths)
-        if yyp_name not in relative_paths and entries:
-            composed = yyp_registry.compose_yyp(base_text, (root / yyp_name).read_text(encoding="utf-8"), entries)
-            (base_project / yyp_name).write_text(composed, encoding="utf-8", newline="")
+        with _project_mutation_lock(root):
+            for relative in relative_paths:
+                source = project_relative_path(relative, project_root=root, kind="isolate source")
+                target = project_relative_path(relative, project_root=base_project, kind="isolate target")
+                _check_copy_source(root / relative, root)
+                if target.is_dir() and not target.is_symlink():
+                    shutil.rmtree(target)
+                elif target.exists() or target.is_symlink():
+                    target.unlink()
+                if source.is_dir():
+                    shutil.copytree(
+                        source,
+                        target,
+                        ignore=lambda directory, names: _snapshot_ignored(root, directory, names),
+                        symlinks=False,
+                    )
+                elif source.is_file():
+                    target.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(source, target)
+            base_text = _read_text_preserving_newlines(base_project / yyp_name)
+            entries = [str(entry) for entry in (yyp_entries or []) if str(entry).strip()]
+            if not entries and relative_paths:
+                entries = yyp_registry.derive_yyp_entries(root, base_text, relative_paths)
+            if yyp_name not in relative_paths and entries:
+                composed = yyp_registry.compose_yyp(base_text, _read_text_preserving_newlines(root / yyp_name), entries)
+                introduced = sorted(
+                    set(yyp_registry.validate_yyp_text(composed)) - set(yyp_registry.validate_yyp_text(base_text))
+                )
+                if introduced:
+                    raise SnapshotError("The isolated project file would be inconsistent: " + "; ".join(introduced))
+                (base_project / yyp_name).write_text(composed, encoding="utf-8", newline="")
         shutil.move(str(base_project), str(dest))
     finally:
         shutil.rmtree(staging, ignore_errors=True)
@@ -426,11 +493,30 @@ def inject_test_script(
     return relative
 
 
+def _test_text_setting(project_root: Path, key: str, default: str) -> str:
+    """A ``test.*`` marker or name from .gms-mcp.json; it must be a non-empty string."""
+    value = project_setting(project_root, key, default)
+    if not isinstance(value, str) or not value:
+        raise SnapshotError(f"{key} in .gms-mcp.json must be a non-empty string, not {value!r}.")
+    return value
+
+
+def _test_runtime_error_patterns(project_root: Path) -> list[str]:
+    """``test.runtime_error_patterns``: a list of non-empty strings matched literally in the run log."""
+    value = project_setting(project_root, "test.runtime_error_patterns", [])
+    if not isinstance(value, list) or not all(isinstance(pattern, str) and pattern for pattern in value):
+        raise SnapshotError(
+            "test.runtime_error_patterns in .gms-mcp.json must be a list of non-empty strings, "
+            f'for example ["FATAL ERROR"]; got {value!r}.'
+        )
+    return value
+
+
 def load_test_source(project_root: Path, test_file: str | None, test_code: str | None) -> str:
     if bool(test_file) == bool(test_code):
         raise SnapshotError("Pass exactly one of test_code (the GML text) or test_file (a path to a .gml file).")
     if test_code:
-        return test_code
+        return test_code.removeprefix("\ufeff")
     path = project_file_path(test_file, project_root=project_root, kind="test file")
     if not path.is_file():
         raise SnapshotError(
@@ -438,12 +524,19 @@ def load_test_source(project_root: Path, test_file: str | None, test_code: str |
         )
     if path.stat().st_size > _MAX_TEST_BYTES:
         raise SnapshotError("The test file is larger than 2 MB; that is not a test script.")
-    return path.read_text(encoding="utf-8")
+    # utf-8-sig drops an editor's byte-order mark, which would otherwise land mid-script after the prelude.
+    return path.read_text(encoding="utf-8-sig")
 
 
 # ----------------------------------------------------------------------
 # Compile
 # ----------------------------------------------------------------------
+def _igor_accepts_mac_compile(toolchain: Toolchain) -> bool:
+    """Igor before runtime 2026 aborts on ``Mac Compile`` with TargetParameterCountException."""
+    major = str(toolchain.runtime_version).split(".", 1)[0]
+    return major.isdigit() and int(major) >= 2026
+
+
 def igor_command(
     toolchain: Toolchain,
     project_file: Path,
@@ -526,7 +619,12 @@ def _default_run_igor(command: list[str], log_path: Path, timeout_seconds: float
     with artifact_writer(log_path) as log:
         try:
             completed = subprocess.run(
-                command, stdout=log, stderr=subprocess.STDOUT, timeout=timeout_seconds, check=False
+                command,
+                stdout=log,
+                stderr=subprocess.STDOUT,
+                timeout=timeout_seconds,
+                check=False,
+                env={**os.environ, "DOTNET_PROCESSOR_COUNT": os.environ.get("DOTNET_PROCESSOR_COUNT", "1")},
             )
             return completed.returncode
         except subprocess.TimeoutExpired:
@@ -569,7 +667,15 @@ def compile_snapshot(
         platform=platform,
         runtime=runtime,
         jobs=jobs,
-        action="folder" if platform == "HTML5" else "PackageZip" if platform in {"Mac", "Windows"} else "Package",
+        action=(
+            "folder"
+            if platform == "HTML5"
+            else "Compile"
+            if platform == "Mac" and str(runtime).upper() == "VM" and _igor_accepts_mac_compile(toolchain)
+            else "PackageZip"
+            if platform in {"Mac", "Windows"}
+            else "Package"
+        ),
     )
     from .runner_support.igor import RunnerIgorMixin
 
@@ -607,8 +713,17 @@ def compile_snapshot(
             break
         result.access_violation_retries += 1
     if build_log is not None and log_path.is_file() and Path(build_log) != log_path:
-        Path(build_log).parent.mkdir(parents=True, exist_ok=True)
-        copy_artifact(log_path, Path(build_log))
+        try:
+            Path(build_log).parent.mkdir(parents=True, exist_ok=True)
+            copy_artifact(log_path, Path(build_log))
+        except OSError as exc:
+            error = SnapshotError(
+                f"Could not publish the build log: {exc}. Compiler output is retained at {log_path}. "
+                "Free space at the artifact destination before retrying; "
+                "GMS_MCP_SNAPSHOT_WORK_DIR selects an external snapshot/cache directory."
+            )
+            error.retain_work_dir = True
+            raise error from exc
     result.elapsed_seconds = round(time.monotonic() - started, 1)
     # Igor's final packaging step can fail on a shared staging folder after the game data
     # was written; the compiled game archive is what a run needs.
@@ -837,13 +952,19 @@ def launch_mac_runner(
     run_dir.mkdir(parents=True, exist_ok=True)
     with artifact_writer(run_dir / "runner_stderr.log") as stderr_log:
         process = subprocess.Popen(
-            [str(runner), "-game", str(game_file), "-debugoutput", str(debug_log), "-output", str(debug_log)],
+            [str(runner), "-game", mac_game_path(game_file), "-debugoutput", "debug.txt", "-output", "debug.txt"],
             cwd=str(staging),
             stdout=stderr_log,
             stderr=subprocess.STDOUT,
             env={**os.environ, **(environment or {})},
         )
     return process, debug_log
+
+
+def mac_game_path(path: Path) -> str:
+    """The native runner misparses the /private/var spelling of macOS temp paths."""
+    value = str(path)
+    return value.removeprefix("/private") if value.startswith("/private/var/") else value
 
 
 def screenshot_files(screenshot_prefix: str, save_dir: Path) -> list[Path]:
@@ -920,6 +1041,7 @@ def run_game_archive(
         shutil.rmtree(shots_dir)
     run_log = run_dir / "run.log"
 
+    error_patterns = _test_runtime_error_patterns(project_root)
     lock = run_lock or project_run_lock(project_root)
     if not lock.held:
         lock.acquire(timeout_seconds=lock_timeout_seconds)
@@ -947,6 +1069,8 @@ def run_game_archive(
             if result_marker in text:
                 time.sleep(1.0)  # let screen_save and the final log lines land
                 break
+            if any(pattern in text for pattern in error_patterns):
+                break  # Fatal-error dialogs keep the process alive but cannot produce a test result.
             if process.poll() is not None and waited > 2.0:
                 break
             if waited >= timeout_seconds:
@@ -977,24 +1101,19 @@ def run_game_archive(
 # ----------------------------------------------------------------------
 # Whole pipelines
 # ----------------------------------------------------------------------
-_IGOR_PLATFORMS = {
-    "macos": "Mac",
-    "mac": "Mac",
-    "windows": "Windows",
-    "linux": "Linux",
-    "android": "Android",
-    "ios": "ios",
-    "html5": "HTML5",
-}
+_IGOR_PLATFORMS = frozenset({"Mac", "Windows", "Linux", "Android", "iOS", "HTML5"})
 
 
 def igor_platform(platform: str | None) -> str:
+    """The token Igor expects after ``--``, shared with the runner's platform mapping."""
+    from .runner_support.targets import _to_igor_platform, normalize_platform_target
+
     if not platform:
         return {"darwin": "Mac", "win32": "Windows"}.get(sys.platform, "Linux")
-    key = str(platform).strip().lower()
-    if key not in _IGOR_PLATFORMS:
+    token = _to_igor_platform(normalize_platform_target(str(platform)))
+    if token not in _IGOR_PLATFORMS:
         raise SnapshotError(f"Unknown platform '{platform}'. Use one of: macOS, Windows, Linux, Android, iOS, HTML5.")
-    return _IGOR_PLATFORMS[key]
+    return token
 
 
 def _relative(project_root: Path, path: Path | None) -> str | None:
@@ -1050,7 +1169,7 @@ def snapshot_compile(
             inject_test_script(
                 snapshot_root,
                 test_code,
-                script_name=str(project_setting(root, "test.script_name", "__agent_test")),
+                script_name=_test_text_setting(root, "test.script_name", "__agent_test"),
                 prelude=prelude,
             )
         tools = toolchain or discover_toolchain(root, runtime_version)
@@ -1066,8 +1185,8 @@ def snapshot_compile(
             build_log=run_dir / "build.log",
             run_igor=run_igor,
         )
-    except BaseException:
-        if not keep_work_dir:
+    except BaseException as exc:
+        if not keep_work_dir and not (isinstance(exc, SnapshotError) and exc.retain_work_dir):
             shutil.rmtree(work, ignore_errors=True)
         raise
     public = {
@@ -1116,6 +1235,11 @@ def _run_test_pipeline(
     root = Path(project_root).resolve()
     source = load_test_source(root, test_file, test_code)
     timeout = float(timeout_seconds or project_setting(root, "test.timeout_seconds", 120))
+    result_marker = _test_text_setting(root, "test.result_marker", "[TEST_RESULT]")
+    screenshot_prefix = _test_text_setting(root, "test.screenshot_prefix", "__agent_shot_")
+    line_marker = _test_text_setting(root, "test.line_marker", "[TEST]")
+    started_marker = _test_text_setting(root, "test.started_marker", "[TEST_SAVE_DIR]")
+    error_patterns = _test_runtime_error_patterns(root)
     public, build, work, tools = snapshot_compile(
         root,
         label=label,
@@ -1144,17 +1268,17 @@ def _run_test_pipeline(
             project_root=root,
             run_lock=run_lock,
             timeout_seconds=timeout,
-            result_marker=str(project_setting(root, "test.result_marker", "[TEST_RESULT]")),
-            screenshot_prefix=str(project_setting(root, "test.screenshot_prefix", "__agent_shot_")),
+            result_marker=result_marker,
+            screenshot_prefix=screenshot_prefix,
             environment=environment,
         )
         run_log: Path = outcome["run_log"]
         verdict = parse_run_log(
             run_log.read_text(encoding="utf-8", errors="replace") if run_log.is_file() else "",
-            result_marker=str(project_setting(root, "test.result_marker", "[TEST_RESULT]")),
-            line_marker=str(project_setting(root, "test.line_marker", "[TEST]")),
-            started_marker=str(project_setting(root, "test.started_marker", "[TEST_SAVE_DIR]")),
-            runtime_error_patterns=project_setting(root, "test.runtime_error_patterns", []),
+            result_marker=result_marker,
+            line_marker=line_marker,
+            started_marker=started_marker,
+            runtime_error_patterns=error_patterns,
             timed_out=bool(outcome.get("timed_out")),
         )
         public.update(verdict)

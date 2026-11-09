@@ -399,6 +399,7 @@ async def _run_smoke(project_root: Path) -> Dict[str, Any]:
             "gm_texture_group_create",
             {
                 "name": "ResolveTemp",
+                "dry_run": False,
                 "project_root": str(project_root),
             },
         )
@@ -407,12 +408,13 @@ async def _run_smoke(project_root: Path) -> Dict[str, Any]:
             {
                 "group_name": "ResolveTemp",
                 "asset_identifiers": ["o_real_smoke_resolved_alternative"],
+                "dry_run": False,
                 "project_root": str(project_root),
             },
         )
         delete_resolve_texture_group = await call_tool_with_resolution(
             "gm_texture_group_delete",
-            {"name": "ResolveTemp", "project_root": str(project_root)},
+            {"name": "ResolveTemp", "dry_run": False, "project_root": str(project_root)},
             {"action": "reassign", "reassign_to": "Default"},
         )
     finally:

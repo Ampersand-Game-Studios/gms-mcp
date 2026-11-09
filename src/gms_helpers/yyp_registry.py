@@ -22,12 +22,12 @@ from .gm_order import (
     FOLDER_ORDERINGS,
     INCLUDED_FILE_ORDERINGS,
     RESOURCE_ORDERINGS,
-    detect_ordering,
     insert_ordered,
+    matching_orderings,
 )
 from .path_safety import project_file_path, project_relative_path
 from .project_validation import ASSET_RESOURCE_TYPES, safe_project_path
-from .utils import find_yyp, load_json_loose, save_json
+from .utils import _read_text_preserving_newlines, find_yyp, load_json_loose, save_json
 
 INCLUDED_PREFIX = "included:"
 
@@ -59,7 +59,8 @@ def _save_yyp(yyp_path: Path, data: dict[str, Any]) -> None:
 
 
 def _norm(path: str) -> str:
-    return str(path).replace("\\", "/").strip().strip("/")
+    """Forward slashes, no surrounding whitespace, no empty or "." segments ("./a//b/" -> "a/b")."""
+    return "/".join(part for part in str(path).replace("\\", "/").strip().split("/") if part not in ("", "."))
 
 
 def _resource_ref(entry: Any) -> dict[str, Any] | None:
@@ -136,12 +137,25 @@ def register_assets(project_root: str | Path, asset_paths: Iterable[str]) -> dic
                 "Create it with gm_create_folder (parents first) or set the asset's parent to an existing "
                 "folder; gm_list_assets shows the folders in use."
             )
-        existing = [entry for entry in resources if (_resource_ref(entry) or {}).get("name") == name]
-        if existing and all(_resource_path(entry) == path for entry in existing):
+        # GameMaker names are case-insensitive: "o_Player" and "o_player" are one asset to Igor.
+        existing = [
+            entry
+            for entry in resources
+            if str((_resource_ref(entry) or {}).get("name", "")).casefold() == name.casefold()
+        ]
+        if existing and all(
+            _resource_path(entry) == path and (_resource_ref(entry) or {}).get("name") == name for entry in existing
+        ):
             unchanged.append(path)
             continue
         if existing:
-            raise ValidationError(f"Cannot register {name!r}: the name is already registered to a different path")
+            taken = ", ".join(
+                f"{(_resource_ref(entry) or {}).get('name')!r} at {_resource_path(entry)}" for entry in existing
+            )
+            raise ValidationError(
+                f"Cannot register {name!r}: the name is already registered as {taken} "
+                "(GameMaker asset names are case-insensitive)."
+            )
         insert_ordered(resources, {"id": {"name": name, "path": path}}, RESOURCE_ORDERINGS)
         registered.append(path)
     if registered:
@@ -565,6 +579,7 @@ def check_registry(project_root: str | Path, *, allow_root_assets: Iterable[str]
                     )
 
     ordering: dict[str, str | None] = {}
+    ambiguous_ordering: dict[str, list[str]] = {}
     for label, entries, candidates in (
         ("resources", [e for e in data.get("resources", []) if _resource_ref(e)], RESOURCE_ORDERINGS),
         (
@@ -578,8 +593,12 @@ def check_registry(project_root: str | Path, *, allow_root_assets: Iterable[str]
             INCLUDED_FILE_ORDERINGS,
         ),
     ):
-        rule = detect_ordering(entries, candidates)
+        matches = matching_orderings(entries, candidates)
+        rule = matches[0] if matches else None
         ordering[label] = rule[0] if rule else None
+        if len(matches) > 1:
+            # Short lists satisfy several rules; the report must not claim one of them.
+            ambiguous_ordering[label] = [match[0] for match in matches]
         if rule is None and len(entries) > 1:
             _label, field, key = candidates[0]
             first = next(
@@ -594,7 +613,7 @@ def check_registry(project_root: str | Path, *, allow_root_assets: Iterable[str]
                 "Run gm_yyp_normalize_order to restore the IDE's ordering.",
             )
 
-    native = gm_json.is_native_layout(yyp_path.read_text(encoding="utf-8"))
+    native = gm_json.is_native_layout(_read_text_preserving_newlines(yyp_path))
     if not native:
         warning(
             "non_native_layout",
@@ -611,6 +630,7 @@ def check_registry(project_root: str | Path, *, allow_root_assets: Iterable[str]
         "problems": problems,
         "warnings": warnings,
         "ordering": ordering,
+        "ordering_ambiguous": ambiguous_ordering,
         "native_layout": native,
         "counts": {
             "resources": len(data.get("resources", [])),
@@ -628,7 +648,7 @@ def normalize_order(project_root: str | Path) -> dict[str, Any]:
     from .gm_order import ide_2026_key
 
     yyp_path, data = load_yyp(project_root)
-    before = yyp_path.read_text(encoding="utf-8")
+    before = _read_text_preserving_newlines(yyp_path)
     if isinstance(data.get("resources"), list):
         data["resources"].sort(key=lambda e: ide_2026_key(_norm((_resource_ref(e) or {}).get("path", ""))))
     if isinstance(data.get("Folders"), list):
@@ -652,14 +672,95 @@ def normalize_order(project_root: str | Path) -> dict[str, Any]:
 # ----------------------------------------------------------------------
 # "Base revision plus named registrations" (isolated builds and partial commits)
 # ----------------------------------------------------------------------
+TEXTURE_GROUP_PREFIX = "texturegroup:"
+AUDIO_GROUP_PREFIX = "audiogroup:"
+CONFIG_PREFIX = "config:"
+_GROUP_LISTS = {TEXTURE_GROUP_PREFIX: "TextureGroups", AUDIO_GROUP_PREFIX: "AudioGroups"}
+_GROUP_REFERENCE_FIELDS = {"textureGroupId": TEXTURE_GROUP_PREFIX, "audioGroupId": AUDIO_GROUP_PREFIX}
+
+
+def _group_name(entry: Any) -> str | None:
+    return entry["name"] if isinstance(entry, dict) and isinstance(entry.get("name"), str) else None
+
+
+def _room_node_path(node: Any) -> str:
+    room = node.get("roomId") if isinstance(node, dict) else None
+    return _norm(str(room.get("path", ""))) if isinstance(room, dict) else ""
+
+
+def _room_node_name(node: Any) -> str:
+    room = node.get("roomId") if isinstance(node, dict) else None
+    return str(room.get("name", "")) if isinstance(room, dict) else ""
+
+
+def _insert_like_work(base_list: list, item: Any, work_list: list, ident: Any) -> None:
+    """Insert ``item`` into ``base_list`` next to the neighbours it has in ``work_list``.
+
+    Used for lists whose order means something (room order, group lists): the new entry goes
+    right after the nearest preceding working-copy entry that the base also has, or before the
+    nearest following one, or at the end.
+    """
+    key = ident(item)
+    base_keys = [ident(entry) for entry in base_list]
+    work_keys = [ident(entry) for entry in work_list]
+    position = work_keys.index(key) if key in work_keys else len(work_keys)
+    for neighbour in reversed(work_keys[:position]):
+        if neighbour in base_keys:
+            base_list.insert(base_keys.index(neighbour) + 1, item)
+            return
+    for neighbour in work_keys[position + 1 :]:
+        if neighbour in base_keys:
+            base_list.insert(base_keys.index(neighbour), item)
+            return
+    base_list.append(item)
+
+
+def _config_chain(tree: Any, name: str) -> list[dict[str, Any]] | None:
+    """Nodes from the root config down to ``name`` in a ``configs`` tree (None when absent)."""
+    if not isinstance(tree, dict):
+        return None
+    if tree.get("name") == name:
+        return [tree]
+    for child in tree.get("children", []) if isinstance(tree.get("children"), list) else []:
+        chain = _config_chain(child, name)
+        if chain is not None:
+            return [tree, *chain]
+    return None
+
+
+def _compose_config(base: dict[str, Any], work: dict[str, Any], name: str) -> None:
+    base_tree = base.get("configs")
+    work_chain = _config_chain(work.get("configs"), name)
+    base_chain = _config_chain(base_tree, name)
+    if work_chain is None:
+        if base_chain is not None and len(base_chain) > 1:
+            parent = base_chain[-2]
+            parent["children"] = [child for child in parent.get("children", []) if child is not base_chain[-1]]
+        return
+    if base_chain is not None or not isinstance(base_tree, dict) or base_tree.get("name") != work_chain[0].get("name"):
+        return
+    node = base_tree
+    for wanted in work_chain[1:]:
+        children = node.setdefault("children", [])
+        existing = next((c for c in children if isinstance(c, dict) and c.get("name") == wanted.get("name")), None)
+        if existing is None:
+            existing = {**copy.deepcopy(wanted), "children": []}
+            children.append(existing)
+        node = existing
+
+
 def compose_yyp(base_text: str, working_text: str, entries: Iterable[str]) -> str:
     """Return ``base_text`` with only the named registrations taken from ``working_text``.
 
-    ``entries`` are asset paths (``scripts/foo/foo.yy``), folder paths (``folders/A/B.yy``)
-    and included files (``included:datafiles/data/foo.json``). An entry present in the
-    working copy is added or replaced; an entry absent from it is removed. Everything else
-    in the result is exactly the base revision, so other people's uncommitted
-    registrations never leak into a build or a commit.
+    ``entries`` are asset paths (``scripts/foo/foo.yy``), folder paths (``folders/A/B.yy``),
+    included files (``included:datafiles/data/foo.json``), texture and audio groups
+    (``texturegroup:Name``, ``audiogroup:Name``) and configs (``config:Name``). An entry present
+    in the working copy is added or replaced; an entry absent from it is removed. A room's entry
+    also carries its room-order node: a new room joins the order next to its working-copy
+    neighbours, a deleted or renamed one leaves no dangling node. Everything else in the result
+    is exactly the base revision, so other people's uncommitted registrations never leak into a
+    build or a commit. ``derive_yyp_entries`` adds the group and config entries a staged asset
+    needs; check the result with ``validate_yyp_text``.
     """
     base = gm_json.loads(base_text)
     work = gm_json.loads(working_text)
@@ -671,6 +772,7 @@ def compose_yyp(base_text: str, working_text: str, entries: Iterable[str]) -> st
     work_resources = {_resource_path(e): e for e in work.get("resources", []) if _resource_ref(e)}
     work_folders = {_norm(str(f.get("folderPath", ""))): f for f in work.get("Folders", []) if isinstance(f, dict)}
     work_included = {key: e for e in work.get("IncludedFiles", []) if (key := _included_key(e))}
+    staged_rooms: list[str] = []
 
     for raw in entries:
         entry = str(raw).strip()
@@ -681,6 +783,26 @@ def compose_yyp(base_text: str, working_text: str, entries: Iterable[str]) -> st
             base_included[:] = [e for e in base_included if _included_key(e) != key]
             if key in work_included:
                 insert_ordered(base_included, copy.deepcopy(work_included[key]), INCLUDED_FILE_ORDERINGS)
+        elif prefix := next((p for p in _GROUP_LISTS if entry.startswith(p)), None):
+            field = _GROUP_LISTS[prefix]
+            name = entry[len(prefix) :].strip()
+            work_groups = (
+                [g for g in work.get(field, []) if _group_name(g)] if isinstance(work.get(field), list) else []
+            )
+            wanted = next((g for g in work_groups if _group_name(g) == name), None)
+            groups = base.setdefault(field, [])
+            if not isinstance(groups, list):
+                raise ValidationError(f"The committed project file's {field} is not an array.")
+            index = next((i for i, g in enumerate(groups) if _group_name(g) == name), None)
+            if wanted is None:
+                if index is not None:
+                    del groups[index]
+            elif index is not None:
+                groups[index] = copy.deepcopy(wanted)
+            else:
+                _insert_like_work(groups, copy.deepcopy(wanted), work_groups, _group_name)
+        elif entry.startswith(CONFIG_PREFIX):
+            _compose_config(base, work, entry[len(CONFIG_PREFIX) :].strip())
         elif _norm(entry).startswith("folders/"):
             key = _norm(entry)
             base_folders[:] = [f for f in base_folders if _norm(str(f.get("folderPath", ""))) != key]
@@ -688,7 +810,7 @@ def compose_yyp(base_text: str, working_text: str, entries: Iterable[str]) -> st
                 insert_ordered(base_folders, copy.deepcopy(work_folders[key]), FOLDER_ORDERINGS)
         else:
             key = _norm(entry)
-            _asset_path_parts(key)
+            kind, _name = _asset_path_parts(key)
             name = PurePosixPath(key).stem
             base_resources[:] = [
                 e
@@ -698,6 +820,11 @@ def compose_yyp(base_text: str, working_text: str, entries: Iterable[str]) -> st
             ]
             if key in work_resources:
                 insert_ordered(base_resources, copy.deepcopy(work_resources[key]), RESOURCE_ORDERINGS)
+            if kind == "rooms":
+                staged_rooms.append(key)
+
+    if staged_rooms:
+        _compose_room_order(base, work, staged_rooms, set(work_resources))
 
     layout = gm_json.detect_layout(base_text)
     if layout is None:
@@ -705,12 +832,157 @@ def compose_yyp(base_text: str, working_text: str, entries: Iterable[str]) -> st
     return gm_json.dumps(base, layout)
 
 
+def _compose_room_order(base: dict[str, Any], work: dict[str, Any], rooms: list[str], work_paths: set[str]) -> None:
+    order = base.get("RoomOrderNodes")
+    work_order = work.get("RoomOrderNodes") if isinstance(work.get("RoomOrderNodes"), list) else []
+    if order is None and not work_order:
+        return
+    if not isinstance(order, list):
+        order = base["RoomOrderNodes"] = []
+    for key in rooms:
+        name = PurePosixPath(key).stem
+        present = key in work_paths
+        # A deleted room leaves the order; a renamed one leaves its old node behind (same name, old path).
+        order[:] = [
+            node
+            for node in order
+            if not (
+                (_room_node_path(node) == key and not present)
+                or (_room_node_name(node) == name and _room_node_path(node) != key)
+            )
+        ]
+        if present and not any(_room_node_path(node) == key for node in order):
+            node = next((n for n in work_order if _room_node_path(n) == key), None)
+            if node is not None:
+                _insert_like_work(order, copy.deepcopy(node), work_order, _room_node_path)
+
+
+def validate_yyp_text(text: str) -> list[str]:
+    """Structural problems in project-file text (no disk access): what a composed .yyp must not have.
+
+    Checks duplicate registrations, folders without their enclosing folder, room-order nodes that
+    name no registered room, duplicate groups, group parents that do not exist and duplicate
+    config names. Returns readable problem strings (empty when the file is consistent).
+    """
+    try:
+        data = gm_json.loads(text)
+    except ValueError as exc:
+        return [f"The project file is not valid JSON: {exc}"]
+    if not isinstance(data, dict):
+        return ["The project file is not a JSON object."]
+    problems: list[str] = []
+    for key in ("resources", "Folders", "IncludedFiles", "RoomOrderNodes", "TextureGroups", "AudioGroups"):
+        if key in data and not isinstance(data[key], list):
+            problems.append(f"'{key}' must be an array.")
+    if problems:
+        return problems
+
+    names: set[str] = set()
+    paths: set[str] = set()
+    for entry in data.get("resources", []):
+        ref = _resource_ref(entry)
+        if ref is None or not isinstance(ref.get("name"), str):
+            problems.append(f"Malformed resource entry: {str(entry)[:80]}")
+            continue
+        name, path = ref["name"].casefold(), _norm(ref["path"]).casefold()
+        if name in names:
+            problems.append(f"Resource '{ref['name']}' is registered more than once.")
+        if path in paths:
+            problems.append(f"Resource path '{_norm(ref['path'])}' is registered more than once.")
+        names.add(name)
+        paths.add(path)
+
+    folders = [_norm(str(f.get("folderPath", ""))) for f in data.get("Folders", []) if isinstance(f, dict)]
+    folder_set = set(folders)
+    if len(folder_set) != len(folders):
+        problems.extend(
+            f"Folder '{f}' is registered more than once." for f in sorted({f for f in folders if folders.count(f) > 1})
+        )
+    for folder in sorted(folder_set):
+        parent = PurePosixPath(folder).parent.as_posix()
+        if parent != "folders" and parent + ".yy" not in folder_set:
+            problems.append(f"Folder '{folder}' has no enclosing folder '{parent}.yy'.")
+
+    included = [key for e in data.get("IncludedFiles", []) if (key := _included_key(e))]
+    problems.extend(
+        f"Included file '{key}' is registered more than once."
+        for key in sorted({k for k in included if included.count(k) > 1})
+    )
+
+    seen_rooms: set[str] = set()
+    for node in data.get("RoomOrderNodes", []):
+        path = _room_node_path(node)
+        if path.casefold() not in paths:
+            problems.append(f"The room order names '{path or str(node)[:80]}', which is not a registered room.")
+        if path.casefold() in seen_rooms:
+            problems.append(f"Room '{path}' appears in the room order more than once.")
+        seen_rooms.add(path.casefold())
+
+    for field in ("TextureGroups", "AudioGroups"):
+        group_names = [_group_name(g) for g in data.get(field, [])]
+        known = {name for name in group_names if name}
+        problems.extend(
+            f"{field} lists '{name}' more than once." for name in sorted({n for n in known if group_names.count(n) > 1})
+        )
+        for group in data.get(field, []):
+            parent = group.get("groupParent") if isinstance(group, dict) else None
+            if isinstance(parent, dict) and parent.get("name") not in known:
+                problems.append(
+                    f"{field} entry '{_group_name(group)}' has a missing parent group '{parent.get('name')}'."
+                )
+
+    config_names: list[str] = []
+
+    def walk(node: Any) -> None:
+        if isinstance(node, dict):
+            config_names.append(str(node.get("name")))
+            for child in node.get("children", []) if isinstance(node.get("children"), list) else []:
+                walk(child)
+
+    walk(data.get("configs"))
+    problems.extend(
+        f"Config '{name}' appears more than once."
+        for name in sorted({n for n in config_names if config_names.count(n) > 1})
+    )
+    return problems
+
+
+def _referenced_groups(value: Any) -> set[str]:
+    """``texturegroup:Name`` / ``audiogroup:Name`` for every group reference anywhere in an asset."""
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            prefix = _GROUP_REFERENCE_FIELDS.get(key)
+            if prefix and isinstance(item, dict) and isinstance(item.get("name"), str):
+                found.add(prefix + item["name"])
+            found |= _referenced_groups(item)
+    elif isinstance(value, list):
+        for item in value:
+            found |= _referenced_groups(item)
+    return found
+
+
+def _referenced_configs(value: Any) -> set[str]:
+    """Config names an asset carries per-config values for (``ConfigValues`` keys, at any depth)."""
+    found: set[str] = set()
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key == "ConfigValues" and isinstance(item, dict):
+                found |= {str(name) for name in item}
+            found |= _referenced_configs(item)
+    elif isinstance(value, list):
+        for item in value:
+            found |= _referenced_configs(item)
+    return found
+
+
 def derive_yyp_entries(project_root: str | Path, base_text: str, changed_paths: Iterable[str]) -> list[str]:
     """Work out which registrations belong to a set of changed project-relative paths.
 
     Used when the caller isolates "these files" without spelling out registrations: every
-    asset whose folder is touched, every touched included file, and any asset-browser
-    folder those assets need that the base revision does not have yet.
+    asset whose folder is touched, every touched included file, and anything those assets need
+    that the base revision does not have yet: asset-browser folders, texture and audio groups
+    (with their parent groups) and configs.
     """
     root = Path(project_root).resolve()
     _yyp_path, work = load_yyp(root)
@@ -721,6 +993,16 @@ def derive_yyp_entries(project_root: str | Path, base_text: str, changed_paths: 
     base_resources = {_resource_path(e) for e in base.get("resources", []) if _resource_ref(e)}
     work_included = {key for e in work.get("IncludedFiles", []) if (key := _included_key(e))}
     base_included = {key for e in base.get("IncludedFiles", []) if (key := _included_key(e))}
+
+    def groups(data: dict[str, Any]) -> dict[str, Any]:
+        found: dict[str, Any] = {}
+        for prefix, field in _GROUP_LISTS.items():
+            for group in data.get(field, []) if isinstance(data.get(field), list) else []:
+                if name := _group_name(group):
+                    found[prefix + name] = group
+        return found
+
+    work_groups, base_groups = groups(work), groups(base)
     entries: list[str] = []
 
     def add(entry: str) -> None:
@@ -738,6 +1020,19 @@ def derive_yyp_entries(project_root: str | Path, base_text: str, changed_paths: 
         for candidate in reversed(chain):
             add(candidate)
 
+    def add_group_chain(group_entry: str) -> None:
+        chain: list[str] = []
+        current: str | None = group_entry
+        while current and current in work_groups and current not in base_groups and current not in chain:
+            chain.append(current)
+            parent = work_groups[current].get("groupParent") if isinstance(work_groups[current], dict) else None
+            prefix = current.split(":", 1)[0] + ":"
+            current = (
+                prefix + parent["name"] if isinstance(parent, dict) and isinstance(parent.get("name"), str) else None
+            )
+        for candidate in reversed(chain):
+            add(candidate)
+
     for raw in changed_paths:
         path = _norm(raw)
         parts = path.split("/")
@@ -748,10 +1043,17 @@ def derive_yyp_entries(project_root: str | Path, base_text: str, changed_paths: 
                 add(candidate)
                 target = project_relative_path(candidate, project_root=root, kind="resource path")
                 asset = load_json_loose(project_file_path(candidate, project_root=root)) if target.exists() else None
-                parent = _as_dict(asset.get("parent")) if isinstance(asset, dict) else {}
+                if not isinstance(asset, dict) or candidate not in work_resources:
+                    continue
+                parent = _as_dict(asset.get("parent"))
                 parent_path = _norm(str(parent.get("path", "")))
                 if parent_path.startswith("folders/"):
                     add_folder_chain(parent_path)
+                for group_entry in sorted(_referenced_groups(asset)):
+                    add_group_chain(group_entry)
+                for config in sorted(_referenced_configs(asset)):
+                    if _config_chain(work.get("configs"), config) and not _config_chain(base.get("configs"), config):
+                        add(CONFIG_PREFIX + config)
         elif parts[0] == "datafiles":
             for key in sorted(work_included | base_included):
                 if key == path or key.startswith(path + "/"):

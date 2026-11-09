@@ -479,5 +479,59 @@ class TestConfigManagerMethods(TestNamingConfigBase):
         self.assertEqual(config.get_rule("object")["prefix"], "obj_")
 
 
+class TestConfigFileRobustness(unittest.TestCase):
+    def setUp(self):
+        self.root = Path(tempfile.mkdtemp())
+        self.home = Path(tempfile.mkdtemp())
+        self.home_patch = patch("pathlib.Path.home", return_value=self.home)
+        self.home_patch.start()
+        NamingConfig.clear_cache()
+
+    def tearDown(self):
+        self.home_patch.stop()
+        NamingConfig.clear_cache()
+        shutil.rmtree(self.root, ignore_errors=True)
+        shutil.rmtree(self.home, ignore_errors=True)
+
+    def _write(self, text):
+        (self.root / PROJECT_CONFIG_FILE).write_text(text, encoding="utf-8")
+
+    def test_quantifier_with_comma_survives_trailing_comma_stripping(self):
+        self._write('{"naming": {"rules": {"object": {"pattern": "^o_[a-z]{2,}$",},},},}')
+        self.assertEqual(NamingConfig(self.root).get_pattern("object"), "^o_[a-z]{2,}$")
+
+    def test_invalid_patterns_are_reported_on_load_and_on_use(self):
+        from gms_helpers.utils import validate_name
+
+        self._write('{"naming": {"rules": {"object": {"pattern": "^o_[a-z"}}}}')
+        config = NamingConfig(self.root)
+        self.assertTrue(any("Invalid regex pattern for 'object'" in error for error in config.errors))
+        with self.assertRaisesRegex(ValueError, "not a valid regular expression"):
+            validate_name("o_player", "object", config=config)
+
+    def test_cached_config_sees_an_edited_file(self):
+        self._write('{"naming": {"rules": {"object": {"prefix": "obj_"}}}}')
+        self.assertEqual(get_config(self.root).get_prefixes("object"), ["obj_"])
+        self._write('{"naming": {"rules": {"object": {"prefix": "ob_"}}}}')
+        os.utime(self.root / PROJECT_CONFIG_FILE, ns=(1, 1))
+        self.assertEqual(get_config(self.root).get_prefixes("object"), ["ob_"])
+
+    def test_project_settings_are_type_checked(self):
+        from gms_helpers.exceptions import ValidationError
+        from gms_helpers.project_config import load_project_config, project_setting
+
+        self._write('{"build": {"igor_attempts": "30"}, "test": {"timeout_seconds": 2.5}}')
+        self.assertEqual(project_setting(self.root, "build.igor_attempts"), 30)
+        self.assertEqual(project_setting(self.root, "test.timeout_seconds"), 2.5)
+        for text, message in (
+            ('{"build": {"jobs": "ten"}}', "build.jobs .* positive whole number"),
+            ('{"test": {"runtime_error_patterns": "FATAL"}}', "runtime_error_patterns .* list of strings"),
+            ('{"build": 4}', "build .* an object"),
+        ):
+            self._write(text)
+            with self.assertRaisesRegex(ValidationError, message):
+                load_project_config(self.root)
+
+
 if __name__ == "__main__":
     unittest.main()

@@ -179,6 +179,44 @@ function setup() {
         self.assertIn("calculate_something", ref_names)
 
 
+class TestGMLScannerMasking(unittest.TestCase):
+    def test_comments_strings_and_nested_defaults_are_parsed_correctly(self):
+        from gms_helpers.gml_index import GMLScanner
+
+        content = (
+            "// function in_line_comment(a) {}\n"
+            "/* function in_block_comment() {}\n   #macro HIDDEN 1 */\n"
+            'var s = "function in_string(x)";\n'
+            'function real_fn(a = max(1, 2), b = "x,y", c = [1, 2]) {\n'
+            "    return a;\n"
+            "}\n"
+            "enum Flags { A, B = max(1, 2), C }\n"
+        )
+        symbols, references = GMLScanner().scan_content(content, Path("test.gml"))
+        by_name = {symbol.name: symbol for symbol in symbols}
+
+        self.assertNotIn("in_line_comment", by_name)
+        self.assertNotIn("in_block_comment", by_name)
+        self.assertNotIn("in_string", by_name)
+        self.assertNotIn("HIDDEN", by_name)
+        self.assertEqual(by_name["real_fn"].parameters, ["a = max(1, 2)", 'b = "x,y"', "c = [1, 2]"])
+        self.assertEqual(by_name["real_fn"].location.line, 5)
+        self.assertEqual(
+            [s.name for s in symbols if s.parent_enum == "Flags"],
+            ["A", "B", "C"],
+        )
+        self.assertFalse(any(ref.symbol_name == "in_string" for ref in references))
+
+    def test_mask_preserves_offsets(self):
+        from gms_helpers.gml_index import GMLScanner
+
+        content = 'a = "x // y"; // c\n/* z\n */ b'
+        masked = GMLScanner.mask_comments_and_strings(content)
+        self.assertEqual(len(masked), len(content))
+        self.assertEqual(masked.count("\n"), content.count("\n"))
+        self.assertEqual(masked.index("b"), content.rindex("b"))
+
+
 class TestGMLIndex(unittest.TestCase):
     """Tests for the GML Index manager."""
 
@@ -267,15 +305,17 @@ function game_start() {
         self._write_gml("scripts/read_only/read_only.gml", "function read_only_symbol() { return 1; }")
         legacy_cache = Path(self.temp_dir) / GMLIndex.CACHE_FILE
         legacy_cache.write_text("legacy remains untouched", encoding="utf-8")
-        os.environ["GMS_MCP_READ_ONLY"] = "1"
+        for value in ("1", "true", "Yes", "on"):
+            with self.subTest(value=value):
+                os.environ["GMS_MCP_READ_ONLY"] = value
 
-        index = GMLIndex(Path(self.temp_dir))
-        stats = index.build(force=True)
+                index = GMLIndex(Path(self.temp_dir))
+                stats = index.build(force=True)
 
-        self.assertEqual(stats["status"], "built")
-        self.assertTrue(legacy_cache.is_file())
-        self.assertEqual(legacy_cache.read_text(encoding="utf-8"), "legacy remains untouched")
-        self.assertFalse(index.cache_path.exists())
+                self.assertEqual(stats["status"], "built")
+                self.assertTrue(legacy_cache.is_file())
+                self.assertEqual(legacy_cache.read_text(encoding="utf-8"), "legacy remains untouched")
+                self.assertFalse(index.cache_path.exists())
 
     @unittest.skipIf(os.name == "nt", "Symlink containment test requires POSIX symlinks")
     def test_index_does_not_follow_gml_symlinks_outside_the_project(self):

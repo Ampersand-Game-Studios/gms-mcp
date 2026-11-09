@@ -6,13 +6,14 @@ wins ties. Igor's project loader in runtime 2026.0.0.23 is sensitive to that ord
 new entry must be inserted where the IDE would put it, and existing entries must never be
 reshuffled: other tools and other people edit the same file line by line.
 
-Earlier IDEs sorted by resource name. ``detect_ordering`` therefore proves which rule a
-project already follows before anything is inserted.
+Earlier IDEs sorted by resource name. ``matching_orderings`` therefore proves which rule a
+project already follows before anything is inserted; a list too short to tell is ambiguous.
 """
 
 from __future__ import annotations
 
 from bisect import bisect_right
+from pathlib import PurePosixPath
 from typing import Any, Callable, Sequence
 
 # Punctuation in the order the 2026 IDE collates it.
@@ -48,19 +49,29 @@ def is_sorted(values: Sequence[str], key: SortKey) -> bool:
     return all(left <= right for left, right in zip(keys, keys[1:]))
 
 
+def matching_orderings(
+    entries: Sequence[Any],
+    candidates: Sequence[tuple[str, Callable[[Any], str], SortKey]],
+) -> list[tuple[str, Callable[[Any], str], SortKey]]:
+    """Every candidate rule the existing entries already satisfy (short lists satisfy several)."""
+    matches = []
+    for candidate in candidates:
+        _label, field, key = candidate
+        try:
+            if is_sorted([field(entry) for entry in entries], key):
+                matches.append(candidate)
+        except (KeyError, TypeError, AttributeError):
+            continue
+    return matches
+
+
 def detect_ordering(
     entries: Sequence[Any],
     candidates: Sequence[tuple[str, Callable[[Any], str], SortKey]],
 ) -> tuple[str, Callable[[Any], str], SortKey] | None:
     """Return the first candidate rule the existing entries already satisfy."""
-    for candidate in candidates:
-        _label, field, key = candidate
-        try:
-            if is_sorted([field(entry) for entry in entries], key):
-                return candidate
-        except (KeyError, TypeError, AttributeError):
-            continue
-    return None
+    matches = matching_orderings(entries, candidates)
+    return matches[0] if matches else None
 
 
 def insert_ordered(
@@ -72,14 +83,22 @@ def insert_ordered(
 
     Existing entries keep their positions. When the array follows none of the known
     rules (it was edited by hand), the entry is placed by the first rule on a best-effort
-    basis and the returned label is ``"unordered"``.
+    basis and the returned label is ``"unordered"``. When the array is short enough to fit
+    several rules and they disagree about the new entry's position, the project's rule is
+    unknown: the entry is appended, keeping the existing order, and the label is ``"ambiguous"``.
     """
-    rule = detect_ordering(entries, candidates)
-    label, field, key = rule if rule is not None else candidates[0]
-    wanted = key(field(new_entry))
-    if rule is not None:
-        index = bisect_right([key(field(entry)) for entry in entries], wanted)
+    matches = matching_orderings(entries, candidates)
+    if matches:
+        positions = {
+            bisect_right([key(field(entry)) for entry in entries], key(field(new_entry))) for _l, field, key in matches
+        }
+        if len(positions) == 1:
+            index, label = positions.pop(), matches[0][0]
+        else:
+            index, label = len(entries), "ambiguous"
     else:
+        _label, field, key = candidates[0]
+        wanted = key(field(new_entry))
         index = len(entries)
         for position, entry in enumerate(entries):
             try:
@@ -106,7 +125,9 @@ def _folder_path(entry: Any) -> str:
 
 
 def _folder_name(entry: Any) -> str:
-    return str(entry.get("name") or entry["folderPath"])
+    # A GameMaker folder's name is its path stem ("folders/A/B.yy" -> "B"), so an entry
+    # without "name" is compared on the same field as one with it.
+    return str(entry.get("name") or PurePosixPath(str(entry["folderPath"])).stem)
 
 
 def _included_file(entry: Any) -> str:

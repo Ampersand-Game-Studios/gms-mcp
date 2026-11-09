@@ -10,6 +10,8 @@ PROJECT_ROOT = Path(__file__).resolve().parents[3]
 sys.path.insert(0, str(PROJECT_ROOT / "src"))
 
 from gms_helpers.asset_helper import maint_purge_command
+from gms_helpers.maintenance.orphan_cleanup import delete_orphan_files
+from gms_helpers.maintenance.trash import move_to_trash, read_manifest, restore_from_trash
 from gms_helpers.utils import save_pretty_json_gm
 
 
@@ -37,6 +39,38 @@ class TestMaintenancePurge(unittest.TestCase):
 
     def tearDown(self):
         shutil.rmtree(self.test_dir)
+
+    def test_trash_batches_are_unique_appendable_and_restorable(self):
+        first = move_to_trash(str(self.project_root), ["objects/obj_orphaned"])
+        second = move_to_trash(str(self.project_root), ["scripts/scr_orphaned.yy"])
+        self.assertNotEqual(first["trash_folder"], second["trash_folder"])
+
+        (self.project_root / "scripts" / "extra.yy").write_text("{}")
+        batch = Path(second["trash_folder"]).name
+        move_to_trash(str(self.project_root), ["scripts/extra.yy"], trash_name=batch)
+        trash_root = self.project_root / second["trash_folder"]
+        self.assertEqual(read_manifest(trash_root), ["scripts/scr_orphaned.yy", "scripts/extra.yy"])
+
+        restored = restore_from_trash(str(self.project_root), batch)
+        self.assertEqual(restored["restored_count"], 2)
+        self.assertTrue((self.project_root / "scripts" / "scr_orphaned.yy").exists())
+        self.assertTrue((self.project_root / "scripts" / "extra.yy").exists())
+        self.assertEqual(read_manifest(trash_root), [])
+
+    def test_orphan_cleanup_trashes_and_keeps_relocated_copy_of_missing_asset(self):
+        # obj_referenced is registered but its files moved; its orphaned copy must be kept.
+        relocated = self.project_root / "objects" / "Moved"
+        relocated.mkdir()
+        (self.project_root / "objects" / "obj_referenced" / "obj_referenced.yy").rename(relocated / "obj_referenced.yy")
+
+        result = delete_orphan_files(str(self.project_root), fix_issues=True)
+
+        self.assertTrue((relocated / "obj_referenced.yy").exists())
+        self.assertFalse((self.project_root / "objects" / "obj_orphaned" / "obj_orphaned.yy").exists())
+        self.assertIsNotNone(result["trash_folder"])
+        trashed = self.project_root / result["trash_folder"] / "objects" / "obj_orphaned" / "obj_orphaned.yy"
+        self.assertTrue(trashed.exists())
+        self.assertTrue(any("missing" in warning for warning in result["safety_warnings"]))
 
     def test_purge_dry_run(self):
         class Args:

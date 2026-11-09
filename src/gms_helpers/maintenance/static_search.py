@@ -224,7 +224,10 @@ def find_asset_name_patterns(filesystem_files: Set[str]) -> Dict[str, Set[str]]:
 
 
 def cross_reference_strings_to_files(
-    string_refs: Dict[str, Set[str]], filesystem_files: Set[str], filesystem_map: Dict[str, str]
+    string_refs: Dict[str, Set[str]],
+    filesystem_files: Set[str],
+    filesystem_map: Dict[str, str],
+    project_root: str | None = None,
 ) -> Dict[str, List[str]]:
     """
     Cross-reference string references found in .gml files with actual filesystem files.
@@ -270,7 +273,7 @@ def cross_reference_strings_to_files(
                     break
                 else:
                     # Try case-insensitive
-                    actual_path = find_file_case_insensitive(path, filesystem_map)
+                    actual_path = find_file_case_insensitive(path, filesystem_map, project_root)
                     if actual_path:
                         results["string_refs_found_case_diff"].append(f"{ref} ({asset_type}) -> {actual_path}")
                         found = True

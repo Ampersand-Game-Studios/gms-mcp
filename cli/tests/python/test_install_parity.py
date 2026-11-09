@@ -301,7 +301,21 @@ class TestInstallParity(unittest.TestCase):
             workspace.mkdir()
             (workspace / "project.yyp").touch()
             home_dir = Path(tmpdir) / "home"
-            with temporary_home(home_dir):
+            # OpenClaw global setup goes through its CLI; a stand-in stores and echoes the saved server.
+            bin_dir = Path(tmpdir) / "bin"
+            bin_dir.mkdir()
+            fake_openclaw = bin_dir / "openclaw"
+            fake_openclaw.write_text(
+                '#!/bin/sh\nstore="$OPENCLAW_FAKE_STORE"\n'
+                'if [ "$2" = set ]; then printf "%s" "$4" > "$store"; exit 0; fi\n'
+                'if [ "$2" = show ] && [ -f "$store" ]; then cat "$store"; exit 0; fi\nexit 1\n'
+            )
+            fake_openclaw.chmod(0o755)
+            fake_env = {
+                "PATH": os.pathsep.join([str(bin_dir), os.environ.get("PATH", "")]),
+                "OPENCLAW_FAKE_STORE": str(Path(tmpdir) / "openclaw-saved.json"),
+            }
+            with temporary_home(home_dir), patch.dict(os.environ, fake_env):
                 for client in clients:
                     with self.subTest(client=client):
                         setup_buffer = io.StringIO()

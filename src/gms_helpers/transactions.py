@@ -90,39 +90,97 @@ _ACTIVE_TRANSACTION: contextvars.ContextVar[_TransactionJournalContext | None] =
 )
 
 
+_PROJECT_LOCK_TIMEOUT_ENV = "GMS_MCP_PROJECT_LOCK_TIMEOUT_SECONDS"
+_PROJECT_LOCK_POLL_SECONDS = 0.05
+
+
+def _project_lock_timeout_seconds() -> float:
+    """How long a mutation waits for another one on the same project (default 600s, as DirectoryLock)."""
+    raw = os.environ.get(_PROJECT_LOCK_TIMEOUT_ENV, "").strip()
+    if not raw:
+        return 600.0
+    try:
+        return max(0.0, float(raw))
+    except ValueError:
+        raise ValidationError(f"{_PROJECT_LOCK_TIMEOUT_ENV} must be a number of seconds, not {raw!r}.") from None
+
+
+def _lock_holder_record(lock_file: TextIO) -> Any:
+    """The JSON a holder wrote into the lock file (best effort; it may be mid-write or locked)."""
+    try:
+        lock_file.seek(0)
+        text = lock_file.read(4096)
+    except OSError:
+        return None
+    try:
+        return json.loads(text) if text.strip("\0 \n") else None
+    except ValueError:
+        return text.strip("\0 \n") or None
+
+
 class _ProjectMutationLock:
     """One project-wide lock shared by threads and cooperating processes."""
 
-    def __init__(self, project_root: Path, tool_name: str):
+    def __init__(
+        self,
+        project_root: Path,
+        tool_name: str,
+        *,
+        timeout_seconds: float | None = None,
+        repository_lock: bool = False,
+    ):
         self.project_root = project_root
         self.tool_name = tool_name
+        self.repository_lock = repository_lock
+        self.timeout_seconds = _project_lock_timeout_seconds() if timeout_seconds is None else timeout_seconds
         self._thread_lock: threading.Lock | None = None
         self._lock_file: TextIO | None = None
         self._acquired = False
         self._shared_lock: Any = None
 
+    def _timeout_error(self, lock_path: Path, holder: Any) -> Exception:
+        from .agent_locks import LockTimeoutError
+
+        described = json.dumps(holder, sort_keys=True) if holder is not None else "an unidentified holder"
+        return LockTimeoutError(
+            f"Timed out after {self.timeout_seconds:g}s waiting for the project lock {lock_path} "
+            f"({self.tool_name}); it is held by {described}. Another mutation of this project is still "
+            f"running: wait for it and retry, or raise {_PROJECT_LOCK_TIMEOUT_ENV}. If that process has "
+            "exited, the operating system has already released its lock."
+        )
+
     def acquire(self) -> None:
+        deadline = time.monotonic() + self.timeout_seconds
+        lock_path = self.project_root / ".gms_mcp" / "locks" / "project-mutation.lock"
         key = os.path.normcase(str(self.project_root.resolve()))
         with _PROJECT_LOCKS_GUARD:
             thread_lock = _PROJECT_LOCKS.setdefault(key, threading.Lock())
-        thread_lock.acquire()
+        if not thread_lock.acquire(timeout=max(0.0, deadline - time.monotonic())):
+            holder = None
+            try:
+                with lock_path.open("r", encoding="utf-8") as stream:
+                    holder = _lock_holder_record(stream)
+            except OSError:
+                pass
+            raise self._timeout_error(lock_path, holder)
         self._thread_lock = thread_lock
 
         try:
-            if os.environ.get("GMS_MCP_LOCK_DIR", "").strip():
+            if self.repository_lock or os.environ.get("GMS_MCP_LOCK_DIR", "").strip():
                 # A team lock directory is configured: scripts that edit the project file
-                # take its repo.lock, so project mutations must take it too.
+                # take its repo.lock, so project mutations must take it too. Staging always
+                # takes it (repository_lock), since several projects can share one repository.
                 from .agent_locks import REPOSITORY_LOCK, DirectoryLock
 
                 shared_lock = DirectoryLock(REPOSITORY_LOCK, purpose=f"project mutation {self.tool_name}")
-                shared_lock.acquire(timeout_seconds=600.0)
+                shared_lock.acquire(timeout_seconds=max(0.0, deadline - time.monotonic()))
                 self._shared_lock = shared_lock
-            lock_dir = self.project_root / ".gms_mcp" / "locks"
+            lock_dir = lock_path.parent
             lock_dir.mkdir(parents=True, exist_ok=True)
-            lock_path = lock_dir / "project-mutation.lock"
             lock_file = lock_path.open("a+", encoding="utf-8")
             self._lock_file = lock_file
-            self._acquire_os_lock(lock_file)
+            if not self._acquire_os_lock(lock_file, deadline=deadline):
+                raise self._timeout_error(lock_path, _lock_holder_record(lock_file))
             self._acquired = True
             lock_file.seek(0)
             lock_file.truncate()
@@ -141,7 +199,8 @@ class _ProjectMutationLock:
             raise
 
     @staticmethod
-    def _acquire_os_lock(lock_file: TextIO) -> None:
+    def _acquire_os_lock(lock_file: TextIO, *, deadline: float) -> bool:
+        """Take the OS lock, polling until ``deadline`` (``time.monotonic``); False when it passed."""
         if os.name == "nt":
             import msvcrt
 
@@ -153,13 +212,22 @@ class _ProjectMutationLock:
                 try:
                     lock_file.seek(0)
                     msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
-                    return
+                    return True
                 except OSError:
-                    time.sleep(0.05)
+                    if time.monotonic() >= deadline:
+                        return False
+                    time.sleep(_PROJECT_LOCK_POLL_SECONDS)
 
         import fcntl
 
-        fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        while True:
+            try:
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return True
+            except BlockingIOError:
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(_PROJECT_LOCK_POLL_SECONDS)
 
     def release(self) -> None:
         lock_file = self._lock_file
@@ -188,6 +256,31 @@ class _ProjectMutationLock:
         self._thread_lock = None
         if thread_lock is not None:
             thread_lock.release()
+
+
+@contextmanager
+def project_mutation_lock(
+    project_root: str | Path,
+    tool_name: str,
+    *,
+    timeout_seconds: float | None = None,
+    repository_lock: bool = False,
+) -> Iterator[None]:
+    """Hold the project-wide mutation lock that every ``GameMakerProjectTransaction`` takes.
+
+    Use it for project-file work that runs outside a transaction (staging, for example) so it
+    never interleaves with a mutation. ``repository_lock`` also takes the shared ``repo.lock``
+    (always taken when ``GMS_MCP_LOCK_DIR`` is set). Not reentrant: never call it while a
+    transaction on the same project is open in this thread.
+    """
+    lock = _ProjectMutationLock(
+        Path(project_root).resolve(), tool_name, timeout_seconds=timeout_seconds, repository_lock=repository_lock
+    )
+    lock.acquire()
+    try:
+        yield
+    finally:
+        lock.release()
 
 
 def _lexical_absolute_path(raw_path: Any, dir_fd: Any = None) -> Path | None:
@@ -597,8 +690,14 @@ def _is_ignored_path(path: Path) -> bool:
 
 
 def _iter_project_paths(project_root: Path) -> Iterable[Path]:
+    # A shared lock directory (GMS_MCP_LOCK_DIR) may sit inside the project; its owner records
+    # change whenever anyone takes a lock, which is coordination, never part of a mutation.
+    configured_locks = os.environ.get("GMS_MCP_LOCK_DIR", "").strip()
+    lock_directory = Path(configured_locks).expanduser().resolve(strict=False) if configured_locks else None
     for path in project_root.rglob("*"):
         if _is_ignored_path(path.relative_to(project_root)):
+            continue
+        if lock_directory is not None and (path == lock_directory or path.is_relative_to(lock_directory)):
             continue
         yield path
 
@@ -682,7 +781,8 @@ def _transaction_participant_lock(project_root: Path, recovery_dir: Path) -> Ite
     lock = _ProjectMutationLock(project_root, "transaction-participant")
     lock._lock_file = lock_path.open("a+", encoding="utf-8")
     try:
-        lock._acquire_os_lock(lock._lock_file)
+        if not lock._acquire_os_lock(lock._lock_file, deadline=time.monotonic() + lock.timeout_seconds):
+            raise lock._timeout_error(lock_path, None)
         lock._acquired = True
         yield
     finally:
@@ -1079,175 +1179,126 @@ def _compile_stage_succeeded(stdout: str) -> bool:
 _ACCESS_VIOLATION_SIGNATURE = "System.AccessViolationException"
 
 
-def _command_references_project(command: str, project_root: str, *, case_insensitive: bool) -> bool:
-    normalized_command = command.replace("\\", "/")
-    normalized_root = project_root.replace("\\", "/").rstrip("/")
-    if case_insensitive:
-        normalized_command = normalized_command.casefold()
-        normalized_root = normalized_root.casefold()
-    if not normalized_root:
-        return False
-
-    start = 0
-    while True:
-        index = normalized_command.find(normalized_root, start)
-        if index < 0:
-            return False
-        before_ok = index == 0 or normalized_command[index - 1].isspace() or normalized_command[index - 1] in "\"'=,"
-        end = index + len(normalized_root)
-        # A descendant separator or closing quote is a real path boundary. Whitespace
-        # is not: it can be part of an unquoted sibling such as "Exact Game Backup".
-        after_ok = end == len(normalized_command) or normalized_command[end] in "/\"'"
-        if before_ok and after_ok:
-            return True
-        start = index + 1
-
-
-def _compile_verification_process_pids(project_root: Path) -> set[int]:
-    """Return active validation helper PIDs scoped to one exact project path."""
-    windows = os.name == "nt"
-    command = (
-        [
-            "powershell.exe",
-            "-NoLogo",
-            "-NoProfile",
-            "-NonInteractive",
-            "-Command",
-            (
-                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
-                "Get-CimInstance Win32_Process | "
-                "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"
-            ),
-        ]
-        if windows
-        # ``-ww`` prevents hosted runners from truncating long command lines
-        # before the project path or helper marker appears.
-        else ["ps", "-ww", "-axo", "pid=,command="]
-    )
+def _descendant_pids(root_pid: int) -> set[int]:
+    """Every live descendant of ``root_pid`` (POSIX), found through the parent links in ``ps``."""
     try:
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True,
-        )
-        output, _stderr = process.communicate(timeout=2)
-    except subprocess.TimeoutExpired:
-        process.kill()
-        process.wait()
-        return set()
+        listing = subprocess.run(["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, timeout=2)
     except (OSError, subprocess.SubprocessError):
         return set()
-
-    root_token = str(project_root)
-    markers = ("gms_helpers.gms", "Igor", "Mac_Runner", "tail -F", "runner.exe")
-    pids: set[int] = set()
-    if windows:
-        try:
-            records = json.loads(output or "[]")
-        except json.JSONDecodeError:
-            return set()
-        if isinstance(records, dict):
-            records = [records]
-        if not isinstance(records, list):
-            return set()
-        normalized_markers = tuple(marker.casefold() for marker in markers)
-        for record in records:
-            if not isinstance(record, dict):
-                continue
-            command_line = str(record.get("CommandLine") or "")
-            normalized_command = command_line.replace("\\", "/").casefold()
-            if not _command_references_project(command_line, root_token, case_insensitive=True) or not any(
-                marker in normalized_command for marker in normalized_markers
-            ):
-                continue
-            raw_pid = record.get("ProcessId")
-            if not isinstance(raw_pid, (int, str)):
-                continue
-            try:
-                pid = int(raw_pid)
-            except (TypeError, ValueError):
-                continue
-            if pid != os.getpid():
-                pids.add(pid)
-        return pids
-
-    for raw_line in output.splitlines():
-        parts = raw_line.strip().split(None, 1)
-        if (
-            len(parts) != 2
-            or not _command_references_project(parts[1], root_token, case_insensitive=False)
-            or not any(marker in parts[1] for marker in markers)
-        ):
+    children: Dict[int, set[int]] = {}
+    for line in listing.stdout.splitlines():
+        parts = line.split()
+        if len(parts) != 2:
             continue
         try:
-            pid = int(parts[0])
+            pid, ppid = int(parts[0]), int(parts[1])
         except ValueError:
             continue
-        if pid != os.getpid():
-            pids.add(pid)
-    return pids
+        children.setdefault(ppid, set()).add(pid)
+    found: set[int] = set()
+    pending = [root_pid]
+    while pending:
+        for child in children.get(pending.pop(), set()):
+            if child not in found and child != os.getpid():
+                found.add(child)
+                pending.append(child)
+    return found
 
 
-def _terminate_compile_verification_processes(project_root: Path, baseline_pids: set[int]) -> Dict[str, Any]:
-    """Terminate only new compile helpers associated with this verification run."""
-    candidates = sorted(_compile_verification_process_pids(project_root) - baseline_pids, reverse=True)
+def _terminate_verification_child(process: subprocess.Popen) -> Dict[str, Any]:
+    """Stop a timed-out verification child and everything it started, and nothing else.
+
+    The child runs in its own session/process group, so the group holds exactly the helpers it
+    spawned (Igor inherits it). Descendants that moved to a session of their own are found
+    through their parent links. A process that merely mentions the project on its command line
+    (an editor, the user's ``tail -F`` of a log) is never touched.
+    """
     terminated: List[int] = []
     failed: List[int] = []
     if os.name == "nt":
-        for pid in candidates:
-            try:
-                completed = subprocess.run(
-                    ["taskkill", "/PID", str(pid), "/T", "/F"],
-                    capture_output=True,
-                    text=True,
-                    timeout=10,
-                )
-            except (OSError, subprocess.SubprocessError):
-                failed.append(pid)
-                continue
-            if completed.returncode == 0:
-                terminated.append(pid)
-            else:
-                failed.append(pid)
-        return {"terminated_pids": terminated, "failed_pids": failed}
-
-    for pid in candidates:
         try:
-            os.kill(pid, signal.SIGTERM)
-            terminated.append(pid)
-        except ProcessLookupError:
-            continue
-        except OSError:
-            failed.append(pid)
+            completed = subprocess.run(
+                ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            (terminated if completed.returncode == 0 else failed).append(process.pid)
+        except (OSError, subprocess.SubprocessError):
+            failed.append(process.pid)
+        if process.poll() is None:
+            process.kill()
+        return {"process_group": process.pid, "terminated_pids": terminated, "failed_pids": failed}
 
-    deadline = time.monotonic() + 1.0
-    remaining = set(terminated)
-    while remaining and time.monotonic() < deadline:
-        for pid in list(remaining):
-            try:
-                os.kill(pid, 0)
-            except ProcessLookupError:
-                remaining.discard(pid)
-        if remaining:
-            time.sleep(0.05)
+    group = process.pid
+    escaped = _descendant_pids(group)
 
-    force_signal = getattr(signal, "SIGKILL", signal.SIGTERM)
-    for pid in sorted(remaining, reverse=True):
+    def signal_all(signal_number: int) -> None:
         try:
-            os.kill(pid, force_signal)
+            os.killpg(group, signal_number)
         except ProcessLookupError:
             pass
         except OSError:
-            if pid not in failed:
-                failed.append(pid)
-    return {"terminated_pids": terminated, "failed_pids": failed}
+            if group not in failed:
+                failed.append(group)
+        for pid in sorted(escaped, reverse=True):
+            try:
+                os.kill(pid, signal_number)
+            except ProcessLookupError:
+                pass
+            except OSError:
+                if pid not in failed:
+                    failed.append(pid)
+
+    signal_all(signal.SIGTERM)
+    terminated.extend(sorted({group, *escaped}))
+    try:
+        process.wait(timeout=1.0)
+    except subprocess.TimeoutExpired:
+        pass
+    # Whatever is left of the group (and the escaped descendants) is force-killed.
+    signal_all(getattr(signal, "SIGKILL", signal.SIGTERM))
+    return {"process_group": group, "terminated_pids": terminated, "failed_pids": failed}
 
 
-def _timeout_output(value: str | bytes | None) -> str:
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace")
-    return value or ""
+def _run_compile_verification_child(
+    cmd: List[str], *, cwd: Path, env: Dict[str, str], timeout_seconds: float
+) -> tuple[subprocess.CompletedProcess, Dict[str, Any] | None]:
+    """Run the verification compile in its own process group; on timeout stop only that group.
+
+    Returns the completed process (exit code -9 after a timeout) and the timeout cleanup report
+    (None when the child finished in time).
+    """
+    isolation: Dict[str, Any] = (
+        {"creationflags": getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)}
+        if os.name == "nt"
+        else {"start_new_session": True}
+    )
+    process = subprocess.Popen(
+        cmd,
+        cwd=str(cwd),
+        env=env,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        **isolation,
+    )
+    try:
+        stdout, stderr = process.communicate(timeout=timeout_seconds)
+        return subprocess.CompletedProcess(cmd, process.returncode, stdout, stderr), None
+    except subprocess.TimeoutExpired:
+        cleanup = _terminate_verification_child(process)
+    except BaseException:
+        _terminate_verification_child(process)
+        process.communicate()
+        raise
+    try:
+        stdout, stderr = process.communicate(timeout=10)
+    except subprocess.TimeoutExpired:
+        # A killed helper's orphan still holds the pipes; give up on the remaining output.
+        process.kill()
+        stdout, stderr = "", ""
+    return subprocess.CompletedProcess(cmd, -9, stdout or "", stderr or ""), cleanup
 
 
 def _compile_verify_attempt_limit() -> int:
@@ -1322,29 +1373,13 @@ def _compile_verify_project_locked(
     started = time.monotonic()
     for attempt_number in range(1, attempt_limit + 1):
         attempt_started = time.monotonic()
-        baseline_compile_pids = _compile_verification_process_pids(root)
-        timed_out = False
-        timeout_cleanup: Dict[str, Any] = {"terminated_pids": [], "failed_pids": []}
         attempt_env = child_env.copy()
         attempt_env.update(machine_lock.delegation_environment("compile"))
-        try:
-            completed = subprocess.run(
-                cmd,
-                cwd=str(root),
-                env=attempt_env,
-                text=True,
-                capture_output=True,
-                timeout=timeout_seconds,
-            )
-        except subprocess.TimeoutExpired as exc:
-            timed_out = True
-            timeout_cleanup = _terminate_compile_verification_processes(root, baseline_compile_pids)
-            completed = subprocess.CompletedProcess(
-                args=cmd,
-                returncode=-9,
-                stdout=_timeout_output(exc.stdout),
-                stderr=_timeout_output(exc.stderr),
-            )
+        completed, cleanup = _run_compile_verification_child(
+            cmd, cwd=root, env=attempt_env, timeout_seconds=timeout_seconds
+        )
+        timed_out = cleanup is not None
+        timeout_cleanup: Dict[str, Any] = cleanup or {"terminated_pids": [], "failed_pids": []}
         stdout = completed.stdout or ""
         stderr = completed.stderr or ""
         compile_stage_ok = _compile_stage_succeeded(stdout)
@@ -1400,6 +1435,176 @@ def _compile_verification(project_root: Path) -> Dict[str, Any]:
     return compile_verify_project(project_root)
 
 
+def _directory_identity(path: Path) -> list[int] | None:
+    """(device, inode) of a directory: survives a rename or move within one volume, unlike its path."""
+    try:
+        info = os.stat(path)
+    except OSError:
+        return None
+    return [info.st_dev, info.st_ino]
+
+
+def _write_state_file(recovery_dir: Path, payload: Dict[str, Any]) -> None:
+    temporary = recovery_dir / "state.tmp"
+    with temporary.open("w", encoding="utf-8") as stream:
+        json.dump(payload, stream, sort_keys=True)
+        stream.flush()
+        os.fsync(stream.fileno())
+    os.replace(temporary, recovery_dir / "state.json")
+    _fsync_directory(recovery_dir)
+
+
+# ----------------------------------------------------------------------
+# Concurrent GameMaker IDE detection (best effort, warning only)
+# ----------------------------------------------------------------------
+_IDE_CHECK_ENV = "GMS_MCP_DETECT_GAMEMAKER_IDE"
+_IDE_CHECK_TTL_SECONDS = 10.0
+_IDE_CHECK_CACHE: Dict[str, tuple[float, Dict[str, Any] | None]] = {}
+_IDE_CHECK_GUARD = threading.Lock()
+_MACOS_IDE_EXECUTABLE = re.compile(r"/GameMaker[^/]*\.app/Contents/MacOS/")
+
+
+def _references_path(command_line: str, path: Path, *, case_insensitive: bool) -> bool:
+    haystack = command_line.replace("\\", "/")
+    needle = str(path).replace("\\", "/")
+    if case_insensitive:
+        haystack, needle = haystack.casefold(), needle.casefold()
+    return bool(needle) and needle in haystack
+
+
+def _macos_ide_processes() -> Dict[int, str]:
+    listing = subprocess.run(["ps", "-axww", "-o", "pid=,command="], capture_output=True, text=True, timeout=2)
+    processes: Dict[int, str] = {}
+    for line in listing.stdout.splitlines():
+        parts = line.strip().split(None, 1)
+        if len(parts) == 2 and parts[0].isdigit() and _MACOS_IDE_EXECUTABLE.search(parts[1]):
+            processes[int(parts[0])] = parts[1]
+    return processes
+
+
+def _macos_processes_with_open_files_under(pids: Iterable[int], root: Path) -> set[int]:
+    """PIDs among ``pids`` holding a file under ``root`` open (``lsof``; empty when unavailable)."""
+    listing = subprocess.run(
+        ["lsof", "-a", "-p", ",".join(str(pid) for pid in pids), "-Fpn"],
+        capture_output=True,
+        text=True,
+        timeout=3,
+    )
+    prefix = str(root).casefold().rstrip("/") + "/"
+    holders: set[int] = set()
+    current: int | None = None
+    for line in listing.stdout.splitlines():
+        if line.startswith("p") and line[1:].isdigit():
+            current = int(line[1:])
+        elif line.startswith("n") and current is not None and line[1:].casefold().startswith(prefix):
+            holders.add(current)
+    return holders
+
+
+def _windows_ide_processes() -> Dict[int, str]:
+    listing = subprocess.run(
+        [
+            "powershell.exe",
+            "-NoLogo",
+            "-NoProfile",
+            "-NonInteractive",
+            "-Command",
+            (
+                "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; "
+                "Get-CimInstance Win32_Process -Filter \"Name LIKE 'GameMaker%.exe'\" | "
+                "Select-Object ProcessId,CommandLine | ConvertTo-Json -Compress"
+            ),
+        ],
+        capture_output=True,
+        text=True,
+        timeout=5,
+    )
+    records = json.loads(listing.stdout or "[]")
+    if isinstance(records, dict):
+        records = [records]
+    processes: Dict[int, str] = {}
+    for record in records if isinstance(records, list) else []:
+        if isinstance(record, dict) and isinstance(record.get("ProcessId"), int):
+            processes[record["ProcessId"]] = str(record.get("CommandLine") or "")
+    return processes
+
+
+def _probe_gamemaker_ide(project_root: Path) -> Dict[str, Any] | None:
+    if sys.platform == "darwin":
+        processes = _macos_ide_processes()
+    elif os.name == "nt":
+        processes = _windows_ide_processes()
+    else:
+        return None
+    if not processes:
+        return None
+    case_insensitive = sys.platform == "darwin" or os.name == "nt"
+    try:
+        from .utils import find_yyp
+
+        yyp_path = find_yyp(project_root)
+    except GMSError:
+        yyp_path = None
+    holders = {
+        pid
+        for pid, command_line in processes.items()
+        if _references_path(command_line, yyp_path or project_root, case_insensitive=case_insensitive)
+    }
+    if not holders and sys.platform == "darwin":
+        try:
+            holders = _macos_processes_with_open_files_under(processes, project_root)
+        except (OSError, subprocess.SubprocessError):
+            holders = set()
+    project_open: bool | None = True if holders else None
+    if project_open:
+        message = (
+            "The GameMaker IDE (pid "
+            + ", ".join(str(pid) for pid in sorted(holders))
+            + ") has this project open. It does not see these changes until it reloads the project, and "
+            "saving from the IDE can overwrite them: close the project in the IDE, or reload it there "
+            "before editing."
+        )
+    else:
+        message = (
+            "The GameMaker IDE is running (pid "
+            + ", ".join(str(pid) for pid in sorted(processes))
+            + "). If it has this project open, saving from the IDE can overwrite these changes; reload "
+            "the project there before editing."
+        )
+    return {
+        "running": True,
+        "project_open": project_open,
+        "pids": sorted(holders or processes),
+        "message": message,
+    }
+
+
+def detect_gamemaker_ide(project_root: str | Path) -> Dict[str, Any] | None:
+    """Best-effort check for a GameMaker IDE that may be editing this project concurrently.
+
+    Returns None when no IDE process is found (or on Linux, or when ``GMS_MCP_DETECT_GAMEMAKER_IDE``
+    is ``0``/``off``); otherwise a dict with ``project_open`` True (the IDE's command line or open
+    files name this project) or None (an IDE is running, project unknown) and a ``message``. It
+    never raises and never blocks a mutation; results are cached for a few seconds.
+    """
+    if not _env_bool(_IDE_CHECK_ENV, default=True):
+        return None
+    root = Path(project_root).resolve()
+    key = os.path.normcase(str(root))
+    now = time.monotonic()
+    with _IDE_CHECK_GUARD:
+        cached = _IDE_CHECK_CACHE.get(key)
+        if cached is not None and now - cached[0] < _IDE_CHECK_TTL_SECONDS:
+            return cached[1]
+    try:
+        result = _probe_gamemaker_ide(root)
+    except (OSError, ValueError, subprocess.SubprocessError):
+        result = None
+    with _IDE_CHECK_GUARD:
+        _IDE_CHECK_CACHE[key] = (now, result)
+    return result
+
+
 class GameMakerProjectTransaction:
     """Serialize a project mutation and journal its writes for selective rollback."""
 
@@ -1426,6 +1631,8 @@ class GameMakerProjectTransaction:
         self.rolled_back = False
         self.committed = False
         self.bookkeeping: Dict[str, Any] = {}
+        self.gamemaker_ide: Dict[str, Any] | None = None
+        self.warnings: List[str] = []
 
     def _persist_status(self, status: str) -> None:
         if self._tmp_dir is None:
@@ -1434,16 +1641,11 @@ class GameMakerProjectTransaction:
             "version": 2,
             "status": status,
             "project_root": str(self.project_root),
+            "project_root_identity": _directory_identity(self.project_root),
             "tool": self.tool_name,
             "before_state": self._before_state,
         }
-        temporary = self._tmp_dir / "state.tmp"
-        with temporary.open("w", encoding="utf-8") as stream:
-            json.dump(payload, stream, sort_keys=True)
-            stream.flush()
-            os.fsync(stream.fileno())
-        os.replace(temporary, self._tmp_dir / "state.json")
-        _fsync_directory(self._tmp_dir)
+        _write_state_file(self._tmp_dir, payload)
 
     def _recover_interrupted_locked(self) -> None:
         directory = self.project_root / ".gms_mcp" / "transactions"
@@ -1474,8 +1676,10 @@ class GameMakerProjectTransaction:
             state = json.loads(state_file.read_text(encoding="utf-8"))
         except (OSError, ValueError) as exc:
             raise ValidationError(f"Transaction recovery metadata is corrupt: {recovery_dir}") from exc
-        if not isinstance(state, dict) or state.get("project_root") != str(self.project_root):
-            raise ValidationError(f"Transaction recovery root mismatch: {recovery_dir}")
+        if not isinstance(state, dict):
+            raise ValidationError(f"Transaction recovery metadata is corrupt: {recovery_dir}")
+        if state.get("project_root") != str(self.project_root):
+            state = self._adopt_moved_recovery_locked(recovery_dir, state)
         if state.get("version") != 2 or state.get("status") not in {"active", "committed", "rolled_back"}:
             raise ValidationError(f"Transaction recovery metadata is unsupported: {recovery_dir}")
         if state.get("status") in {"committed", "rolled_back"}:
@@ -1501,6 +1705,36 @@ class GameMakerProjectTransaction:
                 "Interrupted mutation requires recovery; external or unproven changes were preserved.",
                 details={"transaction": recovery.to_dict()},
             )
+
+    def _adopt_moved_recovery_locked(self, recovery_dir: Path, state: Dict[str, Any]) -> Dict[str, Any]:
+        """Accept a recovery record whose project was moved or renamed since the crash.
+
+        The record lives inside the project, so after ``mv`` it is found under the new path while
+        still naming the old one. When the directory is provably the same one (same device and
+        inode as recorded), the record is rewritten to the new path and recovery proceeds. Anything
+        else (a copy, a move to another volume, a record from before identities were recorded)
+        stops with the exact choices instead of failing every later mutation unexplained.
+        """
+        recorded_root = state.get("project_root")
+        recorded_identity = state.get("project_root_identity")
+        if recorded_identity is not None and recorded_identity == _directory_identity(self.project_root):
+            adopted = {**state, "project_root": str(self.project_root)}
+            _write_state_file(recovery_dir, adopted)
+            return adopted
+        state_file = recovery_dir / "state.json"
+        raise ValidationError(
+            f"An interrupted mutation recorded in {recovery_dir} was made to {recorded_root!r}, but this "
+            f"project is {str(self.project_root)!r} and is not provably the same directory (it was copied, "
+            "moved to another volume, or recorded by an older version). Nothing was changed. Choose one: "
+            f'(1) to roll that mutation back here, set "project_root" in {state_file} to '
+            f"{json.dumps(str(self.project_root))} and retry; (2) to keep the files exactly as they are now, "
+            f"delete the directory {recovery_dir} and retry.",
+            details={
+                "recovery_path": str(recovery_dir),
+                "recorded_project_root": recorded_root,
+                "project_root": str(self.project_root),
+            },
+        )
 
     # ------------------------------------------------------------------
     # Differential validation
@@ -1586,6 +1820,9 @@ class GameMakerProjectTransaction:
             assert_project_tree_contained(self.project_root)
             _assert_plain_infrastructure(self.project_root, self.project_root / ".gms_mcp" / "transactions")
             self._recover_interrupted_locked()
+            self.gamemaker_ide = detect_gamemaker_ide(self.project_root)
+            if self.gamemaker_ide is not None:
+                self.warnings.append(self.gamemaker_ide["message"])
             self._before_state = _snapshot_state(self.project_root)
             if not self._strict_validation():
                 self._baseline_errors = self._load_baseline_errors()
@@ -1962,4 +2199,6 @@ class GameMakerProjectTransaction:
             "changes": _summarize_changes(self._before_state, after_state),
             "validation": self.validation.to_dict() if self.validation else None,
             "compile_verification": self.compile_verification,
+            "gamemaker_ide": self.gamemaker_ide,
+            "warnings": list(self.warnings),
         }

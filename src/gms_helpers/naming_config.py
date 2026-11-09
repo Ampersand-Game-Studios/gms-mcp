@@ -19,7 +19,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 from copy import deepcopy
 
-from .utils import atomic_write_text
+from .utils import atomic_write_text, strip_trailing_commas
 
 # Configuration file names
 PROJECT_CONFIG_FILE = ".gms-mcp.json"
@@ -146,17 +146,23 @@ def _load_json_file(path: Path) -> Optional[Dict[str, Any]]:
     try:
         with open(path, "r", encoding="utf-8") as f:
             content = f.read()
-
-        # Handle trailing commas (GameMaker style)
-        import re
-
-        content = re.sub(r",(\s*[}\]])", r"\1", content)
-
-        return json.loads(content)
+        try:
+            return json.loads(content)
+        except json.JSONDecodeError:
+            # GameMaker-style trailing commas; string contents (patterns such as "{2,}") are untouched.
+            return json.loads(strip_trailing_commas(content))
     except (json.JSONDecodeError, IOError, OSError) as e:
         # Log warning but don't crash - fall back to defaults
         print(f"[WARN] Could not load config from {path}: {e}")
         return None
+
+
+def _file_stamp(path: Path) -> tuple[int, int] | None:
+    try:
+        info = path.stat()
+    except OSError:
+        return None
+    return (info.st_mtime_ns, info.st_size)
 
 
 class NamingConfig:
@@ -192,26 +198,42 @@ class NamingConfig:
         self.project_root = project_root.resolve()
         self._config: Dict[str, Any] = {}
         self._loaded = False
+        self._stamp: tuple[Any, ...] = ()
+        self.errors: List[str] = []
         self._load()
+
+    def _source_paths(self) -> tuple[Path, Path]:
+        return (Path.home() / GLOBAL_CONFIG_DIR / GLOBAL_CONFIG_FILE, self.project_root / PROJECT_CONFIG_FILE)
+
+    def _current_stamp(self) -> tuple[Any, ...]:
+        """Modification time and size of every source file, so edits are seen by a long-lived server."""
+        return tuple(_file_stamp(path) for path in self._source_paths())
 
     def _load(self) -> None:
         """Load configuration from all sources and merge."""
+        # Taken first: an edit landing while files are read is picked up by the next lookup.
+        self._stamp = self._current_stamp()
+        global_config_path, project_config_path = self._source_paths()
+
         # Start with factory defaults
         config = _get_factory_defaults()
+        errors: List[str] = []
 
-        # Try to load global config
-        global_config_path = Path.home() / GLOBAL_CONFIG_DIR / GLOBAL_CONFIG_FILE
-        global_config = _load_json_file(global_config_path)
-        if global_config:
-            config = _deep_merge(config, global_config)
+        # Global config, then project config (takes precedence)
+        for source in (global_config_path, project_config_path):
+            loaded = _load_json_file(source)
+            if not loaded:
+                continue
+            if not isinstance(loaded, dict):
+                errors.append(f"{source}: the configuration must be a JSON object")
+                continue
+            errors.extend(f"{source}: {error}" for error in validate_config(loaded))
+            config = _deep_merge(config, loaded)
 
-        # Try to load project config (takes precedence)
-        project_config_path = self.project_root / PROJECT_CONFIG_FILE
-        project_config = _load_json_file(project_config_path)
-        if project_config:
-            config = _deep_merge(config, project_config)
-
+        for error in errors:
+            print(f"[WARN] Invalid naming configuration: {error}")
         self._config = config
+        self.errors = errors
         self._loaded = True
 
     def reload(self) -> None:
@@ -328,10 +350,11 @@ class NamingConfig:
 
         key = str(project_root.resolve())
 
-        if key not in cls._cache:
-            cls._cache[key] = cls(project_root)
+        cached = cls._cache.get(key)
+        if cached is None or cached._stamp != cached._current_stamp():
+            cached = cls._cache[key] = cls(project_root)
 
-        return cls._cache[key]
+        return cached
 
     @classmethod
     def clear_cache(cls) -> None:
@@ -439,7 +462,9 @@ def validate_config(config_data: Dict[str, Any]) -> List[str]:
 
                 # Validate pattern is valid regex
                 pattern = rule.get("pattern")
-                if pattern:
+                if pattern is not None and not isinstance(pattern, str):
+                    errors.append(f"Pattern for '{asset_type}' must be a string")
+                elif pattern:
                     try:
                         re.compile(pattern)
                     except re.error as e:

@@ -262,6 +262,18 @@ def test_name_ordered_project_keeps_its_own_rule():
     assert [e["id"]["name"] for e in entries] == ["a_obj", "b_script", "bb", "c_obj"]
 
 
+def test_short_list_fitting_disagreeing_rules_is_ambiguous_and_appends():
+    entries = [{"id": {"name": "alpha", "path": "scripts/alpha/alpha.yy"}}]
+    index, label = gm_order.insert_ordered(
+        entries, {"id": {"name": "zeta", "path": "objects/zeta/zeta.yy"}}, gm_order.RESOURCE_ORDERINGS
+    )
+    assert (index, label) == (1, "ambiguous")
+    index, label = gm_order.insert_ordered(
+        [], {"id": {"name": "a", "path": "scripts/a/a.yy"}}, gm_order.RESOURCE_ORDERINGS
+    )
+    assert (index, label) == (0, "ide-2026-path")
+
+
 # ----------------------------------------------------------------------
 # Registry
 # ----------------------------------------------------------------------
@@ -668,14 +680,117 @@ def test_igor_access_violation_is_retried_until_it_compiles(repo: Path, tmp_path
     result = snapshot_build.compile_snapshot(repo, tmp_path / "work", _toolchain(tmp_path), attempts=5, run_igor=igor)
     assert result.ok and result.attempts == 3 and result.access_violation_retries == 2
     assert result.warnings == ["Warning : unused thing"] and result.game_archive.name == "game.zip"
-    assert "/project=" in " ".join(igor.calls[0]) and igor.calls[0][-3:] == ["--", "Mac", "PackageZip"]
+    assert "/project=" in " ".join(igor.calls[0]) and igor.calls[0][-3:] == ["--", "Mac", "Compile"]
     assert not any(lock_dir.glob("build_slot_*"))
-    for platform, action in (("Android", "Package"), ("ios", "Package"), ("Windows", "PackageZip")):
+    for platform, action in (("Android", "Package"), ("iOS", "Package"), ("Windows", "PackageZip")):
         mobile = _fake_igor(["ok"])
         snapshot_build.compile_snapshot(
             repo, tmp_path / f"work_{platform}", _toolchain(tmp_path), platform=platform, run_igor=mobile
         )
         assert mobile.calls[0][-3:] == ["--", platform, action]
+
+
+def test_mac_vm_build_uses_package_zip_before_runtime_2026(repo: Path, tmp_path: Path, lock_dir: Path):
+    igor = _fake_igor(["ok"])
+    toolchain = _toolchain(tmp_path)
+    toolchain.runtime_version = "2024.14.4.268"
+    snapshot_build.compile_snapshot(repo, tmp_path / "work", toolchain, run_igor=igor)
+    assert igor.calls[0][-3:] == ["--", "Mac", "PackageZip"]
+
+
+def test_disk_full_release_keeps_lease_without_masking_compiler_diagnostics(lock_dir, monkeypatch):
+    import errno
+
+    lease = agent_locks.DirectoryLock("disk-full", directory=lock_dir)
+    lease.acquire()
+    mkdir = Path.mkdir
+
+    def no_reclaim_space(path, *args, **kwargs):
+        if path.name == "disk-full.reclaim":
+            raise OSError(errno.ENOSPC, "No space left on device")
+        return mkdir(path, *args, **kwargs)
+
+    with monkeypatch.context() as scoped:
+        scoped.setattr(Path, "mkdir", no_reclaim_space)
+        with pytest.warns(RuntimeWarning, match="lease retained"):
+            lease.release()
+    assert lease.held and lease.owner()["token"] == lease._token
+    lease.release()
+    assert not lease.path.exists()
+
+
+def test_build_log_publication_failure_preserves_external_work(repo, tmp_path, lock_dir, monkeypatch):
+    import errno
+
+    work_root = tmp_path / "external"
+    monkeypatch.setenv("GMS_MCP_SNAPSHOT_WORK_DIR", str(work_root))
+
+    def no_space(*args):
+        raise OSError(errno.ENOSPC, "No space left on device")
+
+    monkeypatch.setattr(snapshot_build, "copy_artifact", no_space)
+    with pytest.raises(snapshot_build.SnapshotError, match="Compiler output is retained at") as caught:
+        snapshot_build.snapshot_compile(repo, run_igor=_fake_igor(["ok"]), toolchain=_toolchain(tmp_path))
+    logs = list(work_root.glob("*/build.log"))
+    assert len(logs) == 1 and "Final Compile finished" in logs[0].read_text()
+    assert caught.value.retain_work_dir
+    assert "GMS_MCP_SNAPSHOT_WORK_DIR" in str(caught.value)
+
+
+def test_session_diagnostics_never_write_protocol_stdout(tmp_path, monkeypatch, capsys):
+    from gms_helpers.run_session import RunSessionManager
+
+    monkeypatch.setattr(RunSessionManager, "_state_root", staticmethod(lambda: tmp_path / "sessions"))
+    manager = RunSessionManager(tmp_path / "project")
+    session = manager.create_session(os.getpid(), "owned-fixture")
+    manager.clear_session(session.run_id)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert "Created session" in captured.err and "Cleared current session" in captured.err
+
+
+def test_snapshot_runner_stops_on_owned_fatal_log(tmp_path, lock_dir, monkeypatch):
+    from types import SimpleNamespace
+
+    project = tmp_path / "project"
+    project.mkdir()
+    staging = tmp_path / "staging"
+    staging.mkdir()
+    log = staging / "debug.txt"
+    log.write_text("ERROR in action number 1 of Step Event\nmissing_variable\n")
+    save = tmp_path / "save"
+    save.mkdir()
+
+    class Process:
+        pid = os.getpid()
+        returncode = None
+
+        def poll(self):
+            return self.returncode
+
+        def terminate(self):
+            self.returncode = -15
+
+        def wait(self, timeout=None):
+            return self.returncode
+
+    process = Process()
+    monkeypatch.setattr(snapshot_build, "require_mac_runner", lambda _: Path("runner"))
+    monkeypatch.setattr(
+        snapshot_build,
+        "prepare_mac_runtime",
+        lambda *args: SimpleNamespace(staging=staging, save_dir=save, runner=Path("runner")),
+    )
+    monkeypatch.setattr(snapshot_build, "stage_game_archive", lambda *args: (staging, staging / "game.ios"))
+    monkeypatch.setattr(snapshot_build, "launch_mac_runner", lambda *args: (process, log))
+    monkeypatch.setattr(snapshot_build.time, "sleep", lambda _: None)
+    result = snapshot_build.run_game_archive(
+        Path("game.zip"), None, label="fatal", run_dir=tmp_path / "run", project_root=project
+    )
+    assert not result["timed_out"] and result["waited_seconds"] < 1
+    assert "missing_variable" in result["run_log"].read_text()
+    assert process.returncode == -15
+    assert snapshot_build.mac_game_path(Path("/private/var/tmp/game.ios")) == "/var/tmp/game.ios"
 
 
 def test_html5_snapshot_requires_real_web_output(repo: Path, tmp_path: Path, lock_dir: Path):
@@ -873,7 +988,7 @@ def test_run_test_pipeline_reports_pass_fail_and_build_failure(repo: Path, tmp_p
 
 
 def test_platform_names_and_runner_staging(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
-    assert snapshot_build.igor_platform("macOS") == "Mac" and snapshot_build.igor_platform("iOS") == "ios"
+    assert snapshot_build.igor_platform("macOS") == "Mac" and snapshot_build.igor_platform("iOS") == "iOS"
     assert snapshot_build.igor_platform("Android") == "Android"
     with pytest.raises(snapshot_build.SnapshotError, match="Unknown platform"):
         snapshot_build.igor_platform("Dreamcast")
@@ -1263,7 +1378,9 @@ def test_live_session_start_command_screenshot_and_stop(repo: Path, tmp_path: Pa
         assert live_session.command(repo, "ping")["result"] == "pong"
         assert live_session.command(repo, "state")["data"] == {"room": "r_menu", "fps": 60}
         unknown = live_session.command(repo, "dance")
-        assert not unknown["ok"] and unknown["error_code"] == "unknown_command"
+        # The endpoint's HELLO lists its commands, so others are refused before they are sent.
+        assert not unknown["ok"] and unknown["error_code"] == "unsupported"
+        assert unknown["supported_commands"] == ["ping", "state", "screenshot"]
         with pytest.raises(live_session.LiveSessionError, match="single line"):
             live_session.command(repo, "a\nb")
 
@@ -1356,3 +1473,120 @@ def test_lock_liveness_never_signals_on_windows(monkeypatch):
     monkeypatch.setattr(agent_locks, "_windows_process_alive", lambda pid: calls.append(pid) or True)
     assert agent_locks._process_alive(4321) is True
     assert calls == [4321]
+
+
+# ----------------------------------------------------------------------
+# Composition carries what staged registrations need; staging normalises paths
+# ----------------------------------------------------------------------
+def _room_entry(name: str) -> str:
+    return f'{{"id":{{"name":"{name}","path":"rooms/{name}/{name}.yy",}},}}'
+
+
+def _with_rooms(text: str, resources: list[str], order: list[str], groups: list[str] = ()) -> str:
+    data = gm_json.loads(text)
+    data["resources"] += [{"id": {"name": n, "path": f"rooms/{n}/{n}.yy"}} for n in resources]
+    data["RoomOrderNodes"] = [{"roomId": {"name": n, "path": f"rooms/{n}/{n}.yy"}} for n in order]
+    data["TextureGroups"] = [{"name": g, "groupParent": None, "resourceType": "GMTextureGroup"} for g in groups]
+    return gm_json.dumps(data)
+
+
+def test_compose_carries_room_order_and_groups(project: Path):
+    base = _with_rooms((project / "game.yyp").read_text(), ["r_a", "r_old"], ["r_a", "r_old"], ["Default"])
+    work = _with_rooms(
+        (project / "game.yyp").read_text(), ["r_a", "r_new", "r_other"], ["r_new", "r_a", "r_other"], ["Default", "UI"]
+    )
+    composed = gm_json.loads(
+        yyp_registry.compose_yyp(base, work, ["rooms/r_new/r_new.yy", "rooms/r_old/r_old.yy", "texturegroup:UI"])
+    )
+    # New room joins next to its working-copy neighbour, the deleted one leaves no dangling node,
+    # and another agent's room (r_other) stays out.
+    assert [n["roomId"]["name"] for n in composed["RoomOrderNodes"]] == ["r_new", "r_a"]
+    assert [g["name"] for g in composed["TextureGroups"]] == ["Default", "UI"]
+    assert yyp_registry.validate_yyp_text(gm_json.dumps(composed)) == []
+    dangling = gm_json.loads(base)
+    dangling["RoomOrderNodes"].append({"roomId": {"name": "r_gone", "path": "rooms/r_gone/r_gone.yy"}})
+    assert any("r_gone" in problem for problem in yyp_registry.validate_yyp_text(gm_json.dumps(dangling)))
+
+
+def test_derive_adds_groups_a_staged_asset_references(project: Path):
+    base = (project / "game.yyp").read_text()
+    data = gm_json.loads(base)
+    data["TextureGroups"] = [{"name": "UI", "groupParent": None, "resourceType": "GMTextureGroup"}]
+    (project / "game.yyp").write_text(gm_json.dumps(data), encoding="utf-8")
+    asset = gm_json.loads(_script_yy("mine"))
+    asset["textureGroupId"] = {"name": "UI", "path": "texturegroups/UI"}
+    _add_script(project, "mine")
+    (project / "scripts/mine/mine.yy").write_text(json.dumps(asset), encoding="utf-8")
+    yyp_registry.register_assets(project, ["scripts/mine/mine.yy"])
+    entries = yyp_registry.derive_yyp_entries(project, base, ["./scripts/mine"])
+    assert entries == ["scripts/mine/mine.yy", "texturegroup:UI"]
+
+
+def test_register_assets_compares_names_case_insensitively(project: Path):
+    _add_script(project, "Alpha")
+    with pytest.raises(ValidationError, match="case-insensitive"):
+        yyp_registry.register_assets(project, ["scripts/Alpha/Alpha.yy"])
+
+
+def test_normalize_order_keeps_crlf_files_unchanged(project: Path):
+    yyp_registry.normalize_order(project)
+    crlf = (project / "game.yyp").read_bytes().replace(b"\r\n", b"\n").replace(b"\n", b"\r\n")
+    (project / "game.yyp").write_bytes(crlf)
+    result = yyp_registry.normalize_order(project)
+    assert not result["changed"] and (project / "game.yyp").read_bytes() == crlf
+
+
+def test_stage_paths_normalises_spellings_of_the_project_file_and_assets(repo: Path, lock_dir: Path):
+    for name in ("mine", "theirs"):
+        _add_script(repo, name)
+    yyp_registry.register_assets(repo, ["scripts/mine/mine.yy", "scripts/theirs/theirs.yy"])
+
+    staged = stage_paths(repo, ["./scripts//mine/"])
+    assert staged["yyp_entries"] == ["scripts/mine/mine.yy"]
+    assert "theirs" not in _git(repo, "show", ":game.yyp")
+
+    whole = stage_paths(repo, ["./game.yyp"])
+    assert whole["yyp_mode"] == "whole file" and "theirs" in _git(repo, "show", ":game.yyp")
+
+    # Pathspec magic is literal: this names a file called ":(glob)*", which does not exist.
+    from gms_helpers.vcs_stage import VcsError
+
+    with pytest.raises(VcsError):
+        stage_paths(repo, [":(glob)*"])
+
+
+def test_stage_paths_keeps_tool_state_out_and_takes_the_project_lock(repo: Path, lock_dir: Path):
+    from gms_helpers import transactions
+    from gms_helpers.agent_locks import LockTimeoutError
+
+    _add_script(repo, "mine")
+    yyp_registry.register_assets(repo, ["scripts/mine/mine.yy"])
+    stage_paths(repo, ["."])
+    assert not [name for name in _git(repo, "diff", "--cached", "--name-only").split() if name.startswith(".gms_mcp")]
+
+    with transactions.project_mutation_lock(repo, "holder"):
+        with pytest.raises(LockTimeoutError, match="holder"):
+            stage_paths(repo, ["scripts/mine"], lock_timeout_seconds=0.2)
+
+
+def test_lock_owner_records_are_atomic_identified_and_never_stale_leftovers(lock_dir: Path, monkeypatch):
+    lock = agent_locks.DirectoryLock("repo.lock", purpose="mine")
+    assert lock.try_acquire()
+    owner = lock.owner()
+    assert owner["pid"] == os.getpid() and "pid_started" in owner
+    assert not list(lock_dir.glob("*.tmp"))
+    lock.release()
+
+    # Someone removed the lock by hand (rmdir) and a script took it again: the old record is not its owner.
+    (lock_dir / "repo.lock.owner").write_text(json.dumps({"pid": os.getpid(), "host": socket.gethostname()}))
+    os.utime(lock_dir / "repo.lock.owner", (time.time() - 60, time.time() - 60))
+    (lock_dir / "repo.lock").mkdir()
+    assert agent_locks.DirectoryLock("repo.lock").owner() is None
+    (lock_dir / "repo.lock").rmdir()
+
+    # A record that cannot be written gives the lock back instead of holding it anonymously.
+    failing = agent_locks.DirectoryLock("repo.lock")
+    monkeypatch.setattr(failing, "_write_owner", lambda _record: (_ for _ in ()).throw(OSError("disk full")))
+    with pytest.raises(OSError, match="disk full"):
+        failing.try_acquire()
+    assert not (lock_dir / "repo.lock").exists() and not failing.held

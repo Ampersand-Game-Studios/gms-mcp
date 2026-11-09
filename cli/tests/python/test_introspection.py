@@ -136,8 +136,8 @@ class TestIntrospectionBasics(unittest.TestCase):
                 {"name": "Scripts", "folderPath": "folders/Scripts.yy"},
             ],
             "IncludedFiles": [
-                {"name": "config.json", "filePath": "datafiles/config.json", "CopyToMask": -1},
-                {"name": "levels.dat", "filePath": "datafiles/levels.dat", "CopyToMask": -1},
+                {"name": "config.json", "filePath": "datafiles", "CopyToMask": -1},
+                {"name": "levels.dat", "filePath": "datafiles/levels", "CopyToMask": -1},
             ],
             "RoomOrderNodes": [{"roomId": {"name": "r_main", "path": "rooms/r_main/r_main.yy"}}],
             "AudioGroups": [{"name": "audiogroup_default", "targets": -1}],
@@ -470,6 +470,74 @@ function scr_spawn_enemy() {
         self.assertIn("total_included_files", stats)
         self.assertIn("counts_by_type", stats)
         self.assertEqual(stats["total_included_files"], 2)
+
+
+class TestProjectShapes(unittest.TestCase):
+    """Project locations, included-file paths and room graph edges as GameMaker stores them."""
+
+    def setUp(self):
+        self.test_dir = tempfile.TemporaryDirectory()
+        # Agent worktrees live under folders such as ~/.cursor/worktrees.
+        self.project_root = Path(self.test_dir.name) / ".cursor" / "worktrees" / "game"
+        (self.project_root / "scripts" / "scr_a").mkdir(parents=True)
+        (self.project_root / "scripts" / "scr_a" / "scr_a.gml").write_text("var n = 1; // needle\n")
+        room_dir = self.project_root / "rooms" / "r_main"
+        room_dir.mkdir(parents=True)
+        (room_dir / "InstanceCreationCode_inst_1.gml").write_text("instance_create_depth(0, 0, 0, o_enemy);\n")
+        room = {
+            "resourceType": "GMRoom",
+            "name": "r_main",
+            "layers": [
+                {
+                    "resourceType": "GMRLayer",
+                    "name": "Folder",
+                    "layers": [
+                        {
+                            "resourceType": "GMRInstanceLayer",
+                            "name": "Instances",
+                            "instances": [{"name": "inst_1", "objectId": {"name": "o_enemy", "path": "x"}}],
+                            "layers": [],
+                        },
+                        {"resourceType": "GMRTileLayer", "name": "Tiles", "tilesetId": {"name": "ts_ground"}},
+                    ],
+                }
+            ],
+        }
+        (room_dir / "r_main.yy").write_text(json.dumps(room))
+        yyp = {
+            "resources": [
+                {"id": {"name": "scr_a", "path": "scripts/scr_a/scr_a.yy"}},
+                {"id": {"name": "r_main", "path": "rooms/r_main/r_main.yy"}},
+                {"id": {"name": "o_enemy", "path": "objects/o_enemy/o_enemy.yy"}},
+                {"id": {"name": "ts_ground", "path": "tilesets/ts_ground/ts_ground.yy"}},
+            ],
+            "IncludedFiles": [{"name": "map.json", "filePath": "datafiles/levels"}],
+        }
+        (self.project_root / "game.yyp").write_text(json.dumps(yyp))
+
+    def tearDown(self):
+        self.test_dir.cleanup()
+
+    def test_search_works_inside_an_ignored_ancestor_folder(self):
+        results = search_references(self.project_root, "needle")
+        self.assertEqual(len(results), 1)
+
+    def test_included_file_path_joins_directory_and_name(self):
+        assets = list_assets_by_type(self.project_root, asset_type_filter="includedfile")
+        self.assertEqual(assets["includedfile"][0]["path"], "datafiles/levels/map.json")
+
+    def test_graph_follows_nested_layers_tilesets_and_creation_code(self):
+        edges = {(e["from"], e["to"], e["relation"]) for e in build_asset_graph(self.project_root, deep=True)["edges"]}
+        self.assertIn(("r_main", "o_enemy", "contains"), edges)
+        self.assertIn(("r_main", "ts_ground", "tileset"), edges)
+        self.assertIn(("r_main", "o_enemy", "code_reference"), edges)
+
+    def test_several_project_files_are_refused(self):
+        from gms_helpers.exceptions import AmbiguousProjectError
+
+        (self.project_root / "copy.yyp").write_text("{}")
+        with self.assertRaises(AmbiguousProjectError):
+            get_project_stats(self.project_root)
 
 
 class TestEdgeCases(unittest.TestCase):

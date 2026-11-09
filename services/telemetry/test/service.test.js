@@ -64,21 +64,32 @@ function event(overrides = {}) {
 class Bucket {
   constructor(keys = []) {
     this.objects = new Map(keys.map((key) => [key, "fixture"]));
+    this.metadata = new Map();
+    this.uploaded = new Map();
     this.deleted = [];
     this.puts = [];
     this.pageSize = 2;
   }
-  async list({ prefix, cursor }) {
+  async list({ prefix, cursor, startAfter }) {
+    const after = cursor || startAfter;
     const all = [...this.objects.keys()]
       .filter((key) => key.startsWith(prefix))
       .sort();
-    const remaining = all.filter((key) => !cursor || key > cursor);
+    const remaining = all.filter((key) => !after || key > after);
     const keys = remaining.slice(0, this.pageSize);
     return {
-      objects: keys.map((key) => ({ key })),
+      objects: keys.map((key) => ({
+        key,
+        uploaded: this.uploaded.get(key),
+      })),
       truncated: remaining.length > keys.length,
       cursor: keys.at(-1),
     };
+  }
+  async head(key) {
+    return this.objects.has(key)
+      ? { key, customMetadata: this.metadata.get(key) || {} }
+      : null;
   }
   async delete(keys) {
     for (const key of Array.isArray(keys) ? keys : [keys]) {
@@ -86,8 +97,10 @@ class Bucket {
       this.objects.delete(key);
     }
   }
-  async put(key, value) {
+  async put(key, value, options = {}) {
     this.objects.set(key, value);
+    this.metadata.set(key, options.customMetadata || {});
+    this.uploaded.set(key, new Date(Date.now()));
     this.puts.push(key);
   }
   async get() {
@@ -570,7 +583,7 @@ test("queue storage failure leaves message unacknowledged for retry", async () =
   assert.equal(ack, false);
 });
 
-test("client retries with different queue IDs and batch membership store each event once", async () => {
+test("client retries with different queue IDs and batch membership count each event once", async () => {
   const bucket = new Bucket();
   const first = event();
   const second = event({ event_id: "c".repeat(32) });
@@ -732,4 +745,124 @@ test("scheduled aggregation revisits offline event days without retry double cou
     bucket.puts.filter((key) => key.startsWith("aggregates/")).length,
     9,
   );
+});
+
+test("queue writes one object per event day per delivery batch", async () => {
+  const bucket = new Bucket();
+  const today = event();
+  const earlier = event({
+    event_id: "d".repeat(32),
+    timestamp: new Date(Date.now() - 2 * 86400000).toISOString(),
+  });
+  const messages = Array.from({ length: 20 }, (_, index) => ({
+    id: `delivery-${index}`,
+    body: {
+      schema_version: 1,
+      received_at: new Date().toISOString(),
+      events: [
+        { ...today, event_id: index.toString(16).padStart(32, "0") },
+        earlier,
+      ],
+    },
+    ack() {},
+  }));
+  await handleQueue({ messages }, env(bucket));
+  assert.equal(bucket.puts.length, 2);
+});
+
+test("delayed queue delivery is validated against the receive time", async () => {
+  const bucket = new Bucket();
+  const originalNow = Date.now;
+  const received = Date.parse("2026-03-01T12:00:00Z");
+  let acked = false;
+  const message = {
+    id: "delayed",
+    body: {
+      schema_version: 1,
+      received_at: new Date(received).toISOString(),
+      events: [
+        event({ timestamp: new Date(received - 6 * 86400000).toISOString() }),
+      ],
+    },
+    ack() {
+      acked = true;
+    },
+  };
+  Date.now = () => received + 2 * 86400000;
+  try {
+    await handleQueue({ messages: [message] }, env(bucket));
+  } finally {
+    Date.now = originalNow;
+  }
+  assert.equal(acked, true);
+  assert.equal(bucket.puts.length, 1);
+});
+
+test("scheduled aggregation skips days without new raw objects", async () => {
+  const bucket = new Bucket();
+  bucket.get = async (key) => ({
+    arrayBuffer: async () => bucket.objects.get(key),
+  });
+  await handleQueue(
+    {
+      messages: [
+        {
+          id: "one",
+          body: {
+            schema_version: 1,
+            received_at: new Date().toISOString(),
+            events: [event()],
+          },
+          ack() {},
+        },
+      ],
+    },
+    env(bucket),
+  );
+  const originalNow = Date.now;
+  Date.now = () => originalNow() + 3600000;
+  try {
+    await worker.scheduled({}, env(bucket));
+    const firstRun = bucket.puts.filter((key) => key.startsWith("aggregates/"));
+    assert.equal(firstRun.length, 9);
+    Date.now = () => originalNow() + 7200000;
+    await worker.scheduled({}, env(bucket));
+    assert.equal(
+      bucket.puts.filter((key) => key.startsWith("aggregates/")).length,
+      9,
+    );
+  } finally {
+    Date.now = originalNow;
+  }
+});
+
+test("archive manifest pages with a cursor instead of failing on large ranges", async () => {
+  const keys = Array.from(
+    { length: 5 },
+    (_, index) => `raw/2026/10/04/batch-${index}.ndjson.gz`,
+  );
+  const bucket = new Bucket([...keys, "aggregates/2026/10/04/summary.json"]);
+  const seen = [];
+  let cursor = "";
+  for (let pageNumber = 0; pageNumber < 10; pageNumber++) {
+    const query = new URLSearchParams({
+      start_date: "2026-10-04",
+      end_date: "2026-10-04",
+      limit: "2",
+      ...(cursor ? { cursor } : {}),
+    });
+    const response = await worker.fetch(
+      new Request(`${host}/v1/archive/manifest?${query}`, {
+        headers: { authorization: "Bearer local-test-token" },
+      }),
+      env(bucket),
+    );
+    assert.equal(response.status, 200);
+    const body = await response.json();
+    seen.push(...body.objects.map((object) => object.key));
+    assert.ok(body.objects.length <= 2);
+    if (!body.next_cursor) break;
+    cursor = body.next_cursor;
+  }
+  assert.deepEqual(seen, [...bucket.objects.keys()].sort());
 });

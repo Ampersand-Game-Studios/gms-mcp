@@ -7,14 +7,116 @@ from typing import Any, Dict, List, Optional
 
 from ..introspection import get_asset_yy_path, read_asset_yy
 from ..utils import save_pretty_json_gm
-from .project import find_texture_group, get_texture_groups_list, load_project_yyp
+from .project import find_texture_group, get_project_configs, get_texture_groups_list, load_project_yyp
 from .refs import (
     _asset_supports_texture_groups,
     _replace_asset_group_references,
     get_asset_group_assignments,
+    make_group_ref,
     parse_group_ref,
+    serialize_group_ref_for_config,
     set_asset_group,
 )
+
+# Texture-group settings a caller may patch. Identity/schema keys (name, %Name,
+# resourceType, resourceVersion, $GMTextureGroup) and ConfigValues (use the
+# configs argument) are never patchable.
+PATCHABLE_GROUP_FIELDS = frozenset(
+    {
+        "autocrop",
+        "border",
+        "compressFormat",
+        "customOptions",
+        "directory",
+        "groupParent",
+        "isScaled",
+        "loadType",
+        "mipsToGenerate",
+        "targets",
+    }
+)
+
+
+def _reject_unknown_patch_keys(patch: Dict[str, Any]) -> Optional[str]:
+    unknown = sorted(str(key) for key in patch if key not in PATCHABLE_GROUP_FIELDS)
+    if unknown:
+        return f"Unsupported texture group field(s): {', '.join(unknown)}. Allowed: {', '.join(sorted(PATCHABLE_GROUP_FIELDS))}"
+    return None
+
+
+def _normalize_group_parent(yyp_data: Dict[str, Any], patch: Dict[str, Any]) -> Optional[str]:
+    """Store groupParent as GameMaker does ({name,path} or null) and require an existing group."""
+    if "groupParent" not in patch or patch["groupParent"] is None:
+        return None
+    parent_name = _group_parent_name(patch["groupParent"])
+    hit = find_texture_group(yyp_data, parent_name) if parent_name else None
+    if hit is None:
+        return f"groupParent texture group '{parent_name or patch['groupParent']}' not found"
+    patch["groupParent"] = make_group_ref(hit[1]["name"])
+    return None
+
+
+def _unknown_configs(yyp_data: Dict[str, Any], configs: Optional[List[str]]) -> List[str]:
+    if not configs:
+        return []
+    known = set(get_project_configs(yyp_data))
+    return sorted({c for c in configs if c not in known})
+
+
+def _is_default_group(name: str) -> bool:
+    return isinstance(name, str) and name.casefold() == "default"
+
+
+def _group_parent_name(value: Any) -> Optional[str]:
+    """Return the group name a groupParent value points at ({name,path}, its string form, or a bare name)."""
+    ref = parse_group_ref(value)
+    if ref is not None:
+        return ref["name"]
+    if isinstance(value, str) and value and not value.strip().startswith("{"):
+        return value
+    return None
+
+
+def _retarget_group_parent(value: Any, new_name: str) -> Any:
+    """Point a groupParent value at ``new_name`` while keeping its stored shape."""
+    if isinstance(value, dict):
+        return make_group_ref(new_name)
+    if isinstance(value, str) and parse_group_ref(value) is not None:
+        return serialize_group_ref_for_config(make_group_ref(new_name))
+    return new_name
+
+
+def _retarget_group_parents(yyp_data: Dict[str, Any], old_name: str, new_name: str) -> None:
+    for group in get_texture_groups_list(yyp_data):
+        if _group_parent_name(group.get("groupParent")) == old_name:
+            group["groupParent"] = _retarget_group_parent(group.get("groupParent"), new_name)
+        config_values = group.get("ConfigValues")
+        if isinstance(config_values, dict):
+            for config in config_values.values():
+                if isinstance(config, dict) and _group_parent_name(config.get("groupParent")) == old_name:
+                    config["groupParent"] = _retarget_group_parent(config.get("groupParent"), new_name)
+
+
+def _logical_folder_key(value: str) -> str:
+    """Normalise a logical folder path to ``folders/a/b`` (casefolded, no .yy suffix)."""
+    text = value.replace("\\", "/").strip().strip("/")
+    if text.casefold().endswith(".yy"):
+        text = text[:-3]
+    if not text.casefold().startswith("folders/") and text.casefold() != "folders":
+        text = f"folders/{text}"
+    return text.casefold()
+
+
+def _in_logical_folder(asset_yy: Dict[str, Any], folder_prefix: str) -> bool:
+    parent = asset_yy.get("parent")
+    parent_path = parent.get("path") if isinstance(parent, dict) else None
+    if not isinstance(parent_path, str) or not parent_path.replace("\\", "/").startswith("folders/"):
+        return False
+    parent_key = _logical_folder_key(parent_path)
+    prefix_key = _logical_folder_key(folder_prefix)
+    return parent_key == prefix_key or parent_key.startswith(prefix_key + "/")
+
+
 from .scan import _iter_resource_assets
 
 
@@ -50,6 +152,13 @@ def texture_group_create(
     if find_texture_group(yyp_data, name) is not None:
         return {"ok": False, "dry_run": dry_run, "error": f"Texture group '{name}' already exists", "changed_files": []}
 
+    if patch is not None and not isinstance(patch, dict):
+        return {"ok": False, "dry_run": dry_run, "error": "patch must be a dict", "changed_files": []}
+    patch = dict(patch or {})
+    patch_error = _reject_unknown_patch_keys(patch) or _normalize_group_parent(yyp_data, patch)
+    if patch_error:
+        return {"ok": False, "dry_run": dry_run, "error": patch_error, "changed_files": []}
+
     template_hit = find_texture_group(yyp_data, template)
     if template_hit is None:
         return {
@@ -67,14 +176,7 @@ def texture_group_create(
 
     warnings: List[str] = []
     if patch:
-        if not isinstance(patch, dict):
-            warnings.append("patch was not a dict; ignored")
-        else:
-            new_group.update(patch)
-            # Ensure name fields remain correct
-            if "%Name" in new_group:
-                new_group["%Name"] = name
-            new_group["name"] = name
+        new_group.update(patch)
 
     groups.append(new_group)
 
@@ -99,6 +201,8 @@ def _stringify_config_value(value: Any) -> str:
         return "true" if value else "false"
     if isinstance(value, (int, float)):
         return str(value)
+    if isinstance(value, dict) and parse_group_ref(value) is not None:
+        return serialize_group_ref_for_config(value)
     if isinstance(value, (dict, list)):
         return json.dumps(value, ensure_ascii=False)
     return str(value)
@@ -121,20 +225,28 @@ def texture_group_update(
     _, tg = hit
     if not isinstance(patch, dict):
         return {"ok": False, "dry_run": dry_run, "error": "patch must be a dict", "changed_files": []}
+    patch = dict(patch)
+    patch_error = _reject_unknown_patch_keys(patch)
+    if patch_error and ("name" in patch or "%Name" in patch):
+        patch_error += " (use rename to change the name)"
+    patch_error = patch_error or _normalize_group_parent(yyp_data, patch)
+    if patch_error:
+        return {"ok": False, "dry_run": dry_run, "error": patch_error, "changed_files": []}
+    unknown_configs = _unknown_configs(yyp_data, configs)
+    if unknown_configs:
+        return {
+            "ok": False,
+            "dry_run": dry_run,
+            "error": f"Unknown project config(s): {', '.join(unknown_configs)}",
+            "changed_files": [],
+        }
 
     warnings: List[str] = []
-    # Avoid accidental renames through patch.
-    if "name" in patch or "%Name" in patch:
-        warnings.append("patch contained name/%Name; ignored (use rename instead)")
-        patch = {k: v for k, v in patch.items() if k not in ("name", "%Name")}
-
     if patch:
         tg.update(patch)
 
     # ConfigValues updates use string values (GameMaker's convention).
-    filtered_keys = [
-        k for k in patch.keys() if k not in ("ConfigValues", "$GMTextureGroup", "resourceType", "resourceVersion")
-    ]
+    filtered_keys = list(patch.keys())
     if filtered_keys:
         cv = tg.get("ConfigValues")
         if cv is None or not isinstance(cv, dict):
@@ -185,7 +297,18 @@ def texture_group_rename(
     hit = find_texture_group(yyp_data, old_name)
     if hit is None:
         return {"ok": False, "dry_run": dry_run, "error": f"Texture group '{old_name}' not found", "changed_files": []}
-    if find_texture_group(yyp_data, new_name) is not None:
+    _, tg = hit
+    # References store the exact registered spelling; match on that, not the argument.
+    old_name = tg["name"]
+    if _is_default_group(old_name):
+        return {
+            "ok": False,
+            "dry_run": dry_run,
+            "error": "The Default texture group cannot be renamed; GameMaker requires it",
+            "changed_files": [],
+        }
+    clash = find_texture_group(yyp_data, new_name)
+    if clash is not None and clash[1] is not tg:
         return {
             "ok": False,
             "dry_run": dry_run,
@@ -193,22 +316,11 @@ def texture_group_rename(
             "changed_files": [],
         }
 
-    _, tg = hit
     if "%Name" in tg:
         tg["%Name"] = new_name
     tg["name"] = new_name
 
-    # Update groupParent references in other texture groups (best-effort).
-    for other in get_texture_groups_list(yyp_data):
-        if not isinstance(other, dict):
-            continue
-        if other.get("groupParent") == old_name:
-            other["groupParent"] = new_name
-        cv = other.get("ConfigValues")
-        if isinstance(cv, dict):
-            for cfg_dict in cv.values():
-                if isinstance(cfg_dict, dict) and cfg_dict.get("groupParent") == old_name:
-                    cfg_dict["groupParent"] = new_name
+    _retarget_group_parents(yyp_data, old_name, new_name)
 
     changed_files: List[str] = [str(yyp_path.relative_to(project_root))]
     warnings: List[str] = []
@@ -278,12 +390,12 @@ def texture_group_reference_evidence(project_root: Path, name: str) -> Dict[str,
     for texture_group in get_texture_groups_list(yyp_data):
         if not isinstance(texture_group, dict):
             continue
-        if texture_group.get("groupParent") == name:
+        if _group_parent_name(texture_group.get("groupParent")) == name:
             references.append({"kind": "texture_group", "name": texture_group.get("name"), "where": ["groupParent"]})
         config_values = texture_group.get("ConfigValues")
         if isinstance(config_values, dict):
             for config_name, config in config_values.items():
-                if isinstance(config, dict) and config.get("groupParent") == name:
+                if isinstance(config, dict) and _group_parent_name(config.get("groupParent")) == name:
                     references.append(
                         {
                             "kind": "texture_group",
@@ -322,6 +434,20 @@ def texture_group_delete_preflight(
             "error": f"Texture group '{name}' not found",
             "references_found": [],
         }
+    # Work with the registered spellings; references store them exactly.
+    name = hit[1]["name"]
+    if _is_default_group(name):
+        return {
+            "ok": False,
+            "ready": False,
+            "name": name,
+            "reassign_to": reassign_to,
+            "error": "The Default texture group cannot be deleted; GameMaker requires it",
+            "references_found": [],
+        }
+    reassign_hit = find_texture_group(yyp_data, reassign_to) if reassign_to else None
+    if reassign_hit is not None:
+        reassign_to = reassign_hit[1]["name"]
     if reassign_to == name:
         return {
             "ok": False,
@@ -331,7 +457,7 @@ def texture_group_delete_preflight(
             "error": "Reassign target must be a different texture group than the deleted group",
             "references_found": [],
         }
-    if reassign_to and find_texture_group(yyp_data, reassign_to) is None:
+    if reassign_to and reassign_hit is None:
         return {
             "ok": False,
             "ready": False,
@@ -376,6 +502,7 @@ def texture_group_delete(
             "details": preflight,
         }
 
+    name = preflight["name"]
     if dry_run:
         changed_files = [asset["path"] for asset in preflight["affected_assets"]]
         yyp_path, _ = load_project_yyp(project_root)
@@ -403,6 +530,8 @@ def texture_group_delete(
         }
 
     yyp_path, yyp_data = load_project_yyp(project_root)
+    name = final_preflight["name"]
+    reassign_to = final_preflight["reassign_to"]
     references = final_preflight["references_found"]
     affected_assets = final_preflight["affected_assets"]
     if "TextureGroups" in yyp_data:
@@ -447,16 +576,7 @@ def texture_group_delete(
 
         # groupParent references live in the project file, so they must move
         # with asset assignments before the deleted group is removed.
-        for texture_group in get_texture_groups_list(yyp_data):
-            if not isinstance(texture_group, dict):
-                continue
-            if texture_group.get("groupParent") == name:
-                texture_group["groupParent"] = reassign_to
-            config_values = texture_group.get("ConfigValues")
-            if isinstance(config_values, dict):
-                for config in config_values.values():
-                    if isinstance(config, dict) and config.get("groupParent") == name:
-                        config["groupParent"] = reassign_to
+        _retarget_group_parents(yyp_data, name, reassign_to)
 
     # Remove by index in the actual list stored in the .yyp (not the filtered dict-only list).
     removed = False
@@ -528,13 +648,27 @@ def texture_group_assign(
     dry_run: bool = False,
 ) -> Dict[str, Any]:
     _, yyp_data = load_project_yyp(project_root)
-    if find_texture_group(yyp_data, group_name) is None:
+    group_hit = find_texture_group(yyp_data, group_name)
+    if group_hit is None:
         return {
             "ok": False,
             "dry_run": dry_run,
             "error": f"Texture group '{group_name}' not found",
             "changed_files": [],
         }
+    group_name = group_hit[1]["name"]
+    unknown_configs = _unknown_configs(yyp_data, configs)
+    if unknown_configs:
+        return {
+            "ok": False,
+            "dry_run": dry_run,
+            "error": f"Unknown project config(s): {', '.join(unknown_configs)}",
+            "changed_files": [],
+        }
+    if from_group:
+        from_hit = find_texture_group(yyp_data, from_group)
+        if from_hit is not None:
+            from_group = from_hit[1]["name"]
 
     warnings: List[str] = []
     assets_changed = 0
@@ -554,12 +688,15 @@ def texture_group_assign(
             rel = yy_path.resolve(strict=False).relative_to(project_root.resolve()).as_posix()
             targets.append({"name": Path(rel).stem, "path": rel, "type": "unknown"})
     else:
-        targets = _iter_resource_assets(
-            project_root,
-            asset_type=asset_type,
-            name_contains=name_contains,
-            folder_prefix=folder_prefix,
-        )
+        targets = _iter_resource_assets(project_root, asset_type=asset_type, name_contains=name_contains)
+        if folder_prefix:
+            # Match the asset's logical IDE folder (parent.path), not a substring of its file path.
+            targets = [
+                asset
+                for asset in targets
+                if isinstance(yy := read_asset_yy(project_root, asset["path"]), dict)
+                and _in_logical_folder(yy, folder_prefix)
+            ]
 
     # Apply from_group filter if requested
     if from_group:
@@ -580,6 +717,10 @@ def texture_group_assign(
         yy_path = get_asset_yy_path(project_root, asset["path"])
         yy = read_asset_yy(project_root, asset["path"])
         if yy_path is None or not isinstance(yy, dict):
+            assets_skipped.append(asset.get("name") or asset.get("path") or "unknown")
+            continue
+        if not _asset_supports_texture_groups(yy):
+            # Only assets that carry a textureGroupId (sprites, fonts, tilesets) can be assigned.
             assets_skipped.append(asset.get("name") or asset.get("path") or "unknown")
             continue
 

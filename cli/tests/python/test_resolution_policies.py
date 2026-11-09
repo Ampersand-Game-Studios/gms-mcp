@@ -8,6 +8,7 @@ import os
 import json
 import asyncio
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Annotated
 from unittest.mock import patch
 
@@ -29,7 +30,7 @@ def _policy(root: Path) -> ProjectAccessPolicy:
 
 
 def _resolution_server(runtime: ResolutionRuntime) -> MCPServer:
-    resolver = runtime.safe_delete_resolver()
+    resolver = runtime.safe_delete_resolver("commit_delete")
 
     def commit_delete(asset_type, asset_name, force=False, dry_run=True, project_root=".", decision=...):
         del asset_type, asset_name, force, dry_run, project_root
@@ -291,6 +292,49 @@ class ResolutionPolicyTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(
                 next(group for group in yyp["TextureGroups"] if group["name"] == "Child")["groupParent"], "Default"
             )
+
+    async def test_texture_group_preview_takes_the_same_reassignment_branch_as_the_real_call(self):
+        from gms_mcp.server.resolution import TextureGroupDecision
+
+        evidence = ResolutionEvidence("members", affected_count=2, facts={"group_exists": True, "member_count": 2})
+        for dry_run in (True, False):
+            decision = ResolutionRuntime._automatic_decision(
+                ResolutionPolicy.TEXTURE_GROUP, evidence, {"name": "Temp", "reassign_to": "Default", "dry_run": dry_run}
+            )
+            self.assertEqual(decision, TextureGroupDecision(action="reassign", reassign_to="Default"))
+
+    async def test_calls_the_boundary_will_refuse_are_never_put_to_the_user(self):
+        from mcp.server.mcpserver import Elicit
+
+        from gms_mcp.server.resolution import RoomDeleteDecision
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            room = {"id": {"name": "r_old", "path": "rooms/r_old/r_old.yy"}}
+            (root / "game.yyp").write_text(json.dumps({"resources": [room]}), encoding="utf-8")
+            (root / "rooms" / "r_old").mkdir(parents=True)
+            (root / "rooms" / "r_old" / "r_old.yy").write_text(
+                json.dumps({"resourceType": "GMRoom", "name": "r_old"}), encoding="utf-8"
+            )
+            runtime = ResolutionRuntime(
+                _policy(root),
+                evidence_readers={
+                    ResolutionPolicy.ROOM_DELETE: lambda *_: ResolutionEvidence(
+                        "blocked", affected_count=1, facts={"room_exists": True, "blocked": True}
+                    )
+                },
+            )
+            resolver = runtime.room_delete_resolver("gm_room_ops_delete")
+            ctx = SimpleNamespace(client_capabilities=None)
+            with patch.dict(os.environ, {"GMS_MCP_REQUIRE_DRY_RUN": "1"}, clear=False):
+                os.environ.pop("GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST", None)
+                refused = await resolver("r_old", False, str(root), ctx)
+                os.environ["GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST"] = "gm_room_ops_delete"
+                with patch("gms_mcp.server.resolution.require_form_elicitation_capability"):
+                    asked = await resolver("r_old", False, str(root), ctx)
+
+        self.assertEqual(refused, RoomDeleteDecision(action="cancel"))
+        self.assertIsInstance(asked, Elicit)
 
     async def test_automatic_client_path_injects_the_typed_accepted_decision(self):
         with tempfile.TemporaryDirectory() as temp_dir:

@@ -129,6 +129,54 @@ class TestUpdateNotifier(unittest.TestCase):
         self.assertTrue(second["used_cache"])
         self.assertFalse(second["notification_due"])
 
+    def test_failed_check_backs_off_even_without_persisting(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("gms_mcp.update_notifier.Path.home", return_value=Path(tmpdir)),
+                patch("gms_mcp.update_notifier.get_current_version", return_value="1.0.0"),
+                patch("gms_mcp.update_notifier._utc_now", return_value=5_000.0),
+                patch("gms_mcp.update_notifier.get_latest_version_pypi", return_value=None) as pypi,
+                patch("gms_mcp.update_notifier.get_latest_version_github", return_value=None),
+            ):
+                first = check_for_updates(persist=False)
+                second = check_for_updates(persist=False)
+            self.assertFalse((Path(tmpdir) / ".gms-mcp" / "doctor" / "update_status.json").exists())
+        self.assertEqual(first["status"], "unknown")
+        self.assertEqual(second["status"], "unknown")
+        self.assertEqual(pypi.call_count, 1)
+
+    def test_persisted_failure_backs_off_then_retries(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch("gms_mcp.update_notifier.Path.home", return_value=Path(tmpdir)),
+                patch("gms_mcp.update_notifier.get_current_version", return_value="1.0.0"),
+                patch("gms_mcp.update_notifier.get_latest_version_pypi", return_value=None) as pypi,
+                patch("gms_mcp.update_notifier.get_latest_version_github", return_value=None),
+            ):
+                with patch("gms_mcp.update_notifier._utc_now", return_value=5_000.0):
+                    check_for_updates()
+                    check_for_updates()
+                self.assertEqual(pypi.call_count, 1)
+                with patch("gms_mcp.update_notifier._utc_now", return_value=5_000.0 + 3_601.0):
+                    check_for_updates()
+                self.assertEqual(pypi.call_count, 2)
+            cache_dir = Path(tmpdir) / ".gms-mcp" / "doctor"
+            self.assertEqual([path.name for path in cache_dir.iterdir()], ["update_status.json"])
+
+    def test_disable_env_skips_network(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            with (
+                patch.dict("os.environ", {"GMS_MCP_DISABLE_UPDATE_CHECK": "1"}),
+                patch("gms_mcp.update_notifier.Path.home", return_value=Path(tmpdir)),
+                patch("gms_mcp.update_notifier.get_current_version", return_value="1.0.0"),
+                patch("gms_mcp.update_notifier.get_latest_version_pypi") as pypi,
+                patch("gms_mcp.update_notifier.get_latest_version_github") as github,
+            ):
+                info = check_for_updates(force_refresh=True)
+        self.assertEqual(info["status"], "unknown")
+        pypi.assert_not_called()
+        github.assert_not_called()
+
 
 if __name__ == "__main__":
     unittest.main()

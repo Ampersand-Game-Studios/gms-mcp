@@ -933,6 +933,20 @@ def test_yyp_included_file_collections_reject_malformed_shapes(tmp_path, shape):
     assert not validate_project_after_mutation(tmp_path).success
 
 
+def test_synthetic_project_replaces_only_its_own_folders(tmp_path):
+    foreign = tmp_path / "foreign"
+    foreign.mkdir()
+    (foreign / "keep.txt").write_text("user data")
+    with pytest.raises(ValueError, match="Refusing to replace"):
+        create_synthetic_project(foreign, project_name="fixture", ide_version="2026.0.0.16")
+    assert (foreign / "keep.txt").is_file()
+    own = tmp_path / "own"
+    create_synthetic_project(own, project_name="fixture", ide_version="2026.0.0.16")
+    (own / "stale.txt").write_text("old run")
+    create_synthetic_project(own, project_name="fixture", ide_version="2026.0.0.16")
+    assert not (own / "stale.txt").exists() and (own / "fixture.yyp").is_file()
+
+
 @pytest.mark.parametrize("ide_version", ["2024.14.3.217", "2026.0.0.16"])
 def test_runtime_fixture_accepts_generated_sound_and_included_file_defaults(tmp_path, ide_version):
     create_synthetic_project(tmp_path, project_name="fixture", ide_version=ide_version)
@@ -946,3 +960,29 @@ def test_runtime_fixture_accepts_generated_sound_and_included_file_defaults(tmp_
     save_pretty_json_gm(yyp, data)
     result = validate_project_after_mutation(tmp_path)
     assert result.success, result.errors
+
+
+def test_instance_creation_code_flag_must_match_gamemaker_code_file(tmp_path):
+    project(tmp_path)
+    obj = asset(tmp_path, "objects", "obj", "GMObject")
+    instance = {"name": "inst_a", "resourceType": "GMRInstance", "objectId": obj, "hasCreationCode": True}
+    layer = {"name": "Instances", "resourceType": "GMRInstanceLayer", "instances": [instance]}
+    ref = asset(tmp_path, "rooms", "room", "GMRoom", layers=[layer], instanceCreationOrder=["inst_a"])
+    result = validate_project_after_mutation(tmp_path)
+    assert any("InstanceCreationCode_inst_a.gml is missing" in error for error in result.errors)
+    (tmp_path / ref["path"]).parent.joinpath("InstanceCreationCode_inst_a.gml").write_text("x = 1;\n")
+    assert validate_project_after_mutation(tmp_path).success
+
+
+def test_renamed_or_duplicated_asset_keeps_its_preexisting_findings():
+    from gms_helpers.project_validation import errors_introduced_by_mutation
+
+    before = ["objects/oa/oA.yy: missing parent reference", "rooms/r/r.yy: missing registered target 'objects/x/x.yy'"]
+    renamed = ["objects/ob/oB.yy: missing parent reference", "rooms/r/r.yy: missing registered target 'objects/x/x.yy'"]
+    assert errors_introduced_by_mutation(before, renamed) == ([], renamed)
+
+    duplicated = [*before, "objects/oc/oC.yy: missing parent reference"]
+    assert errors_introduced_by_mutation(before, duplicated) == ([], duplicated)
+
+    broken = [*before, "objects/oc/oC.yy: expected resourceType GMObject"]
+    assert errors_introduced_by_mutation(before, broken)[0] == ["objects/oc/oC.yy: expected resourceType GMObject"]

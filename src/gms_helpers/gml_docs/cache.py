@@ -7,6 +7,8 @@ Stores fetched documentation in ~/.gms-mcp/doc_cache/ with TTL-based expiration.
 from __future__ import annotations
 
 import json
+import os
+import tempfile
 import time
 from dataclasses import asdict, dataclass
 from pathlib import Path
@@ -23,6 +25,24 @@ def _get_cache_dir() -> Path:
     """Get the cache directory, creating if needed."""
     cache_dir = Path.home() / ".gms-mcp" / "doc_cache"
     return cache_dir
+
+
+def _atomic_write_json(path: Path, data: Any) -> None:
+    """Write JSON next to ``path`` and rename it into place, so readers never see a partial file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, tmp_name = tempfile.mkstemp(prefix=f".{path.name}.", suffix=".tmp", dir=path.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            json.dump(data, handle, indent=2)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_name)
+        except OSError:
+            pass
+        raise
 
 
 @dataclass
@@ -90,9 +110,12 @@ class DocCache:
         safe_name = name.lower().replace("/", "_").replace("\\", "_")
         return self.functions_dir / f"{safe_name}.json"
 
-    def get_index(self) -> Optional[Dict[str, FunctionIndexEntry]]:
-        """Get the cached function index."""
-        if self._index is not None:
+    def get_index(self, *, allow_stale: bool = False) -> Optional[Dict[str, FunctionIndexEntry]]:
+        """Get the cached function index.
+
+        ``allow_stale`` returns an expired index too (used when a refresh fails).
+        """
+        if self._index is not None and not allow_stale:
             # Check if in-memory index is still fresh
             if time.time() - self._index_loaded_at < 300:  # 5 min memory cache
                 return self._index
@@ -107,11 +130,12 @@ class DocCache:
 
             # Check if index has expired
             cached_at = data.get("cached_at", 0)
-            if time.time() > cached_at + INDEX_TTL_SECONDS:
-                return None
-
             entries = data.get("entries", {})
-            self._index = {name: FunctionIndexEntry.from_dict(entry) for name, entry in entries.items()}
+            index = {name: FunctionIndexEntry.from_dict(entry) for name, entry in entries.items()}
+            if time.time() > cached_at + INDEX_TTL_SECONDS:
+                return index if allow_stale else None
+
+            self._index = index
             self._index_loaded_at = time.time()
             return self._index
         except (json.JSONDecodeError, KeyError, TypeError):
@@ -119,20 +143,17 @@ class DocCache:
 
     def save_index(self, entries: Dict[str, FunctionIndexEntry]) -> None:
         """Save the function index to cache."""
-        index_path = self._get_index_path()
-        index_path.parent.mkdir(parents=True, exist_ok=True)
         data = {
             "cached_at": time.time(),
             "entries": {name: entry.to_dict() for name, entry in entries.items()},
         }
-        with index_path.open("w", encoding="utf-8") as f:
-            json.dump(data, f, indent=2)
+        _atomic_write_json(self._get_index_path(), data)
 
         self._index = entries
         self._index_loaded_at = time.time()
 
-    def get_function(self, name: str) -> Optional[CachedDoc]:
-        """Get a cached function documentation."""
+    def get_function(self, name: str, *, allow_stale: bool = False) -> Optional[CachedDoc]:
+        """Get a cached function documentation (``allow_stale`` also returns expired entries)."""
         path = self._get_function_path(name)
         if not path.exists():
             return None
@@ -142,7 +163,7 @@ class DocCache:
                 data = json.load(f)
 
             doc = CachedDoc.from_dict(data)
-            if doc.is_expired():
+            if doc.is_expired() and not allow_stale:
                 # Reading stale cache data must not delete it implicitly.
                 return None
             return doc
@@ -151,10 +172,7 @@ class DocCache:
 
     def save_function(self, doc: CachedDoc) -> None:
         """Save function documentation to cache."""
-        path = self._get_function_path(doc.name)
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with path.open("w", encoding="utf-8") as f:
-            json.dump(doc.to_dict(), f, indent=2)
+        _atomic_write_json(self._get_function_path(doc.name), doc.to_dict())
 
     def get_stats(self) -> Dict[str, Any]:
         """Get cache statistics."""

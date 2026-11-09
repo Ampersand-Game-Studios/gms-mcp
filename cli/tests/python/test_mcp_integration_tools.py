@@ -317,6 +317,22 @@ class TestMCPIntegrationTools(unittest.TestCase):
         self.assertTrue(any(error["field"] == "asset_name" for error in result["validation_errors"]))
         self.assertNotIn("transaction", result)
 
+    def test_mcp_boundary_rejects_unsupported_safe_delete_type_before_resolution(self):
+        from mcp.server.mcpserver.exceptions import ToolError
+
+        with patch("gms_helpers.workflow.safe_delete_preflight") as preflight:
+            with self.assertRaisesRegex(ToolError, "asset_type"):
+                self._call_tool(
+                    "gm_safe_delete",
+                    {
+                        "asset_type": "extension",
+                        "asset_name": "Ext",
+                        "dry_run": False,
+                        "project_root": str(self.project_root),
+                    },
+                )
+            preflight.assert_not_called()
+
     def test_default_project_root_cannot_follow_another_direct_calls_cwd(self):
         from gms_mcp.server.direct import _run_direct
 

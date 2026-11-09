@@ -7,7 +7,7 @@ from typing import Any, Callable, Iterable
 
 from .auto_maintenance import handle_maintenance_failure, run_auto_maintenance, validate_asset_creation_safe
 from .base_asset import preflight_asset_destination
-from .utils import update_yyp_file, validate_name, validate_parent_path_for_project
+from .utils import find_yyp, load_json, save_json, update_yyp_file, validate_name, validate_parent_path_for_project
 
 
 def run_pre_creation_maintenance(args: Any, operation: str) -> Any:
@@ -59,6 +59,33 @@ def preflight_asset_creation(args: Any, asset: Any, asset_type: str) -> dict[str
     )
 
 
+def append_room_order_node(project_root: Path, room_name: str, room_path: str) -> bool:
+    """Append a new room to RoomOrderNodes, as the GameMaker IDE does on room creation.
+
+    Rooms missing from the room order are not part of the game's room sequence
+    (``room_next``/``room_previous``), and a project whose order is empty has no
+    startup room.
+    """
+    yyp_file = find_yyp(Path(project_root).resolve())
+    project_data = load_json(yyp_file)
+    room_order = project_data.setdefault("RoomOrderNodes", [])
+    if not isinstance(room_order, list):
+        print("[ERROR] Project RoomOrderNodes must be a list")
+        return False
+    normalized = room_path.replace("\\", "/").casefold()
+    if any(
+        isinstance(node, dict)
+        and isinstance(node.get("roomId"), dict)
+        and str(node["roomId"].get("path", "")).replace("\\", "/").casefold() == normalized
+        for node in room_order
+    ):
+        return True
+    room_order.append({"roomId": {"name": room_name, "path": room_path}})
+    save_json(project_data, yyp_file)
+    print(f"[OK] Added '{room_name}' to RoomOrderNodes")
+    return True
+
+
 def create_project_asset(
     args: Any,
     *,
@@ -101,6 +128,8 @@ def create_project_asset(
 
     if not update_yyp_file(resource_entry, project_root=project_root):
         print(f"[ERROR] Failed to update .yyp file for {label.lower()} '{args.name}'")
+        return False
+    if asset_type == "room" and not append_room_order_node(project_root, args.name, relative_path):
         return False
 
     print(success_message or f"[OK] {label} '{args.name}' created successfully")

@@ -6,6 +6,7 @@ All notable changes to this project will be documented in this file.
 
 ### Changed
 - Raise the minimum Python version to 3.11 so image imports can use Pillow 13 security fixes.
+- **OpenClaw global setup now works.** `--client openclaw --scope global` saves the server with `openclaw mcp set` into OpenClaw's own config (`~/.openclaw/openclaw.json`, `mcp.servers`) instead of writing `~/.openclaw/mcp.json`, which OpenClaw never read. It needs the `openclaw` CLI on PATH and the OpenClaw Gateway stopped; `check` reads the entry back with `openclaw mcp show`.
 
 ### Security
 - Require Pillow 13 and OpenTelemetry SDK 1.45.1 or newer to remove known vulnerabilities from image-import and development dependencies.

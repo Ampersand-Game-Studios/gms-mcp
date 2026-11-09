@@ -21,7 +21,7 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from gms_helpers import asset_helper
-from gms_helpers.exceptions import GMSError, ProjectNotFoundError
+from gms_helpers.exceptions import AssetNotFoundError, GMSError, ProjectNotFoundError
 
 
 def _capture_output(func, *args, **kwargs):
@@ -142,13 +142,12 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
         for func_name, class_name, args, _ in CREATE_CASES:
             with self.subTest(func=func_name):
                 with ExitStack() as stack:
-                    if func_name == "create_script":
-                        stack.enter_context(
-                            patch(
-                                "gms_helpers.asset_cli.create.validate_asset_directory_structure",
-                                return_value=Path("/tmp/project"),
-                            )
+                    stack.enter_context(
+                        patch(
+                            "gms_helpers.asset_cli.create.validate_asset_directory_structure",
+                            return_value=Path("/tmp/project"),
                         )
+                    )
                     stack.enter_context(
                         patch(
                             "gms_helpers.asset_creation_flow.run_auto_maintenance",
@@ -189,13 +188,12 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
         for func_name, class_name, args, relative_path in CREATE_CASES:
             with self.subTest(func=func_name):
                 with ExitStack() as stack:
-                    if func_name == "create_script":
-                        stack.enter_context(
-                            patch(
-                                "gms_helpers.asset_cli.create.validate_asset_directory_structure",
-                                return_value=Path("/tmp/project"),
-                            )
+                    stack.enter_context(
+                        patch(
+                            "gms_helpers.asset_cli.create.validate_asset_directory_structure",
+                            return_value=Path("/tmp/project"),
                         )
+                    )
                     stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_name"))
                     stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path_for_project"))
                     stack.enter_context(patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=False))
@@ -214,13 +212,12 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
         for func_name, class_name, args, _ in CREATE_CASES:
             with self.subTest(func=func_name):
                 with ExitStack() as stack:
-                    if func_name == "create_script":
-                        stack.enter_context(
-                            patch(
-                                "gms_helpers.asset_cli.create.validate_asset_directory_structure",
-                                return_value=Path("/tmp/project"),
-                            )
+                    stack.enter_context(
+                        patch(
+                            "gms_helpers.asset_cli.create.validate_asset_directory_structure",
+                            return_value=Path("/tmp/project"),
                         )
+                    )
                     stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_name"))
                     stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path_for_project"))
                     asset_cls = stack.enter_context(patch(f"gms_helpers.asset_cli.create.{class_name}"))
@@ -248,13 +245,12 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
         for func_name, class_name, args, relative_path in CREATE_CASES:
             with self.subTest(func=func_name):
                 with ExitStack() as stack:
-                    if func_name == "create_script":
-                        stack.enter_context(
-                            patch(
-                                "gms_helpers.asset_cli.create.validate_asset_directory_structure",
-                                return_value=Path("/tmp/project"),
-                            )
+                    stack.enter_context(
+                        patch(
+                            "gms_helpers.asset_cli.create.validate_asset_directory_structure",
+                            return_value=Path("/tmp/project"),
                         )
+                    )
                     stack.enter_context(
                         patch(
                             "gms_helpers.asset_creation_flow.run_auto_maintenance",
@@ -267,6 +263,7 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                     stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_name"))
                     stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path_for_project"))
                     stack.enter_context(patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=True))
+                    stack.enter_context(patch("gms_helpers.asset_creation_flow.append_room_order_node", return_value=True))
                     handler = stack.enter_context(
                         patch("gms_helpers.asset_creation_flow.handle_maintenance_failure", return_value="post-failed")
                     )
@@ -304,83 +301,75 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
         self.assertFalse(result)
         self.assertIn("Unsupported asset type", output)
 
-        missing = _create_args("missing", asset_type="script", skip_maintenance=True)
-        with (
-            patch("gms_helpers.utils.find_yyp_file", return_value="project.yyp"),
-            patch(
-                "gms_helpers.utils.load_json",
-                return_value={"resources": []},
-            ),
-        ):
-            result, output = _capture_output(asset_helper.delete_asset, missing)
-        self.assertFalse(result)
-        self.assertIn("not found in project", output)
-
-        dry_run_args = _create_args("test_asset", asset_type="script", dry_run=True, skip_maintenance=True)
-        with (
-            patch("gms_helpers.utils.find_yyp_file", return_value="project.yyp"),
-            patch(
-                "gms_helpers.utils.load_json",
-                return_value={
-                    "resources": [{"id": {"name": "test_asset", "path": "scripts/test_asset/test_asset.yy"}}]
-                },
-            ),
-            patch("pathlib.Path.exists", return_value=False),
-        ):
-            result, output = _capture_output(asset_helper.delete_asset, dry_run_args)
-        self.assertTrue(result)
-        self.assertIn("No files found on disk", output)
-
         with tempfile.TemporaryDirectory() as temp_dir:
             project_root = Path(temp_dir)
             yyp_file = project_root / "game.yyp"
             yyp_file.write_text(
-                json.dumps(
-                    {
-                        "resources": [
-                            {
-                                "id": {
-                                    "name": "test_asset",
-                                    "path": "scripts/test_asset/test_asset.yy",
-                                }
-                            }
-                        ]
-                    }
-                ),
+                json.dumps({"resources": [{"id": {"name": "test_asset", "path": "scripts/test_asset/test_asset.yy"}}]}),
                 encoding="utf-8",
             )
-            asset_dir = project_root / "scripts" / "test_asset"
-            asset_dir.mkdir(parents=True)
-            (asset_dir / "test_asset.yy").write_text("{}", encoding="utf-8")
+            cwd_before = Path.cwd()
+            os.chdir(project_root)
+            try:
+                missing = _create_args("missing", asset_type="script", skip_maintenance=True)
+                result, output = _capture_output(asset_helper.delete_asset, missing)
+                self.assertFalse(result)
+                self.assertIn("not found in project", output)
 
-            delete_args = _create_args("test_asset", asset_type="script", skip_maintenance=False)
-            with ExitStack() as stack:
-                stack.enter_context(patch("gms_helpers.utils.find_yyp_file", return_value=str(yyp_file)))
-                stack.enter_context(
-                    patch(
-                        "gms_helpers.asset_cli.delete.run_auto_maintenance",
-                        side_effect=[_maintenance_result(False), _maintenance_result(True)],
+                dry_run_args = _create_args("test_asset", asset_type="script", dry_run=True, skip_maintenance=True)
+                result, output = _capture_output(asset_helper.delete_asset, dry_run_args)
+                self.assertTrue(result)
+                self.assertIn("No files found on disk", output)
+
+                asset_dir = project_root / "scripts" / "test_asset"
+                asset_dir.mkdir(parents=True)
+                (asset_dir / "test_asset.yy").write_text("{}", encoding="utf-8")
+
+                delete_args = _create_args("test_asset", asset_type="script", skip_maintenance=False)
+                with ExitStack() as stack:
+                    stack.enter_context(
+                        patch(
+                            "gms_helpers.asset_cli.delete.run_auto_maintenance",
+                            side_effect=[_maintenance_result(False), _maintenance_result(True)],
+                        )
                     )
-                )
-                stack.enter_context(
-                    patch("gms_helpers.asset_cli.delete.validate_asset_creation_safe", return_value=True)
-                )
-                handler = stack.enter_context(
-                    patch("gms_helpers.asset_cli.delete.handle_maintenance_failure", return_value="delete-post-failed")
-                )
-                stack.enter_context(
-                    patch("gms_helpers.transactions.transactional_rmtree", side_effect=OSError("unlink failed"))
-                )
-                cwd_before = Path.cwd()
-                os.chdir(project_root)
-                try:
+                    stack.enter_context(
+                        patch("gms_helpers.asset_cli.delete.validate_asset_creation_safe", return_value=True)
+                    )
+                    stack.enter_context(
+                        patch("gms_helpers.transactions.transactional_rmtree", side_effect=OSError("unlink failed"))
+                    )
                     result, output = _capture_output(asset_helper.delete_asset, delete_args)
-                finally:
-                    os.chdir(cwd_before)
+                # A failed file deletion is a failed delete (the caller's transaction rolls back).
+                self.assertFalse(result)
+                self.assertIn("Could not delete files on disk", output)
 
-        self.assertEqual(result, "delete-post-failed")
-        self.assertIn("Warning: Could not delete files on disk", output)
-        handler.assert_called_once()
+                with ExitStack() as stack:
+                    stack.enter_context(
+                        patch(
+                            "gms_helpers.asset_cli.delete.run_auto_maintenance",
+                            side_effect=[_maintenance_result(False), _maintenance_result(True)],
+                        )
+                    )
+                    stack.enter_context(
+                        patch("gms_helpers.asset_cli.delete.validate_asset_creation_safe", return_value=True)
+                    )
+                    handler = stack.enter_context(
+                        patch(
+                            "gms_helpers.asset_cli.delete.handle_maintenance_failure", return_value="delete-post-failed"
+                        )
+                    )
+                    yyp_file.write_text(
+                        json.dumps(
+                            {"resources": [{"id": {"name": "test_asset", "path": "scripts/test_asset/test_asset.yy"}}]}
+                        ),
+                        encoding="utf-8",
+                    )
+                    result, output = _capture_output(asset_helper.delete_asset, delete_args)
+                self.assertEqual(result, "delete-post-failed")
+                handler.assert_called_once()
+            finally:
+                os.chdir(cwd_before)
 
     def test_maintenance_and_folder_command_error_paths(self):
         command_cases = [
@@ -418,7 +407,10 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                 self.assertFalse(result)
                 self.assertIn(str(exc), output)
 
-        with patch("gms_helpers.asset_cli.maintenance.find_missing_assets", side_effect=RuntimeError("missing fail")):
+        with (
+            patch("gms_helpers.asset_cli.maintenance.find_orphaned_assets", return_value=[]),
+            patch("gms_helpers.asset_cli.maintenance.find_missing_assets", side_effect=RuntimeError("missing fail")),
+        ):
             result, output = _capture_output(asset_helper.maint_list_orphans_command, _create_args("orphans"))
         self.assertFalse(result)
         self.assertIn("missing fail", output)
@@ -479,7 +471,10 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
         self.assertIn("list fail", output)
 
     def test_sync_clean_audit_and_purge_command_branches(self):
-        with patch("os.path.exists", return_value=False):
+        with patch(
+            "gms_helpers.project_validation.resolve_asset_reference",
+            side_effect=AssetNotFoundError("Reference 'o_missing' is not a registered object"),
+        ):
             result, output = _capture_output(
                 asset_helper.maint_sync_events_command,
                 _create_args("sync", fix=False, object="o_missing"),
@@ -571,7 +566,7 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                 asset_helper.maint_purge_command,
                 _create_args("purge", apply=True, delete=True),
             )
-        self.assertTrue(result)
+        self.assertFalse(result)
         self.assertIn("trash fail", output)
         self.assertIn("Final deletion from trash folder not yet implemented", output)
 

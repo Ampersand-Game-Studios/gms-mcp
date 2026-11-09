@@ -400,7 +400,7 @@ python -m gms_helpers.event_helper fix o_enemy --no-safe-mode
 ### Options
 - `--template [file]` - Use custom template file for event content
 - `--keep-file` - Keep GML file when removing an event
-- `--no-safe-mode` - Allow potentially destructive fixes
+- `--no-safe-mode` - Also register orphaned `.gml` files as new events (safe mode only creates empty files for events the `.yy` already declares)
 
 ---
 
@@ -640,9 +640,11 @@ python -m gms_helpers.asset_helper delete sprite spr_unused                  # R
 
 ### Delete Options
 - `--dry-run` - Preview what would be deleted without making changes
-- Supports all asset types: script, object, sprite, room, folder, font, shader, animcurve, sound, path, tileset, timeline, sequence, note
-- Removes both .yyp entries and disk files/folders
-- Runs automatic maintenance validation before and after deletion
+- Supports script, object, sprite, room, font, shader, animcurve, sound, path, tileset, timeline, sequence and note (remove logical folders with `maint remove-folder`)
+- Finds the asset by its registered `.yyp` path; the asset must be registered under the requested type's directory (`delete script o_player` is refused)
+- Removes the `.yyp` entry, its resource-order and `RoomOrderNodes` entries, and the asset folder
+- Runs report-only maintenance before and after deletion; it never deletes or rewrites anything else
+- Runs inside the same project lock and rollback journal as `gms` commands
 
 ### Global Options
 - `--skip-maintenance` - Skip automatic maintenance operations (not recommended)
@@ -760,17 +762,20 @@ The auto-maintenance system performs a comprehensive 9-step health check:
 2. **Path Validation** - Verify all folder references are valid
 3. **JSON Fixes** - Repair trailing comma issues in .yy files
 4. **Missing Assets** - Remove references to deleted/missing assets
-5. **Event Sync** - Ensure object events match physical .gml files
-6. **Old File Cleanup** - Remove .bak and other temporary files
-7. **Duplicate Detection** - Find and report duplicate resource entries
-8. **Orphan Cleanup** - Remove orphaned asset files (with safety checks)
+5. **Event Sync** - Ensure object events match physical .gml files (missing event files are created empty)
+6. **Unused Folder Cleanup** - Move unregistered asset folders (only folders holding a parseable `<name>/<name>.yy`) to the project trash
+7. **Old File Cleanup** - Move `.old.yy` backup files to the project trash
+8. **Orphan Cleanup** - Move orphaned asset files to the project trash (with safety checks)
 9. **Multi-Asset Directories** - Detect problematic asset organization
+
+Steps 5-8 change files only in fix mode, and are skipped (report only) when steps 1-4 report errors. Trashed files go to `.maintenance_trash/<batch>/` with a `MANIFEST.txt`; `gms_helpers.maintenance.trash.restore_from_trash(project_root, batch)` moves a batch back.
 
 ### Orphan Cleanup Safety Features
 The orphan cleanup system includes comprehensive safety checks to prevent accidental deletion:
 
 - **Multi-Asset Directory Protection** - Won't delete companion files (`.gml`, `.png`) if multiple assets exist in the same directory
 - **UUID-Based Sprite Attribution** - Matches sprite PNG files to their exact `.yy` file using UUID references
+- **Relocated Asset Protection** - Keeps an orphan whose name matches a registered asset whose files are missing (it may be the only copy)
 - **Safety Warnings** - Reports when companion files are protected from deletion
 - **Comprehensive Logging** - Shows exactly what was deleted vs. what was protected
 
@@ -810,7 +815,9 @@ python -m gms_helpers.room_layer_helper [command] [arguments]
 ```bash
 python -m gms_helpers.room_layer_helper add-layer r_game "lyr_enemies" --type instance --depth 4150
 python -m gms_helpers.room_layer_helper add-layer r_game "Background" --type background --depth 5000
+python -m gms_helpers.room_layer_helper add-layer r_game "Tiles" --type tile --tileset ts_world
 ```
+Without `--depth` the layer goes on top of the existing layers. Tile layers need `--tileset`.
 
 - **remove-layer** - Remove a layer from a room
 ```bash
@@ -879,6 +886,7 @@ python -m gms_helpers.room_instance_helper modify-instance r_game inst_12345678 
 ```bash
 python -m gms_helpers.room_instance_helper set-creation-code r_game inst_12345678 --code "hp = 100; damage = 25;"
 ```
+The code is written to `rooms/<room>/InstanceCreationCode_<instance>.gml`, the file GameMaker reads.
 
 ### Instance Options
 - `--x, --y` - Position coordinates

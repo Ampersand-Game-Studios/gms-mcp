@@ -7,7 +7,7 @@
   "workers_dev": false,
   "preview_urls": false,
   "keep_vars": true,
-  "observability": { "enabled": false },
+  "observability": { "enabled": true, "logs": { "enabled": true, "invocation_logs": false } },
   "ratelimits": [
     { "name": "INGEST_IP_LIMITER", "namespace_id": "761301", "simple": { "limit": 60, "period": 60 } },
     { "name": "INGEST_EDGE_LIMITER", "namespace_id": "761302", "simple": { "limit": 300, "period": 60 } }
@@ -19,7 +19,7 @@
   "r2_buckets": [{ "binding": "TELEMETRY_BUCKET", "bucket_name": "gms-mcp-telemetry-prod" }],
   "queues": {
     "producers": [{ "binding": "TELEMETRY_QUEUE", "queue": "gms-mcp-telemetry-events" }],
-    "consumers": [{ "queue": "gms-mcp-telemetry-events", "max_batch_size": 50, "max_batch_timeout": 5, "max_retries": 3 }]
+    "consumers": [{ "queue": "gms-mcp-telemetry-events", "max_batch_size": 50, "max_batch_timeout": 5, "max_retries": 3, "dead_letter_queue": "gms-mcp-telemetry-events-dlq" }]
   },
   "triggers": { "crons": ["15 2 * * *"] }
 }

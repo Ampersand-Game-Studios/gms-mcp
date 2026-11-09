@@ -85,6 +85,23 @@ class TestRuntimeManager(unittest.TestCase):
             )
             self.assertEqual(self.manager.select(), lts)
 
+    def test_select_stays_on_recorded_channel_and_reports_fallback(self):
+        beta = RuntimeInfo("2024.1400.0.900", "/beta", "/beta/Igor", True, "beta")
+        lts = RuntimeInfo("2026.0.0.23", "/lts", "/lts/Igor", True, "lts")
+        stable = RuntimeInfo("2024.14.4.268", "/stable", "/stable/Igor", True, "stable")
+        (self.project_root / "TestGame.yyp").write_text('{"MetaData":{"IDEVersion":"2024.13.0.200"}}', encoding="utf-8")
+
+        with mock.patch.object(RuntimeManager, "list_installed", return_value=[lts, beta, stable]):
+            self.assertEqual(self.manager.select(), stable)
+            self.assertIn("2024.13.0.200", self.manager.selection_note)
+            self.assertIn("2024.14.4.268", self.manager.selection_note)
+            self.assertIn(self.manager.selection_note, self.manager.discovery_diagnostics)
+
+        (self.project_root / "TestGame.yyp").write_text("{}", encoding="utf-8")
+        with mock.patch.object(RuntimeManager, "list_installed", return_value=[beta, stable]):
+            self.assertEqual(self.manager.select(), stable)
+            self.assertIn("records no runtime", self.manager.selection_note)
+
     def test_classify_runtime_channel_handles_lts2026_and_beta_series(self):
         self.assertEqual(classify_runtime_channel("2026.0.0.23"), "lts")
         self.assertEqual(classify_runtime_channel("runtime-2026.0.0.23"), "lts")

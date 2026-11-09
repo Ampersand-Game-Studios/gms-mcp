@@ -11,6 +11,8 @@ from .asset_types import RoomAsset
 
 
 _SAFE_PROJECT_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
+# Written into every synthetic project; only a folder carrying it may be replaced.
+SYNTHETIC_SENTINEL = ".gms-mcp-synthetic-project"
 
 
 def create_synthetic_project(project_root: Path, *, project_name: str, ide_version: str) -> Path:
@@ -22,8 +24,17 @@ def create_synthetic_project(project_root: Path, *, project_name: str, ide_versi
 
     project_root = Path(project_root).resolve()
     if project_root.exists():
-        shutil.rmtree(project_root)
-    project_root.mkdir(parents=True)
+        if not project_root.is_dir():
+            raise ValueError(f"Synthetic project target is not a directory: {project_root}")
+        if any(project_root.iterdir()):
+            if not (project_root / SYNTHETIC_SENTINEL).is_file():
+                raise ValueError(
+                    f"Refusing to replace {project_root}: it is not empty and was not created as a synthetic "
+                    "project. Choose an empty or new directory."
+                )
+            shutil.rmtree(project_root)
+    project_root.mkdir(parents=True, exist_ok=True)
+    (project_root / SYNTHETIC_SENTINEL).write_text("synthetic gms-mcp smoke project\n", encoding="utf-8")
     for directory in (
         "animcurves",
         "fonts",

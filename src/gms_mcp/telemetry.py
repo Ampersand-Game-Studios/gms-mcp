@@ -22,6 +22,7 @@ from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Iterable, Iterator
 
+from .ci_detection import is_ci_environment
 from .update_notifier import get_current_version
 
 SCHEMA_VERSION = 1
@@ -34,9 +35,10 @@ MAX_BATCH_EVENTS = 50
 MAX_BATCH_BYTES = 128 * 1024
 MAX_SPOOL_EVENTS = 1000
 MAX_SPOOL_BYTES = 1024 * 1024
-MAX_SPOOL_AGE_SECONDS = 7 * 24 * 60 * 60
 UPLOAD_TIMEOUT_SECONDS = 5
 LOCK_STALE_SECONDS = 15 * 60
+QUEUE_LOCK_TIMEOUT_SECONDS = 0.25
+_LOCK_POLL_SECONDS = 0.01
 BACKGROUND_FLUSH_COOLDOWN_SECONDS = 60
 PROMPT_TEXT = (
     "Help improve gms-mcp by sending limited usage telemetry to "
@@ -48,7 +50,6 @@ PROMPT_TEXT = (
 )
 _OVERRIDE_VALUES = {"inherit", "on", "off"}
 _STATE_VALUES = {"enabled", "disabled"}
-_CI_ENV_KEYS = ("CI", "GITHUB_ACTIONS")
 _TEST_ENV_KEYS = ("PYTEST_CURRENT_TEST", "GMS_TEST_SUITE")
 SUPPRESS_CLI_TELEMETRY_ENV_VAR = "GMS_MCP_TELEMETRY_SUPPRESS_CLI"
 _TOOL_EXECUTION_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = contextvars.ContextVar(
@@ -58,7 +59,74 @@ _TOOL_EXECUTION_CONTEXT: contextvars.ContextVar[dict[str, Any] | None] = context
 _SESSION_ID = uuid.uuid4().hex
 _LAST_BACKGROUND_FLUSH_AT = 0.0
 _STATE_LOCK = threading.Lock()
+_UPLOAD_LOCK = threading.Lock()
 _PENDING_FILENAME = re.compile(r"\.gms-mcp-telemetry-pending-[a-f0-9]{32}-[A-Za-z0-9_-]+\.json")
+
+# Closed event schema. Mirrors services/telemetry/src/event-schema.json, which the
+# ingest worker enforces; test_telemetry_schema_parity keeps the two identical.
+EVENT_FIELD_RULES: dict[str, dict[str, Any]] = {
+    "schema_version": {"type": "integer", "required": True},
+    "event_id": {"type": "string", "required": True, "maxLength": 64},
+    "session_id": {"type": "string", "required": True, "maxLength": 64},
+    "timestamp": {"type": "string", "required": True, "maxLength": 32},
+    "surface": {"type": "string", "required": True, "maxLength": 16},
+    "event_type": {"type": "string", "required": True, "maxLength": 32},
+    "action": {"type": "string", "required": True, "maxLength": 64},
+    "tool_name": {"type": "string", "required": True, "maxLength": 64},
+    "tool_family": {"type": "string", "required": True, "maxLength": 32},
+    "result": {"type": "string", "required": True, "maxLength": 16},
+    "error_family": {"type": "string", "required": False, "maxLength": 32},
+    "duration_ms": {"type": "integer", "required": False},
+    "duration_bucket": {"type": "string", "required": False, "maxLength": 16},
+    "execution_mode": {"type": "string", "required": False, "maxLength": 32},
+    "gms_mcp_version": {"type": "string", "required": True, "maxLength": 32},
+    "os_family": {"type": "string", "required": True, "maxLength": 16},
+    "python_version": {"type": "string", "required": True, "maxLength": 16},
+    "interactive": {"type": "boolean", "required": True},
+    "ci": {"type": "boolean", "required": True},
+    "test_env": {"type": "boolean", "required": True},
+    "install_hash": {"type": "string", "required": False, "maxLength": 128},
+}
+EVENT_TOKEN_PATTERN = r"^[A-Za-z0-9_.+:-]+$"
+EVENT_SURFACES = {
+    "cli.command": "cli",
+    "telemetry.consent_changed": "cli",
+    "mcp.tool": "mcp",
+    "mcp.server_start": "mcp",
+    "init.run": "init",
+    "init.codex_check": "init",
+}
+EVENT_RESULTS = ("ok", "error", "cancelled")
+EVENT_ERROR_FAMILIES = (
+    "timeout",
+    "cancelled",
+    "missing_dependency",
+    "permission",
+    "not_found",
+    "network",
+    "validation",
+    "system_exit",
+    "runtime",
+    "unexpected",
+    "project_access",
+)
+EVENT_DURATION_BUCKETS = ("lt_100", "100_499", "500_999", "1000_4999", "5000_29999", "ge_30000")
+EVENT_MAX_DURATION_MS = 7 * 24 * 60 * 60 * 1000
+EVENT_MAX_AGE_MS = 7 * 24 * 60 * 60 * 1000
+EVENT_MAX_CLOCK_SKEW_MS = 5 * 60 * 1000
+EVENT_VERSION_PATTERN = (
+    r"^\d+(?:\.\d+)*(?:(?:a|b|rc)\d+)?(?:\.post\d+)?(?:\.dev\d+)?(?:\+[a-z0-9]+(?:[._-][a-z0-9]+)*)?$"
+)
+EVENT_PYTHON_VERSION_PATTERN = r"^\d+\.\d+$"
+EVENT_TIMESTAMP_PATTERN = r"^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$"
+_TOKEN_RE = re.compile(EVENT_TOKEN_PATTERN, re.ASCII)
+_VERSION_RE = re.compile(EVENT_VERSION_PATTERN, re.ASCII | re.IGNORECASE)
+_PYTHON_VERSION_RE = re.compile(EVENT_PYTHON_VERSION_PATTERN, re.ASCII)
+_TIMESTAMP_RE = re.compile(EVENT_TIMESTAMP_PATTERN, re.ASCII)
+_HEX32_RE = re.compile(r"[a-f0-9]{32}")
+_HEX64_RE = re.compile(r"[a-f0-9]{64}")
+# Client errors the service will never accept on retry; the batch is discarded.
+_RETRYABLE_HTTP_STATUSES = {408, 429}
 
 
 @dataclass(frozen=True)
@@ -144,35 +212,92 @@ def _recover_pending_files(root: Path) -> None:
             _fsync_directory(directory)
 
 
+def _lock_file(handle: Any, *, deadline: float | None) -> None:
+    """Take an exclusive byte-range/flock lock, polling until ``deadline`` when given."""
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        if deadline is None:
+            msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
+            return
+        while True:
+            try:
+                msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)
+                return
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("Telemetry lock is busy.") from None
+                time.sleep(_LOCK_POLL_SECONDS)
+    import fcntl
+
+    if deadline is None:
+        fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+        return
+    while True:
+        try:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+            return
+        except BlockingIOError:
+            if time.monotonic() >= deadline:
+                raise TimeoutError("Telemetry lock is busy.") from None
+            time.sleep(_LOCK_POLL_SECONDS)
+
+
+def _unlock_file(handle: Any) -> None:
+    handle.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
+    else:
+        import fcntl
+
+        fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+
+
 @contextmanager
-def _state_guard() -> Iterator[None]:
-    """Serialize consent changes, queue writes and each upload across processes."""
-    with _STATE_LOCK:
-        path = telemetry_root() / "state.lock"
+def _file_lock(name: str, thread_lock: threading.Lock, *, timeout: float | None = None) -> Iterator[Path]:
+    deadline = None if timeout is None else time.monotonic() + timeout
+    if not thread_lock.acquire(timeout=-1 if timeout is None else timeout):
+        raise TimeoutError("Telemetry lock is busy.")
+    try:
+        path = telemetry_root() / name
         if path.is_symlink():
             raise ValueError("Telemetry lock must not be a symlink.")
         with path.open("a+b") as handle:
             if handle.seek(0, os.SEEK_END) == 0:
                 handle.write(b"\0")
                 handle.flush()
-            handle.seek(0)
-            if os.name == "nt":
-                import msvcrt
-
-                msvcrt.locking(handle.fileno(), msvcrt.LK_LOCK, 1)
-            else:
-                import fcntl
-
-                fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            _lock_file(handle, deadline=deadline)
             try:
-                _recover_pending_files(path.parent)
-                yield
+                yield path
             finally:
-                handle.seek(0)
-                if os.name == "nt":
-                    msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)
-                else:
-                    fcntl.flock(handle.fileno(), fcntl.LOCK_UN)
+                _unlock_file(handle)
+    finally:
+        thread_lock.release()
+
+
+@contextmanager
+def _state_guard(*, timeout: float | None = None) -> Iterator[None]:
+    """Serialize consent changes, queue writes and spool reads across processes.
+
+    Never held across network I/O, so short ``timeout`` waits stay short.
+    """
+    with _file_lock("state.lock", _STATE_LOCK, timeout=timeout) as path:
+        _recover_pending_files(path.parent)
+        yield
+
+
+@contextmanager
+def _upload_guard() -> Iterator[None]:
+    """Held for the duration of one upload; consent withdrawal waits for it.
+
+    Lock order is always upload -> state, and the state lock is never held while
+    waiting for this one.
+    """
+    with _file_lock("upload.lock", _UPLOAD_LOCK):
+        yield
 
 
 def telemetry_lock_path() -> Path:
@@ -205,7 +330,7 @@ def _interactive_stdin() -> bool:
 
 
 def _ci_enabled() -> bool:
-    return any(bool(os.environ.get(key)) for key in _CI_ENV_KEYS)
+    return is_ci_environment()
 
 
 def _test_env_enabled() -> bool:
@@ -302,7 +427,7 @@ def save_config(*, consent: str | None, include_install_hash: bool, install_hash
 
 def enable_telemetry(*, include_install_hash: bool = False) -> TelemetryConfig:
     install_hash = _generate_install_hash() if include_install_hash else None
-    with _state_guard():
+    with _upload_guard(), _state_guard():
         config = save_config(consent="enabled", include_install_hash=include_install_hash, install_hash=install_hash)
         spool = telemetry_root() / SPOOL_SUBDIR
         if not include_install_hash and spool.exists():
@@ -316,7 +441,7 @@ def enable_telemetry(*, include_install_hash: bool = False) -> TelemetryConfig:
 
 
 def disable_telemetry() -> TelemetryConfig:
-    with _state_guard():
+    with _upload_guard(), _state_guard():
         config = save_config(consent="disabled", include_install_hash=False, install_hash=None)
         clear_spool()
         return config
@@ -378,7 +503,12 @@ def should_prompt_for_consent(*, cli_override: str | None = None, allow_prompt: 
 
 def prompt_for_consent() -> bool:
     while True:
-        choice = input(PROMPT_TEXT).strip().lower()
+        try:
+            choice = input(PROMPT_TEXT).strip().lower()
+        except EOFError:
+            # No answer is possible (stdin closed); leave the decision unmade.
+            print()
+            return False
         if choice in {"", "n", "no"}:
             disable_telemetry()
             return False
@@ -497,7 +627,8 @@ def queue_event(
             "test_env": active_state.test_env,
         }
         record = {key: value for key, value in payload.items() if value is not None}
-        with _state_guard():
+        # Called from the MCP event loop after tool calls: never wait long for the lock.
+        with _state_guard(timeout=QUEUE_LOCK_TIMEOUT_SECONDS):
             config = load_config()
             if config.consent == "disabled":
                 return False
@@ -513,8 +644,11 @@ def queue_event(
         return False
 
 
-def emit_consent_changed(action: str) -> None:
+def emit_consent_changed(action: str, *, cli_override: str | None = None) -> None:
     if action != "enable":
+        return
+    # A per-run "off" (CLI flag or GMS_MCP_TELEMETRY) still wins over the saved consent.
+    if not resolve_state(cli_override).enabled:
         return
     config = load_config()
     state = TelemetryState(
@@ -539,7 +673,7 @@ def emit_consent_changed(action: str) -> None:
         execution_mode="inline",
         force=True,
     )
-    maybe_start_background_flush(force=True)
+    maybe_start_background_flush(force=True, cli_override=cli_override)
 
 
 def count_spool_events() -> int:
@@ -547,75 +681,59 @@ def count_spool_events() -> int:
     return sum(1 for path in telemetry_spool_dir().glob("*.ndjson") if path.is_file())
 
 
-def _valid_spool_event(event: Any) -> bool:
-    """Reject arbitrary payload fields and free-form diagnostics before storage/upload."""
-    if not isinstance(event, dict) or event.get("schema_version") != SCHEMA_VERSION:
+def _valid_spool_event(event: Any, *, now: float | None = None) -> bool:
+    """Apply the ingest service's closed schema so the service never rejects a stored event."""
+    if not isinstance(event, dict) or set(event) - set(EVENT_FIELD_RULES):
         return False
-    fields = {
-        "schema_version",
-        "event_id",
-        "session_id",
-        "timestamp",
-        "surface",
-        "event_type",
-        "action",
-        "tool_name",
-        "tool_family",
-        "result",
-        "error_family",
-        "duration_ms",
-        "duration_bucket",
-        "execution_mode",
-        "gms_mcp_version",
-        "os_family",
-        "python_version",
-        "interactive",
-        "ci",
-        "test_env",
-        "install_hash",
-    }
-    if set(event) - fields:
-        return False
-    required = fields - {"error_family", "duration_ms", "duration_bucket", "execution_mode", "install_hash"}
-    if not required.issubset(event):
-        return False
-    if any(type(event[key]) is not bool for key in ("interactive", "ci", "test_env")):
-        return False
-    if event["ci"] or event["test_env"] or event["result"] not in {"ok", "error", "cancelled"}:
-        return False
-    if event["surface"] not in {"cli", "mcp", "init"}:
-        return False
-    for key in ("event_id", "session_id"):
-        if not re.fullmatch(r"[a-f0-9]{32}", str(event.get(key, ""))):
+    for key, rule in EVENT_FIELD_RULES.items():
+        value = event.get(key)
+        if value is None:
+            if rule["required"] or key in event:
+                return False
+            continue
+        if rule["type"] == "string":
+            if (
+                not isinstance(value, str)
+                or not value
+                or value != value.strip()
+                or len(value) > rule["maxLength"]
+                or (key != "timestamp" and not _TOKEN_RE.fullmatch(value))
+            ):
+                return False
+        elif rule["type"] == "integer":
+            if type(value) is not int or value < 0:
+                return False
+        elif type(value) is not bool:
             return False
-    if "install_hash" in event and not re.fullmatch(r"[a-f0-9]{64}", str(event["install_hash"])):
+    if event["schema_version"] != SCHEMA_VERSION or event["ci"] or event["test_env"]:
         return False
-    for key in (
-        "surface",
-        "event_type",
-        "action",
-        "tool_name",
-        "tool_family",
-        "result",
-        "error_family",
-        "execution_mode",
-        "gms_mcp_version",
-        "os_family",
-        "python_version",
-        "duration_bucket",
-    ):
-        if key in event and (
-            not isinstance(event[key], str) or not re.fullmatch(r"[A-Za-z0-9_.+:-]{1,128}", event[key])
-        ):
-            return False
-    duration = event.get("duration_ms", 0)
-    if type(duration) is not int or duration < 0:
+    if not _HEX32_RE.fullmatch(event["event_id"]) or not _HEX32_RE.fullmatch(event["session_id"]):
+        return False
+    if "install_hash" in event and not _HEX64_RE.fullmatch(event["install_hash"]):
+        return False
+    if event["result"] not in EVENT_RESULTS or EVENT_SURFACES.get(event["event_type"]) != event["surface"]:
+        return False
+    if "error_family" in event and event["error_family"] not in EVENT_ERROR_FAMILIES:
+        return False
+    if "duration_bucket" in event and event["duration_bucket"] not in EVENT_DURATION_BUCKETS:
+        return False
+    if event.get("duration_ms", 0) > EVENT_MAX_DURATION_MS:
+        return False
+    if not _VERSION_RE.fullmatch(event["gms_mcp_version"]) or not _PYTHON_VERSION_RE.fullmatch(event["python_version"]):
+        return False
+    return _valid_event_timestamp(event["timestamp"], now=now)
+
+
+def _valid_event_timestamp(value: str, *, now: float | None = None) -> bool:
+    if not _TIMESTAMP_RE.fullmatch(value):
         return False
     try:
-        timestamp = _dt.datetime.fromisoformat(str(event["timestamp"]).replace("Z", "+00:00"))
-        return timestamp.tzinfo is not None
-    except (KeyError, TypeError, ValueError):
+        parsed = _dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
         return False
+    timestamp_ms = parsed.timestamp() * 1000
+    now_ms = (time.time() if now is None else now) * 1000
+    return now_ms - EVENT_MAX_AGE_MS <= timestamp_ms <= now_ms + EVENT_MAX_CLOCK_SKEW_MS
 
 
 def prune_spool() -> int:
@@ -628,11 +746,7 @@ def prune_spool() -> int:
             info = path.lstat()
             invalid = path.is_symlink() or not path.is_file() or info.st_size > MAX_BATCH_BYTES
             if not invalid:
-                payload = _safe_json_load(path)
-                invalid = not _valid_spool_event(payload)
-                if not invalid:
-                    created = _dt.datetime.fromisoformat(payload["timestamp"].replace("Z", "+00:00")).timestamp()
-                    invalid = created < now - MAX_SPOOL_AGE_SECONDS or created > now + 300
+                invalid = not _valid_spool_event(_safe_json_load(path), now=now)
             if invalid:
                 path.unlink()
                 removed += 1
@@ -768,6 +882,13 @@ def _post_batch(endpoint: str, events: list[dict[str, Any]]) -> None:
             raise urllib.error.HTTPError(endpoint, response.status, "upload failed", response.headers, None)
 
 
+def _delete_spool_paths(paths: list[Path]) -> None:
+    for path in paths:
+        path.unlink(missing_ok=True)
+    if paths:
+        _fsync_directory(paths[0].parent)
+
+
 def flush_spool(*, force: bool = False) -> FlushResult:
     state = resolve_state()
     if state.ci or state.test_env:
@@ -781,41 +902,54 @@ def flush_spool(*, force: bool = False) -> FlushResult:
 
     sent_events = 0
     sent_batches = 0
+    rejected_events = 0
     try:
         while True:
-            with _state_guard():
-                config = load_config()
-                if config.consent == "disabled":
-                    return FlushResult(
-                        False, sent_events, sent_batches, count_spool_events(), "Telemetry consent withdrawn."
-                    )
-                paths, events = _load_spool_records()
+            # The upload lock (not the state lock) spans the network call, so queue
+            # writes never wait on the network while consent withdrawal still does.
+            with _upload_guard():
+                with _state_guard():
+                    config = load_config()
+                    if config.consent == "disabled":
+                        return FlushResult(
+                            False, sent_events, sent_batches, count_spool_events(), "Telemetry consent withdrawn."
+                        )
+                    paths, events = _load_spool_records()
                 if not events:
                     break
                 for event in events:
                     if not config.include_install_hash or event.get("install_hash") != config.install_hash:
                         event.pop("install_hash", None)
-                _post_batch(state.endpoint, events)
-                for path in paths:
-                    try:
-                        path.unlink()
-                    except FileNotFoundError:
-                        continue
-                _fsync_directory(paths[0].parent)
+                try:
+                    _post_batch(state.endpoint, events)
+                except urllib.error.HTTPError as exc:
+                    if not 400 <= exc.code < 500 or exc.code in _RETRYABLE_HTTP_STATUSES:
+                        raise
+                    # The service rejected this batch permanently; keeping it would
+                    # block every later event until the spool ages out.
+                    with _state_guard():
+                        _delete_spool_paths(paths)
+                    rejected_events += len(events)
+                    continue
+                with _state_guard():
+                    _delete_spool_paths(paths)
             sent_events += len(events)
             sent_batches += 1
         remaining = count_spool_events()
-        return FlushResult(True, sent_events, sent_batches, remaining, "Telemetry flushed.")
+        message = "Telemetry flushed."
+        if rejected_events:
+            message = f"Telemetry flushed; discarded {rejected_events} event(s) rejected by the service."
+        return FlushResult(True, sent_events, sent_batches, remaining, message)
     except Exception:
         return FlushResult(False, sent_events, sent_batches, count_spool_events(), "Telemetry flush failed.")
     finally:
         _release_lock(lock_path)
 
 
-def maybe_start_background_flush(*, force: bool = False) -> bool:
+def maybe_start_background_flush(*, force: bool = False, cli_override: str | None = None) -> bool:
     global _LAST_BACKGROUND_FLUSH_AT
 
-    state = resolve_state()
+    state = resolve_state(cli_override)
     if state.ci or state.test_env:
         return False
     if not state.enabled:
@@ -830,6 +964,9 @@ def maybe_start_background_flush(*, force: bool = False) -> bool:
     env.setdefault("PYTHONUNBUFFERED", "1")
     env["PYTHONSAFEPATH"] = "1"
     env["PYTHONPATH"] = str(Path(__file__).resolve().parents[1])
+    if state.source in {"cli", "env"}:
+        # Carry this run's explicit override into the detached flush process.
+        env["GMS_MCP_TELEMETRY"] = "on"
     try:
         subprocess.Popen(
             [sys.executable, "-P", "-m", "gms_mcp.telemetry_runtime", "flush-spool"],

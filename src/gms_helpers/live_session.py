@@ -47,6 +47,7 @@ from .run_session import RunSessionManager
 BRIDGE_PORT_ENVIRONMENT_VARIABLE = "GMS_MCP_BRIDGE_PORT"
 BRIDGE_TOKEN_ENVIRONMENT_VARIABLE = "GMS_MCP_BRIDGE_TOKEN"
 STANDARD_COMMANDS = ("ping", "help", "state", "screenshot", "log_tail", "console")
+BRIDGE_PROTOCOL = 2
 
 
 class LiveSessionError(snapshot_build.SnapshotError):
@@ -97,6 +98,35 @@ def _require_session(project_root: str | Path) -> LiveSession:
     return session
 
 
+def endpoint_problem(hello: dict[str, Any] | None) -> str | None:
+    """Why a connected endpoint cannot be driven by this server, or None."""
+    protocol = (hello or {}).get("protocol")
+    if protocol != BRIDGE_PROTOCOL:
+        return (
+            f"The game's bridge endpoint speaks protocol {protocol!r}, but this server needs protocol "
+            f"{BRIDGE_PROTOCOL}. Reinstall the bridge with gm_bridge_install (or update the project's endpoint), "
+            "then restart the game."
+        )
+    return None
+
+
+def unsupported_command(hello: dict[str, Any] | None, text: str) -> dict[str, Any] | None:
+    """A clear refusal when the endpoint's HELLO lists its commands and ``text`` is not one of them."""
+    commands = (hello or {}).get("commands")
+    if not isinstance(commands, list) or not all(isinstance(name, str) for name in commands):
+        return None
+    name = text.strip().split(" ", 1)[0]
+    if name in commands:
+        return None
+    return {
+        "ok": False,
+        "command": text,
+        "error_code": "unsupported",
+        "error": f"The game's bridge endpoint does not provide '{name}'.",
+        "supported_commands": commands,
+    }
+
+
 def parse_bridge_result(text: str | None) -> dict[str, Any]:
     """Interpret one bridge response line."""
     raw = "" if text is None else str(text)
@@ -140,11 +170,11 @@ def _launch_game(runner: Path, staging: Path, game_file: Path, run_dir: Path, en
             [
                 str(runner),
                 "-game",
-                str(game_file),
+                snapshot_build.mac_game_path(game_file),
                 "-debugoutput",
-                str(staging / "debug.txt"),
+                "debug.txt",
                 "-output",
-                str(staging / "debug.txt"),
+                "debug.txt",
             ],
             cwd=str(staging),
             stdout=stderr_log,
@@ -286,6 +316,7 @@ def _start(
             isolated_runtime=True,
             runtime_label=session.label,
             runtime_work_dir=str(work),
+            runtime_work_root=str(snapshot_build._work_root().resolve()),
             runtime_save_dir=str(owned_runtime.save_dir),
             macos_runner_commands={str(process.pid): identity.command} if identity else {},
             macos_runner_starts={str(process.pid): identity.started} if identity else {},
@@ -329,6 +360,9 @@ def _start(
     elif not owns_bridge:
         public["status"] = "RUNNING"
         public["message"] = "The game is running; the launching MCP server owns its bridge connection."
+    elif bridge.is_connected and (problem := endpoint_problem(bridge.hello)):
+        public["status"] = "RUNNING_UNSUPPORTED_ENDPOINT"
+        public["message"] = problem
     elif not bridge.is_connected:
         public["status"] = "RUNNING_NOT_CONNECTED"
         public["message"] = (
@@ -403,6 +437,12 @@ def command(project_root: str | Path, text: str, timeout_seconds: float = 5.0) -
         )
     if "\n" in text or "\r" in text:
         raise LiveSessionError("A bridge command is a single line; remove the line breaks.")
+    problem = endpoint_problem(session.bridge.hello)
+    if problem:
+        raise LiveSessionError(problem)
+    refusal = unsupported_command(session.bridge.hello, text)
+    if refusal is not None:
+        return refusal
     result = session.bridge.send_command(text, timeout=timeout_seconds)
     if not result.success:
         return {
@@ -564,7 +604,7 @@ def _archive_persisted(project_root: str | Path, persisted: Any) -> None:
     shutil.rmtree(staging, ignore_errors=True)
     if work is not None:
         shutil.rmtree(work, ignore_errors=True)
-    manager.clear_session()
+    manager.clear_session(persisted.run_id)
 
 
 def _persisted_paths(project_root: str | Path, persisted: Any) -> tuple[Path, Path, Path | None, Path | None]:
@@ -576,6 +616,9 @@ def _persisted_paths(project_root: str | Path, persisted: Any) -> tuple[Path, Pa
     staging = Path(persisted.exe_path).parent
     log = Path(persisted.log_file) if persisted.log_file else None
     work = Path(persisted.runtime_work_dir) if persisted.runtime_work_dir else None
+    # The snapshot work root comes from the launching process's environment (GMS_MCP_SNAPSHOT_WORK_DIR),
+    # so check against the root saved with the session, never this process's.
+    work_root = Path(persisted.runtime_work_root) if getattr(persisted, "runtime_work_root", None) else None
     if (
         not persisted.runtime_save_dir
         or save_dir.resolve() != expected_save
@@ -585,7 +628,7 @@ def _persisted_paths(project_root: str | Path, persisted: Any) -> tuple[Path, Pa
         or (log is not None and (log != staging / "debug.txt" or log.resolve() != log))
         or (
             work is not None
-            and (work != work.resolve() or work.resolve().parent != snapshot_build._work_root().resolve())
+            and (work_root is None or work != work.resolve() or work.resolve().parent != work_root.resolve())
         )
     ):
         raise LiveSessionError("Persisted runtime paths do not match this project; preserving its files and processes.")
@@ -615,9 +658,8 @@ def _cleanup(session: LiveSession) -> list[Path]:
                 shutil.rmtree(session.staging, ignore_errors=True)
                 shutil.rmtree(session.work_dir, ignore_errors=True)
                 manager = RunSessionManager(session.project_root)
-                persisted = manager.get_current_session()
-                if persisted is not None and persisted.run_id == session.run_id:
-                    manager.clear_session()
+                if session.run_id is not None:
+                    manager.clear_session(session.run_id)
             finally:
                 session.lock.release()
                 session.label_lock.release()

@@ -11,12 +11,15 @@ class GameMakerContextError(Exception):
     pass
 
 
-def validate_gamemaker_context():
+def validate_gamemaker_context(project_root=None):
     """
     Ensure commands run in proper GameMaker project context.
     Prevents asset creation in wrong directories.
+
+    ``project_root`` is the directory the operation writes into; it defaults to
+    the current working directory.
     """
-    cwd = Path.cwd()
+    cwd = Path(project_root).resolve() if project_root is not None else Path.cwd()
 
     # Check if we're in a gamemaker directory or subdirectory
     current_dir = cwd
@@ -62,17 +65,17 @@ def validate_gamemaker_context():
     return gamemaker_root
 
 
-def validate_asset_directory_structure():
+def validate_asset_directory_structure(project_root=None):
     """
     Validate that asset operations won't create files outside the GameMaker project structure.
     This prevents the bug where assets were created in the wrong location.
     """
     try:
-        gamemaker_root = validate_gamemaker_context()
+        gamemaker_root = validate_gamemaker_context(project_root)
 
         # Ensure we're not creating assets outside the project structure
-        cwd = Path.cwd()
-        if not str(cwd).startswith(str(gamemaker_root)):
+        cwd = Path(project_root).resolve() if project_root is not None else Path.cwd()
+        if not Path(cwd).is_relative_to(gamemaker_root):
             raise GameMakerContextError(
                 f"ERROR: Current directory '{cwd}' is outside GameMaker project '{gamemaker_root}'"
             )

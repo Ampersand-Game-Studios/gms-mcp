@@ -7,10 +7,11 @@ import argparse
 import json
 import shlex
 import shutil
+import sys
 import time
 from pathlib import Path
 
-from .client_registry import CLIENT_ACTIONS, CLIENT_SCOPES, all_client_names, resolve_client_spec
+from .client_registry import CLIENT_ACTIONS, CLIENT_SCOPES, all_client_names, codex_home, resolve_client_spec
 from .install_support.client_configs import (
     _build_claude_plugin_manifest,
     _build_codex_env,
@@ -26,7 +27,6 @@ from .install_support.client_configs import (
     _make_claude_code_mcp_config,
     _make_codex_mcp_config,
     _make_codex_toml_value,
-    _make_backup_path,
     _make_claude_code_plugin_manifest,
     _parse_toml_or_raise,
     _print_antigravity_app_setup_summary,
@@ -44,7 +44,6 @@ from .install_support.client_configs import (
     _upsert_codex_server_config,
     _validate_antigravity_sections,
     _validate_codex_sections,
-    _write_json_atomic_with_backup,
 )
 from .install_support.common import (
     ConfigState,
@@ -76,6 +75,9 @@ from .install_support.common import (
     _validate_common_entry,
     _workspace_folder_var,
     _write_json,
+    _write_json_atomic_with_backup,
+    _which_without_cwd,
+    validate_server_name,
 )
 from .install_support.flow import (
     _collect_client_check_state,
@@ -117,13 +119,101 @@ def _privacy_safe_path_label(path: Path, *, workspace_root: Path) -> str:
     return "<host-path>"
 
 
+def _write_requested_json_configs(
+    *,
+    args: argparse.Namespace,
+    written: list[Path],
+    workspace_root: Path,
+    command: str,
+    args_prefix: list[str],
+    gm_project_root: Path | None,
+    dry_run: bool,
+) -> None:
+    """Write the Cursor and Claude configs requested by legacy flags."""
+    if args.cursor:
+        written.append(
+            _generate_cursor_config(
+                workspace_root=workspace_root,
+                server_name=args.server_name,
+                command=command,
+                args_prefix=args_prefix,
+                gm_project_root=gm_project_root,
+                out_path=workspace_root / ".cursor" / "mcp.json",
+                dry_run=dry_run,
+                safe_profile=bool(args.safe_profile),
+            )
+        )
+
+    if args.cursor_global:
+        # Global config should be multi-workspace safe: default GM_PROJECT_ROOT to ${workspaceFolder}
+        # and let project discovery happen per workspace.
+        written.append(
+            _generate_cursor_config(
+                workspace_root=workspace_root,
+                server_name=args.server_name,
+                command=command,
+                args_prefix=args_prefix,
+                gm_project_root=None,
+                out_path=Path.home() / ".cursor" / "mcp.json",
+                workspace_scope=False,
+                dry_run=dry_run,
+                safe_profile=bool(args.safe_profile),
+            )
+        )
+
+    if args.claude_code:
+        # Per-project .mcp.json for Claude Code CLI
+        written.extend(
+            _generate_claude_code_plugin(
+                plugin_dir=workspace_root,
+                server_name=args.server_name,
+                command=command,
+                args_prefix=args_prefix,
+                dry_run=dry_run,
+                include_bundle_assets=False,
+                safe_profile=bool(args.safe_profile),
+                force=bool(args.force),
+            )
+        )
+        if not dry_run:
+            print(f"[INFO] Created .mcp.json for Claude Code CLI (per-project config)")
+            print(f"[INFO] When you open Claude Code in this directory, it will auto-discover the MCP server.")
+            print(f"[INFO] You'll be prompted to approve it on first use.")
+            print(f"[INFO] To use in other GameMaker projects: copy .mcp.json or re-run this command.")
+
+    if args.claude_code_global:
+        # Global plugin for Claude Desktop GUI (NOT Claude Code CLI)
+        claude_plugins_dir = Path.home() / ".claude" / "plugins" / "gms-mcp"
+        written.extend(
+            _generate_claude_code_plugin(
+                plugin_dir=claude_plugins_dir,
+                server_name=args.server_name,
+                command=command,
+                args_prefix=args_prefix,
+                dry_run=dry_run,
+                include_bundle_assets=True,
+                safe_profile=bool(args.safe_profile),
+                force=bool(args.force),
+            )
+        )
+        if not dry_run:
+            print(f"[INFO] Claude Desktop plugin installed to: {claude_plugins_dir}")
+            print("       This is for Claude Desktop GUI app, NOT Claude Code CLI.")
+            print("       The plugin will be available after restarting Claude Desktop.")
+            print("       For Claude Code CLI, use --claude-code (per-project) instead.")
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         description="Generate MCP client configs for the GameMaker MCP server.",
         epilog=HELP_EPILOG,
     )
     parser.add_argument("--workspace-root", default=".", help="Workspace root where configs should be written.")
-    parser.add_argument("--server-name", default="gms", help="MCP server name in the config (default: gms).")
+    parser.add_argument(
+        "--server-name",
+        default="gms",
+        help="MCP server name in the config (default: gms). Letters, digits, '_' and '-' only.",
+    )
     parser.add_argument(
         "--mode",
         choices=["command", "python-module"],
@@ -133,7 +223,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--python",
         default=_default_python_command(),
-        help="Python command to use when --mode=python-module (default: python3 on Unix, python on Windows).",
+        help="Python command to use when --mode=python-module (default: the interpreter running this installer).",
     )
     parser.add_argument(
         "--gm-project-root",
@@ -149,6 +239,11 @@ def main(argv: list[str] | None = None) -> int:
         "--dry-run",
         action="store_true",
         help="Print what would be written, but do not write any files.",
+    )
+    parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Replace an existing .claude-plugin/plugin.json that gms-mcp did not create.",
     )
     parser.add_argument(
         "--no-star-ask",
@@ -314,12 +409,22 @@ def main(argv: list[str] | None = None) -> int:
     )
 
     args = parser.parse_args(argv)
+    try:
+        validate_server_name(args.server_name)
+    except ValueError as exc:
+        parser.error(str(exc))
     start_time = time.monotonic()
+    # Effective dry-run for this run; --codex-dry-run-only also sets it below.
+    dry_run = bool(args.dry_run)
 
     def _finish(exit_code: int, *, only_checks: bool = False, error_family: str | None = None) -> int:
+        if dry_run:
+            # Dry runs write nothing, including telemetry spool and consent files.
+            return exit_code
         event_type, action = _install_action_label(args, only_checks=only_checks)
         duration_ms = int((time.monotonic() - start_time) * 1000)
-        state = resolve_state(getattr(args, "telemetry", "inherit"))
+        telemetry_override = getattr(args, "telemetry", "inherit")
+        state = resolve_state(telemetry_override)
         queued = queue_event(
             state=state,
             surface="init",
@@ -333,23 +438,27 @@ def main(argv: list[str] | None = None) -> int:
             execution_mode="inline",
         )
         if queued:
-            maybe_start_background_flush()
-        if _should_prompt_after_init(args=args, only_checks=only_checks, exit_code=exit_code):
+            maybe_start_background_flush(cli_override=telemetry_override)
+        if _should_prompt_after_init(args=args, only_checks=only_checks, exit_code=exit_code, dry_run=dry_run):
             enabled = prompt_for_consent()
             if enabled:
-                emit_consent_changed("enable")
+                emit_consent_changed("enable", cli_override=telemetry_override)
         return exit_code
 
+    if args.codex_dry_run_only:
+        dry_run = True
     workspace_root = Path(args.workspace_root).expanduser().resolve()
-    dry_run = bool(args.dry_run)
-    gm_project_root, gm_candidates = _select_gm_project_root(
-        workspace_root=workspace_root,
-        requested_root=args.gm_project_root,
-        non_interactive=bool(args.non_interactive),
-    )
-
-    command, args_prefix = _resolve_launcher(mode=args.mode, python_command=args.python)
-    if args.mode == "python-module" and command != args.python:
+    try:
+        gm_project_root, gm_candidates = _select_gm_project_root(
+            workspace_root=workspace_root,
+            requested_root=args.gm_project_root,
+            non_interactive=bool(args.non_interactive),
+        )
+        command, args_prefix = _resolve_launcher(mode=args.mode, python_command=args.python)
+    except ValueError as exc:
+        print(f"[ERROR] {exc}")
+        return _finish(2, error_family=classify_error_family(exc))
+    if args.mode == "python-module" and _which_without_cwd(args.python) != command:
         print(f"[WARN] Python command '{args.python}' not found; using '{command}' instead.")
 
     if args.mode == "command" and shutil.which(command) is None:
@@ -389,6 +498,7 @@ def main(argv: list[str] | None = None) -> int:
                 config_path_override=args.config_path,
                 openclaw_install_skills=bool(args.openclaw_install_skills),
                 openclaw_skills_project=bool(args.openclaw_skills_project),
+                force=bool(args.force),
             ),
             only_checks=args.action in {"check", "check-json"},
         )
@@ -442,7 +552,6 @@ def main(argv: list[str] | None = None) -> int:
         args.antigravity_app_setup = False
         args.openclaw = False
         args.all = False
-        dry_run = True
 
     def _run_requested_codex_checks() -> int:
         check_exit = 0
@@ -513,75 +622,19 @@ def main(argv: list[str] | None = None) -> int:
 
     written: list[Path] = []
 
-    if args.cursor:
-        written.append(
-            _generate_cursor_config(
-                workspace_root=workspace_root,
-                server_name=args.server_name,
-                command=command,
-                args_prefix=args_prefix,
-                gm_project_root=gm_project_root,
-                out_path=workspace_root / ".cursor" / "mcp.json",
-                dry_run=dry_run,
-                safe_profile=bool(args.safe_profile),
-            )
+    try:
+        _write_requested_json_configs(
+            args=args,
+            written=written,
+            workspace_root=workspace_root,
+            command=command,
+            args_prefix=args_prefix,
+            gm_project_root=gm_project_root,
+            dry_run=dry_run,
         )
-
-    if args.cursor_global:
-        # Global config should be multi-workspace safe: default GM_PROJECT_ROOT to ${workspaceFolder}
-        # and let project discovery happen per workspace.
-        written.append(
-            _generate_cursor_config(
-                workspace_root=workspace_root,
-                server_name=args.server_name,
-                command=command,
-                args_prefix=args_prefix,
-                gm_project_root=None,
-                out_path=Path.home() / ".cursor" / "mcp.json",
-                workspace_scope=False,
-                dry_run=dry_run,
-                safe_profile=bool(args.safe_profile),
-            )
-        )
-
-    if args.claude_code:
-        # Per-project .mcp.json for Claude Code CLI
-        written.extend(
-            _generate_claude_code_plugin(
-                plugin_dir=workspace_root,
-                server_name=args.server_name,
-                command=command,
-                args_prefix=args_prefix,
-                dry_run=dry_run,
-                include_bundle_assets=False,
-                safe_profile=bool(args.safe_profile),
-            )
-        )
-        if not dry_run:
-            print(f"[INFO] Created .mcp.json for Claude Code CLI (per-project config)")
-            print(f"[INFO] When you open Claude Code in this directory, it will auto-discover the MCP server.")
-            print(f"[INFO] You'll be prompted to approve it on first use.")
-            print(f"[INFO] To use in other GameMaker projects: copy .mcp.json or re-run this command.")
-
-    if args.claude_code_global:
-        # Global plugin for Claude Desktop GUI (NOT Claude Code CLI)
-        claude_plugins_dir = Path.home() / ".claude" / "plugins" / "gms-mcp"
-        written.extend(
-            _generate_claude_code_plugin(
-                plugin_dir=claude_plugins_dir,
-                server_name=args.server_name,
-                command=command,
-                args_prefix=args_prefix,
-                dry_run=dry_run,
-                include_bundle_assets=True,
-                safe_profile=bool(args.safe_profile),
-            )
-        )
-        if not dry_run:
-            print(f"[INFO] Claude Desktop plugin installed to: {claude_plugins_dir}")
-            print("       This is for Claude Desktop GUI app, NOT Claude Code CLI.")
-            print("       The plugin will be available after restarting Claude Desktop.")
-            print("       For Claude Code CLI, use --claude-code (per-project) instead.")
+    except (RuntimeError, ValueError, OSError) as exc:
+        print(f"[ERROR] Could not generate MCP config: {exc}")
+        return _finish(2, error_family=classify_error_family(exc))
 
     if args.codex:
         try:
@@ -596,7 +649,7 @@ def main(argv: list[str] | None = None) -> int:
                 include_project_root=True,
                 safe_profile=bool(args.safe_profile),
             )
-        except (RuntimeError, ValueError) as exc:
+        except (RuntimeError, ValueError, OSError) as exc:
             print(f"[ERROR] Could not generate Codex workspace config: {exc}")
             return _finish(2, error_family=classify_error_family(exc))
         written.append(codex_path)
@@ -633,7 +686,7 @@ def main(argv: list[str] | None = None) -> int:
             print(f"[INFO] Registering command: {command_line}")
 
     if args.codex_global:
-        codex_global_path = Path.home() / ".codex" / "config.toml"
+        codex_global_path = codex_home() / "config.toml"
         try:
             codex_global_path, _codex_global_payload, codex_global_merged = _generate_codex_config(
                 workspace_root=workspace_root,
@@ -646,7 +699,7 @@ def main(argv: list[str] | None = None) -> int:
                 include_project_root=False,
                 safe_profile=bool(args.safe_profile),
             )
-        except (RuntimeError, ValueError) as exc:
+        except (RuntimeError, ValueError, OSError) as exc:
             print(f"[ERROR] Could not generate Codex global config: {exc}")
             return _finish(2, error_family=classify_error_family(exc))
         written.append(codex_global_path)
@@ -657,7 +710,10 @@ def main(argv: list[str] | None = None) -> int:
                 server_name=args.server_name,
                 source_label=str(codex_global_path),
             )
-            print("[DRY-RUN] Codex global config would be merged into: ~/.codex/config.toml")
+            print(
+                "[DRY-RUN] Codex global config would be merged into: "
+                f"{_privacy_safe_path_label(codex_global_path, workspace_root=workspace_root)}"
+            )
             print("[DRY-RUN] Codex global redacted target entry (unrelated configuration omitted):")
             print(codex_global_preview)
         else:
@@ -666,7 +722,7 @@ def main(argv: list[str] | None = None) -> int:
 
     codex_global_preview_only = args.codex_app_setup and not args.codex_global and not args.codex_dry_run_only
     if codex_global_preview_only:
-        codex_global_path = Path.home() / ".codex" / "config.toml"
+        codex_global_path = codex_home() / "config.toml"
         try:
             _, _, codex_global_preview = _generate_codex_config(
                 workspace_root=workspace_root,
@@ -687,7 +743,10 @@ def main(argv: list[str] | None = None) -> int:
             server_name=args.server_name,
             source_label=str(codex_global_path),
         )
-        print("[INFO] Codex app setup global preview target: ~/.codex/config.toml")
+        print(
+            "[INFO] Codex app setup global preview target: "
+            f"{_privacy_safe_path_label(codex_global_path, workspace_root=workspace_root)}"
+        )
         print("[INFO] Codex app setup redacted target entry (unrelated configuration omitted):")
         print(codex_global_safe_preview)
 
@@ -705,7 +764,7 @@ def main(argv: list[str] | None = None) -> int:
                     dry_run=dry_run,
                 )
             )
-        except ValueError as exc:
+        except (RuntimeError, ValueError, OSError) as exc:
             print(f"[ERROR] Could not generate Antigravity config: {exc}")
             return _finish(2, error_family=classify_error_family(exc))
         written.append(antigravity_path)
@@ -730,18 +789,22 @@ def main(argv: list[str] | None = None) -> int:
     if args.openclaw:
         example_clients.append("openclaw")
     if example_clients:
-        written.extend(
-            _generate_example_configs(
-                workspace_root=workspace_root,
-                server_name=args.server_name,
-                command=command,
-                args_prefix=args_prefix,
-                gm_project_root=gm_project_root,
-                clients=example_clients,
-                dry_run=dry_run,
-                safe_profile=bool(args.safe_profile),
+        try:
+            written.extend(
+                _generate_example_configs(
+                    workspace_root=workspace_root,
+                    server_name=args.server_name,
+                    command=command,
+                    args_prefix=args_prefix,
+                    gm_project_root=gm_project_root,
+                    clients=example_clients,
+                    dry_run=dry_run,
+                    safe_profile=bool(args.safe_profile),
+                )
             )
-        )
+        except (RuntimeError, ValueError, OSError) as exc:
+            print(f"[ERROR] Could not generate example MCP configs: {exc}")
+            return _finish(2, error_family=classify_error_family(exc))
 
     if dry_run:
         if args.codex_dry_run_only:
