@@ -208,12 +208,93 @@ class TestRoomLayerHelper(unittest.TestCase):
         """Test successfully listing layers in a room."""
         # Add some layers for testing
         add_layer("r_test", "lyr_background", "background", 500)
-        add_layer("r_test", "lyr_tiles", "tile", 400)
+        add_layer("r_test", "lyr_assets", "asset", 400)
 
         # List layers
         result = list_layers("r_test")
         self.assertIsInstance(result, list)
         self.assertGreater(len(result), 0)
+
+    def test_layers_stay_in_ascending_depth_order(self):
+        add_layer("r_test", "lyr_back", "background", 500)
+        add_layer("r_test", "lyr_front", "instance", -100)
+        add_layer("r_test", "lyr_top", "instance")
+        data = _load_room_data(_find_room_file("r_test"))
+        self.assertEqual(
+            [(layer["name"], layer["depth"]) for layer in data["layers"]],
+            [("lyr_top", -200), ("lyr_front", -100), ("Instances", 0), ("lyr_back", 500)],
+        )
+        self.assertTrue(data["layers"][1]["userdefinedDepth"])
+        self.assertFalse(data["layers"][0]["userdefinedDepth"])
+
+    def test_reorder_sorts_nested_siblings_ascending(self):
+        room_path = _find_room_file("r_test")
+        data = _load_room_data(room_path)
+        children = [create_layer_data(name, "instance", depth) for name, depth in (("a", 0), ("b", 10), ("c", 20))]
+        data["layers"].append({"name": "Folder", "resourceType": "GMRLayer", "depth": 900, "layers": children})
+        _save_room_data(room_path, data)
+        self.assertTrue(reorder_layer("r_test", "a", 15))
+        folder = _load_room_data(room_path)["layers"][-1]
+        self.assertEqual([layer["name"] for layer in folder["layers"]], ["b", "a", "c"])
+        self.assertTrue(folder["layers"][1]["userdefinedDepth"])
+
+    def test_tile_layer_needs_tileset_and_covers_the_room(self):
+        with self.assertRaises(ValidationError):
+            add_layer("r_test", "lyr_tiles", "tile", 400)
+        tileset_dir = Path("tilesets/ts_ground")
+        tileset_dir.mkdir(parents=True)
+        save_pretty_json(
+            tileset_dir / "ts_ground.yy",
+            {"$GMTileSet": "v1", "name": "ts_ground", "resourceType": "GMTileSet", "tileWidth": 32, "tileHeight": 48},
+        )
+        yyp_path = self.project_dir / "test.yyp"
+        yyp_data = load_json_loose(yyp_path)
+        yyp_data["resources"].append({"id": {"name": "ts_ground", "path": "tilesets/ts_ground/ts_ground.yy"}})
+        save_pretty_json(yyp_path, yyp_data)
+        self.assertTrue(add_layer("r_test", "lyr_tiles", "tile", 400, tileset_name="ts_ground"))
+        layer = next(l for l in _load_room_data(_find_room_file("r_test"))["layers"] if l["name"] == "lyr_tiles")
+        self.assertEqual(layer["tilesetId"]["name"], "ts_ground")
+        self.assertEqual(
+            {key: layer["tiles"][key] for key in ("SerialiseWidth", "SerialiseHeight", "TileDataFormat")},
+            {"SerialiseWidth": 25, "SerialiseHeight": 13, "TileDataFormat": 1},
+        )
+        self.assertEqual(layer["tiles"]["TileCompressedData"], [-325, -2147483648])
+
+    def test_remove_layer_removes_instance_creation_code(self):
+        room_path = _find_room_file("r_test")
+        data = _load_room_data(room_path)
+        data["layers"][0]["instances"] = [{"name": "inst_a"}, {"objectId": None}]
+        data["instanceCreationOrder"] = [{"name": "inst_a", "path": "rooms/r_test/r_test.yy"}]
+        _save_room_data(room_path, data)
+        code = room_path.parent / "InstanceCreationCode_inst_a.gml"
+        code.write_text("hp = 1;", encoding="utf-8")
+        self.assertTrue(remove_layer("r_test", "Instances"))
+        self.assertFalse(code.exists())
+        self.assertEqual(_load_room_data(room_path)["instanceCreationOrder"], [])
+
+    def test_legacy_room_format_is_refused(self):
+        room_path = _find_room_file("r_test")
+        data = _load_room_data(room_path)
+        del data["$GMRoom"]
+        data["resourceVersion"] = "1.0"
+        _save_room_data(room_path, data)
+        with self.assertRaisesRegex(ValidationError, "pre-2023"):
+            add_layer("r_test", "lyr_new", "instance", 0)
+
+    def test_module_cli_runs_through_the_project_transaction(self):
+        from unittest.mock import patch
+        import sys as _sys
+        from gms_helpers import room_layer_helper
+
+        with (
+            patch.object(
+                _sys, "argv", ["room_layer_helper", "reorder-layer", "r_test", "Instances", "--new-depth", "5"]
+            ),
+            patch("gms_helpers.gms._execute_project_command", return_value=True) as execute,
+        ):
+            self.assertTrue(room_layer_helper.main())
+        args = execute.call_args.args[0]
+        self.assertEqual((args.category, args.room_category, args.layer_action), ("room", "layer", "reorder"))
 
     def test_layer_types_constants(self):
         """Test that LAYER_TYPES constant contains expected values."""
@@ -285,8 +366,12 @@ class TestRoomLayerHelperIntegration(unittest.TestCase):
         self.assertEqual(zero_layer["depth"], 0)
 
         # Test with very high depth
-        high_layer = create_layer_data("high_layer", "tile", 10000)
+        high_layer = create_layer_data("high_layer", "asset", 10000)
         self.assertEqual(high_layer["depth"], 10000)
+
+        # A tile layer cannot exist without a tileset and grid
+        with self.assertRaises(ValidationError):
+            create_layer_data("tiles", "tile", 0)
 
 
 if __name__ == "__main__":

@@ -27,7 +27,11 @@ def register(mcp: Any, ContextType: Any) -> None:
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Add an event to an object."""
+        """Add an event to an object.
+
+        Args:
+            template: Inline GML event content, not a filename.
+        """
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.event_commands import handle_event_add
@@ -35,9 +39,10 @@ def register(mcp: Any, ContextType: Any) -> None:
         args = argparse.Namespace(
             object=object, event=event, template=template if template else None, project_root=project_root
         )
-        cli_args = ["event", "add", object, event]
+        cli_args = ["event", "add"]
         if template:
             cli_args.extend(["--template", template])
+        cli_args.extend(["--", object, event])
 
         return await _run_with_fallback(
             direct_handler=handle_event_add,
@@ -69,9 +74,10 @@ def register(mcp: Any, ContextType: Any) -> None:
         from gms_helpers.commands.event_commands import handle_event_remove
 
         args = argparse.Namespace(object=object, event=event, keep_file=keep_file, project_root=project_root)
-        cli_args = ["event", "remove", object, event]
+        cli_args = ["event", "remove"]
         if keep_file:
             cli_args.append("--keep-file")
+        cli_args.extend(["--", object, event])
 
         return await _run_with_fallback(
             direct_handler=handle_event_remove,
@@ -105,7 +111,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         args = argparse.Namespace(
             object=object, source_event=source_event, target_event=target_event, project_root=project_root
         )
-        cli_args = ["event", "duplicate", object, source_event, target_event]
+        cli_args = ["event", "duplicate", "--", object, source_event, target_event]
 
         return await _run_with_fallback(
             direct_handler=handle_event_duplicate,
@@ -135,7 +141,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         from gms_helpers.commands.event_commands import handle_event_list
 
         args = argparse.Namespace(object=object, project_root=project_root)
-        cli_args = ["event", "list", object]
+        cli_args = ["event", "list", "--", object]
 
         return await _run_with_fallback(
             direct_handler=handle_event_list,
@@ -165,7 +171,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         from gms_helpers.commands.event_commands import handle_event_validate
 
         args = argparse.Namespace(object=object, project_root=project_root)
-        cli_args = ["event", "validate", object]
+        cli_args = ["event", "validate", "--", object]
 
         return await _run_with_fallback(
             direct_handler=handle_event_validate,
@@ -196,9 +202,10 @@ def register(mcp: Any, ContextType: Any) -> None:
         from gms_helpers.commands.event_commands import handle_event_fix
 
         args = argparse.Namespace(object=object, safe_mode=safe_mode, project_root=project_root)
-        cli_args = ["event", "fix", object]
+        cli_args = ["event", "fix"]
         if not safe_mode:
             cli_args.append("--no-safe-mode")
+        cli_args.extend(["--", object])
 
         return await _run_with_fallback(
             direct_handler=handle_event_fix,

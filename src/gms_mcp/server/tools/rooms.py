@@ -13,7 +13,8 @@ from ..resolution import ResolutionRuntime
 from ..tool_types import OutputMode
 
 RoomDeleteResolution = Any
-RoomNameResolution = Any
+RoomDuplicateNameResolution = Any
+RoomRenameNameResolution = Any
 
 
 def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) -> None:
@@ -24,20 +25,28 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     globals()["RoomDeleteDecision"] = RoomDeleteDecision
     globals()["NameCollisionDecision"] = NameCollisionDecision
 
-    async def resolve_room_delete(ctx: Context, room_name: str, dry_run: bool = False, project_root: str = "."):
+    async def resolve_room_delete(ctx: Context, room_name: str, dry_run: bool = True, project_root: str = "."):
         try:
-            return await resolution_runtime.room_delete_resolver()(room_name, dry_run, project_root, ctx)
+            return await resolution_runtime.room_delete_resolver("gm_room_ops_delete")(
+                room_name, dry_run, project_root, ctx
+            )
         except ProjectAccessError:
             return RoomDeleteDecision(action="cancel")
 
-    async def resolve_room_name(ctx: Context, new_name: str, project_root: str = "."):
-        try:
-            return await resolution_runtime.name_collision_resolver()(new_name, project_root, ctx)
-        except ProjectAccessError:
-            return None
+    def room_name_resolution(tool_name: str) -> Any:
+        resolver = resolution_runtime.name_collision_resolver(tool_name)
+
+        async def resolve_room_name(ctx: Context, new_name: str, project_root: str = "."):
+            try:
+                return await resolver(new_name, project_root, ctx)
+            except ProjectAccessError:
+                return None
+
+        return Annotated[NameCollisionDecision, Resolve(resolve_room_name)]
 
     globals()["RoomDeleteResolution"] = Annotated[RoomDeleteDecision, Resolve(resolve_room_delete)]
-    globals()["RoomNameResolution"] = Annotated[NameCollisionDecision, Resolve(resolve_room_name)]
+    globals()["RoomDuplicateNameResolution"] = room_name_resolution("gm_room_ops_duplicate")
+    globals()["RoomRenameNameResolution"] = room_name_resolution("gm_room_ops_rename")
 
     # -----------------------------
     # Room tools
@@ -46,7 +55,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     async def gm_room_ops_duplicate(
         source_room: str,
         new_name: str,
-        resolution: RoomNameResolution = None,
+        resolution: RoomDuplicateNameResolution = None,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: OutputMode = "full",
@@ -68,7 +77,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         from gms_helpers.commands.room_commands import handle_room_duplicate
 
         args = argparse.Namespace(source_room=source_room, new_name=new_name, project_root=project_root)
-        cli_args = ["room", "ops", "duplicate", source_room, new_name]
+        cli_args = ["room", "ops", "duplicate", "--", source_room, new_name]
 
         return await _run_with_fallback(
             direct_handler=handle_room_duplicate,
@@ -86,7 +95,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     async def gm_room_ops_rename(
         room_name: str,
         new_name: str,
-        resolution: RoomNameResolution = None,
+        resolution: RoomRenameNameResolution = None,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: OutputMode = "full",
@@ -108,7 +117,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         from gms_helpers.commands.room_commands import handle_room_rename
 
         args = argparse.Namespace(room_name=room_name, new_name=new_name, project_root=project_root)
-        cli_args = ["room", "ops", "rename", room_name, new_name]
+        cli_args = ["room", "ops", "rename", "--", room_name, new_name]
 
         return await _run_with_fallback(
             direct_handler=handle_room_rename,
@@ -125,7 +134,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_room_ops_delete(
         room_name: str,
-        dry_run: bool = False,
+        dry_run: bool = True,
         project_root: str = ".",
         resolution: RoomDeleteResolution = None,
         prefer_cli: bool = False,
@@ -134,7 +143,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Delete a room (supports dry-run)."""
+        """Delete a room (previews by default; pass dry_run=false to delete)."""
         if resolution.action == "cancel":
             return {"ok": False, "cancelled": True, "message": "Room deletion cancelled; no changes were made."}
         repo_root = _resolve_repo_root(project_root)
@@ -147,11 +156,12 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             force=resolution.action == "force",
             project_root=project_root,
         )
-        cli_args = ["room", "ops", "delete", room_name]
+        cli_args = ["room", "ops", "delete"]
         if dry_run:
             cli_args.append("--dry-run")
         if resolution.action == "force":
             cli_args.append("--force")
+        cli_args.extend(["--", room_name])
         if not dry_run and _requires_dry_run_for_tool("gm_room_ops_delete"):
             return _dry_run_policy_blocked_result(
                 "gm_room_ops_delete",
@@ -207,7 +217,8 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         room_name: str,
         layer_type: str,
         layer_name: str,
-        depth: int = 0,
+        depth: int | None = None,
+        tileset: str | None = None,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: OutputMode = "full",
@@ -215,17 +226,28 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Add a layer to a room."""
+        """Add a layer to a room.
+
+        Without depth the layer goes on top of the existing layers. Tile layers need tileset.
+        """
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.room_commands import handle_room_layer_add
 
         args = argparse.Namespace(
-            room_name=room_name, layer_type=layer_type, layer_name=layer_name, depth=depth, project_root=project_root
+            room_name=room_name,
+            layer_type=layer_type,
+            layer_name=layer_name,
+            depth=depth,
+            tileset=tileset,
+            project_root=project_root,
         )
-        cli_args = ["room", "layer", "add", room_name, layer_type, layer_name]
-        if depth:
+        cli_args = ["room", "layer", "add"]
+        if depth is not None:
             cli_args.extend(["--depth", str(depth)])
+        if tileset:
+            cli_args.extend(["--tileset", tileset])
+        cli_args.extend(["--", room_name, layer_type, layer_name])
 
         return await _run_with_fallback(
             direct_handler=handle_room_layer_add,
@@ -256,7 +278,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         from gms_helpers.commands.room_commands import handle_room_layer_remove
 
         args = argparse.Namespace(room_name=room_name, layer_name=layer_name, project_root=project_root)
-        cli_args = ["room", "layer", "remove", room_name, layer_name]
+        cli_args = ["room", "layer", "remove", "--", room_name, layer_name]
 
         return await _run_with_fallback(
             direct_handler=handle_room_layer_remove,
@@ -286,7 +308,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         from gms_helpers.commands.room_commands import handle_room_layer_list
 
         args = argparse.Namespace(room_name=room_name, project_root=project_root)
-        cli_args = ["room", "layer", "list", room_name]
+        cli_args = ["room", "layer", "list", "--", room_name]
 
         return await _run_with_fallback(
             direct_handler=handle_room_layer_list,
@@ -327,9 +349,10 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             layer=layer if layer else None,
             project_root=project_root,
         )
-        cli_args = ["room", "instance", "add", room_name, object_name, str(x), str(y)]
+        cli_args = ["room", "instance", "add"]
         if layer:
             cli_args.extend(["--layer", layer])
+        cli_args.extend(["--", room_name, object_name, str(x), str(y)])
 
         return await _run_with_fallback(
             direct_handler=handle_room_instance_add,
@@ -360,7 +383,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         from gms_helpers.commands.room_commands import handle_room_instance_remove
 
         args = argparse.Namespace(room_name=room_name, instance_id=instance_id, project_root=project_root)
-        cli_args = ["room", "instance", "remove", room_name, instance_id]
+        cli_args = ["room", "instance", "remove", "--", room_name, instance_id]
 
         return await _run_with_fallback(
             direct_handler=handle_room_instance_remove,
@@ -390,7 +413,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         from gms_helpers.commands.room_commands import handle_room_instance_list
 
         args = argparse.Namespace(room_name=room_name, project_root=project_root)
-        cli_args = ["room", "instance", "list", room_name]
+        cli_args = ["room", "instance", "list", "--", room_name]
 
         return await _run_with_fallback(
             direct_handler=handle_room_instance_list,

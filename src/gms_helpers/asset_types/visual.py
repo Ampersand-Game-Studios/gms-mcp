@@ -8,6 +8,7 @@ from ..base_asset import BaseAsset
 from ..sprite_import import validate_frame_count
 from ..utils import atomic_write_text, create_dummy_png, ensure_directory, generate_uuid
 from .naming import get_config
+from .ranges import require_int
 
 
 class SpriteAsset(BaseAsset):
@@ -193,6 +194,9 @@ class SpriteAsset(BaseAsset):
 
             # Extract layer UUID (shared across all frames)
             layer_uuid = yy_data["layers"][0]["name"]
+            # Placeholders must match the size the .yy declares.
+            width = int(yy_data.get("width") or 1)
+            height = int(yy_data.get("height") or 1)
 
             # Create PNG files for each frame
             for frame in yy_data["frames"]:
@@ -201,7 +205,7 @@ class SpriteAsset(BaseAsset):
                 # Create main image
                 main_image_path = asset_folder / f"{frame_uuid}.png"
                 if not main_image_path.exists():
-                    create_dummy_png(main_image_path)
+                    create_dummy_png(main_image_path, width=width, height=height)
                     print(f"Created {main_image_path.name} (dummy image)")
 
                 # Create layer directory and image
@@ -211,7 +215,7 @@ class SpriteAsset(BaseAsset):
 
                 layer_image_path = layer_dir / f"{layer_uuid}.png"
                 if not layer_image_path.exists():
-                    create_dummy_png(layer_image_path)
+                    create_dummy_png(layer_image_path, width=width, height=height)
                     print(f"Created layers/{frame_uuid}/{layer_uuid}.png (dummy image)")
 
             frame_count = len(yy_data["frames"])
@@ -245,11 +249,13 @@ class FontAsset(BaseAsset):
     def create_yy_data(self, name: str, parent_path: str, **kwargs) -> Dict[str, Any]:
         # Font configuration parameters
         font_name = kwargs.get("font_name", "Arial")
-        size = kwargs.get("size", 12)
+        if not isinstance(font_name, str) or not font_name.strip():
+            raise ValueError("font_name must be a non-empty string")
+        size = require_int(kwargs.get("size", 12), "size", 1)
         bold = kwargs.get("bold", False)
         italic = kwargs.get("italic", False)
         charset = kwargs.get("charset", 0)
-        aa_level = kwargs.get("aa_level", 1)
+        aa_level = require_int(kwargs.get("aa_level", 1), "aa_level", 0, 3)
 
         return {
             "$GMFont": "",

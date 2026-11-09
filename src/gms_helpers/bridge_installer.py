@@ -13,6 +13,7 @@ Safety principles:
 5. All assets use __mcp_ prefix for easy identification
 """
 
+import hashlib
 import json
 import uuid
 from pathlib import Path
@@ -26,15 +27,33 @@ from .transactions import (
     transactional_rmtree,
     transactional_unlink,
 )
-from .utils import atomic_write_text, load_json, save_json
+from .exceptions import AmbiguousProjectError, ProjectNotFoundError
+from .utils import atomic_write_text, find_yyp, load_json, save_json
 
 
-def _find_yyp_in_dir(directory: Path) -> Optional[Path]:
-    """Find a .yyp file in the given directory."""
-    yyp_files = list(directory.glob("*.yyp"))
-    if not yyp_files:
-        return None
-    return yyp_files[0]
+# Last line of every generated .gml file. The digest covers everything above it, so an edited
+# file (for example a command added by hand) is recognised and never silently overwritten.
+GENERATED_MARKER = "// gms-mcp generated asset sha256:"
+
+
+def _normalized(text: str) -> str:
+    return text.replace("\r\n", "\n")
+
+
+def stamp_generated(code: str) -> str:
+    """Append the generated-content marker to one .gml file."""
+    body = _normalized(code)
+    body = body if body.endswith("\n") else body + "\n"
+    return body + GENERATED_MARKER + hashlib.sha256(body.encode("utf-8")).hexdigest() + "\n"
+
+
+def is_unmodified_generated(text: str) -> bool:
+    """True when ``text`` is a stamped generated file whose content still matches its digest."""
+    lines = _normalized(text).rstrip("\n").split("\n")
+    if not lines or not lines[-1].startswith(GENERATED_MARKER):
+        return False
+    body = "\n".join(lines[:-1]) + "\n"
+    return lines[-1][len(GENERATED_MARKER) :] == hashlib.sha256(body.encode("utf-8")).hexdigest()
 
 
 def _detect_asset_format(project_root: Path, asset_type: str) -> str:
@@ -81,6 +100,8 @@ ASSET_TYPE_OBJECT = "objects"
 ASSET_TYPE_SCRIPT = "scripts"
 ASSET_TYPE_FOLDER = "folders"
 
+BRIDGE_EVENTS = ("Create_0", "Step_0", "Other_68", "Destroy_0")
+
 
 class BridgeInstallError(Exception):
     """Error during bridge installation/removal."""
@@ -100,10 +121,10 @@ class BridgeInstaller:
 
     def __init__(self, project_root: Path):
         self.project_root = Path(project_root).resolve()
-        yyp_path = _find_yyp_in_dir(self.project_root)
-        if not yyp_path:
-            raise BridgeInstallError(f"No .yyp file found in {self.project_root}")
-        self.yyp_path: Path = yyp_path
+        try:
+            self.yyp_path: Path = find_yyp(self.project_root)
+        except (ProjectNotFoundError, AmbiguousProjectError) as exc:
+            raise BridgeInstallError(str(exc)) from exc
 
         self.backup_path: Optional[Path] = None
 
@@ -194,6 +215,71 @@ class BridgeInstaller:
             status["issues"].append("Bridge registered in .yyp but files missing")
 
         return status
+
+    def user_modified_files(self) -> List[str]:
+        """Project-relative bridge files that are not untouched gms-mcp output.
+
+        Edited or hand-added event code, extra files, and assets written by an older gms-mcp
+        (which carried no marker) all count; install and uninstall refuse to overwrite or delete
+        them unless forced.
+        """
+        modified: List[str] = []
+        layouts = (
+            (
+                self.project_root / ASSET_TYPE_OBJECT / BRIDGE_OBJECT_NAME,
+                f"{BRIDGE_OBJECT_NAME}.yy",
+                {f"{event}.gml" for event in BRIDGE_EVENTS},
+                set(BRIDGE_EVENTS),
+            ),
+            (
+                self.project_root / ASSET_TYPE_SCRIPT / BRIDGE_SCRIPT_NAME,
+                f"{BRIDGE_SCRIPT_NAME}.yy",
+                {f"{BRIDGE_SCRIPT_NAME}.gml"},
+                None,
+            ),
+        )
+        for directory, yy_name, gml_names, events in layouts:
+            if directory.is_symlink():
+                modified.append(directory.relative_to(self.project_root).as_posix())
+                continue
+            if not directory.is_dir():
+                continue
+            for entry in sorted(directory.iterdir()):
+                relative = entry.relative_to(self.project_root).as_posix()
+                if entry.is_symlink() or not entry.is_file():
+                    modified.append(relative)
+                elif entry.name == yy_name:
+                    if events is not None:
+                        try:
+                            listed = {event.get("name") for event in load_json(entry).get("eventList", [])}
+                        except Exception:
+                            listed = None
+                        if listed != events:
+                            modified.append(relative)
+                elif entry.name not in gml_names:
+                    modified.append(relative)
+                else:
+                    try:
+                        text = entry.read_text(encoding="utf-8")
+                    except (OSError, UnicodeDecodeError):
+                        text = ""
+                    if not is_unmodified_generated(text):
+                        modified.append(relative)
+        return modified
+
+    def _refuse_modified(self, action: str, force: bool) -> Optional[Dict[str, Any]]:
+        modified = [] if force else self.user_modified_files()
+        if not modified:
+            return None
+        return {
+            "ok": False,
+            "error": (
+                f"Bridge assets were changed after gms-mcp generated them (or were written by an older "
+                f"gms-mcp); {action} would discard those changes: {', '.join(modified)}"
+            ),
+            "modified_files": modified,
+            "hint": f"Keep a copy of your changes, then retry with force=true to {action} anyway.",
+        }
 
     def _backup_yyp(self) -> Path:
         """Create a backup of the .yyp file."""
@@ -330,7 +416,7 @@ class BridgeInstaller:
                         from .path_safety import validate_resource_name
 
                         validate_resource_name(instance_id, "room instance")
-                        creation_code_file = room_file.parent / f"{instance_id}.gml"
+                        creation_code_file = room_file.parent / f"InstanceCreationCode_{instance_id}.gml"
                         if creation_code_file.exists():
                             transactional_unlink(creation_code_file)
                             summary["creation_code_deleted"] += 1
@@ -338,7 +424,7 @@ class BridgeInstaller:
                 if changed:
                     save_json(room_data, room_file)
                     summary["instances_removed"] += removed_count
-                    summary["rooms_modified"].append(str(room_file.relative_to(self.project_root)))
+                    summary["rooms_modified"].append(room_file.relative_to(self.project_root).as_posix())
             except Exception as exc:
                 raise BridgeInstallError(f"Failed to clean room '{room_file}': {exc}") from exc
 
@@ -370,6 +456,7 @@ class BridgeInstaller:
 
         script_gml = """global.__mcp_socket = -1;
 global.__mcp_enabled = false;
+global.__mcp_log_lines = [];
 
 /// @function __mcp_log(message)
 /// @description Log a message to both debug output and MCP bridge
@@ -378,8 +465,10 @@ function __mcp_log(_message) {
     var _timestamp = string(current_time);
     var _full_msg = "[" + _timestamp + "] " + string(_message);
     
-    // Always log to standard debug output
+    // Always log to standard debug output, and keep the newest lines for log_tail
     show_debug_message(_full_msg);
+    array_push(global.__mcp_log_lines, _full_msg);
+    if (array_length(global.__mcp_log_lines) > 200) array_delete(global.__mcp_log_lines, 0, 1);
     
     // Send to MCP bridge if connected
     if (global.__mcp_enabled && global.__mcp_socket >= 0) {
@@ -406,7 +495,7 @@ function __mcp_send_response(_cmd_id, _result) {
 }
 """
 
-        return script_yy_path, script_data, script_gml
+        return script_yy_path, script_data, stamp_generated(script_gml)
 
     def _create_object_asset(self, port: int = 6502) -> Tuple[Path, Dict[str, Any], Dict[str, str]]:
         """Create the __mcp_bridge object asset."""
@@ -504,6 +593,8 @@ global.__mcp_socket = -1;
 global.__mcp_enabled = false;
 global.__mcp_buffer = "";
 global.__mcp_port = 0;
+// Advertised in HELLO; the server refuses other commands with a clear error.
+global.__mcp_commands = ["ping", "help", "state", "screenshot", "log_tail", "goto_room", "get_var", "set_var", "spawn", "room_info", "instance_count"];
 
 var _port_text = environment_get_variable("GMS_MCP_BRIDGE_PORT");
 var _credential = environment_get_variable("GMS_MCP_BRIDGE_TOKEN");
@@ -520,7 +611,7 @@ var _result = network_connect_raw(_socket, "127.0.0.1", global.__mcp_port);
 if (_result >= 0) {
     global.__mcp_socket = _socket;
     global.__mcp_enabled = true;
-    var _hello = "HELLO:" + json_stringify({protocol: 2, token: _credential}) + chr(10);
+    var _hello = "HELLO:" + json_stringify({protocol: 2, token: _credential, game: game_project_name, commands: global.__mcp_commands}) + chr(10);
     var _packet = buffer_create(string_byte_length(_hello) + 1, buffer_fixed, 1);
     buffer_write(_packet, buffer_string, _hello);
     network_send_raw(_socket, _packet, buffer_tell(_packet));
@@ -619,13 +710,35 @@ function __mcp_execute_command(_command) {
         }
     }
     
-    if (array_length(_parts) == 0) return "ERROR:Empty command";
+    if (array_length(_parts) == 0) return "ERR:empty Empty command";
     
     var _action = _parts[0];
     
     switch (_action) {
         case "ping":
             return "pong";
+
+        case "help":
+            return json_stringify({commands: global.__mcp_commands});
+
+        case "state":
+            return json_stringify({room: room_get_name(room), room_width: room_width, room_height: room_height, instance_count: instance_count, fps: fps, fps_real: fps_real});
+
+        case "log_tail":
+            var _count = 20;
+            if (array_length(_parts) > 1) _count = max(0, floor(real(_parts[1])));
+            var _total = array_length(global.__mcp_log_lines);
+            var _from = max(0, _total - _count);
+            var _lines = [];
+            for (var _l = _from; _l < _total; _l++) array_push(_lines, global.__mcp_log_lines[_l]);
+            return json_stringify({lines: _lines});
+
+        case "screenshot":
+            var _shot = "shot";
+            if (array_length(_parts) > 1) _shot = _parts[1];
+            var _file = game_save_id + "__agent_shot_" + _shot + ".png";
+            screen_save(_file);
+            return json_stringify({file: _file});
             
         case "goto_room":
             if (array_length(_parts) > 1) {
@@ -634,9 +747,9 @@ function __mcp_execute_command(_command) {
                     room_goto(_room);
                     return "OK:Changed to " + _parts[1];
                 }
-                return "ERROR:Room not found: " + _parts[1];
+                return "ERR:not_found Room not found: " + _parts[1];
             }
-            return "ERROR:Missing room name";
+            return "ERR:usage Missing room name";
             
         case "get_var":
             if (array_length(_parts) > 1) {
@@ -647,12 +760,12 @@ function __mcp_execute_command(_command) {
                     try {
                         return "OK:" + string(variable_global_get(_real_name));
                     } catch (_error) {
-                        return "ERROR:Global variable not found: " + _real_name;
+                        return "ERR:not_found Global variable not found: " + _real_name;
                     }
                 }
-                return "ERROR:Only global variables supported";
+                return "ERR:unsupported Only global variables supported";
             }
-            return "ERROR:Missing variable name";
+            return "ERR:usage Missing variable name";
             
         case "set_var":
             if (array_length(_parts) > 2) {
@@ -669,9 +782,9 @@ function __mcp_execute_command(_command) {
                     }
                     return "OK:Set " + _var_name;
                 }
-                return "ERROR:Only global variables supported";
+                return "ERR:unsupported Only global variables supported";
             }
-            return "ERROR:Missing variable name or value";
+            return "ERR:usage Missing variable name or value";
             
         case "spawn":
             if (array_length(_parts) > 3) {
@@ -682,9 +795,9 @@ function __mcp_execute_command(_command) {
                     var _inst = instance_create_depth(_x, _y, 0, _obj);
                     return "OK:Created " + _parts[1] + " at " + string(_x) + "," + string(_y);
                 }
-                return "ERROR:Object not found: " + _parts[1];
+                return "ERR:not_found Object not found: " + _parts[1];
             }
-            return "ERROR:Usage: spawn <object> <x> <y>";
+            return "ERR:usage spawn <object> <x> <y>";
             
         case "room_info":
             return "OK:" + room_get_name(room) + " (" + string(room_width) + "x" + string(room_height) + ")";
@@ -695,12 +808,12 @@ function __mcp_execute_command(_command) {
                 if (_obj >= 0) {
                     return "OK:" + string(instance_number(_obj));
                 }
-                return "ERROR:Object not found";
+                return "ERR:not_found Object not found";
             }
             return "OK:" + string(instance_count);
             
         default:
-            return "ERROR:Unknown command: " + _action;
+            return "ERR:unknown_command Unknown command: " + _action;
     }
 }
 """
@@ -714,7 +827,7 @@ if (global.__mcp_socket >= 0) {
 global.__mcp_enabled = false;
 """
 
-        return object_yy_path, object_data, events
+        return object_yy_path, object_data, {name: stamp_generated(code) for name, code in events.items()}
 
     def _run_standalone(self, operation: str, call) -> Dict[str, Any]:
         from .transactions import GameMakerProjectTransaction
@@ -745,7 +858,7 @@ global.__mcp_enabled = false;
         finally:
             tx.cleanup()
 
-    def install(self, port: int = 6502) -> Dict[str, Any]:
+    def install(self, port: int = 6502, force: bool = False) -> Dict[str, Any]:
         """
         Install the MCP bridge into the project.
 
@@ -760,12 +873,16 @@ global.__mcp_enabled = false;
 
         Args:
             port: Port number for bridge server
+            force: Overwrite bridge assets even if they were edited after generation
 
         Returns:
             Dict with installation result
         """
         if not transaction_is_active(self.project_root):
-            return self._run_standalone("gm_bridge_install", lambda: self.install(port))
+            return self._run_standalone("gm_bridge_install", lambda: self.install(port, force))
+        refusal = self._refuse_modified("reinstall", force)
+        if refusal is not None:
+            return refusal
         already_installed = self.is_installed()
 
         created_paths: List[Path] = []
@@ -777,6 +894,17 @@ global.__mcp_enabled = false;
 
             # Modern GameMaker folders are logical YYP entries, not physical
             # YY resources. The logical folder is registered with the assets.
+
+            # A forced reinstall starts from clean asset folders so no stale edited events remain.
+            if force:
+                for stale in (
+                    self.project_root / ASSET_TYPE_OBJECT / BRIDGE_OBJECT_NAME,
+                    self.project_root / ASSET_TYPE_SCRIPT / BRIDGE_SCRIPT_NAME,
+                ):
+                    if stale.is_symlink():
+                        transactional_unlink(stale)
+                    elif stale.exists():
+                        transactional_rmtree(stale)
 
             # Step 3: Create script asset
             print("[BRIDGE] Creating script asset...")
@@ -890,83 +1018,100 @@ global.__mcp_enabled = false;
 
             raise
 
-    def uninstall(self) -> Dict[str, Any]:
+    def _bridge_yyp_paths(self) -> set:
+        return {
+            f"objects/{BRIDGE_OBJECT_NAME}/{BRIDGE_OBJECT_NAME}.yy",
+            f"scripts/{BRIDGE_SCRIPT_NAME}/{BRIDGE_SCRIPT_NAME}.yy",
+            f"folders/{BRIDGE_FOLDER_NAME}.yy",
+        }
+
+    def uninstall(self, force: bool = False) -> Dict[str, Any]:
         """
-        Remove the MCP bridge from the project.
+        Remove the MCP bridge from the project, including whatever parts a partial install left.
+
+        Args:
+            force: Delete bridge assets even if they were edited after generation
 
         Returns:
             Dict with uninstallation result
         """
         if not transaction_is_active(self.project_root):
-            return self._run_standalone("gm_bridge_uninstall", self.uninstall)
-        if not self.is_installed():
-            return {
-                "ok": True,
-                "message": "Bridge not installed",
-                "already_uninstalled": True,
-            }
+            return self._run_standalone("gm_bridge_uninstall", lambda: self.uninstall(force))
+
+        object_dir = self.project_root / ASSET_TYPE_OBJECT / BRIDGE_OBJECT_NAME
+        script_dir = self.project_root / ASSET_TYPE_SCRIPT / BRIDGE_SCRIPT_NAME
+        folder_yy = self.project_root / ASSET_TYPE_FOLDER / f"{BRIDGE_FOLDER_NAME}.yy"
+        yyp_data = load_json(self.yyp_path)
+        bridge_paths = self._bridge_yyp_paths()
+        registered = [
+            r
+            for r in yyp_data.get("resources", [])
+            if isinstance(r, dict) and r.get("id", {}).get("path") in bridge_paths
+        ]
+        folder_registered = any(
+            isinstance(f, dict) and f.get("folderPath") == f"folders/{BRIDGE_FOLDER_NAME}.yy"
+            for f in yyp_data.get("Folders", [])
+        )
+        present_files = [path for path in (object_dir, script_dir, folder_yy) if path.exists() or path.is_symlink()]
+        installed = self.is_installed()
+
+        refusal = self._refuse_modified("uninstall", force)
+        if refusal is not None:
+            return refusal
 
         try:
             # Step 1: Backup .yyp
             print("[BRIDGE] Backing up .yyp...")
             self._backup_yyp()
 
-            # Step 2: Load .yyp and clean room instances before deleting assets
+            # Step 2: Clean room instances before deleting assets, then the .yyp entries
             print("[BRIDGE] Updating .yyp...")
-            yyp_data = load_json(self.yyp_path)
-
             room_cleanup = self._cleanup_bridge_room_instances(yyp_data)
+            if not (present_files or registered or folder_registered or room_cleanup.get("instances_removed")):
+                self._cleanup_backup()
+                return {
+                    "ok": True,
+                    "message": "Bridge not installed",
+                    "already_uninstalled": True,
+                }
 
-            # Remove from Folders
-            if "Folders" in yyp_data:
+            if folder_registered:
                 yyp_data["Folders"] = [
                     f for f in yyp_data["Folders"] if f.get("folderPath") != f"folders/{BRIDGE_FOLDER_NAME}.yy"
                 ]
-
-            # Remove from resources
-            if "resources" in yyp_data:
-                bridge_paths = {
-                    f"objects/{BRIDGE_OBJECT_NAME}/{BRIDGE_OBJECT_NAME}.yy",
-                    f"scripts/{BRIDGE_SCRIPT_NAME}/{BRIDGE_SCRIPT_NAME}.yy",
-                    f"folders/{BRIDGE_FOLDER_NAME}.yy",
-                }
+            if registered:
                 yyp_data["resources"] = [
                     r for r in yyp_data["resources"] if r.get("id", {}).get("path") not in bridge_paths
                 ]
+            if registered or folder_registered:
+                save_json(yyp_data, self.yyp_path)
 
-            save_json(yyp_data, self.yyp_path)
-
-            # Step 3: Delete files
+            # Step 3: Delete whatever asset files exist
             print("[BRIDGE] Removing files...")
-            deleted_count = 0
-
-            # Delete object directory
-            object_dir = self.project_root / ASSET_TYPE_OBJECT / BRIDGE_OBJECT_NAME
-            if object_dir.exists():
-                transactional_rmtree(object_dir)
-                deleted_count += 1
-
-            # Delete script directory
-            script_dir = self.project_root / ASSET_TYPE_SCRIPT / BRIDGE_SCRIPT_NAME
-            if script_dir.exists():
-                transactional_rmtree(script_dir)
-                deleted_count += 1
-
-            # Delete folder .yy
-            folder_yy = self.project_root / ASSET_TYPE_FOLDER / f"{BRIDGE_FOLDER_NAME}.yy"
-            if folder_yy.exists():
-                transactional_unlink(folder_yy)
-                deleted_count += 1
+            removed = [path.relative_to(self.project_root).as_posix() for path in present_files]
+            for path in present_files:
+                if path.is_dir() and not path.is_symlink():
+                    transactional_rmtree(path)
+                else:
+                    transactional_unlink(path)
 
             # Success - clean up backup
             self._cleanup_backup()
 
             print("[BRIDGE] Uninstallation complete!")
-            warnings = room_cleanup.get("warnings", [])
+            warnings = list(room_cleanup.get("warnings", []))
+            if not installed:
+                warnings.append(
+                    "The bridge was only partly installed; removed the parts that were present: "
+                    + (", ".join(removed + [r["id"]["path"] + " (.yyp entry)" for r in registered]) or "room instances")
+                )
             return {
                 "ok": True,
-                "message": "Bridge removed successfully",
-                "items_deleted": deleted_count,
+                "message": "Bridge removed successfully" if installed else "Partial bridge install removed",
+                "partial": not installed,
+                "items_deleted": len(removed),
+                "removed_files": removed,
+                "yyp_entries_removed": len(registered) + int(folder_registered),
                 "rooms_cleaned": len(room_cleanup.get("rooms_modified", [])),
                 "instances_removed": room_cleanup.get("instances_removed", 0),
                 "creation_code_removed": room_cleanup.get("creation_code_deleted", 0),
@@ -980,37 +1125,39 @@ global.__mcp_enabled = false;
             raise
 
 
-def install_bridge(project_root: str, port: int = 6502) -> Dict[str, Any]:
+def install_bridge(project_root: str, port: int = 6502, force: bool = False) -> Dict[str, Any]:
     """
     Install bridge into a project.
 
     Args:
         project_root: Path to project root
         port: Bridge server port
+        force: Overwrite bridge assets even if they were edited after generation
 
     Returns:
         Installation result dict
     """
     try:
         installer = BridgeInstaller(Path(project_root))
-        return installer.install(port)
+        return installer.install(port, force)
     except Exception as e:
         return {"ok": False, "error": str(e), "message": f"Installation failed: {e}"}
 
 
-def uninstall_bridge(project_root: str) -> Dict[str, Any]:
+def uninstall_bridge(project_root: str, force: bool = False) -> Dict[str, Any]:
     """
     Remove bridge from a project.
 
     Args:
         project_root: Path to project root
+        force: Delete bridge assets even if they were edited after generation
 
     Returns:
         Uninstallation result dict
     """
     try:
         installer = BridgeInstaller(Path(project_root))
-        return installer.uninstall()
+        return installer.uninstall(force)
     except Exception as e:
         return {"ok": False, "error": str(e), "message": f"Uninstallation failed: {e}"}
 

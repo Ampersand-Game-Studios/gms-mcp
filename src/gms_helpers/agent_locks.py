@@ -16,13 +16,18 @@ protocol is deliberately trivial so shell scripts can take part:
 
 A lock whose holder died is reclaimed when its owner record names a dead process on this
 host, or when it is older than its stale timeout. The lock directory itself stays empty so
-``rmdir`` always works; the owner record is a sibling ``<name>.owner`` file.
+``rmdir`` always works; the owner record is a sibling ``<name>.owner`` file, replaced
+atomically, and ignored when it is older than the lock directory (a leftover from a holder
+whose lock was removed by hand).
 
 ``GMS_MCP_LOCK_DIR`` selects the directory (default ``~/.gms-mcp/locks``). Point it at an
 existing team lock directory to cooperate with scripts already using this protocol.
 """
 
 from __future__ import annotations
+
+import errno
+import warnings
 
 import json
 import os
@@ -95,9 +100,12 @@ def _process_alive(pid: int) -> bool:
 
 
 def _process_identity(pid: int) -> str | None:
-    """Birth identity prevents a recycled PID inheriting a game lease on macOS."""
+    """Birth identity prevents a recycled PID inheriting a lock or game lease."""
     if sys.platform != "darwin":
-        return None
+        from .run_session import process_identity
+
+        identity = process_identity(pid)
+        return identity[0] if identity else None
     try:
         result = subprocess.run(
             ["/bin/ps", "-p", str(pid), "-o", "lstart="],
@@ -143,11 +151,35 @@ class DirectoryLock:
 
     # -- inspection -----------------------------------------------------
     def owner(self) -> dict | None:
+        """The current holder's record, or None.
+
+        A record older than the lock directory belongs to an earlier holder (someone removed the
+        lock by hand with ``rmdir`` and a script took it again), so it never describes this lock.
+        """
         try:
+            lock_mtime = self.path.stat().st_mtime_ns
+            if self.owner_path.stat().st_mtime_ns < lock_mtime:
+                return None
             data = json.loads(self.owner_path.read_text(encoding="utf-8"))
             return data if isinstance(data, dict) else None
         except (OSError, ValueError):
             return None
+
+    def _write_owner(self, record: dict) -> None:
+        """Publish the owner record atomically: readers see the old record or the new one, never half."""
+        temporary = self.owner_path.with_name(f".{self.owner_path.name}.{self._token}.tmp")
+        try:
+            with temporary.open("w", encoding="utf-8") as stream:
+                json.dump(record, stream, sort_keys=True)
+                stream.flush()
+                os.fsync(stream.fileno())
+            os.replace(temporary, self.owner_path)
+        except BaseException:
+            try:
+                temporary.unlink()
+            except OSError:
+                pass
+            raise
 
     def age_seconds(self) -> float | None:
         try:
@@ -219,23 +251,26 @@ class DirectoryLock:
             self.path.mkdir()
         except FileExistsError:
             return False
-        self.held = True
         try:
-            self.owner_path.write_text(
-                json.dumps(
-                    {
-                        "token": self._token,
-                        "pid": os.getpid(),
-                        "host": socket.gethostname(),
-                        "purpose": self.purpose,
-                        "acquired_at_unix": time.time(),
-                    },
-                    sort_keys=True,
-                ),
-                encoding="utf-8",
+            self._write_owner(
+                {
+                    "token": self._token,
+                    "pid": os.getpid(),
+                    "pid_started": _process_identity(os.getpid()),
+                    "host": socket.gethostname(),
+                    "purpose": self.purpose,
+                    "acquired_at_unix": time.time(),
+                }
             )
-        except OSError:
-            pass
+        except BaseException:
+            # Without a record the lock could only be reclaimed by age, while its holder is alive:
+            # give it back instead of holding an anonymous lock.
+            try:
+                self.path.rmdir()
+            except OSError:
+                pass
+            raise
+        self.held = True
         return True
 
     def acquire(
@@ -273,7 +308,7 @@ class DirectoryLock:
         owner["supervisor_pid_started"] = _process_identity(os.getpid())
         owner["pid"] = int(pid)
         owner["pid_started"] = _process_identity(int(pid))
-        self.owner_path.write_text(json.dumps(owner, sort_keys=True), encoding="utf-8")
+        self._write_owner(owner)
 
     def release(self) -> None:
         if not self.held:
@@ -290,6 +325,16 @@ class DirectoryLock:
                 except OSError:
                     pass
                 time.sleep(0.01)
+            except OSError as exc:
+                if exc.errno not in {errno.ENOSPC, errno.EDQUOT}:
+                    raise
+                # Keep ownership intact so a contender cannot overlap a live build.
+                # Once the owner exits normal stale-lock recovery reclaims it. Never
+                # replace the compiler's real diagnostic with an allocation failure.
+                warnings.warn(
+                    f"Could not release '{self.name}' lock: {exc}; lease retained until owner exits.", RuntimeWarning
+                )
+                return
         try:
             # Reclaimers use this same mutex. A delayed old cleanup can never remove
             # a replacement lease after its original process has exited.

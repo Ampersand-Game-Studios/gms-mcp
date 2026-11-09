@@ -17,10 +17,16 @@ from gms_mcp.server.verification_policy import (
     mark_compile_verification_pending,
 )
 from gms_helpers.transactions import (
-    _compile_verification_process_pids,
-    _terminate_compile_verification_processes,
+    _run_compile_verification_child,
+    _terminate_verification_child,
     compile_verify_project,
 )
+
+CHILD = "gms_helpers.transactions._run_compile_verification_child"
+
+
+def _finished(completed):
+    return completed, None
 
 
 class TestVerificationPolicy(unittest.TestCase):
@@ -30,6 +36,23 @@ class TestVerificationPolicy(unittest.TestCase):
             os.environ.pop("GMS_MCP_VERIFY_COMPILE_AFTER_MUTATION", None)
 
             self.assertEqual(current_verification_mode(), "smart")
+
+    def test_unrecognised_project_policy_verifies_in_smart_mode_and_reports_it(self):
+        from gms_mcp.server.verification_policy import verification_mode_notice
+
+        with tempfile.TemporaryDirectory() as temp_dir, patch.dict(os.environ, {}, clear=False):
+            os.environ.pop("GMS_MCP_POST_MUTATION_VERIFY", None)
+            os.environ.pop("GMS_MCP_VERIFY_COMPILE_AFTER_MUTATION", None)
+            root = Path(temp_dir)
+            (root / ".gms-mcp.json").write_text(json.dumps({"verification": {"post_mutation": "of"}}))
+
+            decision = decide_mutation_verification("gm_create_script", root)
+            notice = verification_mode_notice(root)
+
+        self.assertEqual(decision.mode, "smart")
+        self.assertEqual(decision.action, "compile")
+        self.assertIn("verification.post_mutation", notice)
+        self.assertIn(notice, decision.reason)
 
     def test_explicit_off_keeps_post_mutation_compile_disabled(self):
         with patch.dict(os.environ, {"GMS_MCP_POST_MUTATION_VERIFY": "off"}, clear=False):
@@ -89,7 +112,7 @@ class TestVerificationPolicy(unittest.TestCase):
 
         with (
             tempfile.TemporaryDirectory() as temp_dir,
-            patch("gms_helpers.transactions.subprocess.run", return_value=completed),
+            patch(CHILD, return_value=_finished(completed)),
         ):
             result = compile_verify_project(temp_dir, platform="macOS", runtime="VM", timeout_seconds=1)
 
@@ -109,7 +132,7 @@ class TestVerificationPolicy(unittest.TestCase):
         with (
             tempfile.TemporaryDirectory() as temp_dir,
             patch.dict(os.environ, {"GMS_MCP_POST_MUTATION_ACCEPT_COMPILE_STAGE_SUCCESS": "off"}, clear=False),
-            patch("gms_helpers.transactions.subprocess.run", return_value=completed),
+            patch(CHILD, return_value=_finished(completed)),
         ):
             result = compile_verify_project(temp_dir, platform="macOS", runtime="VM", timeout_seconds=1)
 
@@ -117,30 +140,20 @@ class TestVerificationPolicy(unittest.TestCase):
         self.assertTrue(result["compile_stage_ok"])
         self.assertFalse(result["accepted_compile_stage_success"])
 
-    def test_compile_verify_timeout_fails_cleanly_and_cleans_new_helpers(self):
-        timeout = subprocess.TimeoutExpired(
-            cmd=["gms"],
-            timeout=5,
-            output="compile still running",
-            stderr="",
-        )
-        cleanup = {"terminated_pids": [101, 102], "failed_pids": []}
+    def test_compile_verify_timeout_fails_cleanly_and_reports_cleanup(self):
+        cleanup = {"process_group": 100, "terminated_pids": [100, 101], "failed_pids": []}
+        timed_out = subprocess.CompletedProcess(args=["gms"], returncode=-9, stdout="compile still running", stderr="")
 
         with (
             tempfile.TemporaryDirectory() as temp_dir,
-            patch("gms_helpers.transactions._compile_verification_process_pids", return_value={10}),
-            patch(
-                "gms_helpers.transactions._terminate_compile_verification_processes",
-                return_value=cleanup,
-            ) as terminate_mock,
-            patch("gms_helpers.transactions.subprocess.run", side_effect=timeout),
+            patch(CHILD, return_value=(timed_out, cleanup)) as child,
         ):
             result = compile_verify_project(temp_dir, platform="macOS", runtime="VM", timeout_seconds=5)
 
         self.assertFalse(result["ok"])
         self.assertTrue(result["timed_out"])
         self.assertEqual(result["timeout_cleanup"], cleanup)
-        terminate_mock.assert_called_once()
+        self.assertEqual(child.call_args.kwargs["timeout_seconds"], 5)
 
     def test_compile_verify_holds_parent_machine_lock_through_timeout_cleanup(self):
         state = {"active": False}
@@ -165,21 +178,17 @@ class TestVerificationPolicy(unittest.TestCase):
                 if not state["active"]:
                     raise AssertionError("compile verification machine lock is not active")
 
-        timeout = subprocess.TimeoutExpired(cmd=["gms"], timeout=1, output="", stderr="")
-
-        def cleanup_while_locked(_root, _baseline):
+        def child_timing_out_while_locked(*_args, **_kwargs):
             RecordingLock.assert_active()
-            return {"terminated_pids": [], "failed_pids": []}
+            return (
+                subprocess.CompletedProcess(args=["gms"], returncode=-9, stdout="", stderr=""),
+                {"terminated_pids": [], "failed_pids": []},
+            )
 
         with (
             tempfile.TemporaryDirectory() as temp_dir,
             patch("gms_helpers.transactions.GameMakerMachineLock", RecordingLock),
-            patch("gms_helpers.transactions._compile_verification_process_pids", return_value=set()),
-            patch(
-                "gms_helpers.transactions._terminate_compile_verification_processes",
-                side_effect=cleanup_while_locked,
-            ),
-            patch("gms_helpers.transactions.subprocess.run", side_effect=timeout),
+            patch(CHILD, side_effect=child_timing_out_while_locked),
         ):
             result = compile_verify_project(temp_dir, platform="macOS", runtime="VM", timeout_seconds=1)
 
@@ -187,21 +196,16 @@ class TestVerificationPolicy(unittest.TestCase):
         self.assertFalse(state["active"])
 
     def test_compile_verify_timeout_can_accept_already_completed_compile_stage(self):
-        timeout = subprocess.TimeoutExpired(
-            cmd=["gms"],
-            timeout=5,
-            output="Final Compile finished.\nSaving IFF file... game.ios\nStats : GMA\n",
+        timed_out = subprocess.CompletedProcess(
+            args=["gms"],
+            returncode=-9,
+            stdout="Final Compile finished.\nSaving IFF file... game.ios\nStats : GMA\n",
             stderr="runner did not stop",
         )
 
         with (
             tempfile.TemporaryDirectory() as temp_dir,
-            patch("gms_helpers.transactions._compile_verification_process_pids", return_value=set()),
-            patch(
-                "gms_helpers.transactions._terminate_compile_verification_processes",
-                return_value={"terminated_pids": [], "failed_pids": []},
-            ),
-            patch("gms_helpers.transactions.subprocess.run", side_effect=timeout),
+            patch(CHILD, return_value=(timed_out, {"terminated_pids": [], "failed_pids": []})),
         ):
             result = compile_verify_project(temp_dir, platform="macOS", runtime="VM", timeout_seconds=5)
 
@@ -210,69 +214,60 @@ class TestVerificationPolicy(unittest.TestCase):
         self.assertTrue(result["compile_stage_ok"])
         self.assertTrue(result["accepted_compile_stage_success"])
 
-    @unittest.skipIf(os.name == "nt", "POSIX process scan regression")
-    def test_timeout_cleanup_terminates_new_scoped_process_group(self):
+    @unittest.skipIf(os.name == "nt", "POSIX process-group regression")
+    def test_timeout_stops_the_child_group_and_spares_unrelated_project_processes(self):
         with tempfile.TemporaryDirectory() as temp_dir:
             root = Path(temp_dir).resolve()
-            process = subprocess.Popen(
-                [
-                    sys.executable,
-                    "-c",
-                    "import time; time.sleep(60)  # gms_helpers.gms",
-                    str(root),
-                ],
+            marker = root / "grandchild.pid"
+            # The user's own process naming the project and a helper marker must survive.
+            bystander = subprocess.Popen(
+                [sys.executable, "-c", "import time; time.sleep(60)  # tail -F gms_helpers.gms", str(root)],
                 start_new_session=True,
             )
+            child_code = (
+                "import subprocess, sys, time; "
+                "g = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(60)']); "
+                f"open({str(marker)!r}, 'w').write(str(g.pid)); "
+                "print('compiling', flush=True); time.sleep(60)"
+            )
             try:
-                deadline = time.monotonic() + 2
-                while process.pid not in _compile_verification_process_pids(root) and time.monotonic() < deadline:
-                    time.sleep(0.02)
-                self.assertIn(process.pid, _compile_verification_process_pids(root))
-                cleanup = _terminate_compile_verification_processes(root, set())
-                process.wait(timeout=5)
+                started = time.monotonic()
+                completed, cleanup = _run_compile_verification_child(
+                    [sys.executable, "-c", child_code], cwd=root, env=dict(os.environ), timeout_seconds=2
+                )
+                grandchild = int(marker.read_text())
+                deadline = time.monotonic() + 5
+                while time.monotonic() < deadline:
+                    try:
+                        os.kill(grandchild, 0)
+                    except ProcessLookupError:
+                        break
+                    time.sleep(0.05)
+                else:
+                    self.fail("the verification child's own helper survived the timeout")
+                self.assertIsNone(bystander.poll())
             finally:
-                if process.poll() is None:
-                    process.kill()
-                    process.wait(timeout=5)
+                bystander.kill()
+                bystander.wait(timeout=5)
 
-        self.assertIn(process.pid, cleanup["terminated_pids"])
+        self.assertLess(time.monotonic() - started, 30)
+        self.assertEqual(completed.returncode, -9)
+        self.assertIn("compiling", completed.stdout)
+        self.assertIsNotNone(cleanup)
+        self.assertNotIn(bystander.pid, cleanup["terminated_pids"])
 
-    def test_windows_process_scan_and_tree_cleanup_are_project_scoped(self):
-        root = Path("C:/Projects/Exact Game")
-        listing = json.dumps(
-            [
-                {
-                    "ProcessId": 101,
-                    "CommandLine": r'C:\Runtime\Igor.exe --project="C:\Projects\Exact Game\game.yyp"',
-                },
-                {
-                    "ProcessId": 202,
-                    "CommandLine": r'C:\Runtime\runner.exe "C:\Projects\Other Game\game.win"',
-                },
-                {
-                    "ProcessId": 203,
-                    "CommandLine": r'C:\Runtime\Igor.exe --project="C:\Projects\Exact Game Backup\game.yyp"',
-                },
-            ]
-        )
-        scanner = MagicMock()
-        scanner.communicate.return_value = (listing, "")
+    def test_windows_timeout_cleanup_kills_only_the_child_tree(self):
+        process = MagicMock(pid=303)
+        process.poll.return_value = 0
         taskkill_result = subprocess.CompletedProcess(args=["taskkill"], returncode=0, stdout="", stderr="")
 
         with (
             patch("gms_helpers.transactions.os.name", "nt"),
-            patch("gms_helpers.transactions.subprocess.Popen", return_value=scanner),
-        ):
-            self.assertEqual(_compile_verification_process_pids(root), {101})
-
-        with (
-            patch("gms_helpers.transactions.os.name", "nt"),
-            patch("gms_helpers.transactions._compile_verification_process_pids", return_value={101, 303}),
             patch("gms_helpers.transactions.subprocess.run", return_value=taskkill_result) as taskkill,
         ):
-            cleanup = _terminate_compile_verification_processes(root, {101})
+            cleanup = _terminate_verification_child(process)
 
-        self.assertEqual(cleanup, {"terminated_pids": [303], "failed_pids": []})
+        self.assertEqual(cleanup, {"process_group": 303, "terminated_pids": [303], "failed_pids": []})
         taskkill.assert_called_once_with(
             ["taskkill", "/PID", "303", "/T", "/F"],
             capture_output=True,
@@ -298,8 +293,8 @@ class TestVerificationPolicy(unittest.TestCase):
             tempfile.TemporaryDirectory() as temp_dir,
             patch.dict(os.environ, {}, clear=False),
             patch(
-                "gms_helpers.transactions.subprocess.run",
-                side_effect=[access_violation, access_violation, success],
+                CHILD,
+                side_effect=[_finished(access_violation), _finished(access_violation), _finished(success)],
             ) as run_mock,
         ):
             os.environ.pop("GMS_MCP_POST_MUTATION_VERIFY_INFRA_ATTEMPTS", None)
@@ -354,12 +349,12 @@ class TestVerificationPolicy(unittest.TestCase):
 
         def run_attempt(*_args, **kwargs):
             child_tokens.append(kwargs["env"]["GMS_MCP_MACHINE_LOCK_DELEGATION_TOKEN"])
-            return access_violation if len(child_tokens) == 1 else success
+            return _finished(access_violation if len(child_tokens) == 1 else success)
 
         with (
             tempfile.TemporaryDirectory() as temp_dir,
             patch("gms_helpers.transactions.GameMakerMachineLock", RecordingLock),
-            patch("gms_helpers.transactions.subprocess.run", side_effect=run_attempt),
+            patch(CHILD, side_effect=run_attempt),
         ):
             result = compile_verify_project(temp_dir, platform="macOS", runtime="VM", timeout_seconds=1)
 
@@ -377,7 +372,7 @@ class TestVerificationPolicy(unittest.TestCase):
 
         with (
             tempfile.TemporaryDirectory() as temp_dir,
-            patch("gms_helpers.transactions.subprocess.run", return_value=compile_failure) as run_mock,
+            patch(CHILD, return_value=_finished(compile_failure)) as run_mock,
         ):
             result = compile_verify_project(temp_dir, platform="macOS", runtime="VM", timeout_seconds=1)
 
@@ -398,7 +393,7 @@ class TestVerificationPolicy(unittest.TestCase):
 
         with (
             tempfile.TemporaryDirectory() as temp_dir,
-            patch("gms_helpers.transactions.subprocess.run", return_value=post_compile_crash) as run_mock,
+            patch(CHILD, return_value=_finished(post_compile_crash)) as run_mock,
         ):
             result = compile_verify_project(temp_dir, platform="macOS", runtime="VM", timeout_seconds=1)
 
@@ -418,7 +413,7 @@ class TestVerificationPolicy(unittest.TestCase):
 
         with (
             tempfile.TemporaryDirectory() as temp_dir,
-            patch("gms_helpers.transactions.subprocess.run", return_value=completed),
+            patch(CHILD, return_value=_finished(completed)),
         ):
             result = compile_verify_project(temp_dir, platform="macOS", runtime="VM", timeout_seconds=1)
 

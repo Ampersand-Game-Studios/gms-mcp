@@ -263,11 +263,13 @@ def test_c2_compile_verification_python_uses_safe_path(tmp_path, monkeypatch):
 
     def run(command, **kwargs):
         commands.append(command)
-        return subprocess.CompletedProcess(command, 0, "Final Compile finished\nSaving IFF file\nIgor complete.", "")
+        completed = subprocess.CompletedProcess(
+            command, 0, "Final Compile finished\nSaving IFF file\nIgor complete.", ""
+        )
+        return completed, None
 
     monkeypatch.setattr(transactions, "transaction_subprocess_environment", lambda: {})
-    monkeypatch.setattr(transactions, "_compile_verification_process_pids", lambda root: set())
-    monkeypatch.setattr(transactions.subprocess, "run", run)
+    monkeypatch.setattr(transactions, "_run_compile_verification_child", run)
     result = transactions._compile_verify_project_locked(
         tmp_path,
         platform="Linux",
@@ -302,8 +304,9 @@ def test_c3_git_tree_uses_raw_blobs_and_pins_commit(tmp_path, monkeypatch):
     raw = b'{"resources":[],"Folders":[],"value":"$Format:%H$"}'
     calls = []
 
-    def git(repo, *args, input_bytes=None):
+    def git(repo, *args, input_bytes=None, env=None):
         calls.append(args)
+        data = b""
         if args[:2] == ("rev-parse", "--show-toplevel"):
             data = str(root).encode()
         elif args[0] == "rev-parse":
@@ -312,10 +315,12 @@ def test_c3_git_tree_uses_raw_blobs_and_pins_commit(tmp_path, monkeypatch):
         elif args[0] == "ls-tree":
             assert args[3] == sha
             data = f"100755 blob {oid}\tgame.yyp\0".encode()
+        elif args[0] == "read-tree":
+            assert args == ("read-tree", sha) and env["GIT_INDEX_FILE"]
         else:
-            assert args == ("cat-file", "--batch")
-            assert input_bytes == (oid + "\n").encode()
-            data = f"{oid} blob {len(raw)}\n".encode() + raw + b"\n"
+            assert args[0] == "checkout-index" and args[2:] == ("--stdin", "-z")
+            assert input_bytes == b"game.yyp\0" and env["GIT_INDEX_FILE"]
+            Path(args[1].removeprefix("--prefix="), "game.yyp").write_bytes(raw)
         return subprocess.CompletedProcess(args, 0, data, b"")
 
     monkeypatch.setattr(snapshot_build, "_git", git)

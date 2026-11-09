@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any
 
@@ -64,7 +65,7 @@ def register(
         try:
             return str(
                 public_mcp_result(
-                    get_update_status().message,
+                    (await asyncio.to_thread(get_update_status)).message,
                     project_root=project_access_policy.project_root,
                     expose_host_diagnostics=expose_host_diagnostics,
                 )

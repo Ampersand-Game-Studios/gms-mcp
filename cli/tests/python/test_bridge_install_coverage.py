@@ -598,6 +598,7 @@ class TestInstallCoverage(unittest.TestCase):
             global_supported=False,
             workspace_relpath="configs/workspace.json",
             global_relpath=".fake/config.json",
+            global_path=lambda: Path.home() / ".fake/config.json",
             resolve_path=lambda **_kwargs: Path("/tmp/unused"),
         )
         with (

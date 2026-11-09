@@ -40,6 +40,24 @@ from .maintenance import (
 )
 
 
+def _set_canonical_command(args: argparse.Namespace) -> None:
+    """Name the parsed command the way `gms` does so the shared policy applies to it."""
+    args.project_root = "."
+    command = getattr(args, "command", None)
+    if command is None:
+        return
+    if command == "maint":
+        args.category = "maintenance"
+        args.maintenance_action = args.maint_command
+    elif args.command == "delete":
+        args.category = "asset"
+        args.asset_action = "delete"
+    else:
+        args.category = "asset"
+        args.asset_action = "create"
+        args.asset_type = command
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="GameMaker Studio Asset Helper",
@@ -401,9 +419,13 @@ Maintenance Commands:
     validate_working_directory()
 
     args = parser.parse_args()
+    _set_canonical_command(args)
 
     try:
-        return args.func(args)
+        # Same lock, journal, rollback and policy as every `gms` writer.
+        from ..gms import _execute_project_command
+
+        return _execute_project_command(args)
     except GMSError as e:
         print(f"[ERROR] {e.message}")
         raise

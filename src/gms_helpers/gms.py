@@ -24,12 +24,13 @@ from gms_mcp.telemetry import (
 )
 
 # Import utilities for directory validation
-from .utils import validate_working_directory, resolve_project_directory
+from .utils import find_yyp, resolve_project_directory
 from .exceptions import GMSError
 from .operation_policy import (
     is_project_mutation,
     is_write_free_operation,
     operation_succeeded,
+    read_only_mode_enabled,
     validate_project_operation,
 )
 
@@ -641,14 +642,18 @@ def setup_event_commands(subparsers):
     add_parser = event_subparsers.add_parser("add", help="Add an event to an object")
     add_parser.add_argument("object", help="Object name (e.g., o_player)")
     add_parser.add_argument("event", help="Event specification (e.g., create, step:1)")
-    add_parser.add_argument("--template", help="Template file to use for event content")
+    add_parser.add_argument("--template", help="Inline GML event content (not a file path)")
     add_parser.set_defaults(func=handle_event_add)
 
     # Remove command
     remove_parser = event_subparsers.add_parser("remove", help="Remove an event from an object")
     remove_parser.add_argument("object", help="Object name (e.g., o_player)")
     remove_parser.add_argument("event", help="Event specification (e.g., create, step:1)")
-    remove_parser.add_argument("--keep-file", action="store_true", help="Keep the GML file (do not delete .gml)")
+    remove_parser.add_argument(
+        "--keep-file",
+        action="store_true",
+        help="Keep the event code, renamed to <Event>.removed.gml so it is not an orphaned event file",
+    )
     remove_parser.set_defaults(func=handle_event_remove)
 
     # Duplicate command
@@ -787,7 +792,9 @@ def setup_texture_group_commands(subparsers):
     assign_parser.add_argument(
         "--name-contains", dest="name_contains", help="Filter by name substring (case-insensitive)"
     )
-    assign_parser.add_argument("--folder-prefix", dest="folder_prefix", help="Filter by folder/path substring")
+    assign_parser.add_argument(
+        "--folder-prefix", dest="folder_prefix", help="Logical IDE folder prefix (e.g. folders/Sprites/UI)"
+    )
     assign_parser.add_argument("--from-group", dest="from_group", help="Only assign assets currently in this group")
     assign_parser.add_argument("--configs", help="Comma-separated config names to set (creates overrides)")
     assign_parser.add_argument(
@@ -902,7 +909,10 @@ def setup_room_commands(subparsers):
         help="Layer type",
     )
     layer_add_parser.add_argument("layer_name", help="Layer name")
-    layer_add_parser.add_argument("--depth", type=int, default=0, help="Layer depth (default: 0)")
+    layer_add_parser.add_argument(
+        "--depth", type=int, default=None, help="Layer depth (default: on top of the existing layers)"
+    )
+    layer_add_parser.add_argument("--tileset", help="Tileset name (required for tile layers)")
     layer_add_parser.set_defaults(func=handle_room_layer_add)
 
     # Remove layer
@@ -1003,6 +1013,13 @@ def setup_maintenance_commands(subparsers):
         "--dry-run", action="store_true", help="Show what would be changed without making changes"
     )
     dedupe_parser.set_defaults(func=handle_maintenance_dedupe_resources)
+
+    # Restore a trash batch
+    restore_trash_parser = maint_subparsers.add_parser(
+        "restore-trash", help="Move a maintenance trash batch back to its original paths"
+    )
+    restore_trash_parser.add_argument("trash_name", help="Trash batch folder name (see the cleanup result)")
+    restore_trash_parser.set_defaults(func=handle_maintenance_restore_trash)
 
     # Normalize names
     normalize_parser = maint_subparsers.add_parser(
@@ -1182,6 +1199,7 @@ from .commands.maintenance_commands import (
     handle_maintenance_prune_missing,
     handle_maintenance_validate_paths,
     handle_maintenance_dedupe_resources,
+    handle_maintenance_restore_trash,
     handle_maintenance_normalize_names,
     handle_maintenance_sync_events,
     handle_maintenance_clean_old_files,
@@ -1297,6 +1315,27 @@ def _cli_command_name(args: argparse.Namespace) -> str:
     return ".".join(parts) if parts else "cli"
 
 
+def _numeric_argument_errors(tool_name: str, args: argparse.Namespace) -> list[dict[str, str]]:
+    """Apply the MCP operation model's numeric ranges to the equivalent CLI command."""
+    from gms_mcp.server.validation import _OPERATION_MODELS, _validate_float_range, _validate_int_range
+    from .operation_policy import canonical_operation_name
+
+    operation = canonical_operation_name(tool_name)
+    model = next(
+        (model for name, model in _OPERATION_MODELS.items() if canonical_operation_name(name) == operation),
+        None,
+    )
+    if model is None:
+        return []
+    values = vars(args)
+    errors: list[dict[str, str]] = []
+    for field_name, (minimum, maximum) in model.int_ranges.items():
+        _validate_int_range(values, field_name, minimum, maximum, errors)
+    for field_name, (minimum, maximum) in model.float_ranges.items():
+        _validate_float_range(values, field_name, minimum, maximum, errors)
+    return errors
+
+
 def _execute_project_command(args: argparse.Namespace):
     """Enforce identical policy and atomic failure handling for every CLI writer."""
     from gms_mcp.server.dry_run_policy import destructive_policy_preflight
@@ -1307,6 +1346,11 @@ def _execute_project_command(args: argparse.Namespace):
     if blocked is not None:
         print(f"[ERROR] {blocked['error']}")
         return blocked
+    argument_errors = _numeric_argument_errors(tool_name, args)
+    if argument_errors:
+        details = "; ".join(f"--{error['field'].replace('_', '-')} {error['message']}" for error in argument_errors)
+        print(f"[ERROR] Invalid arguments: {details}")
+        return {"ok": False, "error": f"Invalid arguments: {details}", "validation_errors": argument_errors}
     if not is_project_mutation(tool_name, args):
         return args.func(args)
     root = validate_project_operation(args.project_root, args)
@@ -1359,11 +1403,7 @@ def _queue_cli_event(
     execution_mode: str = "inline",
     arguments: argparse.Namespace | None = None,
 ) -> None:
-    if (
-        cli_telemetry_suppressed()
-        or os.environ.get("GMS_MCP_READ_ONLY", "").strip() == "1"
-        or is_write_free_operation(tool_name, arguments or {})
-    ):
+    if cli_telemetry_suppressed() or read_only_mode_enabled() or is_write_free_operation(tool_name, arguments or {}):
         return
     state = resolve_state(telemetry_override)
     if not queue_event(
@@ -1379,11 +1419,11 @@ def _queue_cli_event(
         execution_mode=execution_mode,
     ):
         return
-    maybe_start_background_flush()
+    maybe_start_background_flush(cli_override=telemetry_override)
 
 
 def _maybe_prompt_after_cli(*, telemetry_override: str, allow_prompt: bool) -> None:
-    if cli_telemetry_suppressed() or os.environ.get("GMS_MCP_READ_ONLY", "").strip() == "1":
+    if cli_telemetry_suppressed() or read_only_mode_enabled():
         return
     if not should_prompt_for_consent(cli_override=telemetry_override, allow_prompt=allow_prompt):
         return
@@ -1391,7 +1431,7 @@ def _maybe_prompt_after_cli(*, telemetry_override: str, allow_prompt: bool) -> N
     if enabled:
         from gms_mcp.telemetry import emit_consent_changed
 
-        emit_consent_changed("enable")
+        emit_consent_changed("enable", cli_override=telemetry_override)
 
 
 def main():
@@ -1480,9 +1520,9 @@ def main():
     os.chdir(project_dir)
 
     try:
-        # Now validate and parse full args.
+        # One resolver decides the project file for every command.
         try:
-            validate_working_directory()
+            find_yyp(project_dir)
         except GMSError as e:
             print(f"[ERROR] {e.message}")
             raise

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import argparse
 from typing import Any, Callable, Dict, List
-from gms_helpers.operation_policy import is_write_free_operation
+from gms_helpers.operation_policy import is_project_mutation, is_write_free_operation
 
 from ..telemetry import note_tool_execution
 from ..execution_policy import ExecutionMode, policy_manager
@@ -68,7 +68,34 @@ async def _run_with_fallback(
         # A positional object name must never become part of the policy key.
         from gms_helpers.gms import _cli_command_name, create_parser
 
-        derived_tool_name = _cli_command_name(create_parser().parse_args(cli_args)).replace(".", "-")
+        try:
+            parsed = create_parser().parse_args(cli_args)
+        except SystemExit:
+            # argparse exits on help/usage errors; never let that stop the server.
+            result = _apply_output_mode(
+                {
+                    "ok": False,
+                    "direct_used": False,
+                    "stdout": "",
+                    "stderr": "",
+                    "exit_code": 2,
+                    "error": "Tool arguments could not be parsed as a GameMaker CLI command.",
+                    "execution_mode": "policy",
+                },
+                output_mode=output_mode,
+                tail_lines=tail_lines,
+                max_chars=max_chars,
+                quiet=quiet,
+            )
+            note_tool_execution(
+                tool_name="cli",
+                execution_mode="policy",
+                ok=False,
+                timed_out=False,
+                error=result.get("error"),
+            )
+            return result
+        derived_tool_name = _cli_command_name(parsed).replace(".", "-")
 
     # Get execution policy for this tool
     policy = policy_manager.get_policy(derived_tool_name)
@@ -178,7 +205,18 @@ async def _run_with_fallback(
         )
         return result
 
-    if destructive_cli_disabled:
+    # Re-running a writer can repeat or compound a partial write, and a timed-out
+    # worker may still have been mid-write; project writers never fall back.
+    no_fallback_reason = (
+        "destructive_cli_disabled"
+        if destructive_cli_disabled
+        else "direct_timeout"
+        if direct_result.timed_out
+        else "project_mutation"
+        if is_project_mutation(derived_tool_name, direct_args)
+        else None
+    )
+    if no_fallback_reason is not None:
         result = _apply_output_mode(
             direct_result.as_dict(),
             output_mode=output_mode,
@@ -187,8 +225,9 @@ async def _run_with_fallback(
             quiet=quiet,
         )
         result["fallback_skipped"] = True
-        result["fallback_skipped_reason"] = "destructive_cli_disabled"
-        result["fallback_blocked_by_policy"] = True
+        result["fallback_skipped_reason"] = no_fallback_reason
+        if destructive_cli_disabled:
+            result["fallback_blocked_by_policy"] = True
         note_tool_execution(
             tool_name=derived_tool_name,
             execution_mode=result.get("execution_mode") or "direct",
@@ -198,7 +237,7 @@ async def _run_with_fallback(
         )
         return result
 
-    # If the direct call failed for an infrastructure reason, fall back to subprocess for resilience.
+    # Anything else that failed for an infrastructure reason falls back to the CLI.
     cli_result = await _run_cli_async(
         cli_args,
         project_root,

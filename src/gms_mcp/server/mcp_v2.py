@@ -58,6 +58,7 @@ _IGNORED_DIRECTORY_NAMES = frozenset(
         ".git",
         ".gms-backups",
         ".gms-mcp",
+        ".gms_mcp",
         ".pytest_cache",
         ".ruff_cache",
         ".venv",
@@ -256,16 +257,16 @@ class ProjectWatchMiddleware:
 
 
 class MutationSerializationMiddleware:
-    """Serialize mutating tools while leaving independent reads concurrent."""
+    """Serialize mutating tools while leaving reads and live-game control concurrent."""
 
     def __init__(
         self,
         runtime: MCPV2Runtime,
-        is_read_only_tool: Callable[[str], bool],
+        requires_mutation_lock: Callable[[str, Mapping[str, Any]], bool],
         is_committed_mutation_result: Callable[[Any], bool],
     ) -> None:
         self._runtime = runtime
-        self._is_read_only_tool = is_read_only_tool
+        self._requires_mutation_lock = requires_mutation_lock
         self._is_committed_mutation_result = is_committed_mutation_result
 
     async def __call__(
@@ -277,9 +278,13 @@ class MutationSerializationMiddleware:
             return await call_next(ctx)
         if isinstance(ctx.params, Mapping):
             tool_name = ctx.params.get("name")
+            arguments = ctx.params.get("arguments")
         else:
             tool_name = getattr(ctx.params, "name", None)
-        if not isinstance(tool_name, str) or self._is_read_only_tool(tool_name):
+            arguments = getattr(ctx.params, "arguments", None)
+        if not isinstance(arguments, Mapping):
+            arguments = {}
+        if not isinstance(tool_name, str) or not self._requires_mutation_lock(tool_name, arguments):
             return await call_next(ctx)
         async with self._runtime.mutation_scope():
             result = await call_next(ctx)

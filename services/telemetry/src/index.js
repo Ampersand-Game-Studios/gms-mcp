@@ -1,3 +1,4 @@
+import EVENT_SCHEMA from "./event-schema.json" with { type: "json" };
 import { clientBudgetName } from "./ingest-budget.js";
 
 const SCHEMA_VERSION = 1;
@@ -7,62 +8,22 @@ const MAX_ARCHIVE_DAYS = 31;
 const MAX_ARCHIVE_OBJECTS = 10000;
 const PRIMARY_HOSTNAME = "gms-mcp-telemetry.ampersandgamestudios.com";
 const DEV_HOSTS = new Set(["localhost", "127.0.0.1"]);
-const SERVICE_REVISION = "ingest-security-v8";
-const EVENT_SURFACES = {
-  "cli.command": "cli",
-  "telemetry.consent_changed": "cli",
-  "mcp.tool": "mcp",
-  "mcp.server_start": "mcp",
-  "init.run": "init",
-  "init.codex_check": "init",
-};
-const ERROR_FAMILIES = new Set([
-  "timeout",
-  "cancelled",
-  "missing_dependency",
-  "permission",
-  "not_found",
-  "network",
-  "validation",
-  "system_exit",
-  "runtime",
-  "unexpected",
-  "project_access",
-]);
-const DURATION_BUCKETS = new Set([
-  "lt_100",
-  "100_499",
-  "500_999",
-  "1000_4999",
-  "5000_29999",
-  "ge_30000",
-]);
+const SERVICE_REVISION = "ingest-security-v9";
+const EVENT_SURFACES = EVENT_SCHEMA.event_surfaces;
+const SURFACES = new Set(Object.values(EVENT_SURFACES));
+const RESULTS = new Set(EVENT_SCHEMA.results);
+const ERROR_FAMILIES = new Set(EVENT_SCHEMA.error_families);
+const DURATION_BUCKETS = new Set(EVENT_SCHEMA.duration_buckets);
+const TOKEN_PATTERN = new RegExp(EVENT_SCHEMA.token_pattern);
+const VERSION_PATTERN = new RegExp(EVENT_SCHEMA.version_pattern, "i");
+const PYTHON_VERSION_PATTERN = new RegExp(EVENT_SCHEMA.python_version_pattern);
+const TIMESTAMP_PATTERN = new RegExp(EVENT_SCHEMA.timestamp_pattern);
+const MAX_EVENT_AGE_MS = EVENT_SCHEMA.max_event_age_ms;
+const MAX_CLOCK_SKEW_MS = EVENT_SCHEMA.max_clock_skew_ms;
 
 export { IngestBudget } from "./ingest-budget.js";
 
-const EVENT_RULES = {
-  schema_version: { type: "integer", required: true },
-  event_id: { type: "string", required: true, maxLength: 64 },
-  session_id: { type: "string", required: true, maxLength: 64 },
-  timestamp: { type: "string", required: true, maxLength: 32 },
-  surface: { type: "string", required: true, maxLength: 16 },
-  event_type: { type: "string", required: true, maxLength: 32 },
-  action: { type: "string", required: true, maxLength: 64 },
-  tool_name: { type: "string", required: true, maxLength: 64 },
-  tool_family: { type: "string", required: true, maxLength: 32 },
-  result: { type: "string", required: true, maxLength: 16 },
-  error_family: { type: "string", required: false, maxLength: 32 },
-  duration_ms: { type: "integer", required: false },
-  duration_bucket: { type: "string", required: false, maxLength: 16 },
-  execution_mode: { type: "string", required: false, maxLength: 32 },
-  gms_mcp_version: { type: "string", required: true, maxLength: 32 },
-  os_family: { type: "string", required: true, maxLength: 16 },
-  python_version: { type: "string", required: true, maxLength: 16 },
-  interactive: { type: "boolean", required: true },
-  ci: { type: "boolean", required: true },
-  test_env: { type: "boolean", required: true },
-  install_hash: { type: "string", required: false, maxLength: 128 },
-};
+const EVENT_RULES = EVENT_SCHEMA.fields;
 
 function jsonResponse(status, payload, headers = {}) {
   return new Response(JSON.stringify(payload, null, 2), {
@@ -163,7 +124,7 @@ async function readJsonBody(request) {
   return JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes));
 }
 
-function sanitizeEvent(event) {
+function sanitizeEvent(event, now = Date.now()) {
   if (!event || typeof event !== "object" || Array.isArray(event)) {
     return null;
   }
@@ -188,7 +149,7 @@ function sanitizeEvent(event) {
       if (
         !trimmed ||
         trimmed.length > rule.maxLength ||
-        (key !== "timestamp" && !/^[A-Za-z0-9_.+:-]+$/.test(trimmed))
+        (key !== "timestamp" && !TOKEN_PATTERN.test(trimmed))
       ) {
         return null;
       }
@@ -212,7 +173,7 @@ function sanitizeEvent(event) {
     }
   }
 
-  if (sanitized.schema_version !== SCHEMA_VERSION) {
+  if (sanitized.schema_version !== EVENT_SCHEMA.schema_version) {
     return null;
   }
   if (
@@ -222,10 +183,7 @@ function sanitizeEvent(event) {
     return null;
   if (sanitized.install_hash && !/^[a-f0-9]{64}$/.test(sanitized.install_hash))
     return null;
-  if (
-    !["cli", "mcp", "init"].includes(sanitized.surface) ||
-    !["ok", "error", "cancelled"].includes(sanitized.result)
-  )
+  if (!SURFACES.has(sanitized.surface) || !RESULTS.has(sanitized.result))
     return null;
   if (sanitized.ci || sanitized.test_env) return null;
   if (
@@ -235,14 +193,12 @@ function sanitizeEvent(event) {
     (sanitized.duration_bucket &&
       !DURATION_BUCKETS.has(sanitized.duration_bucket)) ||
     (sanitized.duration_ms !== undefined &&
-      sanitized.duration_ms > 7 * 86400000) ||
-    !/^\d+(?:\.\d+)*(?:(?:a|b|rc)\d+)?(?:\.post\d+)?(?:\.dev\d+)?(?:\+[a-z0-9]+(?:[._-][a-z0-9]+)*)?$/i.test(
-      sanitized.gms_mcp_version,
-    ) ||
-    !/^\d+\.\d+$/.test(sanitized.python_version)
+      sanitized.duration_ms > EVENT_SCHEMA.max_duration_ms) ||
+    !VERSION_PATTERN.test(sanitized.gms_mcp_version) ||
+    !PYTHON_VERSION_PATTERN.test(sanitized.python_version)
   )
     return null;
-  if (!validClientTimestamp(sanitized.timestamp)) return null;
+  if (!validClientTimestamp(sanitized.timestamp, now)) return null;
   return sanitized;
 }
 
@@ -347,19 +303,6 @@ function buildDailyAggregate(dayIso, events) {
   };
 }
 
-async function listKeys(bucket, prefix) {
-  let cursor;
-  const keys = [];
-  do {
-    const page = await bucket.list({ prefix, cursor });
-    for (const object of page.objects) {
-      keys.push(object.key);
-    }
-    cursor = page.truncated ? page.cursor : undefined;
-  } while (cursor);
-  return keys;
-}
-
 async function listObjects(bucket, prefix) {
   let cursor;
   const objects = [];
@@ -379,8 +322,7 @@ async function listObjects(bucket, prefix) {
   return objects;
 }
 
-async function loadEventsForPrefix(bucket, prefix) {
-  const keys = await listKeys(bucket, prefix);
+async function loadEvents(bucket, keys) {
   const events = [];
   for (const key of keys) {
     const object = await bucket.get(key);
@@ -400,6 +342,16 @@ async function loadEventsForPrefix(bucket, prefix) {
     }
   }
   return events;
+}
+
+async function sha256Hex(text) {
+  const digest = await crypto.subtle.digest(
+    "SHA-256",
+    new TextEncoder().encode(text),
+  );
+  return [...new Uint8Array(digest)]
+    .map((byte) => byte.toString(16).padStart(2, "0"))
+    .join("");
 }
 
 function daysToMilliseconds(days) {
@@ -491,31 +443,61 @@ async function handleArchiveManifest(request, env) {
     });
   }
 
-  const objects = [];
-  for (
-    let current = range.startDate;
-    current.getTime() <= range.endDate.getTime();
-    current = nextUtcDay(current)
+  const cursor = url.searchParams.get("cursor") || "";
+  if (cursor && !isAllowedArchiveKey(cursor)) {
+    return jsonResponse(400, { ok: false, error: "Invalid archive cursor." });
+  }
+  const limitRaw = url.searchParams.get("limit");
+  const pageLimit = limitRaw === null ? MAX_ARCHIVE_OBJECTS : Number(limitRaw);
+  if (
+    !Number.isSafeInteger(pageLimit) ||
+    pageLimit < 1 ||
+    pageLimit > MAX_ARCHIVE_OBJECTS
   ) {
-    const dayIso = current.toISOString();
-    for (const kind of ["raw", "aggregates"]) {
-      const entries = await listObjects(
-        env.TELEMETRY_BUCKET,
-        prefixForDate(kind, dayIso),
-      );
-      for (const entry of entries) {
-        objects.push({
-          key: entry.key,
-          size: entry.size,
-          uploaded_at: entry.uploaded,
+    return jsonResponse(400, { ok: false, error: "Invalid archive limit." });
+  }
+
+  // Keys are listed in ascending lexicographic order (kind, then day), so the
+  // last returned key is a stable cursor for the next page.
+  const objects = [];
+  let nextCursor = null;
+  pages: for (const kind of ["aggregates", "raw"]) {
+    for (
+      let current = range.startDate;
+      current.getTime() <= range.endDate.getTime();
+      current = nextUtcDay(current)
+    ) {
+      const prefix = prefixForDate(kind, current.toISOString());
+      const resumesHere = cursor.startsWith(prefix);
+      if (cursor && cursor > prefix && !resumesHere) continue;
+      let listCursor;
+      do {
+        const page = await env.TELEMETRY_BUCKET.list({
+          prefix,
+          limit: 1000,
+          ...(listCursor
+            ? { cursor: listCursor }
+            : resumesHere
+              ? { startAfter: cursor }
+              : {}),
         });
-        if (objects.length > MAX_ARCHIVE_OBJECTS) {
-          return jsonResponse(413, {
-            ok: false,
-            error: "Requested archive contains too many objects.",
+        for (const object of page.objects) {
+          if (objects.length === pageLimit) {
+            nextCursor = objects.at(-1).key;
+            break pages;
+          }
+          objects.push({
+            key: object.key,
+            size: object.size || 0,
+            uploaded_at: object.uploaded
+              ? new Date(object.uploaded).toISOString()
+              : null,
           });
         }
-      }
+        if (page.truncated && (!page.cursor || page.cursor === listCursor))
+          throw new Error("invalid_archive_cursor");
+        listCursor = page.truncated ? page.cursor : undefined;
+      } while (listCursor);
     }
   }
 
@@ -529,6 +511,7 @@ async function handleArchiveManifest(request, env) {
     },
     object_count: objects.length,
     objects,
+    next_cursor: nextCursor,
   });
 }
 
@@ -641,7 +624,10 @@ async function handleIngest(request, env) {
     return jsonResponse(400, { ok: false, error: "Expected 1-50 events." });
   }
 
-  const sanitized = events.map(sanitizeEvent).filter(Boolean);
+  const now = Date.now();
+  const sanitized = events
+    .map((event) => sanitizeEvent(event, now))
+    .filter(Boolean);
   if (sanitized.length !== events.length) {
     return jsonResponse(400, {
       ok: false,
@@ -700,12 +686,8 @@ async function handleIngest(request, env) {
   });
 }
 
-function validClientTimestamp(value) {
-  if (
-    typeof value !== "string" ||
-    !/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(\.\d{1,3})?Z$/.test(value)
-  )
-    return false;
+function validClientTimestamp(value, now = Date.now()) {
+  if (typeof value !== "string" || !TIMESTAMP_PATTERN.test(value)) return false;
   const timestamp = Date.parse(value);
   const canonical = value.replace(
     /(\.\d{1,3})?Z$/,
@@ -714,12 +696,14 @@ function validClientTimestamp(value) {
   return (
     Number.isFinite(timestamp) &&
     new Date(timestamp).toISOString() === canonical &&
-    timestamp <= Date.now() + 300000 &&
-    timestamp >= Date.now() - 7 * 86400000
+    timestamp <= now + MAX_CLOCK_SKEW_MS &&
+    timestamp >= now - MAX_EVENT_AGE_MS
   );
 }
 
 async function handleQueue(batch, env) {
+  const accepted = [];
+  const eventsByPrefix = new Map();
   for (const message of batch.messages) {
     const body = message.body;
     if (
@@ -732,36 +716,65 @@ async function handleQueue(batch, env) {
       message.ack();
       continue;
     }
-    const receivedAt = body.received_at;
-    const receivedTime = Date.parse(receivedAt);
-    const events = body.events.map(sanitizeEvent);
+    const receivedTime = Date.parse(body.received_at);
     if (
       !Number.isFinite(receivedTime) ||
-      receivedTime > Date.now() + 300000 ||
-      receivedTime < Date.now() - 7 * 86400000 ||
-      events.some((event) => !event) ||
+      receivedTime > Date.now() + MAX_CLOCK_SKEW_MS ||
+      receivedTime < Date.now() - MAX_EVENT_AGE_MS ||
       !message.id
     ) {
       message.ack();
       continue;
     }
+    // Events were accepted (and charged to the budget) at receive time, so a
+    // delayed or retried delivery is judged against that time, not now.
+    const events = body.events.map((event) =>
+      sanitizeEvent(event, receivedTime),
+    );
+    if (events.some((event) => !event)) {
+      message.ack();
+      continue;
+    }
+    accepted.push(message);
     for (const event of events) {
-      // Stable event identity makes retries safe even when batch membership changes.
-      const key = `${prefixForDate("raw", event.timestamp) + event.event_id}.ndjson.gz`;
-      const compressed = await gzipText(`${JSON.stringify(event)}\n`);
-      await env.TELEMETRY_BUCKET.put(key, compressed, {
+      const prefix = prefixForDate("raw", event.timestamp);
+      if (!eventsByPrefix.has(prefix)) eventsByPrefix.set(prefix, new Map());
+      eventsByPrefix.get(prefix).set(event.event_id, event);
+    }
+  }
+  if (!accepted.length) return;
+
+  // One object per event day per delivery batch. A redelivery of the same
+  // messages rewrites the same keys; events resent in a different batch are
+  // removed by the event_id de-duplication in buildDailyAggregate.
+  const batchId = (
+    await sha256Hex(
+      accepted
+        .map((message) => message.id)
+        .sort()
+        .join("\n"),
+    )
+  ).slice(0, 32);
+  for (const [prefix, events] of eventsByPrefix) {
+    const lines = [...events.values()]
+      .map((event) => `${JSON.stringify(event)}\n`)
+      .join("");
+    await env.TELEMETRY_BUCKET.put(
+      `${prefix}batch-${batchId}.ndjson.gz`,
+      await gzipText(lines),
+      {
         httpMetadata: {
           contentType: "application/x-ndjson",
           contentEncoding: "gzip",
         },
         customMetadata: {
           schema_version: String(SCHEMA_VERSION),
-          event_count: "1",
+          event_count: String(events.size),
         },
-      });
-    }
-    message.ack();
+      },
+    );
   }
+  for (const message of accepted) message.ack();
 }
 
 function retentionSettings(env, now) {
@@ -839,39 +852,73 @@ async function runRetention(env, { now = new Date(), dryRun = false } = {}) {
   return { ok: true, dry_run: dryRun, cutoffs, objects: { raw, aggregates } };
 }
 
+// Raw objects uploaded within this margin of the last aggregation are re-read,
+// covering clock skew between the Worker and R2 upload timestamps.
+const AGGREGATE_FRESHNESS_MARGIN_MS = 5 * 60 * 1000;
+
+async function rebuildAggregates(env, now) {
+  const bucket = env.TELEMETRY_BUCKET;
+  // Offline clients can submit events up to seven days old. Consider the
+  // accepted window plus the following UTC boundary so late arrivals count,
+  // but only re-read days that received raw objects since their last rollup.
+  for (let offset = 0; offset <= 8; offset++) {
+    const day = new Date(
+      Date.UTC(
+        now.getUTCFullYear(),
+        now.getUTCMonth(),
+        now.getUTCDate() - offset,
+      ),
+    );
+    const dayIso = day.toISOString();
+    const aggregateKey = `${prefixForDate("aggregates", dayIso)}summary.json`;
+    const listedAt = Date.now();
+    const [objects, existing] = await Promise.all([
+      listObjects(bucket, prefixForDate("raw", dayIso)),
+      bucket.head(aggregateKey),
+    ]);
+    const previousListedAt = Number(existing?.customMetadata?.listed_at);
+    if (
+      Number.isFinite(previousListedAt) &&
+      objects.every(
+        (object) =>
+          object.uploaded &&
+          Date.parse(object.uploaded) <
+            previousListedAt - AGGREGATE_FRESHNESS_MARGIN_MS,
+      )
+    )
+      continue;
+    const events = await loadEvents(
+      bucket,
+      objects.map((object) => object.key),
+    );
+    const summary = buildDailyAggregate(dayIso.slice(0, 10), events);
+    await bucket.put(aggregateKey, JSON.stringify(summary, null, 2), {
+      httpMetadata: { contentType: "application/json" },
+      customMetadata: { listed_at: String(listedAt) },
+    });
+  }
+}
+
 async function handleScheduled(env) {
   const now = new Date();
-  retentionSettings(env, now);
-  try {
-    // Offline clients can submit events up to seven days old. Rebuild the
-    // accepted window plus the following UTC boundary so late arrivals count.
-    for (let offset = 0; offset <= 8; offset++) {
-      const day = new Date(
-        Date.UTC(
-          now.getUTCFullYear(),
-          now.getUTCMonth(),
-          now.getUTCDate() - offset,
-        ),
+  // Aggregation and retention are independent: either failing must not stop
+  // the other, and both failures are reported.
+  const results = await Promise.allSettled([
+    rebuildAggregates(env, now),
+    runRetention(env, { now }),
+  ]);
+  const failures = results.filter((result) => result.status === "rejected");
+  for (const [index, result] of results.entries()) {
+    if (result.status === "rejected")
+      console.error(
+        JSON.stringify({
+          event: "scheduled_task_failed",
+          task: index === 0 ? "aggregate" : "retention",
+          error: String(result.reason?.message || result.reason),
+        }),
       );
-      const dayIso = day.toISOString();
-      const events = await loadEventsForPrefix(
-        env.TELEMETRY_BUCKET,
-        prefixForDate("raw", dayIso),
-      );
-      const summary = buildDailyAggregate(dayIso.slice(0, 10), events);
-      const aggregateKey = `${prefixForDate("aggregates", dayIso)}summary.json`;
-      await env.TELEMETRY_BUCKET.put(
-        aggregateKey,
-        JSON.stringify(summary, null, 2),
-        {
-          httpMetadata: { contentType: "application/json" },
-        },
-      );
-    }
-  } finally {
-    // Retention must still run when yesterday's aggregate cannot be produced.
-    await runRetention(env, { now });
   }
+  if (failures.length) throw failures[0].reason;
 }
 
 export default {

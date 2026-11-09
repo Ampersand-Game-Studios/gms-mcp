@@ -1,12 +1,22 @@
 from __future__ import annotations
 
+import datetime as _dt
+import hashlib
 import json
 import os
 import re
 import shutil
+import stat
+import subprocess
 import sys
+import tempfile
+import time
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable, Iterator
+
+from ..client_registry import resolve_client_spec
 
 _DEFAULT_IGNORED_DIRS = {
     ".git",
@@ -44,6 +54,21 @@ SUPPORTED_TOOLSETS = (
     "runtime",
     "texture-groups",
 )
+# Server-entry keys the installer owns. Everything else in an existing entry
+# (extra env such as GMS_MCP_GMS_PATH, disabled, timeouts, ...) is preserved.
+_INSTALLER_OWNED_ENV_KEYS = frozenset(
+    {
+        "GM_PROJECT_ROOT",
+        "PYTHONUNBUFFERED",
+        "GMS_MCP_ENABLE_DIRECT",
+        "GMS_MCP_REQUIRE_DRY_RUN",
+        "GMS_MCP_READ_ONLY",
+        "GMS_MCP_TOOLSETS",
+    }
+)
+_SERVER_NAME_RE = re.compile(r"[A-Za-z0-9_-]+")
+_BACKUPS_KEPT_PER_CONFIG = 5
+_CONFIG_LOCK_TIMEOUT_SECONDS = 30.0
 _SAFE_ENV_OUTPUT_KEYS = {
     "GM_PROJECT_ROOT",
     "GMS_MCP_DEFAULT_TIMEOUT_SECONDS",
@@ -242,9 +267,17 @@ def _select_gm_project_root(
     if requested_root:
         p = Path(requested_root).expanduser()
         if not p.is_absolute():
-            p = (workspace_root / p).resolve()
+            p = workspace_root / p
+        p = p.resolve()
         if p.is_file():
             p = p.parent
+        if not p.is_dir() or not any(child.suffix.lower() == ".yyp" for child in p.iterdir() if child.is_file()):
+            raise ValueError(f"--gm-project-root must be a GameMaker project directory containing a .yyp file: {p}")
+        if not p.is_relative_to(workspace_root.resolve()):
+            raise ValueError(
+                f"--gm-project-root must be inside the workspace root ({workspace_root.resolve()}); got {p}. "
+                "Pass --workspace-root for the folder that contains the project."
+            )
         return p, []
 
     candidates = _detect_gm_project_roots(workspace_root)
@@ -306,30 +339,256 @@ def _validate_config_destination(path: Path, workspace_root: Path | None = None)
         current = current.parent
 
 
-def _write_json(path: Path, data: dict, *, dry_run: bool, workspace_root: Path | None = None) -> None:
-    _validate_config_destination(path, workspace_root)
-    if dry_run:
-        return
-    from .client_configs import _write_json_atomic_with_backup
+def validate_server_name(server_name: str) -> str:
+    """Server names become TOML table keys and tool prefixes; allow only bare-key characters."""
+    if not isinstance(server_name, str) or not _SERVER_NAME_RE.fullmatch(server_name):
+        raise ValueError(
+            f"Invalid server name {server_name!r}: use only letters, digits, '_' and '-' (for example 'gms' or 'gms-local')."
+        )
+    return server_name
 
-    merged = {}
-    if path.exists():
-        merged = _parse_json_object_or_raise(text=path.read_text(encoding="utf-8"), source_label=str(path))
+
+def _merge_server_entry(existing: object, generated: dict) -> tuple[dict, list[str]]:
+    """Replace only installer-owned keys; return the merged entry and removed owned keys."""
+    if not isinstance(existing, dict):
+        return dict(generated), []
+    merged = {**existing, **{key: value for key, value in generated.items() if key != "env"}}
+    removed: list[str] = []
+    if "env" in generated:
+        existing_env = existing.get("env")
+        if existing_env is None:
+            existing_env = {}
+        elif not isinstance(existing_env, dict):
+            removed.append("env")
+            existing_env = {}
+        generated_env = generated["env"]
+        env = {}
+        for key, value in existing_env.items():
+            if key in _INSTALLER_OWNED_ENV_KEYS and key not in generated_env:
+                removed.append(f"env.{key}")
+                continue
+            env[key] = value
+        env.update(generated_env)
+        merged["env"] = env
+    return merged, removed
+
+
+def _report_removed_keys(server_name: str, removed: list[str]) -> None:
+    if removed:
+        print(f"[INFO] Removed installer-managed setting(s) from '{server_name}': {', '.join(removed)}")
+
+
+def _merge_json_config(existing: dict, data: dict) -> dict:
+    merged = dict(existing)
     for key, value in data.items():
         if isinstance(value, dict) and key in merged:
             if not isinstance(merged[key], dict):
                 raise ValueError(f"Config section {key} must be an object")
-            merged[key] = {**merged[key], **value}
+            section = dict(merged[key])
+            if key in {"mcpServers", "servers"}:
+                for name, entry in value.items():
+                    section[name], removed = _merge_server_entry(section.get(name), entry)
+                    _report_removed_keys(name, removed)
+            else:
+                section.update(value)
+            merged[key] = section
         else:
             merged[key] = value
-    _write_json_atomic_with_backup(output_path=path, payload=merged)
+    return merged
+
+
+def _write_json(path: Path, data: dict, *, dry_run: bool, workspace_root: Path | None = None) -> dict:
+    """Merge ``data`` into the JSON object at ``path``; return the merged payload.
+
+    Existing files are parsed (and malformed ones rejected) in dry-run too.
+    """
+    _validate_config_destination(path, workspace_root)
+
+    def render(existing_text: str | None) -> str:
+        existing = (
+            {} if existing_text is None else _parse_json_object_or_raise(text=existing_text, source_label=str(path))
+        )
+        return json.dumps(_merge_json_config(existing, data), indent=2) + "\n"
+
+    text, _backup = _update_config_text(output_path=path, render=render, dry_run=dry_run)
+    return json.loads(text)
+
+
+def _installer_state_root() -> Path:
+    return Path.home() / ".gms-mcp"
+
+
+def _installer_state_dir(name: str) -> Path:
+    root = _installer_state_root()
+    directory = root / name
+    for candidate in (root, directory):
+        if candidate.is_symlink():
+            raise ValueError(f"Refusing to use a symlinked gms-mcp state directory: {candidate}")
+        candidate.mkdir(mode=0o700, exist_ok=True)
+    return directory
+
+
+def _config_identity(path: Path) -> str:
+    return hashlib.sha256(os.path.abspath(path.expanduser()).encode("utf-8")).hexdigest()[:16]
+
+
+@contextmanager
+def _config_lock(path: Path, *, timeout: float = _CONFIG_LOCK_TIMEOUT_SECONDS) -> Iterator[None]:
+    """Serialize gms-mcp installers that update the same config file."""
+    lock_path = _installer_state_dir("config-locks") / f"{_config_identity(path)}.lock"
+    deadline = time.monotonic() + timeout
+    with open(lock_path, "a+b") as handle:
+        if handle.seek(0, os.SEEK_END) == 0:
+            handle.write(b"\0")
+            handle.flush()
+        handle.seek(0)
+        if os.name == "nt":
+            import msvcrt
+
+            lock, unlock = (
+                (lambda: msvcrt.locking(handle.fileno(), msvcrt.LK_NBLCK, 1)),
+                (lambda: msvcrt.locking(handle.fileno(), msvcrt.LK_UNLCK, 1)),
+            )
+        else:
+            import fcntl
+
+            lock, unlock = (
+                (lambda: fcntl.flock(handle.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)),
+                (lambda: fcntl.flock(handle.fileno(), fcntl.LOCK_UN)),
+            )
+        while True:
+            try:
+                lock()
+                break
+            except OSError:
+                if time.monotonic() >= deadline:
+                    raise RuntimeError(
+                        f"Another gms-mcp installer is updating {path}; retry when it finishes."
+                    ) from None
+                time.sleep(0.05)
+        try:
+            yield
+        finally:
+            handle.seek(0)
+            unlock()
+
+
+def _file_fingerprint(path: Path) -> tuple[int, int, int] | None:
+    try:
+        info = os.stat(path)
+    except FileNotFoundError:
+        return None
+    return (info.st_ino, info.st_size, info.st_mtime_ns)
+
+
+def _read_text_or_none(path: Path) -> str | None:
+    try:
+        return path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return None
+
+
+def _update_config_text(
+    *, output_path: Path, render: Callable[[str | None], str], dry_run: bool
+) -> tuple[str, Path | None]:
+    """Read, render and (unless dry-run) atomically replace a config file.
+
+    Real writes hold a per-file installer lock from read to replace and refuse to
+    replace a file another program changed in between.
+    """
+    if dry_run:
+        return render(_read_text_or_none(output_path)), None
+    with _config_lock(output_path):
+        fingerprint = _file_fingerprint(output_path)
+        existing_text = _read_text_or_none(output_path)
+        text = render(existing_text)
+        backup = _replace_config_text(
+            output_path=output_path, text=text, existing_text=existing_text, expected_fingerprint=fingerprint
+        )
+    return text, backup
+
+
+def _write_json_atomic_with_backup(*, output_path: Path, payload: dict) -> Path | None:
+    _text, backup = _update_config_text(
+        output_path=output_path, render=lambda _existing: json.dumps(payload, indent=2) + "\n", dry_run=False
+    )
+    return backup
+
+
+def _write_config_backup(output_path: Path, text: str) -> Path:
+    """Keep a bounded set of private backups outside the workspace."""
+    directory = _installer_state_dir("backups")
+    stem = f"{re.sub(r'[^A-Za-z0-9._-]', '_', output_path.name)}.{_config_identity(output_path)}"
+    timestamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S-%f")
+    backup_path = directory / f"{stem}.{timestamp}-{os.getpid()}.bak"
+    descriptor = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    with os.fdopen(descriptor, "w", encoding="utf-8") as backup:
+        backup.write(text)
+    backups = sorted(directory.glob(f"{stem}.*.bak"))
+    for stale in backups[:-_BACKUPS_KEPT_PER_CONFIG]:
+        stale.unlink(missing_ok=True)
+    return backup_path
+
+
+def _config_backups(output_path: Path) -> list[Path]:
+    stem = f"{re.sub(r'[^A-Za-z0-9._-]', '_', output_path.name)}.{_config_identity(output_path)}"
+    return sorted((_installer_state_root() / "backups").glob(f"{stem}.*.bak"))
+
+
+def _apply_ownership(temp_path: Path, output_path: Path) -> None:
+    """Give the replacement the original file's mode and owner (or the directory's, for new files)."""
+    try:
+        reference = os.stat(output_path)
+        mode = stat.S_IMODE(reference.st_mode)
+    except FileNotFoundError:
+        reference = os.stat(output_path.parent)
+        umask = os.umask(0)
+        os.umask(umask)
+        mode = 0o666 & ~umask
+    os.chmod(temp_path, mode)
+    geteuid = getattr(os, "geteuid", None)
+    if geteuid is not None and geteuid() == 0 and (reference.st_uid, reference.st_gid) != (0, 0):
+        # Under sudo, keep user configs owned by the user rather than root.
+        os.chown(temp_path, reference.st_uid, reference.st_gid)
+
+
+def _replace_config_text(
+    *, output_path: Path, text: str, existing_text: str | None, expected_fingerprint: tuple[int, int, int] | None
+) -> Path | None:
+    _validate_config_destination(output_path)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    backup_path = _write_config_backup(output_path, existing_text) if existing_text is not None else None
+    temp_path = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w",
+            encoding="utf-8",
+            dir=output_path.parent,
+            prefix=f".{output_path.name}.",
+            suffix=".tmp",
+            delete=False,
+        ) as handle:
+            temp_path = Path(handle.name)
+            handle.write(text)
+            handle.flush()
+            os.fsync(handle.fileno())
+        _apply_ownership(temp_path, output_path)
+        _validate_config_destination(output_path)
+        if _file_fingerprint(output_path) != expected_fingerprint:
+            raise RuntimeError(f"{output_path} changed while gms-mcp was updating it; re-run the installer.")
+        os.replace(temp_path, output_path)
+        temp_path = None
+    finally:
+        if temp_path is not None:
+            temp_path.unlink(missing_ok=True)
+    return backup_path
 
 
 def _relpath_posix_or_none(target: Path | None, base: Path) -> str | None:
     if target is None:
         return None
     try:
-        rel = target.relative_to(base)
+        rel = target.resolve().relative_to(base.resolve())
     except ValueError:
         return None
     return _as_posix_path(rel)
@@ -366,16 +625,15 @@ def _make_server_config(
         toolsets=toolsets,
     )
 
-    return {
-        "mcpServers": {
-            server_name: {
-                "command": command,
-                "args": args,
-                "cwd": workspace_var,
-                "env": env,
-            }
-        }
-    }
+    entry: dict = {"command": command, "args": args, "cwd": workspace_var, "env": env}
+    if resolve_client_spec(client).stdio_type_required:
+        entry = {"type": "stdio", **entry}
+    return {_servers_key(client): {server_name: entry}}
+
+
+def _servers_key(client: str) -> str:
+    """Top-level JSON key holding server entries for ``client`` (VS Code uses ``servers``)."""
+    return resolve_client_spec(client).servers_key
 
 
 def _default_antigravity_config_path() -> Path:
@@ -533,8 +791,8 @@ def _validate_common_entry(
     return ReadinessResult(ready=len(problems) == 0, problems=problems)
 
 
-def _resolve_json_entry_root(parsed: dict, *, server_name: str) -> dict | None:
-    mcp_servers = parsed.get("mcpServers")
+def _resolve_json_entry_root(parsed: dict, *, server_name: str, servers_key: str = "mcpServers") -> dict | None:
+    mcp_servers = parsed.get(servers_key)
     if isinstance(mcp_servers, dict):
         entry = mcp_servers.get(server_name)
         return entry if isinstance(entry, dict) else None
@@ -545,13 +803,14 @@ def _read_json_server_entry(
     *,
     config_path: Path,
     server_name: str,
+    servers_key: str = "mcpServers",
 ) -> tuple[dict | None, bool]:
     if not config_path.exists():
         return None, False
 
     text = config_path.read_text(encoding="utf-8")
     parsed = _parse_json_object_or_raise(text=text, source_label=str(config_path))
-    entry = _resolve_json_entry_root(parsed, server_name=server_name)
+    entry = _resolve_json_entry_root(parsed, server_name=server_name, servers_key=servers_key)
     return entry, True
 
 
@@ -580,6 +839,7 @@ def _collect_standard_check_state(
     entry, exists = _read_json_server_entry(
         config_path=config_path,
         server_name=server_name,
+        servers_key=_servers_key(client),
     )
     readiness = _validate_common_entry(
         entry,
@@ -667,45 +927,65 @@ def _make_antigravity_server_config(
 def _resolve_launcher(*, mode: str, python_command: str) -> tuple[str, list[str]]:
     """
     Return (command, args_prefix) for launching the server.
+
+    Commands are written as absolute paths when found, because GUI clients often
+    start servers with a minimal PATH that lacks ~/.local/bin or pipx shims.
     """
     if mode == "command":
-        if os.name == "nt":
-            resolved_command = _which_without_cwd("gms-mcp")
-            if resolved_command is None:
-                raise ValueError("gms-mcp was not found on a trusted PATH; use --mode=python-module.")
+        resolved_command = _which_without_cwd("gms-mcp")
+        if resolved_command is not None:
             return resolved_command, []
+        if os.name == "nt":
+            raise ValueError("gms-mcp was not found on a trusted PATH; use --mode=python-module.")
         return "gms-mcp", []
     if mode == "python-module":
         resolved_python = _resolve_python_command(python_command)
+        _probe_python_module_launcher(resolved_python)
         return resolved_python, ["-P", "-m", "gms_mcp.bootstrap_server"]
     raise ValueError(f"Unknown mode: {mode}")
 
 
-def _default_python_command() -> str:
-    """
-    Return a practical Python command default per host OS.
+def _probe_python_module_launcher(python: str) -> None:
+    """Fail before writing configs when the interpreter cannot start the server."""
+    env = {key: value for key, value in os.environ.items() if key not in {"PYTHONPATH", "PYTHONHOME"}}
+    try:
+        completed = subprocess.run(
+            [python, "-P", "-c", "import gms_mcp"],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
+            env=env,
+            timeout=30,
+            check=False,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        raise ValueError(f"Could not run Python interpreter {python}: {exc}") from exc
+    if completed.returncode != 0:
+        detail = (completed.stderr or b"").decode("utf-8", errors="replace").strip().splitlines()
+        raise ValueError(
+            f"Python interpreter {python} cannot import gms_mcp (needs Python 3.11+ with gms-mcp installed)"
+            + (f": {detail[-1]}" if detail else ".")
+        )
 
-    On Unix-like systems `python3` is often available while `python` may not be.
-    """
-    if os.name == "nt":
-        return "python"
-    if shutil.which("python3"):
-        return "python3"
-    return "python"
+
+def _default_python_command() -> str:
+    """The interpreter running the installer, which is known to have gms-mcp installed."""
+    return sys.executable
 
 
 def _resolve_python_command(python_command: str) -> str:
     """
     Resolve a usable Python command for --mode=python-module.
 
-    Resolve PATH entries without allowing implicit current-directory lookup.
+    Resolve PATH entries without allowing implicit current-directory lookup. A
+    missing interpreter falls back only to the one running the installer.
     """
     requested = (python_command or "").strip() or _default_python_command()
-    for candidate in (requested, sys.executable, "python3", "python"):
+    for candidate in (requested, sys.executable):
         resolved = _which_without_cwd(candidate)
         if resolved:
             return resolved
-    raise ValueError("No usable Python interpreter found; supply an absolute --python-command path.")
+    raise ValueError("No usable Python interpreter found; supply an absolute --python path.")
 
 
 def _which_path(candidate: Path) -> str | None:

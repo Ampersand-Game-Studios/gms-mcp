@@ -199,6 +199,8 @@ class RuntimeManager:
         self.project_root = project_root
         self.discovery_diagnostics: list[str] = []
         self.exposure_warnings: list[str] = []
+        # Set by select() when it had to pick a runtime the project did not record.
+        self.selection_note: Optional[str] = None
         self._cached_runtimes: Optional[List[RuntimeInfo]] = None
 
     def list_installed(self) -> List[RuntimeInfo]:
@@ -332,6 +334,7 @@ class RuntimeManager:
         if not installed:
             return None
 
+        self.selection_note = None
         target_version = version_override or self.get_pinned()
 
         if target_version:
@@ -343,11 +346,35 @@ class RuntimeManager:
             return None
 
         valid = [runtime for runtime in installed if runtime.is_valid]
-        for project_version in self._project_recorded_versions():
+        recorded = self._project_recorded_versions()
+        for project_version in recorded:
             for runtime in valid:
                 if runtime.version == project_version:
                     return runtime
-        return valid[0] if valid else None
+        if not valid:
+            return None
+        # No exact match: stay on the project's release channel (newest first), and never drift onto
+        # Beta unless nothing else is installed.
+        wanted_channel = classify_runtime_channel(recorded[0]) if recorded else None
+        candidates = [runtime for runtime in valid if wanted_channel and runtime.release_channel == wanted_channel]
+        candidates = candidates or [runtime for runtime in valid if runtime.release_channel != "beta"] or valid
+        chosen = candidates[0]
+        if recorded:
+            note = (
+                f"Project records runtime {recorded[0]} ({wanted_channel}), which is not installed; using "
+                f"{chosen.version} ({chosen.release_channel}). Pin a runtime to choose explicitly."
+            )
+        elif len(valid) > 1:
+            note = (
+                f"Project records no runtime version; using {chosen.version} ({chosen.release_channel}). "
+                "Pin a runtime to choose explicitly."
+            )
+        else:
+            return chosen
+        self.selection_note = note
+        if note not in self.discovery_diagnostics:
+            self.discovery_diagnostics.append(note)
+        return chosen
 
     def _project_recorded_versions(self) -> list[str]:
         try:
@@ -391,5 +418,6 @@ class RuntimeManager:
                 "license_found": license_file is not None,
             },
             "issues": issues,
+            "selection_note": self.selection_note,
             "discovery_diagnostics": self.discovery_diagnostics,
         }

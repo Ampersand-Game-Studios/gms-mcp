@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import List, Optional
 
 from ..exceptions import LicenseNotFoundError, RuntimeNotFoundError
+from ..runner_process import stop_igor_process
 from .security import private_directory
 from .targets import _to_igor_platform, ensure_igor_supported_runtime_type, normalize_platform_target
 
@@ -161,6 +162,16 @@ class RunnerIgorMixin:
         """Return the private per-user base used for Igor build folders."""
         return private_directory(private_directory(Path.home() / ".gms-mcp") / "build")
 
+    def _igor_output_dir(self) -> Path:
+        """Return this project's package/export folder, keyed by the .yyp path like the Igor work root.
+
+        Two checkouts of the same game share a .yyp name; keying by name alone made their builds collide.
+        """
+        project_file = self.find_project_file()
+        project_key = hashlib.sha256(str(project_file.resolve()).encode("utf-8")).hexdigest()[:16]
+        builds = private_directory(private_directory(self._system_temp_root() / "GameMakerStudio2") / project_key)
+        return private_directory(builds / project_file.stem)
+
     def _igor_work_root(self) -> Path:
         """Return the project/runtime-scoped disposable Igor work directory."""
         if not self.runtime_path:
@@ -250,29 +261,34 @@ class RunnerIgorMixin:
         if not process.stdout:
             return output_lines
 
-        for line in process.stdout:
-            line = line.strip()
-            if not line:
-                continue
+        try:
+            for line in process.stdout:
+                line = line.strip()
+                if not line:
+                    continue
 
-            output_lines.append(line)
-            if not emit_output:
-                continue
-            lowered = line.lower()
-            if "error" in lowered:
-                print(f"[ERROR] {line}")
-            elif "warning" in lowered:
-                print(f"[WARN] {line}")
-            elif "compile" in lowered or "build" in lowered:
-                print(f"[BUILD] {line}")
-            elif stage_label == "package/export" and (
-                "package" in lowered or "sign" in lowered or "zip" in lowered or "export" in lowered
-            ):
-                print(f"[PACKAGE] {line}")
-            elif stage_label == "local compile validation" and "test" in lowered:
-                print(f"[TEST] {line}")
-            else:
-                print(f"   {line}")
+                output_lines.append(line)
+                if not emit_output:
+                    continue
+                lowered = line.lower()
+                if "error" in lowered:
+                    print(f"[ERROR] {line}")
+                elif "warning" in lowered:
+                    print(f"[WARN] {line}")
+                elif "compile" in lowered or "build" in lowered:
+                    print(f"[BUILD] {line}")
+                elif stage_label == "package/export" and (
+                    "package" in lowered or "sign" in lowered or "zip" in lowered or "export" in lowered
+                ):
+                    print(f"[PACKAGE] {line}")
+                elif stage_label == "local compile validation" and "test" in lowered:
+                    print(f"[TEST] {line}")
+                else:
+                    print(f"   {line}")
+        except BaseException:
+            # Nobody will read the rest of this output; never leave Igor running unowned.
+            stop_igor_process(process)
+            raise
 
         return output_lines
 
@@ -392,11 +408,8 @@ class RunnerIgorMixin:
 
             stage_label = "package/export"
             self._clear_last_result(stage_label)
-            project_file = self.find_project_file()
-            system_temp = self._system_temp_root()
-            project_name = project_file.stem
-            ide_temp_dir = system_temp / "GameMakerStudio2" / project_name
-            private_directory(private_directory(system_temp / "GameMakerStudio2") / project_name)
+            project_name = self.find_project_file().stem
+            ide_temp_dir = self._igor_output_dir()
             # HTML5 folder export copies the entire output directory. Its target
             # must be a sibling, never a child that would recursively copy itself.
             html5_output_dir = private_directory(ide_temp_dir.with_name(project_name + "_html5"))

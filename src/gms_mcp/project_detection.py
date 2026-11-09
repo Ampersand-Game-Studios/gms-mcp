@@ -51,8 +51,15 @@ def _git_workspace_root(directory: Path) -> Path | None:
     return None
 
 
-def _tracked_yyp_paths(directory: Path) -> list[Path] | None:
-    """Return safe, tracked, non-prefab projects, or ``None`` when Git fails."""
+def _is_prefab(path: Path) -> bool:
+    return any(part.casefold() == "prefabs" for part in path.parts)
+
+
+def _tracked_yyp_paths(directory: Path, errors: list[str] | None = None) -> list[Path] | None:
+    """Return safe, tracked, non-prefab projects, or ``None`` when Git fails.
+
+    A Git failure is described in ``errors`` when a list is supplied.
+    """
     if not (directory / ".git").exists():
         return []
     workspace_root = directory.resolve()
@@ -61,12 +68,22 @@ def _tracked_yyp_paths(directory: Path) -> list[Path] | None:
             safe_git_command(directory, "ls-files", "-z", "--", "*.yyp"),
             check=False,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,
             timeout=5,
         )
-    except (OSError, subprocess.TimeoutExpired):
+    except subprocess.TimeoutExpired:
+        if errors is not None:
+            errors.append(f"git ls-files timed out in {workspace_root}")
+        return None
+    except OSError as exc:
+        if errors is not None:
+            errors.append(f"git could not run in {workspace_root}: {exc}")
         return None
     if completed.returncode != 0:
+        if errors is not None:
+            detail = (completed.stderr or b"").decode("utf-8", errors="replace").strip().splitlines()
+            reason = detail[-1] if detail else f"exit code {completed.returncode}"
+            errors.append(f"git ls-files failed in {workspace_root}: {reason}")
         return None
 
     tracked: list[Path] = []
@@ -74,7 +91,7 @@ def _tracked_yyp_paths(directory: Path) -> list[Path] | None:
         if not raw_path:
             continue
         relative = Path(raw_path)
-        if any(part.casefold() == "prefabs" for part in relative.parts):
+        if _is_prefab(relative):
             continue
         if relative.is_absolute():
             continue
@@ -101,37 +118,38 @@ def _resolve_candidate(
     *,
     requested_yyp: Path | None = None,
     allow_untracked_direct: bool = False,
+    errors: list[str] | None = None,
 ) -> Path | None:
     if not candidate.exists() or not candidate.is_dir():
         return None
 
-    # A Git workspace is authoritative: only a single tracked, non-prefab
-    # project may be selected. Do not fall back to arbitrary filesystem matches
-    # or traverse beyond a nested workspace boundary.
+    # A Git workspace is authoritative for discovery: only a single tracked,
+    # non-prefab project may be selected from elsewhere in the tree. A single
+    # project file directly in the candidate is always unambiguous, including
+    # when it is untracked or Git cannot be queried. Do not fall back to other
+    # filesystem matches or traverse beyond a nested workspace boundary.
     workspace_root = _git_workspace_root(candidate)
     if workspace_root is not None:
-        tracked = _tracked_yyp_paths(workspace_root)
-        if tracked is None:
-            return None
         direct_yyp_files = _list_yyp_files(candidate)
+        single_direct = len(direct_yyp_files) == 1 and not _is_prefab(direct_yyp_files[0].resolve())
+        tracked = _tracked_yyp_paths(workspace_root, errors)
+        if tracked is None:
+            if requested_yyp is not None:
+                return (
+                    requested_yyp.parent if single_direct and direct_yyp_files[0].resolve() == requested_yyp else None
+                )
+            return candidate.resolve() if single_direct else None
         if requested_yyp is not None:
             requested_yyp = requested_yyp.resolve()
             if (
                 len(direct_yyp_files) == 1
                 and direct_yyp_files[0].resolve() == requested_yyp
-                and not any(part.casefold() == "prefabs" for part in requested_yyp.parts)
+                and not _is_prefab(requested_yyp)
                 and (requested_yyp in tracked or allow_untracked_direct)
             ):
                 return requested_yyp.parent
             return None
-        direct_tracked = [path for path in direct_yyp_files if path.resolve() in tracked]
-        if len(direct_yyp_files) == 1 and len(direct_tracked) == 1:
-            return candidate.resolve()
-        if (
-            allow_untracked_direct
-            and len(direct_yyp_files) == 1
-            and not any(part.casefold() == "prefabs" for part in direct_yyp_files[0].parts)
-        ):
+        if single_direct:
             return candidate.resolve()
         if direct_yyp_files:
             return None
@@ -183,17 +201,20 @@ def resolve_project_directory(project_root: str | Path | None = None) -> Path:
                 else None
             )
             explicit_candidate = _normalize_candidate(raw_candidate)
+            errors: list[str] = []
             resolved = _resolve_candidate(
                 explicit_candidate,
                 requested_yyp=requested_yyp,
                 allow_untracked_direct=True,
+                errors=errors,
             )
             if resolved is not None:
                 return resolved
             raise FileNotFoundError(
                 "No GameMaker project (.yyp) found.\n"
                 f"Tried: {explicit_candidate}\n"
-                "Fix: pass a directory that contains your .yyp, a .yyp file path, or a nested path inside the target project."
+                + _git_error_lines(errors)
+                + "Fix: pass a directory that contains your .yyp, a .yyp file path, or a nested path inside the target project."
             )
 
     candidates: list[tuple[Path, bool]] = []
@@ -205,6 +226,7 @@ def resolve_project_directory(project_root: str | Path | None = None) -> Path:
     candidates.append((Path.cwd(), False))
 
     tried: list[str] = []
+    errors = []
     seen: set[str] = set()
     for raw, allow_untracked_direct in candidates:
         candidate = _normalize_candidate(raw)
@@ -214,16 +236,21 @@ def resolve_project_directory(project_root: str | Path | None = None) -> Path:
         seen.add(candidate_key)
         tried.append(candidate_key)
 
-        resolved = _resolve_candidate(candidate, allow_untracked_direct=allow_untracked_direct)
+        resolved = _resolve_candidate(candidate, allow_untracked_direct=allow_untracked_direct, errors=errors)
         if resolved is not None:
             return resolved
 
     raise FileNotFoundError(
         "No GameMaker project (.yyp) found.\n"
         f"Tried: {', '.join(tried)}\n"
-        "Fix: cd into the directory that contains your .yyp, or pass --project-root, "
+        + _git_error_lines(errors)
+        + "Fix: cd into the directory that contains your .yyp, or pass --project-root, "
         "or set GM_PROJECT_ROOT or PROJECT_ROOT to the absolute path."
     )
+
+
+def _git_error_lines(errors: list[str]) -> str:
+    return "".join(f"Git: {error}\n" for error in dict.fromkeys(errors))
 
 
 def find_yyp_path(project_directory: Path) -> Path | None:
