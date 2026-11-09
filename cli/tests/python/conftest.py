@@ -19,6 +19,12 @@ os.environ.setdefault("GMS_MCP_POST_MUTATION_VERIFY", "off")
 
 
 @pytest.fixture(autouse=True)
+def no_update_check_network(monkeypatch):
+    """Keep tests and the servers they spawn from contacting PyPI or GitHub."""
+    monkeypatch.setenv("GMS_MCP_DISABLE_UPDATE_CHECK", "1")
+
+
+@pytest.fixture(autouse=True)
 def private_run_session_state(tmp_path_factory, monkeypatch):
     """Keep host session and lock state outside tmp_path, which many tests use as the project root."""
     from gms_helpers.run_session import RunSessionManager

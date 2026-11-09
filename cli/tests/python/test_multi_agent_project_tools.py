@@ -494,6 +494,41 @@ def test_directory_lock_is_exclusive_and_script_compatible(lock_dir: Path):
     assert not (lock_dir / "gamerun.lock").exists()
 
 
+def test_release_waits_out_a_windows_sharing_violation(lock_dir: Path, monkeypatch: pytest.MonkeyPatch):
+    # A contender reading the owner record holds it open; Windows then refuses the delete.
+    lock = agent_locks.DirectoryLock("repo.lock")
+    assert lock.try_acquire()
+    real_unlink = Path.unlink
+    refusals = []
+
+    def unlink(path: Path, missing_ok: bool = False) -> None:
+        if path.name == "repo.lock.owner" and len(refusals) < 3:
+            refusals.append(path)
+            raise PermissionError(32, "The process cannot access the file because it is being used by another process")
+        real_unlink(path, missing_ok=missing_ok)
+
+    monkeypatch.setattr(agent_locks, "_WINDOWS", True)
+    monkeypatch.setattr(Path, "unlink", unlink)
+    lock.release()
+    assert len(refusals) == 3
+    assert not (lock_dir / "repo.lock").exists() and not (lock_dir / "repo.lock.owner").exists()
+
+
+def test_sharing_violation_retry_is_bounded_and_windows_only(monkeypatch: pytest.MonkeyPatch):
+    def refuse() -> None:
+        raise PermissionError(32, "in use")
+
+    monkeypatch.setattr(agent_locks, "_WINDOWS", False)
+    with pytest.raises(PermissionError):
+        agent_locks._retry_while_shared(refuse)
+    monkeypatch.setattr(agent_locks, "_WINDOWS", True)
+    monkeypatch.setattr(agent_locks, "_SHARING_RETRY_SECONDS", 0.05)
+    started = time.monotonic()
+    with pytest.raises(PermissionError):
+        agent_locks._retry_while_shared(refuse)
+    assert time.monotonic() - started < 1.0
+
+
 def test_stale_locks_are_reclaimed(lock_dir: Path):
     lock_dir.mkdir()
     (lock_dir / "repo.lock").mkdir()
