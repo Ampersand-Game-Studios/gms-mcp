@@ -197,7 +197,7 @@ class ReferenceCollector:
             tags.append(resource_type[2:])
         for tag in tags:
             gm_type = tag.lower()
-            return {"notes": "note"}.get(gm_type, gm_type)
+            return "note" if gm_type == "notes" else gm_type
 
         # Path-based detection from the project-relative top-level directory
         try:

@@ -242,7 +242,7 @@ def _project_relative(path: str, project_prefix: str) -> str:
     return normalized
 
 
-def _snapshot_ignored(root: Path, directory: str | Path, names: Iterable[str]) -> set[str]:
+def _snapshot_ignored(root: Path, directory: str | os.PathLike[str], names: Iterable[str]) -> set[str]:
     """Names a snapshot never copies: tool/VCS folders at the project root and bytecode caches."""
     if Path(directory) == root:
         return {name for name in names if name in _SNAPSHOT_IGNORED}

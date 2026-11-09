@@ -12,7 +12,21 @@ from ..project import ProjectAccessError, _ensure_cli_on_sys_path, _resolve_repo
 from ..resolution import ResolutionRuntime
 from ..tool_types import OutputMode
 
-AssetNameResolutions: dict[str, Any] = {}
+# Per-tool name-collision resolvers; register() replaces each with its Resolve annotation.
+CreateScriptResolution = Any
+CreateObjectResolution = Any
+CreateSpriteResolution = Any
+CreateRoomResolution = Any
+CreateFolderResolution = Any
+CreateFontResolution = Any
+CreateShaderResolution = Any
+CreateAnimCurveResolution = Any
+CreateSoundResolution = Any
+CreatePathResolution = Any
+CreateTilesetResolution = Any
+CreateTimelineResolution = Any
+CreateSequenceResolution = Any
+CreateNoteResolution = Any
 
 
 def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) -> None:
@@ -40,12 +54,23 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         return ""
 
     # One resolver per tool, so each applies that tool's own boundary checks.
-    globals()["AssetNameResolutions"] = {
-        f"gm_create_{kind}": asset_name_resolution(f"gm_create_{kind}")
-        for kind in (
-            "script object sprite room folder font shader animcurve sound path tileset timeline sequence note".split()
-        )
-    }
+    for kind, alias_name in {
+        "script": "CreateScriptResolution",
+        "object": "CreateObjectResolution",
+        "sprite": "CreateSpriteResolution",
+        "room": "CreateRoomResolution",
+        "folder": "CreateFolderResolution",
+        "font": "CreateFontResolution",
+        "shader": "CreateShaderResolution",
+        "animcurve": "CreateAnimCurveResolution",
+        "sound": "CreateSoundResolution",
+        "path": "CreatePathResolution",
+        "tileset": "CreateTilesetResolution",
+        "timeline": "CreateTimelineResolution",
+        "sequence": "CreateSequenceResolution",
+        "note": "CreateNoteResolution",
+    }.items():
+        globals()[alias_name] = asset_name_resolution(f"gm_create_{kind}")
 
     # -----------------------------
     # Asset creation tools
@@ -53,7 +78,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_script(
         name: str,
-        resolution: AssetNameResolutions["gm_create_script"] = None,
+        resolution: CreateScriptResolution = None,
         parent_path: str = "",
         is_constructor: bool = False,
         skip_maintenance: bool = True,
@@ -133,7 +158,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_object(
         name: str,
-        resolution: AssetNameResolutions["gm_create_object"] = None,
+        resolution: CreateObjectResolution = None,
         parent_path: str = "",
         sprite_id: str = "",
         parent_object: str = "",
@@ -203,7 +228,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_sprite(
         name: str,
-        resolution: AssetNameResolutions["gm_create_sprite"] = None,
+        resolution: CreateSpriteResolution = None,
         parent_path: str = "",
         frame_count: int = 1,
         skip_maintenance: bool = True,
@@ -275,7 +300,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_room(
         name: str,
-        resolution: AssetNameResolutions["gm_create_room"] = None,
+        resolution: CreateRoomResolution = None,
         parent_path: str = "",
         width: int = 1024,
         height: int = 768,
@@ -346,7 +371,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     async def gm_create_folder(
         name: str,
         path: str,
-        resolution: AssetNameResolutions["gm_create_folder"] = None,
+        resolution: CreateFolderResolution = None,
         skip_maintenance: bool = True,
         no_auto_fix: bool = False,
         maintenance_verbose: bool = False,
@@ -412,7 +437,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_font(
         name: str,
-        resolution: AssetNameResolutions["gm_create_font"] = None,
+        resolution: CreateFontResolution = None,
         parent_path: str = "",
         font_name: str = "Arial",
         size: int = 12,
@@ -498,7 +523,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_shader(
         name: str,
-        resolution: AssetNameResolutions["gm_create_shader"] = None,
+        resolution: CreateShaderResolution = None,
         parent_path: str = "",
         shader_type: int = 1,
         skip_maintenance: bool = True,
@@ -556,7 +581,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_animcurve(
         name: str,
-        resolution: AssetNameResolutions["gm_create_animcurve"] = None,
+        resolution: CreateAnimCurveResolution = None,
         parent_path: str = "",
         curve_type: str = "linear",
         channel_name: str = "curve",
@@ -626,7 +651,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_sound(
         name: str,
-        resolution: AssetNameResolutions["gm_create_sound"] = None,
+        resolution: CreateSoundResolution = None,
         parent_path: str = "",
         volume: float = 1.0,
         pitch: float = 1.0,
@@ -712,7 +737,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_path(
         name: str,
-        resolution: AssetNameResolutions["gm_create_path"] = None,
+        resolution: CreatePathResolution = None,
         parent_path: str = "",
         closed: bool = False,
         precision: int = 4,
@@ -786,7 +811,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_tileset(
         name: str,
-        resolution: AssetNameResolutions["gm_create_tileset"] = None,
+        resolution: CreateTilesetResolution = None,
         parent_path: str = "",
         sprite_id: str = "",
         tile_width: int = 32,
@@ -876,7 +901,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_timeline(
         name: str,
-        resolution: AssetNameResolutions["gm_create_timeline"] = None,
+        resolution: CreateTimelineResolution = None,
         parent_path: str = "",
         skip_maintenance: bool = True,
         no_auto_fix: bool = False,
@@ -934,7 +959,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_sequence(
         name: str,
-        resolution: AssetNameResolutions["gm_create_sequence"] = None,
+        resolution: CreateSequenceResolution = None,
         parent_path: str = "",
         length: float = 60.0,
         playback_speed: float = 30.0,
@@ -997,7 +1022,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_note(
         name: str,
-        resolution: AssetNameResolutions["gm_create_note"] = None,
+        resolution: CreateNoteResolution = None,
         parent_path: str = "",
         content: str = "",
         skip_maintenance: bool = True,

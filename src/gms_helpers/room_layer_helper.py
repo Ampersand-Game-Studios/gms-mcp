@@ -157,6 +157,8 @@ def create_layer_data(
     if layer_type == "asset":
         base["assets"] = []
     elif layer_type == "tile":
+        if tileset is None:
+            raise ValidationError("A tile layer needs a tileset grid.")
         columns, rows = int(tileset["columns"]), int(tileset["rows"])
         base["gridX"], base["gridY"] = int(tileset["tile_width"]), int(tileset["tile_height"])
         # GameMaker 2023+ writes tile layers as resourceVersion 2.1 with run-length tile data.
@@ -182,6 +184,12 @@ def create_layer_data(
 # ------------------------------------------------------------------
 
 
+def _positive_number(label: str, value: Any) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
+        raise ValidationError(f"Cannot size the tile layer: {label} is {value!r}, not a positive number.")
+    return value
+
+
 def _tileset_grid(project_root: Path, room_data: Dict[str, Any], tileset_name: str) -> Dict[str, Any]:
     """Tileset reference plus the room-covering tile grid for a new tile layer."""
     from .project_validation import resolve_asset_reference
@@ -193,18 +201,12 @@ def _tileset_grid(project_root: Path, room_data: Dict[str, Any], tileset_name: s
         raise AssetNotFoundError(f"Tileset '{tileset_name}' is not a registered valid tileset: {exc}") from exc
     tileset_path = project_child_path(reference["path"], project_root=project_root, kind=f"tileset '{tileset_name}'")
     tileset_data = load_json_loose(tileset_path)
-    tile_width = tileset_data.get("tileWidth") if isinstance(tileset_data, dict) else None
-    tile_height = tileset_data.get("tileHeight") if isinstance(tileset_data, dict) else None
+    tileset_fields = tileset_data if isinstance(tileset_data, dict) else {}
     settings = room_data.get("roomSettings") or {}
-    room_width, room_height = settings.get("Width"), settings.get("Height")
-    for label, value in (
-        (f"tileset '{tileset_name}' tileWidth", tile_width),
-        (f"tileset '{tileset_name}' tileHeight", tile_height),
-        ("room width", room_width),
-        ("room height", room_height),
-    ):
-        if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
-            raise ValidationError(f"Cannot size the tile layer: {label} is {value!r}, not a positive number.")
+    tile_width = _positive_number(f"tileset '{tileset_name}' tileWidth", tileset_fields.get("tileWidth"))
+    tile_height = _positive_number(f"tileset '{tileset_name}' tileHeight", tileset_fields.get("tileHeight"))
+    room_width = _positive_number("room width", settings.get("Width"))
+    room_height = _positive_number("room height", settings.get("Height"))
     return {
         "reference": reference,
         "tile_width": int(tile_width),
@@ -271,7 +273,7 @@ def add_layer(
         raise ValidationError(
             "A tile layer needs a tileset: pass the tileset asset name so the layer gets its tile grid."
         )
-    tileset = _tileset_grid(root, room_data, tileset_name) if layer_type == "tile" else None
+    tileset = _tileset_grid(root, room_data, tileset_name) if layer_type == "tile" and tileset_name else None
 
     siblings = room_data.setdefault("layers", [])
     if depth is None:
@@ -301,8 +303,8 @@ def remove_layer(room_name: str, layer_name: str) -> bool:
         raise AssetNotFoundError(f"Layer '{layer_name}' not found in room '{room_name}'")
     removed = next(layer for layer in siblings if isinstance(layer, dict) and layer.get("name") == layer_name)
     siblings.remove(removed)
-    removed_instances = {
-        instance.get("name")
+    removed_instances: set[str] = {
+        instance["name"]
         for layer in _iter_layers([removed])
         for instance in layer.get("instances") or []
         if isinstance(instance, dict) and instance.get("name")

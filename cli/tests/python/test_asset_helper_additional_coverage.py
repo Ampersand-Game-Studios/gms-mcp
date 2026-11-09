@@ -263,7 +263,9 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                     stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_name"))
                     stack.enter_context(patch("gms_helpers.asset_creation_flow.validate_parent_path_for_project"))
                     stack.enter_context(patch("gms_helpers.asset_creation_flow.update_yyp_file", return_value=True))
-                    stack.enter_context(patch("gms_helpers.asset_creation_flow.append_room_order_node", return_value=True))
+                    stack.enter_context(
+                        patch("gms_helpers.asset_creation_flow.append_room_order_node", return_value=True)
+                    )
                     handler = stack.enter_context(
                         patch("gms_helpers.asset_creation_flow.handle_maintenance_failure", return_value="post-failed")
                     )

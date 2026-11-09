@@ -834,7 +834,8 @@ def compose_yyp(base_text: str, working_text: str, entries: Iterable[str]) -> st
 
 def _compose_room_order(base: dict[str, Any], work: dict[str, Any], rooms: list[str], work_paths: set[str]) -> None:
     order = base.get("RoomOrderNodes")
-    work_order = work.get("RoomOrderNodes") if isinstance(work.get("RoomOrderNodes"), list) else []
+    raw_work_order = work.get("RoomOrderNodes")
+    work_order: list[Any] = raw_work_order if isinstance(raw_work_order, list) else []
     if order is None and not work_order:
         return
     if not isinstance(order, list):
