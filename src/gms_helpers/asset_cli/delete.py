@@ -1,57 +1,67 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from ..auto_maintenance import handle_maintenance_failure, run_auto_maintenance, validate_asset_creation_safe
+
+# Asset type -> top-level project directory of its registered .yy path.
+ASSET_TYPE_FOLDERS = {
+    "script": "scripts",
+    "object": "objects",
+    "sprite": "sprites",
+    "room": "rooms",
+    "font": "fonts",
+    "shader": "shaders",
+    "animcurve": "animcurves",
+    "sound": "sounds",
+    "path": "paths",
+    "tileset": "tilesets",
+    "timeline": "timelines",
+    "sequence": "sequences",
+    "note": "notes",
+}
+
+
+def _resource_path(resource) -> str:
+    resource_id = resource.get("id") if isinstance(resource, dict) else None
+    path = resource_id.get("path") if isinstance(resource_id, dict) else None
+    return path.replace("\\", "/") if isinstance(path, str) else ""
+
+
+def _resource_name(resource) -> str | None:
+    resource_id = resource.get("id") if isinstance(resource, dict) else None
+    return resource_id.get("name") if isinstance(resource_id, dict) else None
 
 
 def delete_asset(args):
-    """Delete an asset from the project."""
+    """Delete a registered asset from the project.
+
+    The asset is located by its registered .yyp ``id.path`` (never rebuilt from
+    the name), must live under the directory of the requested type, and its
+    resource-order and room-order entries are removed with it. Maintenance runs
+    report-only before and after; it never deletes anything else.
+    """
     try:
-        import os
-        from pathlib import Path
+        from ..transactions import transactional_rmtree
+        from ..utils import find_yyp, load_json, save_json
+        from ..workflow import _remove_resource_order_entries
 
-        from ..transactions import transactional_rmtree, transactional_unlink
+        project_root = Path.cwd().resolve()
 
-        # Import utilities with fallback
-        try:
-            from ..utils import load_json, save_json, find_yyp_file
-        except ImportError:
-            from ..utils import load_json, save_json, find_yyp_file
-
-        # Skip maintenance if explicitly requested
         if not getattr(args, "skip_maintenance", False):
             print("[SCAN] Running pre-deletion validation...")
-            pre_result = run_auto_maintenance(
-                ".",
-                fix_issues=not (getattr(args, "dry_run", False) or getattr(args, "no_auto_fix", False)),
-                verbose=False,
-            )
-
+            pre_result = run_auto_maintenance(str(project_root), fix_issues=False, verbose=False)
             if not validate_asset_creation_safe(pre_result):
                 return handle_maintenance_failure(f"Asset '{args.name}' deletion", pre_result)
 
-        # Map asset types to their expected paths and prefixes
-        asset_type_info = {
-            "script": {"folder": "scripts", "prefix": "", "extension": ".gml"},
-            "object": {"folder": "objects", "prefix": "o_", "extension": ""},
-            "sprite": {"folder": "sprites", "prefix": "spr_", "extension": ""},
-            "room": {"folder": "rooms", "prefix": "r_", "extension": ""},
-            "font": {"folder": "fonts", "prefix": "fnt_", "extension": ""},
-            "shader": {"folder": "shaders", "prefix": "sh_", "extension": ""},
-            "animcurve": {"folder": "animcurves", "prefix": "curve_", "extension": ""},
-            "sound": {"folder": "sounds", "prefix": "snd_", "extension": ""},
-            "path": {"folder": "paths", "prefix": "pth_", "extension": ""},
-            "tileset": {"folder": "tilesets", "prefix": "ts_", "extension": ""},
-            "timeline": {"folder": "timelines", "prefix": "tl_", "extension": ""},
-            "sequence": {"folder": "sequences", "prefix": "seq_", "extension": ""},
-            "note": {"folder": "notes", "prefix": "", "extension": ""},
-        }
-
-        if args.asset_type not in asset_type_info:
-            print(f"[ERROR] Unsupported asset type: {args.asset_type}")
+        asset_folder = ASSET_TYPE_FOLDERS.get(args.asset_type)
+        if asset_folder is None:
+            if args.asset_type == "folder":
+                print("[ERROR] Logical folders are removed with 'maint remove-folder', not 'delete'")
+            else:
+                print(f"[ERROR] Unsupported asset type: {args.asset_type}")
             return False
 
-        info = asset_type_info[args.asset_type]
-        asset_folder = info["folder"]
         asset_name = str(args.name).strip()
         asset_name_path = Path(asset_name)
         if (
@@ -63,54 +73,53 @@ def delete_asset(args):
             print(f"[ERROR] Invalid asset name: {args.name}")
             return False
 
-        project_root = Path.cwd().resolve()
-
-        # Determine asset path structure
-        if args.asset_type == "folder":
-            # Special handling for folders
-            asset_path = f"folders/{asset_name}.yy"
-            disk_path = (project_root / asset_path).resolve()
-        else:
-            # Regular assets have folder structure
-            asset_path = f"{asset_folder}/{asset_name}/{asset_name}.yy"
-            disk_path = (project_root / asset_folder / asset_name).resolve()
-        try:
-            disk_path.relative_to(project_root)
-        except ValueError:
-            print(f"[ERROR] Refusing to delete outside project root: {disk_path}")
-            return False
-
-        # Check if asset exists in .yyp file
-        yyp_file = find_yyp_file()
+        yyp_file = find_yyp(project_root)
         project_data = load_json(yyp_file)
         resources = project_data.get("resources", [])
 
-        # Find the resource entry
-        resource_to_remove = None
-        for resource in resources:
-            if resource.get("id", {}).get("name") == asset_name:
-                resource_to_remove = resource
-                break
-
-        if not resource_to_remove:
-            print(f"[ERROR] Asset '{asset_name}' not found in project")
+        named = [resource for resource in resources if _resource_name(resource) == asset_name]
+        matches = [
+            resource
+            for resource in named
+            if _resource_path(resource).split("/", 1)[0].casefold() == asset_folder.casefold()
+        ]
+        if not matches:
+            if named:
+                registered = ", ".join(_resource_path(resource) for resource in named)
+                print(f"[ERROR] '{asset_name}' is not a {args.asset_type}; it is registered at {registered}")
+            else:
+                print(f"[ERROR] Asset '{asset_name}' not found in project")
+            return False
+        if len(matches) > 1:
+            print(f"[ERROR] '{asset_name}' is registered more than once as a {args.asset_type}; dedupe first")
             return False
 
-        # Check if asset files exist on disk
+        resource_to_remove = matches[0]
+        registered_path = _resource_path(resource_to_remove)
+        path_parts = registered_path.split("/")
+        if len(path_parts) != 3 or not path_parts[2].casefold().endswith(".yy"):
+            print(f"[ERROR] Registered path is not '<folder>/<name>/<name>.yy': {registered_path}")
+            return False
+        type_root = (project_root / path_parts[0]).resolve()
+        disk_path = (project_root / registered_path).parent.resolve()
+        try:
+            disk_path.relative_to(type_root)
+        except ValueError:
+            print(f"[ERROR] Refusing to delete outside the {asset_folder}/ directory: {disk_path}")
+            return False
+        if disk_path == type_root:
+            print(f"[ERROR] Refusing to delete the whole {asset_folder}/ directory")
+            return False
+
         files_to_delete = []
-        if disk_path.exists():
-            if disk_path.is_file():
-                files_to_delete.append(disk_path)
-            else:
-                files_to_delete.append(disk_path)
-                # Add all files in the directory
-                for item in disk_path.rglob("*"):
-                    if item.is_file():
-                        files_to_delete.append(item)
+        if disk_path.is_dir():
+            files_to_delete = [disk_path, *(item for item in disk_path.rglob("*") if item.is_file())]
 
         if args.dry_run:
             print(f"[DRY-RUN] Would delete asset '{asset_name}' ({args.asset_type}):")
-            print(f"  [FILE] .yyp entry: {resource_to_remove['id']['path']}")
+            print(f"  [FILE] .yyp entry: {registered_path}")
+            if registered_path.startswith("rooms/"):
+                print("  [FILE] RoomOrderNodes entry")
             if files_to_delete:
                 print(f"  [FILES] Files/folders ({len(files_to_delete)}):")
                 for file_path in files_to_delete[:10]:  # Show first 10 files
@@ -118,41 +127,29 @@ def delete_asset(args):
                 if len(files_to_delete) > 10:
                     print(f"    ... and {len(files_to_delete) - 10} more files")
             else:
-                print(f"  [FILES] No files found on disk")
+                print("  [FILES] No files found on disk")
             return True
 
-        # Remove from .yyp file
-        updated_resources = [r for r in resources if r.get("id", {}).get("name") != asset_name]
-        project_data["resources"] = updated_resources
+        project_data["resources"] = [resource for resource in resources if resource is not resource_to_remove]
+        _remove_resource_order_entries(project_root, project_data, registered_path)
+        save_json(project_data, yyp_file)
+        print(f"[OK] Removed '{asset_name}' from {yyp_file.name}")
 
-        try:
-            save_json(project_data, yyp_file)
-            print(f"[OK] Removed '{asset_name}' from {yyp_file}")
-        except Exception as e:
-            print(f"[ERROR] Failed to update .yyp file: {e}")
-            return False
-
-        # Delete files from disk
         if files_to_delete:
             try:
-                if disk_path.is_file():
-                    transactional_unlink(disk_path)
-                    print(f"[OK] Deleted file: {disk_path}")
-                else:
-                    transactional_rmtree(disk_path)
-                    print(f"[OK] Deleted folder: {disk_path}")
+                transactional_rmtree(disk_path)
+                print(f"[OK] Deleted folder: {disk_path}")
             except Exception as e:
-                print(f"[WARN] Warning: Could not delete files on disk: {e}")
-                print(f"   Asset removed from project but files may remain")
+                print(f"[ERROR] Could not delete files on disk: {e}")
+                return False
 
         print(f"[OK] Asset '{asset_name}' deleted successfully")
 
-        # Run post-deletion maintenance
         if not getattr(args, "skip_maintenance", False):
-            print("[MAINT] Running post-deletion maintenance...")
+            print("[MAINT] Running post-deletion validation...")
             post_result = run_auto_maintenance(
-                ".",
-                fix_issues=not getattr(args, "no_auto_fix", False),
+                str(project_root),
+                fix_issues=False,
                 verbose=getattr(args, "maintenance_verbose", True),
             )
 

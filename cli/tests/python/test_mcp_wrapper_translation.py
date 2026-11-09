@@ -269,17 +269,17 @@ class TestRoomWrappers(MCPToolTestCase):
                 (
                     "gm_room_ops_duplicate",
                     {"source_room": "r_old", "new_name": "r_new", "project_root": "/tmp/project"},
-                    ["room", "ops", "duplicate", "r_old", "r_new"],
+                    ["room", "ops", "duplicate", "--", "r_old", "r_new"],
                 ),
                 (
                     "gm_room_ops_rename",
                     {"room_name": "r_old", "new_name": "r_new", "project_root": "/tmp/project"},
-                    ["room", "ops", "rename", "r_old", "r_new"],
+                    ["room", "ops", "rename", "--", "r_old", "r_new"],
                 ),
                 (
                     "gm_room_ops_delete",
                     {"room_name": "r_old", "dry_run": True, "project_root": "/tmp/project"},
-                    ["room", "ops", "delete", "r_old", "--dry-run"],
+                    ["room", "ops", "delete", "--dry-run", "--", "r_old"],
                 ),
                 (
                     "gm_room_ops_list",
@@ -295,17 +295,17 @@ class TestRoomWrappers(MCPToolTestCase):
                         "depth": 100,
                         "project_root": "/tmp/project",
                     },
-                    ["room", "layer", "add", "r_main", "instance", "Actors", "--depth", "100"],
+                    ["room", "layer", "add", "--depth", "100", "--", "r_main", "instance", "Actors"],
                 ),
                 (
                     "gm_room_layer_remove",
                     {"room_name": "r_main", "layer_name": "Actors", "project_root": "/tmp/project"},
-                    ["room", "layer", "remove", "r_main", "Actors"],
+                    ["room", "layer", "remove", "--", "r_main", "Actors"],
                 ),
                 (
                     "gm_room_layer_list",
                     {"room_name": "r_main", "project_root": "/tmp/project"},
-                    ["room", "layer", "list", "r_main"],
+                    ["room", "layer", "list", "--", "r_main"],
                 ),
                 (
                     "gm_room_instance_add",
@@ -317,17 +317,17 @@ class TestRoomWrappers(MCPToolTestCase):
                         "layer": "Actors",
                         "project_root": "/tmp/project",
                     },
-                    ["room", "instance", "add", "r_main", "o_player", "10", "20", "--layer", "Actors"],
+                    ["room", "instance", "add", "--layer", "Actors", "--", "r_main", "o_player", "10", "20"],
                 ),
                 (
                     "gm_room_instance_remove",
                     {"room_name": "r_main", "instance_id": "inst_1", "project_root": "/tmp/project"},
-                    ["room", "instance", "remove", "r_main", "inst_1"],
+                    ["room", "instance", "remove", "--", "r_main", "inst_1"],
                 ),
                 (
                     "gm_room_instance_list",
                     {"room_name": "r_main", "project_root": "/tmp/project"},
-                    ["room", "instance", "list", "r_main"],
+                    ["room", "instance", "list", "--", "r_main"],
                 ),
             ]
 
@@ -505,12 +505,12 @@ class TestWorkflowWrappers(MCPToolTestCase):
                         "yes": True,
                         "project_root": "/tmp/project",
                     },
-                    ["workflow", "duplicate", "scripts/scr_old/scr_old.yy", "scr_new", "--yes"],
+                    ["workflow", "duplicate", "--yes", "--", "scripts/scr_old/scr_old.yy", "scr_new"],
                 ),
                 (
                     "gm_workflow_rename",
                     {"asset_path": "scripts/scr_old/scr_old.yy", "new_name": "scr_new", "project_root": "/tmp/project"},
-                    ["workflow", "rename", "scripts/scr_old/scr_old.yy", "scr_new"],
+                    ["workflow", "rename", "--", "scripts/scr_old/scr_old.yy", "scr_new"],
                 ),
                 (
                     "gm_workflow_swap_sprite",
@@ -520,7 +520,7 @@ class TestWorkflowWrappers(MCPToolTestCase):
                         "frame": 2,
                         "project_root": "/tmp/project",
                     },
-                    ["workflow", "swap-sprite", "sprites/spr_test/spr_test.yy", "frame.png", "--frame", "2"],
+                    ["workflow", "swap-sprite", "--frame", "2", "--", "sprites/spr_test/spr_test.yy", "frame.png"],
                 ),
                 (
                     "gm_sprite_add_frame",
@@ -533,17 +533,18 @@ class TestWorkflowWrappers(MCPToolTestCase):
                     [
                         "sprite-frames",
                         "add",
-                        "sprites/spr_test/spr_test.yy",
                         "--position",
                         "2",
                         "--source",
                         "frame.png",
+                        "--",
+                        "sprites/spr_test/spr_test.yy",
                     ],
                 ),
                 (
                     "gm_sprite_remove_frame",
                     {"sprite_path": "sprites/spr_test/spr_test.yy", "position": 1, "project_root": "/tmp/project"},
-                    ["sprite-frames", "remove", "sprites/spr_test/spr_test.yy", "1"],
+                    ["sprite-frames", "remove", "--", "sprites/spr_test/spr_test.yy", "1"],
                 ),
                 (
                     "gm_sprite_duplicate_frame",
@@ -553,7 +554,7 @@ class TestWorkflowWrappers(MCPToolTestCase):
                         "target_position": 3,
                         "project_root": "/tmp/project",
                     },
-                    ["sprite-frames", "duplicate", "sprites/spr_test/spr_test.yy", "0", "--target", "3"],
+                    ["sprite-frames", "duplicate", "--target", "3", "--", "sprites/spr_test/spr_test.yy", "0"],
                 ),
                 (
                     "gm_sprite_import_strip",
@@ -570,8 +571,6 @@ class TestWorkflowWrappers(MCPToolTestCase):
                     [
                         "sprite-frames",
                         "import-strip",
-                        "spr_strip",
-                        "strip.png",
                         "--parent-path",
                         "folders/Sprites.yy",
                         "--layout",
@@ -582,12 +581,15 @@ class TestWorkflowWrappers(MCPToolTestCase):
                         "32",
                         "--columns",
                         "4",
+                        "--",
+                        "spr_strip",
+                        "strip.png",
                     ],
                 ),
                 (
                     "gm_sprite_frame_count",
                     {"sprite_path": "sprites/spr_test/spr_test.yy", "project_root": "/tmp/project"},
-                    ["sprite-frames", "count", "sprites/spr_test/spr_test.yy"],
+                    ["sprite-frames", "count", "--", "sprites/spr_test/spr_test.yy"],
                 ),
             ]
 

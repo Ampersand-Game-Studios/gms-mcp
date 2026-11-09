@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 from typing import Any
 
+from gms_helpers.operation_policy import read_only_mode_enabled
+
 from . import prompts, resources
 from .project import ProjectAccessPolicy
 from .resolution import ResolutionRuntime
@@ -31,6 +33,10 @@ from .tools import (
 )
 
 
+class ServerConfigurationError(ValueError):
+    """The server environment asks for an unsupported configuration."""
+
+
 _OPTIONAL_TOOLSETS = {
     "assets": asset_creation,
     "bridge": bridge,
@@ -57,7 +63,9 @@ def enabled_toolsets() -> tuple[str, ...]:
     unknown = requested - {"core", *_OPTIONAL_TOOLSETS}
     if unknown:
         supported = ", ".join(("core", *_OPTIONAL_TOOLSETS, "all"))
-        raise ValueError(f"Unknown GMS_MCP_TOOLSETS value(s): {', '.join(sorted(unknown))}. Supported: {supported}")
+        raise ServerConfigurationError(
+            f"Unknown GMS_MCP_TOOLSETS value(s): {', '.join(sorted(unknown))}. Supported: {supported}"
+        )
     return ("core", *sorted(requested - {"core"}))
 
 
@@ -70,9 +78,9 @@ def register_all(
     resolution_runtime: ResolutionRuntime,
 ) -> None:
     toolsets = enabled_toolsets()
-    read_only = os.environ.get("GMS_MCP_READ_ONLY", "").strip() == "1"
+    read_only = read_only_mode_enabled()
     if read_only and toolsets != ("core",):
-        raise ValueError("GMS_MCP_READ_ONLY=1 only supports GMS_MCP_TOOLSETS=core.")
+        raise ServerConfigurationError("GMS_MCP_READ_ONLY only supports GMS_MCP_TOOLSETS=core.")
     capabilities.register(mcp, Context, enabled=toolsets, optional=tuple(sorted(_OPTIONAL_TOOLSETS)))
     project_health.register(mcp, Context)
     runner.register(mcp, Context, read_only=read_only)

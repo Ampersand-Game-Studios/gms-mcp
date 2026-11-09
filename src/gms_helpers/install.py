@@ -8,9 +8,43 @@ import os
 import sys
 import platform
 import shlex
+import tempfile
 from pathlib import Path
 from typing import Any, cast
 from .exceptions import GMSError
+
+
+# Every launcher this module writes runs the CLI module; a file without it is someone else's.
+LAUNCHER_MARKER = "-m gms_helpers.gms"
+
+
+def _write_launcher(target: Path, content: str, mode: int = 0o755) -> None:
+    """Write a launcher, replacing only a regular file this module wrote earlier.
+
+    Never follows or replaces a symlink, and never overwrites a different program named gms.
+    """
+    if target.is_symlink():
+        raise FileExistsError(f"{target} is a symlink; leaving it alone. Remove it to let gms-mcp install a launcher.")
+    if target.exists():
+        try:
+            current = target.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            current = ""
+        if not target.is_file() or LAUNCHER_MARKER not in current:
+            raise FileExistsError(
+                f"{target} already exists and was not written by gms-mcp; leaving it alone. "
+                "Remove or rename it to let gms-mcp install a launcher."
+            )
+    descriptor, temporary = tempfile.mkstemp(prefix=".gms-launcher-", dir=target.parent)
+    try:
+        with os.fdopen(descriptor, "w", encoding="utf-8", newline="") as stream:
+            stream.write(content)
+        os.chmod(temporary, mode)
+        # os.replace swaps the directory entry itself, so a symlink created meanwhile is not followed.
+        os.replace(temporary, target)
+    except BaseException:
+        Path(temporary).unlink(missing_ok=True)
+        raise
 
 
 # Added optional auto flag to trigger silent installation steps
@@ -18,9 +52,6 @@ def install_gms_command(auto: bool = False):
     """Install gms command for easy access."""
     script_dir = Path(__file__).parent
     cli_dir = script_dir.parent
-    gms_py = script_dir / "gms.py"
-    # Prefer the project-local wrapper so the CLI can be copied as a folder.
-    gms_bat = cli_dir / "gms.bat"
     module_command = [sys.executable, "-P", "-m", "gms_helpers.gms"]
     quoted_python = sys.executable.replace("'", "''")
     quoted_root = str(cli_dir).replace("'", "''")
@@ -30,39 +61,36 @@ def install_gms_command(auto: bool = False):
     if is_windows:
         print("[INFO] Windows detected")
         print("\nTo use the 'gms' command, you have several options:")
-        print("\n1. Add the CLI directory to your PATH:")
-        print(f"   {cli_dir}")
-        print("\n2. Create an alias in PowerShell:")
+        print("\n1. Create an alias in PowerShell:")
         print(
             f"   function gms {{ $env:PYTHONPATH = '{quoted_root}'; & '{quoted_python}' -P -m gms_helpers.gms @args }}"
         )
-        print("\n3. Use the full path:")
+        print("\n2. Use the full path:")
         print(f"   $env:PYTHONPATH = '{quoted_root}'; & '{quoted_python}' -P -m gms_helpers.gms [commands]")
-        print("\n4. Use the batch file:")
-        print(f'   "{gms_bat}" [commands]')
 
         # Preferred approach on Windows: create a shim in WindowsApps (usually already on PATH)
-        shim_created = False
+        shim = None
         try:
             windows_apps = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WindowsApps"
             if windows_apps.exists():
-                shim = windows_apps / "gms.cmd"
                 if any(char in str(cli_dir) + sys.executable for char in '&|<>^%!"\r\n'):
                     raise ValueError("Unsafe characters in command shim path")
                 shim_content = (
                     f'@echo off\r\nset "PYTHONPATH={cli_dir}"\r\n"{sys.executable}" -P -m gms_helpers.gms %*\r\n'
                 )
-                shim.write_text(shim_content, encoding="utf-8")
+                _write_launcher(windows_apps / "gms.cmd", shim_content)
+                shim = windows_apps / "gms.cmd"
                 print(f"\n[OK] Shim created at {shim}")
                 print("   You can usually run: gms --help  (may require opening a new terminal)")
-                shim_created = True
             else:
                 print("\n[WARN] LOCALAPPDATA\\Microsoft\\WindowsApps not found; shim not created")
         except Exception as e:
             print(f"\n[WARN] Could not create WindowsApps shim: {e}")
 
-        # Optional: add helper directory to *user* PATH safely (avoid setx PATH hazards)
-        if auto:
+        # The PATH entry must be the folder that holds the launcher; nothing else contains one.
+        if shim is None:
+            print("\n[INFO] No launcher was created, so there is no folder to add to PATH; use option 1 or 2.")
+        elif auto:
             try:
                 winreg = cast(Any, __import__("winreg"))
 
@@ -75,20 +103,21 @@ def install_gms_command(auto: bool = False):
                     except FileNotFoundError:
                         current_path, value_type = "", winreg.REG_EXPAND_SZ
 
+                launcher_dir = str(shim.parent)
                 paths = _normalize_path_list(current_path or "")
-                if str(script_dir) not in paths:
-                    new_path = (current_path + os.pathsep if current_path else "") + str(script_dir)
+                if launcher_dir not in paths:
+                    new_path = (current_path + os.pathsep if current_path else "") + launcher_dir
                     with winreg.OpenKey(winreg.HKEY_CURRENT_USER, r"Environment", 0, winreg.KEY_SET_VALUE) as k:
                         winreg.SetValueEx(k, "Path", 0, value_type, new_path)
-                    print(f"\n[OK] Added to user PATH (HKCU\\Environment\\Path): {script_dir}")
+                    print(f"\n[OK] Added to user PATH (HKCU\\Environment\\Path): {launcher_dir}")
                     print("   Windows may require a new terminal session to pick this up.")
                 else:
-                    print(f"\n[OK] Already present in user PATH: {script_dir}")
+                    print(f"\n[OK] Already present in user PATH: {launcher_dir}")
             except Exception as e:
                 print(f"\n[WARN] Could not update user PATH via registry: {e}")
         else:
-            print("\n[INFO] Tip (optional): add this line to your PowerShell profile for the current session:")
-            print("   $env:Path += ';" + str(script_dir).replace("'", "''") + "'")
+            print("\n[INFO] Tip (optional): add the launcher folder to PATH for the current session:")
+            print("   $env:Path += ';" + str(shim.parent).replace("'", "''") + "'")
 
     else:
         # Unix-like systems (Linux, macOS)
@@ -107,8 +136,7 @@ def install_gms_command(auto: bool = False):
             )
 
             try:
-                target.write_text(shell_script)
-                target.chmod(0o755)
+                _write_launcher(target, shell_script)
                 print(f"[OK] Installed gms command to {target}")
                 print(f"   Make sure {local_bin} is in your PATH")
 
@@ -125,12 +153,10 @@ def install_gms_command(auto: bool = False):
 
         # Fallback instructions
         print(f"\n[ERROR] Could not auto-install. Manual options:")
-        print(f"\n1. Add this directory to your PATH:")
-        print('   export PATH="$PATH":' + shlex.quote(str(script_dir)))
-        print(f"\n2. Create an alias:")
+        print(f"\n1. Create an alias:")
         print("   alias gms=" + shlex.quote(shlex.join(["env", f"PYTHONPATH={cli_dir}", *module_command])))
-        print(f"\n3. Create a symlink:")
-        print("   " + shlex.join(["sudo", "ln", "-s", str(gms_py), "/usr/local/bin/gms"]))
+        print("\n2. Install the package entry point, which puts gms on PATH:")
+        print("   pipx install gms-mcp")
 
     print("\n[INFO] Usage examples:")
     print("   gms --help")

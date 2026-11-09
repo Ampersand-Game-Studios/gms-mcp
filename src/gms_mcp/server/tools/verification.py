@@ -8,6 +8,7 @@ from ..verification_policy import (
     current_verification_mode,
     flush_pending_compile_verification,
     get_pending_compile_verification,
+    verification_mode_notice,
 )
 
 
@@ -20,12 +21,16 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         """Show pending post-mutation compile verification state for the project."""
         _ = ctx
         root = Path(project_root).resolve()
-        return {
+        status = {
             "ok": True,
             "mode": current_verification_mode(root),
             "project_root": str(root),
             "pending_compile_verification": get_pending_compile_verification(root),
         }
+        notice = verification_mode_notice(root)
+        if notice:
+            status["warning"] = notice
+        return status
 
     @mutating_tool
     def gm_verification_flush(

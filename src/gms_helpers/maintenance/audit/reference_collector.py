@@ -19,7 +19,6 @@ from ...path_safety import project_file_path
 from ...utils import load_json, find_yyp_file
 from ..path_utils import (
     build_filesystem_map,
-    categorize_path_differences,
     get_gamemaker_files,
     normalize_path,
 )
@@ -40,9 +39,16 @@ class ReferenceCollector:
         self.parsing_queue: List[Path] = []
 
     def _add_reference(self, file_path: str):
-        """Add a file reference with proper path normalization."""
-        normalized_path = normalize_path(file_path)
-        self.referenced_files.add(normalized_path)
+        """Record a project-relative reference, keeping its exact spelling.
+
+        Spelling is preserved so the audit can detect references whose case
+        differs from the file on disk.
+        """
+        self.referenced_files.add(str(file_path).replace("\\", "/"))
+
+    def _add_existing(self, path: Path) -> None:
+        if path.is_file():
+            self._add_reference(path.relative_to(self.project_root).as_posix())
 
     def collect_all_references(self) -> Set[str]:
         """
@@ -81,6 +87,7 @@ class ReferenceCollector:
 
             # Add the .yyp file itself as referenced
             self._add_reference(yyp_path)
+            self._add_project_level_files(yyp_path, yyp_data)
 
             # Process all resources in the .yyp
             resources = yyp_data.get("resources", [])
@@ -101,6 +108,32 @@ class ReferenceCollector:
         except Exception as e:
             print(f"[ERROR] Error loading .yyp file: {e}")
             raise
+
+    def _add_project_level_files(self, yyp_name: str, yyp_data: Dict) -> None:
+        """Reference files the project owns outside its resource list."""
+        # The IDE's resource-order sidecar.
+        self._add_existing(self.project_root / f"{Path(yyp_name).stem}.resource_order")
+
+        # Platform options (options/<platform>/options_<platform>.yy, icons, splash
+        # images) are managed by the IDE and loaded whether or not they are listed.
+        options_dir = self.project_root / "options"
+        if options_dir.is_dir():
+            for option_file in options_dir.rglob("*"):
+                self._add_existing(option_file)
+
+        # Included files (datafiles) are registered by folder + name.
+        for included in yyp_data.get("IncludedFiles", []) or []:
+            if not isinstance(included, dict):
+                continue
+            name = included.get("name") or included.get("fileName")
+            folder = str(included.get("filePath") or "datafiles").replace("\\", "/").removeprefix("${project_dir}/")
+            if isinstance(name, str) and name:
+                try:
+                    self._add_existing(
+                        project_file_path(f"{folder.rstrip('/')}/{name}", project_root=self.project_root)
+                    )
+                except ValidationError:
+                    continue
 
     def _process_asset_queue(self):
         """Process all queued .yy files to find their companion files."""
@@ -146,6 +179,10 @@ class ReferenceCollector:
                 self._process_timeline_asset(asset_path, asset_data)
             elif asset_type == "path":
                 self._process_path_asset(asset_path, asset_data)
+            elif asset_type == "extension":
+                self._process_extension_asset(asset_path, asset_data)
+            elif asset_type == "note":
+                self._add_existing(asset_path.parent / f"{asset_path.stem}.txt")
             # Note: folders have no companion files
 
         except Exception as e:
@@ -153,13 +190,36 @@ class ReferenceCollector:
 
     def _determine_asset_type(self, asset_data: Dict, asset_path: Path) -> str:
         """Determine the type of GameMaker asset from its data."""
-        # Check the $GM type tag
-        for key in asset_data.keys():
-            if key.startswith("$GM"):
-                gm_type = key[3:].lower()  # Remove '$GM' prefix
-                return gm_type
+        # Check the $GM type tag, then the older resourceType field
+        tags = [key[3:] for key in asset_data.keys() if key.startswith("$GM")]
+        resource_type = asset_data.get("resourceType")
+        if isinstance(resource_type, str) and resource_type.startswith("GM"):
+            tags.append(resource_type[2:])
+        for tag in tags:
+            gm_type = tag.lower()
+            return "note" if gm_type == "notes" else gm_type
 
-        # Fallback to path-based detection
+        # Path-based detection from the project-relative top-level directory
+        try:
+            top = asset_path.resolve().relative_to(self.project_root).parts[0].casefold()
+        except (ValueError, IndexError):
+            top = ""
+        by_directory = {
+            "objects": "object",
+            "sprites": "sprite",
+            "sounds": "sound",
+            "rooms": "room",
+            "fonts": "font",
+            "shaders": "shader",
+            "scripts": "script",
+            "folders": "folder",
+            "tilesets": "tileset",
+            "timelines": "timeline",
+            "extensions": "extension",
+            "notes": "note",
+        }
+        if top in by_directory:
+            return by_directory[top]
         parent_dir = asset_path.parent.name
         if parent_dir.startswith("o_"):
             return "object"
@@ -192,11 +252,10 @@ class ReferenceCollector:
 
             # Generate event filename using GameMaker conventions
             event_filename = self._get_event_filename(event_type, event_num, collision_object)
+            # GameMaker always pairs a listed event with its .gml, so the exact path is a
+            # reference even when the file is missing or only matches case-insensitively.
             if event_filename:
-                event_path = asset_dir / event_filename
-                if event_path.exists():
-                    rel_path = str(event_path.relative_to(self.project_root))
-                    self._add_reference(rel_path)
+                self._add_reference((asset_dir / event_filename).relative_to(self.project_root).as_posix())
 
     def _process_script_asset(self, asset_path: Path, asset_data: Dict):
         """Process script asset to find companion .gml file."""
@@ -204,9 +263,8 @@ class ReferenceCollector:
         script_dir = asset_path.parent
         gml_path = script_dir / f"{script_name}.gml"
 
-        if gml_path.exists():
-            rel_path = str(gml_path.relative_to(self.project_root))
-            self._add_reference(rel_path)
+        # A script's .gml is required, so its exact path is always a reference.
+        self._add_reference(gml_path.relative_to(self.project_root).as_posix())
 
     def _process_sprite_asset(self, asset_path: Path, asset_data: Dict):
         """Process sprite asset to find image files."""
@@ -242,21 +300,30 @@ class ReferenceCollector:
                 self._add_reference(rel_path)
 
     def _process_room_asset(self, asset_path: Path, asset_data: Dict):
-        """Process room asset - rooms may reference other assets."""
-        # Rooms typically don't have companion files, but may reference other assets
-        # We could parse instanceCreationOrder, layers, etc. for references
-        pass
+        """Process room asset to find room and instance creation-code files."""
+        room_dir = asset_path.parent
+        creation_code = asset_data.get("creationCodeFile")
+        if isinstance(creation_code, str) and creation_code:
+            relative = creation_code.replace("\\", "/").removeprefix("${project_dir}/")
+            try:
+                self._add_existing(project_file_path(relative, project_root=self.project_root))
+            except ValidationError:
+                pass
+
+        def walk_layers(layers: Any) -> None:
+            for layer in layers if isinstance(layers, list) else []:
+                if not isinstance(layer, dict):
+                    continue
+                for instance in layer.get("instances", []) or []:
+                    if isinstance(instance, dict) and instance.get("hasCreationCode") and instance.get("name"):
+                        self._add_existing(room_dir / f"InstanceCreationCode_{instance['name']}.gml")
+                walk_layers(layer.get("layers"))
+
+        walk_layers(asset_data.get("layers"))
 
     def _process_font_asset(self, asset_path: Path, asset_data: Dict):
-        """Process font asset to find font files."""
-        # Fonts may have texture files
-        texture_path = asset_data.get("texture")
-        if texture_path:
-            font_dir = asset_path.parent
-            texture_file = font_dir / texture_path
-            if texture_file.exists():
-                rel_path = str(texture_file.relative_to(self.project_root))
-                self._add_reference(rel_path)
+        """Process font asset: GameMaker stores the generated glyph sheet as <name>.png."""
+        self._add_existing(asset_path.parent / f"{asset_path.stem}.png")
 
     def _process_shader_asset(self, asset_path: Path, asset_data: Dict):
         """Process shader asset to find shader files."""
@@ -281,14 +348,21 @@ class ReferenceCollector:
         pass
 
     def _process_tileset_asset(self, asset_path: Path, asset_data: Dict):
-        """Process tileset asset."""
-        # Tilesets typically don't have companion files
-        pass
+        """Process tileset asset: the IDE writes the packed tiles to output_tileset.png."""
+        self._add_existing(asset_path.parent / "output_tileset.png")
 
     def _process_timeline_asset(self, asset_path: Path, asset_data: Dict):
-        """Process timeline asset."""
-        # Timelines typically don't have companion files
-        pass
+        """Process timeline asset to find its moment_<n>.gml files."""
+        for moment in asset_data.get("momentList", []) or []:
+            if isinstance(moment, dict) and isinstance(moment.get("moment"), int):
+                self._add_existing(asset_path.parent / f"moment_{moment['moment']}.gml")
+
+    def _process_extension_asset(self, asset_path: Path, asset_data: Dict):
+        """Process extension asset to find the library/source files it lists."""
+        for entry in asset_data.get("files", []) or []:
+            filename = entry.get("filename") if isinstance(entry, dict) else None
+            if isinstance(filename, str) and filename and "/" not in filename and "\\" not in filename:
+                self._add_existing(asset_path.parent / filename)
 
     def _process_path_asset(self, asset_path: Path, asset_data: Dict):
         """Process path asset."""
@@ -352,40 +426,39 @@ def comprehensive_analysis(project_root: str = ".") -> Dict:
 
     print("[SCAN] Phase 2: Building filesystem map and performing static analysis...")
 
-    # Phase 2: Build filesystem map for case-insensitive handling
+    # Phase 2: Build filesystem maps. References keep their exact spelling, so
+    # a reference that only matches a file case-insensitively is a case mismatch.
     filesystem_map = build_filesystem_map(project_root)
     filesystem_files = get_gamemaker_files(project_root)
+    all_files = set(filesystem_map.values()) | set(filesystem_files)
+    all_by_fold: Dict[str, str] = {}
+    for actual in sorted(all_files):
+        all_by_fold.setdefault(actual.casefold(), actual)
 
-    # Ensure both referenced files and filesystem files are normalized for comparison
-    referenced_files_normalized = {normalize_path(p) for p in referenced_files}
-    filesystem_files_normalized = {normalize_path(p) for p in filesystem_files}
+    path_categories: Dict[str, List[str]] = {"found_exact": [], "found_case_diff": [], "missing": []}
+    for reference in sorted(referenced_files):
+        if reference in all_files:
+            path_categories["found_exact"].append(reference)
+        elif reference.casefold() in all_by_fold:
+            path_categories["found_case_diff"].append(f"{reference} -> {all_by_fold[reference.casefold()]}")
+        else:
+            path_categories["missing"].append(reference)
 
-    # Create reverse mapping from normalized to original case
-    filesystem_norm_to_original = {normalize_path(p): p for p in filesystem_files}
-
-    # Categorize path differences (case sensitivity issues)
-    path_categories = categorize_path_differences(referenced_files_normalized, filesystem_map)
+    referenced_folded = {reference.casefold() for reference in referenced_files}
+    referenced_files_normalized = {normalize_path(p, project_root) for p in referenced_files}
+    filesystem_files_normalized = {normalize_path(p, project_root) for p in filesystem_files}
 
     # Static string search in .gml files
     string_refs = find_string_references_in_gml(project_root)
-    string_cross_ref = cross_reference_strings_to_files(string_refs, filesystem_files, filesystem_map)
+    string_cross_ref = cross_reference_strings_to_files(string_refs, filesystem_files, filesystem_map, project_root)
 
     # Identify derivable orphans (use normalized sets for comparison)
     derivable_orphans = identify_derivable_orphans(
         filesystem_files_normalized, referenced_files_normalized, string_refs
     )
 
-    # Calculate final orphans (accounting for case differences and string refs)
-    true_orphans_normalized = filesystem_files_normalized - referenced_files_normalized
-
-    # Map back to original case for reporting
-    true_orphans = {filesystem_norm_to_original[norm_path] for norm_path in true_orphans_normalized}
-
-    # Remove files that were found with case differences
-    for case_diff_entry in path_categories["found_case_diff"]:
-        if " -> " in case_diff_entry:
-            actual_path = case_diff_entry.split(" -> ")[1]
-            true_orphans.discard(actual_path)
+    # Orphans: files on disk no reference matches, even case-insensitively.
+    true_orphans = {path for path in filesystem_files if path.casefold() not in referenced_folded}
 
     # Remove files that were found via string references
     for string_ref_entry in string_cross_ref["string_refs_found_exact"]:

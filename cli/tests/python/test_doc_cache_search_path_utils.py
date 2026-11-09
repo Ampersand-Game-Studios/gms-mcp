@@ -255,21 +255,14 @@ class TestPathUtils(unittest.TestCase):
                 actual = path_utils.find_file_case_insensitive("sprites/hero.png", filesystem_map)
                 self.assertEqual(actual.replace("\\", "/"), "sprites/Hero.PNG")
 
-                with patch(
-                    "gms_helpers.maintenance.path_utils.os.path.exists",
-                    side_effect=lambda p: str(p) == "sprites/exact.yy",
-                ):
-                    categories = path_utils.categorize_path_differences(
-                        {"sprites/exact.yy", "sprites/hero.png", "missing/file.yy"},
-                        filesystem_map,
-                    )
-
-            self.assertEqual(categories["found_exact"], ["sprites/exact.yy"])
-            self.assertEqual(
-                [entry.replace("\\", "/") for entry in categories["found_case_diff"]],
-                ["sprites/hero.png -> sprites/Hero.PNG"],
-            )
-            self.assertEqual(categories["missing"], ["missing/file.yy"])
+            self.assertEqual(path_utils.find_case_variant(root, "sprites/Hero.PNG"), "sprites/Hero.PNG")
+            self.assertEqual(path_utils.find_case_variant(root, "SPRITES/hero.png"), "sprites/Hero.PNG")
+            self.assertIsNone(path_utils.find_case_variant(root, "missing/file.yy"))
+            self.assertTrue(path_utils.is_options_path("options/main/options_main.yy"))
+            self.assertTrue(path_utils.is_options_path(str(root / "Options" / "x.yy"), root))
+            self.assertFalse(path_utils.is_options_path("scripts/options_menu/options_menu.yy"))
+            options_project = root / "options_game"
+            self.assertFalse(path_utils.is_options_path(str(options_project / "sprites" / "x.yy"), options_project))
 
     def test_get_gamemaker_files_filters_noise(self):
         with tempfile.TemporaryDirectory() as temp_dir:

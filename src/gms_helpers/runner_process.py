@@ -96,23 +96,56 @@ def run_igor_command(
     *,
     cwd: Path | None = None,
     environment_overrides: Mapping[str, str] | None = None,
+    output_file: Path | None = None,
 ) -> subprocess.Popen:
-    """Start Igor inside the caller's process group so outer timeouts can terminate it."""
+    """Start Igor inside the caller's process group so outer timeouts can terminate it.
+
+    Output is a UTF-8 text pipe (undecodable bytes replaced, never a decode error that strands Igor),
+    or ``output_file`` when nobody will read the pipe, so a background run neither loses its output
+    nor blocks on a full pipe.
+    """
     environment = build_igor_environment()
     if environment_overrides:
         environment.update(environment_overrides)
-    process_kwargs = {
-        "stdout": subprocess.PIPE,
-        "stderr": subprocess.STDOUT,
-        "text": True,
-        "bufsize": 1,
-        "universal_newlines": True,
-        "env": environment,
-    }
     try:
-        return subprocess.Popen(cmd, cwd=str(cwd) if cwd is not None else None, **process_kwargs)
+        if output_file is not None:
+            with open(output_file, "ab") as stream:
+                return subprocess.Popen(
+                    cmd,
+                    cwd=str(cwd) if cwd is not None else None,
+                    stdin=subprocess.DEVNULL,
+                    stdout=stream,
+                    stderr=subprocess.STDOUT,
+                    env=environment,
+                )
+        return subprocess.Popen(
+            cmd,
+            cwd=str(cwd) if cwd is not None else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            encoding="utf-8",
+            errors="replace",
+            bufsize=1,
+            env=environment,
+        )
     except OSError as exc:
         if platform.system() == "Darwin":
             igor_path = Path(cmd[0]) if cmd else Path("<unknown>")
             raise RuntimeError(build_macos_launch_guidance(igor_path, exc, "runtime")) from exc
         raise
+
+
+def stop_igor_process(process: subprocess.Popen, timeout_seconds: float = 5.0) -> None:
+    """Terminate an Igor process this call started; used when reading its output fails."""
+    try:
+        if process.poll() is not None:
+            return
+        process.terminate()
+        try:
+            process.wait(timeout=timeout_seconds)
+        except subprocess.TimeoutExpired:
+            process.kill()
+            process.wait(timeout=timeout_seconds)
+    except (OSError, subprocess.SubprocessError):
+        pass

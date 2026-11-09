@@ -83,7 +83,7 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
             symbol_name=symbol_name,
         )
 
-        cli_args = ["symbol", "find-definition", symbol_name]
+        cli_args = ["symbol", "find-definition", "--", symbol_name]
 
         return await _run_with_fallback(
             direct_handler=handle_find_definition,
@@ -126,7 +126,7 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
             max_results=max_results,
         )
 
-        cli_args = ["symbol", "find-references", symbol_name, "--max-results", str(max_results)]
+        cli_args = ["symbol", "find-references", "--max-results", str(max_results), "--", symbol_name]
 
         return await _run_with_fallback(
             direct_handler=handle_find_references,

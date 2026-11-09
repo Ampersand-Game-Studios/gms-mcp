@@ -1,19 +1,16 @@
 """
 Orphan cleanup functionality for GameMaker projects.
-Removes orphaned asset files that are not referenced in the .yyp file.
+Moves orphaned asset files that are not referenced in the .yyp file to the project trash.
 """
 
-import os
-import shutil
 from pathlib import Path
-
-from ..path_safety import project_file_path
-from ..utils import load_json
 from typing import List, Set, Dict, Any, Optional
 
-from .orphans import find_orphaned_assets
-from ..transactions import transactional_rmdir, transactional_unlink
-from ..path_safety import assert_project_tree_contained, project_relative_path
+from ..path_safety import assert_project_tree_contained, project_file_path, project_relative_path
+from ..transactions import transactional_rmdir
+from ..utils import load_json
+from .orphans import find_missing_assets, find_orphaned_assets
+from .trash import move_to_trash
 
 
 def find_delete_candidates(project_root: str, skip_types: Optional[Set[str]] = None) -> List[str]:
@@ -198,17 +195,22 @@ def delete_orphan_files(
     project_root: str, fix_issues: bool = False, skip_types: Optional[Set[str]] = None
 ) -> Dict[str, Any]:
     """
-    Delete orphaned asset files and their companions.
+    Move orphaned asset files and their companions to the project trash.
+
+    An orphan whose name matches a registered-but-missing resource is skipped: it
+    may be the only (relocated) copy of that asset.
 
     Args:
         project_root: Path to the GameMaker project root
-        fix_issues: If True, actually delete files. If False, just report what would be deleted
+        fix_issues: If True, move files to the trash. If False, just report what would be moved
         skip_types: Set of asset types to skip (default: {"folder"})
 
     Returns:
-        Dictionary with deletion statistics and details
+        Dictionary with statistics and details. ``deleted_files``/``total_deleted``
+        count files moved to ``trash_folder`` (restorable with ``restore_from_trash``).
     """
-    project_root = str(assert_project_tree_contained(Path(project_root)))
+    root = assert_project_tree_contained(Path(project_root))
+    project_root = str(root)
     if skip_types is None:
         skip_types = {"folder"}
 
@@ -220,67 +222,77 @@ def delete_orphan_files(
         "errors": [],
         "total_deleted": 0,
         "total_skipped": 0,
+        "trash_folder": None,
     }
 
     candidates = find_delete_candidates(project_root, skip_types)
-    # Reject the full selection before any deletion; a compromised scanner
+    # Reject the full selection before any move; a compromised scanner
     # result must not allow partial cleanup or an external destination.
     for candidate in candidates:
-        project_relative_path(candidate, project_root=Path(project_root), kind="orphan candidate")
+        project_relative_path(candidate, project_root=root, kind="orphan candidate")
 
+    missing_names = {Path(path.replace("\\", "/")).stem.casefold() for path, _ in find_missing_assets(project_root)}
+
+    files_to_trash: List[str] = []
+    orphan_dirs: List[Path] = []
     for orphan_file in candidates:
         try:
-            orphan_path = project_relative_path(orphan_file, project_root=Path(project_root), kind="orphan candidate")
+            orphan_path = project_relative_path(orphan_file, project_root=root, kind="orphan candidate")
 
             if not orphan_path.exists():
                 result["skipped_files"].append(f"File not found: {orphan_file}")
                 result["total_skipped"] += 1
                 continue
 
-            # CRITICAL SAFETY CHECK: Only delete companion files if this is the only asset in the directory
+            if Path(orphan_file).stem.casefold() in missing_names:
+                safety_msg = f"SAFETY: Kept {orphan_file} - its name matches a registered asset whose files are missing"
+                result["safety_warnings"].append(safety_msg)
+                result["skipped_files"].append(orphan_file)
+                result["total_skipped"] += 1
+                if fix_issues:
+                    print(f"[WARN]  {safety_msg}")
+                continue
+
+            # CRITICAL SAFETY CHECK: Only include companion files if this is the only asset in the directory
             if _check_directory_safety(orphan_file, project_root):
-                # Safe to delete companion files
                 companions = _get_companion_files(orphan_file, project_root)
-                files_to_delete = [orphan_file] + companions
+                selected = [orphan_file] + companions
             else:
-                # NOT safe - only delete the .yy file itself
-                files_to_delete = [orphan_file]
+                selected = [orphan_file]
                 safety_msg = f"SAFETY: Skipped companion files for {orphan_file} - directory contains other assets"
                 result["safety_warnings"].append(safety_msg)
                 if fix_issues:
                     print(f"[WARN]  {safety_msg}")
 
-            if fix_issues:
-                # Actually delete the files
-                for file_to_delete in files_to_delete:
-                    file_path = project_relative_path(
-                        file_to_delete, project_root=Path(project_root), kind="orphan companion"
-                    )
-                    if file_path.exists():
-                        transactional_unlink(file_path)
-                        result["deleted_files"].append(file_to_delete)
-                        result["total_deleted"] += 1
-
-                # Check if parent directory is now empty and delete if so
-                parent_dir = orphan_path.parent
-                if parent_dir.exists() and parent_dir.is_dir():
-                    try:
-                        # Only delete if directory is empty
-                        if not any(parent_dir.iterdir()):
-                            transactional_rmdir(parent_dir)
-                            relative_dir = parent_dir.relative_to(project_root)
-                            result["deleted_directories"].append(str(relative_dir))
-                    except OSError:
-                        # Directory not empty or other error, ignore
-                        pass
-            else:
-                # Dry run - just report what would be deleted
-                for file_to_delete in files_to_delete:
-                    result["deleted_files"].append(f"[DRY RUN] {file_to_delete}")
-                    result["total_deleted"] += 1
+            for file_path in selected:
+                normalized = Path(file_path).as_posix()
+                if normalized not in files_to_trash:
+                    files_to_trash.append(normalized)
+            orphan_dirs.append(orphan_path.parent)
 
         except Exception as e:
-            error_msg = f"Error processing {orphan_file}: {str(e)}"
-            result["errors"].append(error_msg)
+            result["errors"].append(f"Error processing {orphan_file}: {str(e)}")
+
+    if not fix_issues:
+        for file_path in files_to_trash:
+            result["deleted_files"].append(f"[DRY RUN] {file_path}")
+            result["total_deleted"] += 1
+        return result
+
+    if files_to_trash:
+        trash_result = move_to_trash(project_root, files_to_trash)
+        result["trash_folder"] = trash_result["trash_folder"]
+        result["deleted_files"].extend(trash_result["manifest"])
+        result["total_deleted"] += trash_result["moved_count"]
+        result["errors"].extend(trash_result["errors"])
+
+    # Remove directories the move left empty.
+    for parent_dir in dict.fromkeys(orphan_dirs):
+        if parent_dir.is_dir() and not any(parent_dir.iterdir()):
+            try:
+                transactional_rmdir(parent_dir)
+                result["deleted_directories"].append(parent_dir.relative_to(root).as_posix())
+            except OSError as e:
+                result["errors"].append(f"Could not remove empty directory {parent_dir}: {e}")
 
     return result

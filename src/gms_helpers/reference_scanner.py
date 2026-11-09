@@ -12,17 +12,17 @@ from __future__ import annotations
 
 import copy
 import re
-import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Dict, Iterator, List, Mapping, Tuple
 
 from .event_model import rewrite_collision_event_target
-from .exceptions import GMSError, ValidationError
+from .exceptions import ValidationError
 from .transactions import transactional_rename
-from .utils import atomic_write_text, load_json_loose, save_pretty_json_gm
+from .utils import _read_text_preserving_newlines, atomic_write_text, load_json_loose, save_pretty_json_gm
 
 
+# Tool/VCS caches are never project content, wherever they appear.
 _IGNORED_DIRECTORIES = {
     ".git",
     ".gms_mcp",
@@ -30,10 +30,39 @@ _IGNORED_DIRECTORIES = {
     ".pytest_cache",
     ".ruff_cache",
     "__pycache__",
-    "build",
-    "dist",
-    "node_modules",
 }
+# Build outputs only exist beside the .yyp; an asset may legitimately be named "build".
+_IGNORED_ROOT_DIRECTORIES = {"build", "dist", "node_modules"}
+
+_PROJECT_DIR_PREFIX = "${project_dir}/"
+
+
+def is_ignored_project_path(relative: Path) -> bool:
+    """Return whether a project-relative path is outside scanned project content."""
+    parts = relative.parts
+    if parts and parts[0] in _IGNORED_ROOT_DIRECTORIES:
+        return True
+    return any(part in _IGNORED_DIRECTORIES for part in parts)
+
+
+def read_gml_source(path: Path) -> str:
+    """Read GML byte-for-byte (newlines preserved). GameMaker source must be UTF-8."""
+    try:
+        return _read_text_preserving_newlines(path)
+    except UnicodeDecodeError as exc:
+        raise ValidationError(f"GML source is not valid UTF-8; fix its encoding before rewriting: {path}") from exc
+
+
+def load_project_json(path: Path) -> Any:
+    """Parse one scanned GameMaker JSON file, refusing to silently skip it."""
+    try:
+        parsed = load_json_loose(path)
+    except (UnicodeDecodeError, ValueError) as exc:
+        raise ValidationError(f"Could not read GameMaker JSON: {path}: {exc}") from exc
+    if parsed is None:
+        raise ValidationError(f"Could not parse GameMaker JSON; repair it before renaming: {path}")
+    return parsed
+
 
 _ASSET_DIRECTORIES = {
     "animcurve": "animcurves",
@@ -87,47 +116,122 @@ def _is_identifier_continue(char: str) -> bool:
     return char == "_" or char.isalnum()
 
 
+def _gml_noncode_spans(source: str) -> List[Tuple[int, int, str]]:
+    """Return ordered ``(start, end, kind)`` spans of non-executable GML.
+
+    Kinds are ``comment``, ``string`` (escaped or verbatim literal),
+    ``simple_string`` (a closed literal without escapes) and ``template``
+    (literal text of a ``$"..."`` template string). String spans include
+    their quotes. ``{...}`` interpolations inside template strings are code
+    and are scanned recursively, so ``$"hp {oEnemy.hp}"`` exposes ``oEnemy``.
+    """
+
+    spans: List[Tuple[int, int, str]] = []
+    length = len(source)
+
+    def scan_string(index: int) -> int:
+        quote = source[index]
+        verbatim = index > 0 and source[index - 1] == "@"
+        start = index
+        index += 1
+        simple = True
+        while index < length:
+            if source[index] == quote:
+                if verbatim and index + 1 < length and source[index + 1] == quote:
+                    simple = False
+                    index += 2
+                    continue
+                spans.append((start, index + 1, "simple_string" if simple else "string"))
+                return index + 1
+            if not verbatim and source[index] == "\\" and index + 1 < length:
+                simple = False
+                index += 2
+                continue
+            index += 1
+        spans.append((start, length, "string"))
+        return length
+
+    def scan_template(index: int) -> int:
+        segment_start = index
+        index += 1
+        while index < length:
+            char = source[index]
+            if char == '"':
+                spans.append((segment_start, index + 1, "template"))
+                return index + 1
+            if char == "\\" and index + 1 < length:
+                index += 2
+                continue
+            if char == "{":
+                spans.append((segment_start, index + 1, "template"))
+                closing = scan_code(index + 1, inside_interpolation=True)
+                if closing >= length:
+                    return length
+                segment_start = closing
+                index = closing + 1
+                continue
+            index += 1
+        spans.append((segment_start, length, "template"))
+        return length
+
+    def scan_code(index: int, *, inside_interpolation: bool) -> int:
+        depth = 0
+        while index < length:
+            if source.startswith("//", index):
+                newline = source.find("\n", index + 2)
+                end = length if newline < 0 else newline
+                spans.append((index, end, "comment"))
+                index = end
+                continue
+            if source.startswith("/*", index):
+                closing = source.find("*/", index + 2)
+                end = length if closing < 0 else closing + 2
+                spans.append((index, end, "comment"))
+                index = end
+                continue
+            char = source[index]
+            if char == '"' and index > 0 and source[index - 1] == "$":
+                index = scan_template(index)
+                continue
+            if char in {'"', "'"}:
+                index = scan_string(index)
+                continue
+            if inside_interpolation:
+                if char == "{":
+                    depth += 1
+                elif char == "}":
+                    if depth == 0:
+                        return index
+                    depth -= 1
+            index += 1
+        return length
+
+    scan_code(0, inside_interpolation=False)
+    return spans
+
+
 def iter_gml_identifier_spans(source: str) -> Iterator[Tuple[int, int, str]]:
     """Yield executable GML identifier spans, excluding comments and strings.
 
     The scanner deliberately preserves the source byte-for-byte outside the
     returned spans. It understands line comments, block comments, quoted
-    strings, escapes, and GameMaker verbatim strings (the quote after ``@`` is
-    still treated as a string delimiter).
+    strings, escapes, GameMaker verbatim strings (the quote after ``@`` is
+    still treated as a string delimiter) and ``$"..."`` template strings,
+    whose ``{...}`` interpolations are executable code.
     """
 
+    noncode = iter(_gml_noncode_spans(source))
+    next_span = next(noncode, None)
     index = 0
     length = len(source)
     while index < length:
+        while next_span is not None and next_span[1] <= index:
+            next_span = next(noncode, None)
+        if next_span is not None and next_span[0] <= index:
+            index = next_span[1]
+            continue
+
         char = source[index]
-
-        if char == "/" and index + 1 < length and source[index + 1] == "/":
-            newline = source.find("\n", index + 2)
-            index = length if newline < 0 else newline + 1
-            continue
-
-        if char == "/" and index + 1 < length and source[index + 1] == "*":
-            end = source.find("*/", index + 2)
-            index = length if end < 0 else end + 2
-            continue
-
-        if char in {'"', "'"}:
-            quote = char
-            verbatim = index > 0 and source[index - 1] == "@"
-            index += 1
-            while index < length:
-                if source[index] == quote:
-                    if verbatim and index + 1 < length and source[index + 1] == quote:
-                        index += 2
-                        continue
-                    index += 1
-                    break
-                if not verbatim and source[index] == "\\" and index + 1 < length:
-                    index += 2
-                    continue
-                index += 1
-            continue
-
         if _is_identifier_start(char):
             end = index + 1
             while end < length and _is_identifier_continue(source[end]):
@@ -163,46 +267,10 @@ def rewrite_gml_identifiers(source: str, replacements: Mapping[str, str]) -> Tup
 def _mask_gml_noncode(source: str) -> str:
     """Replace comments and string contents with spaces while preserving offsets."""
     masked = list(source)
-    index = 0
-    length = len(source)
-
-    def erase(start: int, end: int) -> None:
-        for position in range(start, min(end, length)):
+    for start, end, _kind in _gml_noncode_spans(source):
+        for position in range(start, end):
             if masked[position] not in {"\n", "\r"}:
                 masked[position] = " "
-
-    while index < length:
-        if source.startswith("//", index):
-            end = source.find("\n", index + 2)
-            end = length if end < 0 else end
-            erase(index, end)
-            index = end
-            continue
-        if source.startswith("/*", index):
-            closing = source.find("*/", index + 2)
-            end = length if closing < 0 else closing + 2
-            erase(index, end)
-            index = end
-            continue
-        if source[index] in {'"', "'"}:
-            quote = source[index]
-            verbatim = index > 0 and source[index - 1] == "@"
-            start = index
-            index += 1
-            while index < length:
-                if source[index] == quote:
-                    if verbatim and index + 1 < length and source[index + 1] == quote:
-                        index += 2
-                        continue
-                    index += 1
-                    break
-                if not verbatim and source[index] == "\\" and index + 1 < length:
-                    index += 2
-                else:
-                    index += 1
-            erase(start, index)
-            continue
-        index += 1
     return "".join(masked)
 
 
@@ -382,40 +450,9 @@ def iter_gml_asset_identifier_spans(source: str, identifier: str) -> Iterator[Tu
 
 def _iter_gml_string_literal_contents(source: str) -> Iterator[Tuple[int, int, str]]:
     """Yield unescaped simple string contents while excluding comments."""
-    index = 0
-    while index < len(source):
-        if source.startswith("//", index):
-            newline = source.find("\n", index + 2)
-            index = len(source) if newline < 0 else newline + 1
-            continue
-        if source.startswith("/*", index):
-            closing = source.find("*/", index + 2)
-            index = len(source) if closing < 0 else closing + 2
-            continue
-        if source[index] not in {'"', "'"}:
-            index += 1
-            continue
-        quote = source[index]
-        verbatim = index > 0 and source[index - 1] == "@"
-        content_start = index + 1
-        cursor = content_start
-        simple = True
-        while cursor < len(source):
-            if source[cursor] == quote:
-                if verbatim and cursor + 1 < len(source) and source[cursor + 1] == quote:
-                    simple = False
-                    cursor += 2
-                    continue
-                if simple:
-                    yield content_start, cursor, source[content_start:cursor]
-                cursor += 1
-                break
-            if not verbatim and source[cursor] == "\\" and cursor + 1 < len(source):
-                simple = False
-                cursor += 2
-            else:
-                cursor += 1
-        index = cursor
+    for start, end, kind in _gml_noncode_spans(source):
+        if kind == "simple_string":
+            yield start + 1, end - 1, source[start + 1 : end - 1]
 
 
 def iter_gml_asset_lookup_string_spans(source: str, identifier: str) -> Iterator[Tuple[int, int, str]]:
@@ -472,27 +509,60 @@ def rewrite_gml_asset_identifiers(source: str, replacements: Mapping[str, str]) 
     return "".join(pieces), count
 
 
+def find_gml_global_declarations(source: str) -> List[Tuple[str, str]]:
+    """Return ``(kind, name)`` for globally scoped GML declarations in a script.
+
+    Top-level named functions, macros and enums are global in GameMaker, so a
+    copied script would declare them twice.
+    """
+    masked = _mask_gml_noncode(source)
+    declarations: List[Tuple[str, str]] = []
+    depth = 0
+    cursor = 0
+    for match in re.finditer(r"\bfunction\s+(?P<name>[A-Za-z_]\w*)\s*\(", masked):
+        depth += masked.count("{", cursor, match.start()) - masked.count("}", cursor, match.start())
+        cursor = match.start()
+        if depth <= 0:
+            declarations.append(("function", match.group("name")))
+    for match in re.finditer(r"(?m)^\s*#\s*macro\s+(?:[A-Za-z_]\w*:)?(?P<name>[A-Za-z_]\w*)", masked):
+        declarations.append(("macro", match.group("name")))
+    for match in re.finditer(r"\benum\s+(?P<name>[A-Za-z_]\w*)", masked):
+        declarations.append(("enum", match.group("name")))
+    return declarations
+
+
 def count_gml_identifier(source: str, identifier: str) -> int:
     """Count exact bare executable references to a GameMaker asset."""
 
     return sum(1 for _span in iter_gml_asset_reference_spans(source, identifier))
 
 
-def _asset_resource_paths(asset_type: str, old_name: str, new_name: str) -> Tuple[str, str, str, str]:
-    asset_dir = _ASSET_DIRECTORIES.get(asset_type, f"{asset_type}s")
-    if asset_type == "folder":
-        return (
-            f"folders/{old_name}.yy",
-            f"folders/{new_name}.yy",
-            "folders/",
-            "folders/",
-        )
-    return (
-        f"{asset_dir}/{old_name}/{old_name}.yy",
-        f"{asset_dir}/{new_name}/{new_name}.yy",
-        f"{asset_dir}/{old_name}/",
-        f"{asset_dir}/{new_name}/",
-    )
+def _asset_resource_paths(old_path: str, new_path: str) -> Tuple[str, str, str, str]:
+    """Return registered ``.yy`` paths and their asset directories (with ``/``).
+
+    Paths always come from the ``.yyp`` registration: tool-created assets use
+    lower-case folders while IDE-created ones keep the asset's exact case.
+    """
+    old_path = old_path.replace("\\", "/")
+    new_path = new_path.replace("\\", "/")
+    if old_path.startswith("folders/"):
+        return old_path, new_path, "folders/", "folders/"
+    old_directory = old_path.rsplit("/", 1)[0] + "/"
+    new_directory = new_path.rsplit("/", 1)[0] + "/"
+    return old_path, new_path, old_directory, new_directory
+
+
+def _split_project_dir_prefix(value: str) -> Tuple[str, str]:
+    """Split GameMaker's ``${project_dir}/`` macro from a project-relative path."""
+    for separator in ("/", "\\"):
+        prefix = "${project_dir}" + separator
+        if value.startswith(prefix):
+            return prefix, value[len(prefix) :]
+    return "", value
+
+
+def _normalized_resource_path(value: str) -> str:
+    return _split_project_dir_prefix(value)[1].replace("\\", "/")
 
 
 def _rewrite_path_string(
@@ -504,34 +574,30 @@ def _rewrite_path_string(
     new_directory: str,
     own_asset: bool,
 ) -> str:
-    if value == old_path:
-        return new_path
-    if value == old_path.replace("/", "\\"):
-        return new_path.replace("/", "\\")
-    if own_asset and old_directory != new_directory:
-        if value.startswith(old_directory):
-            return new_directory + value[len(old_directory) :]
-        old_windows = old_directory.replace("/", "\\")
-        if value.startswith(old_windows):
-            return new_directory.replace("/", "\\") + value[len(old_windows) :]
+    prefix, relative = _split_project_dir_prefix(value)
+    windows = "\\" in relative or prefix.endswith("\\")
+
+    def restore(path: str) -> str:
+        return prefix + (path.replace("/", "\\") if windows else path)
+
+    normalized = relative.replace("\\", "/")
+    if normalized == old_path:
+        return restore(new_path)
+    if own_asset and old_directory != new_directory and normalized.startswith(old_directory):
+        return restore(new_directory + normalized[len(old_directory) :])
     return value
 
 
-def count_json_resource_references(data: Any, asset_type: str, asset_name: str) -> int:
-    """Count exact structured references to one GameMaker resource path."""
+def count_json_resource_references(data: Any, asset_path: str, asset_name: str) -> int:
+    """Count exact structured references to one registered GameMaker resource path."""
 
-    old_path, _new_path, _old_directory, _new_directory = _asset_resource_paths(
-        asset_type,
-        asset_name,
-        asset_name,
-    )
-    normalized_target = old_path.replace("\\", "/")
+    normalized_target = asset_path.replace("\\", "/")
     count = 0
 
     def visit(node: Any) -> None:
         nonlocal count
         if isinstance(node, str):
-            if node.replace("\\", "/") == normalized_target:
+            if _normalized_resource_path(node) == normalized_target:
                 count += 1
             return
         if isinstance(node, list):
@@ -558,6 +624,8 @@ def rewrite_json_asset_references(
     new_name: str,
     asset_type: str,
     *,
+    old_path: str,
+    new_path: str,
     own_asset: bool = False,
 ) -> JsonRewriteStats:
     """Mutate parsed GameMaker JSON using resource-aware rename rules.
@@ -565,9 +633,10 @@ def rewrite_json_asset_references(
     Outside the renamed asset's own ``.yy`` file, a ``name`` is changed only
     when its sibling ``path`` identifies the target resource. Inside the asset,
     exact internal names and resource-directory paths are also updated.
+    ``old_path``/``new_path`` are the registered ``.yy`` paths.
     """
 
-    old_path, new_path, old_directory, new_directory = _asset_resource_paths(asset_type, old_name, new_name)
+    old_path, new_path, old_directory, new_directory = _asset_resource_paths(old_path, new_path)
     stats = JsonRewriteStats()
 
     def visit(node: Any, location: Tuple[str, ...] = ()) -> None:
@@ -591,11 +660,13 @@ def rewrite_json_asset_references(
         if not isinstance(node, dict):
             return
 
-        if asset_type == "object" and rewrite_collision_event_target(node, old_name, new_name):
+        if asset_type == "object" and rewrite_collision_event_target(
+            node, old_name, new_name, old_path=old_path, new_path=new_path
+        ):
             stats.collision_events += 1
 
         original_path = node.get("path")
-        target_resource = isinstance(original_path, str) and original_path.replace("\\", "/") == old_path
+        target_resource = isinstance(original_path, str) and _normalized_resource_path(original_path) == old_path
         resource_type = str(node.get("resourceType") or "")
         expression_value = node.get("value")
         if resource_type in {"GMObjectProperty", "GMOverriddenProperty"} and isinstance(expression_value, str):
@@ -655,6 +726,44 @@ def rewrite_json_asset_references(
     return stats
 
 
+def plan_collision_file_renames(
+    object_yy: Path,
+    data: Any,
+    old_name: str,
+    new_name: str,
+    *,
+    old_path: str,
+    new_path: str,
+) -> List[Tuple[Path, Path]]:
+    """Plan ``Collision_<old>.gml`` renames for one object's collision events targeting the asset."""
+    planned: List[Tuple[Path, Path]] = []
+
+    def visit(node: Any) -> None:
+        if isinstance(node, list):
+            for item in node:
+                visit(item)
+            return
+        if not isinstance(node, dict):
+            return
+        candidate = copy.deepcopy(node)
+        if rewrite_collision_event_target(candidate, old_name, new_name, old_path=old_path, new_path=new_path):
+            source = object_yy.parent / f"Collision_{old_name}.gml"
+            destination = object_yy.parent / f"Collision_{new_name}.gml"
+            if not source.is_file():
+                raise ValidationError(f"Collision event metadata points to missing file: {source}")
+            if destination.exists() and destination != source:
+                raise ValidationError(f"Collision event rename destination already exists: {destination}")
+            pair = (source, destination)
+            if pair not in planned:
+                planned.append(pair)
+        for value in node.values():
+            if isinstance(value, (dict, list)):
+                visit(value)
+
+    visit(data)
+    return planned
+
+
 class ReferenceScanner:
     """Discover and apply token-aware references for one GameMaker project."""
 
@@ -664,6 +773,8 @@ class ReferenceScanner:
         self._old_name: str | None = None
         self._new_name: str | None = None
         self._asset_type: str | None = None
+        self._old_path: str | None = None
+        self._new_path: str | None = None
         self._collision_file_renames: List[Tuple[Path, Path]] = []
 
     def _is_ignored(self, path: Path) -> bool:
@@ -671,12 +782,22 @@ class ReferenceScanner:
             relative = path.relative_to(self.project_root)
         except ValueError:
             return True
-        return any(part in _IGNORED_DIRECTORIES for part in relative.parts)
+        return is_ignored_project_path(relative)
 
-    def _is_own_asset_file(self, path: Path, old_name: str, new_name: str, asset_type: str) -> bool:
-        old_path, new_path, _old_dir, _new_dir = _asset_resource_paths(asset_type, old_name, new_name)
+    def _is_own_asset_file(self, path: Path, old_path: str, new_path: str) -> bool:
         relative = path.relative_to(self.project_root).as_posix()
-        return relative in {old_path, new_path}
+        return relative in {old_path.replace("\\", "/"), new_path.replace("\\", "/")}
+
+    def _scanned_json_files(self) -> List[Path]:
+        json_files = {
+            *self.project_root.rglob("*.yy"),
+            *self.project_root.rglob("*.yyp"),
+            *self.project_root.rglob("*.resource_order"),
+        }
+        return sorted(path for path in json_files if not self._is_ignored(path))
+
+    def _scanned_gml_files(self) -> List[Path]:
+        return sorted(path for path in self.project_root.rglob("*.gml") if not self._is_ignored(path))
 
     @staticmethod
     def _line_for(text: str, needle: str) -> int:
@@ -693,6 +814,8 @@ class ReferenceScanner:
         old_name: str,
         new_name: str,
         asset_type: str,
+        old_path: str,
+        new_path: str,
     ) -> None:
         if path.suffix == ".yyp":
             name_type = "project_resource_name"
@@ -718,7 +841,6 @@ class ReferenceScanner:
                     context="Structured GameMaker resource name",
                 )
             )
-        old_path, new_path, _old_dir, _new_dir = _asset_resource_paths(asset_type, old_name, new_name)
         for _ in range(stats.paths):
             self.references.append(
                 AssetReference(
@@ -753,65 +875,39 @@ class ReferenceScanner:
                 )
             )
 
-    def _plan_collision_file_renames(
+    def find_all_asset_references(
         self,
-        object_yy: Path,
-        data: Any,
         old_name: str,
         new_name: str,
-    ) -> List[Tuple[Path, Path]]:
-        planned: List[Tuple[Path, Path]] = []
+        asset_type: str,
+        *,
+        old_path: str,
+        new_path: str,
+    ) -> List[AssetReference]:
+        """Find structured JSON references and executable GML identifier uses.
 
-        def visit(node: Any) -> None:
-            if isinstance(node, list):
-                for item in node:
-                    visit(item)
-                return
-            if not isinstance(node, dict):
-                return
-            candidate = copy.deepcopy(node)
-            if rewrite_collision_event_target(candidate, old_name, new_name):
-                source = object_yy.parent / f"Collision_{old_name}.gml"
-                destination = object_yy.parent / f"Collision_{new_name}.gml"
-                if not source.is_file():
-                    raise ValidationError(f"Collision event metadata points to missing file: {source}")
-                if destination.exists() and destination != source:
-                    raise ValidationError(f"Collision event rename destination already exists: {destination}")
-                pair = (source, destination)
-                if pair not in planned:
-                    planned.append(pair)
-            for value in node.values():
-                if isinstance(value, (dict, list)):
-                    visit(value)
-
-        visit(data)
-        return planned
-
-    def find_all_asset_references(self, old_name: str, new_name: str, asset_type: str) -> List[AssetReference]:
-        """Find structured JSON references and executable GML identifier uses."""
+        ``old_path``/``new_path`` are the asset's registered ``.yy`` paths
+        before and after the rename. Every scanned file must parse/decode;
+        a file that cannot be read fails the scan instead of being skipped.
+        """
 
         self.references.clear()
         self._old_name = old_name
         self._new_name = new_name
         self._asset_type = asset_type
+        self._old_path = old_path.replace("\\", "/")
+        self._new_path = new_path.replace("\\", "/")
         self._collision_file_renames.clear()
 
-        json_files = {
-            *self.project_root.rglob("*.yy"),
-            *self.project_root.rglob("*.yyp"),
-            *self.project_root.rglob("*.resource_order"),
-        }
-        for path in sorted(json_files):
-            if self._is_ignored(path):
-                continue
-            parsed = load_json_loose(path)
-            if parsed is None:
-                continue
-            own_asset = self._is_own_asset_file(path, old_name, new_name, asset_type)
+        for path in self._scanned_json_files():
+            parsed = load_project_json(path)
+            own_asset = self._is_own_asset_file(path, old_path, new_path)
             if asset_type == "object" and path.suffix == ".yy":
                 self._collision_file_renames.extend(
                     pair
-                    for pair in self._plan_collision_file_renames(path, parsed, old_name, new_name)
+                    for pair in plan_collision_file_renames(
+                        path, parsed, old_name, new_name, old_path=old_path, new_path=new_path
+                    )
                     if pair not in self._collision_file_renames
                 )
             planned = copy.deepcopy(parsed)
@@ -820,10 +916,12 @@ class ReferenceScanner:
                 old_name,
                 new_name,
                 asset_type,
+                old_path=old_path,
+                new_path=new_path,
                 own_asset=own_asset,
             )
             if stats.total:
-                raw = path.read_text(encoding="utf-8", errors="replace")
+                raw = _read_text_preserving_newlines(path)
                 self._append_json_references(
                     path,
                     raw,
@@ -832,12 +930,12 @@ class ReferenceScanner:
                     old_name=old_name,
                     new_name=new_name,
                     asset_type=asset_type,
+                    old_path=self._old_path,
+                    new_path=self._new_path,
                 )
 
-        for path in sorted(self.project_root.rglob("*.gml")):
-            if self._is_ignored(path):
-                continue
-            source = path.read_text(encoding="utf-8", errors="replace")
+        for path in self._scanned_gml_files():
+            source = read_gml_source(path)
             source_lines = source.splitlines()
             relative = path.relative_to(self.project_root)
             root_kind = relative.parts[0] if relative.parts else "gml"
@@ -868,14 +966,20 @@ class ReferenceScanner:
     def update_all_references(self, references: List[AssetReference]) -> Tuple[int, int]:
         """Apply all planned changes using atomic per-file replacements."""
 
-        if self._old_name is None or self._new_name is None or self._asset_type is None:
+        if (
+            self._old_name is None
+            or self._new_name is None
+            or self._asset_type is None
+            or self._old_path is None
+            or self._new_path is None
+        ):
             raise ValueError("find_all_asset_references must be called before update_all_references")
 
         files_updated = 0
         total_updates = 0
         for path in sorted({reference.file_path for reference in references}):
             if path.suffix == ".gml":
-                source = path.read_text(encoding="utf-8")
+                source = read_gml_source(path)
                 rewritten, count = rewrite_gml_asset_identifiers(source, {self._old_name: self._new_name})
                 if count:
                     atomic_write_text(path, rewritten)
@@ -883,15 +987,15 @@ class ReferenceScanner:
                     total_updates += count
                 continue
 
-            parsed = load_json_loose(path)
-            if parsed is None:
-                raise ValueError(f"Could not parse GameMaker JSON: {path}")
-            own_asset = self._is_own_asset_file(path, self._old_name, self._new_name, self._asset_type)
+            parsed = load_project_json(path)
+            own_asset = self._is_own_asset_file(path, self._old_path, self._new_path)
             stats = rewrite_json_asset_references(
                 parsed,
                 self._old_name,
                 self._new_name,
                 self._asset_type,
+                old_path=self._old_path,
+                new_path=self._new_path,
                 own_asset=own_asset,
             )
             if stats.total:
@@ -914,36 +1018,27 @@ class ReferenceScanner:
         """Return executable or structured references still using ``old_name``."""
 
         stale: List[str] = []
-        for path in sorted(self.project_root.rglob("*.gml")):
-            if self._is_ignored(path):
-                continue
-            source = path.read_text(encoding="utf-8", errors="replace")
+        for path in self._scanned_gml_files():
+            source = read_gml_source(path)
             for start, _end, _token in iter_gml_asset_reference_spans(source, old_name):
                 stale.append(f"{path.relative_to(self.project_root).as_posix()}:{source.count(chr(10), 0, start) + 1}")
             if path.name == f"Collision_{old_name}.gml":
                 stale.append(f"{path.relative_to(self.project_root).as_posix()}:stale-collision-filename")
 
-        if self._new_name is None or self._asset_type is None:
+        if self._new_name is None or self._asset_type is None or self._old_path is None or self._new_path is None:
             return stale
 
-        json_files = {
-            *self.project_root.rglob("*.yy"),
-            *self.project_root.rglob("*.yyp"),
-            *self.project_root.rglob("*.resource_order"),
-        }
-        for path in sorted(json_files):
-            if self._is_ignored(path):
-                continue
-            parsed = load_json_loose(path)
-            if parsed is None:
-                continue
-            own_asset = self._is_own_asset_file(path, old_name, self._new_name, self._asset_type)
+        for path in self._scanned_json_files():
+            parsed = load_project_json(path)
+            own_asset = self._is_own_asset_file(path, self._old_path, self._new_path)
             planned = copy.deepcopy(parsed)
             stats = rewrite_json_asset_references(
                 planned,
                 old_name,
                 self._new_name,
                 self._asset_type,
+                old_path=self._old_path,
+                new_path=self._new_path,
                 own_asset=own_asset,
             )
             if stats.total:
@@ -952,20 +1047,25 @@ class ReferenceScanner:
         return stale
 
 
-def preflight_asset_rename(project_root: Path, old_name: str, new_name: str, asset_type: str) -> None:
-    """Reject collision and GML binding ambiguities before any asset path moves."""
+def preflight_asset_rename(
+    project_root: Path,
+    old_name: str,
+    new_name: str,
+    asset_type: str,
+    *,
+    old_path: str,
+    new_path: str,
+) -> None:
+    """Reject unreadable files, collision and GML binding ambiguities before any asset path moves."""
     scanner = ReferenceScanner(project_root)
-    if asset_type == "object":
-        for object_yy in sorted((scanner.project_root / "objects").glob("*/*.yy")):
-            parsed = load_json_loose(object_yy)
-            if isinstance(parsed, dict):
-                scanner._plan_collision_file_renames(object_yy, parsed, old_name, new_name)
+    for json_path in scanner._scanned_json_files():
+        parsed = load_project_json(json_path)
+        if asset_type == "object" and json_path.suffix == ".yy" and isinstance(parsed, dict):
+            plan_collision_file_renames(json_path, parsed, old_name, new_name, old_path=old_path, new_path=new_path)
 
-    own_script = scanner.project_root / "scripts" / old_name / f"{old_name}.gml"
-    for gml_path in sorted(scanner.project_root.rglob("*.gml")):
-        if scanner._is_ignored(gml_path):
-            continue
-        source = gml_path.read_text(encoding="utf-8", errors="replace")
+    own_script = (scanner.project_root / old_path).parent / f"{old_name}.gml"
+    for gml_path in scanner._scanned_gml_files():
+        source = read_gml_source(gml_path)
         findings = find_gml_ambiguous_asset_bindings(source, old_name)
         if asset_type == "script" and gml_path == own_script:
             findings = [finding for finding in findings if finding[1] != "function declaration"]
@@ -978,12 +1078,20 @@ def preflight_asset_rename(project_root: Path, old_name: str, new_name: str, ass
             )
 
 
-def comprehensive_rename_asset(project_root: Path, old_name: str, new_name: str, asset_type: str) -> bool:
+def comprehensive_rename_asset(
+    project_root: Path,
+    old_name: str,
+    new_name: str,
+    asset_type: str,
+    *,
+    old_path: str,
+    new_path: str,
+) -> bool:
     """Rewrite and verify token-aware references to a renamed asset."""
 
     scanner = ReferenceScanner(project_root)
     print(f"[SCAN] Scanning token-aware references to {old_name}...")
-    references = scanner.find_all_asset_references(old_name, new_name, asset_type)
+    references = scanner.find_all_asset_references(old_name, new_name, asset_type, old_path=old_path, new_path=new_path)
     if references:
         files_updated, total_updates = scanner.update_all_references(references)
         print(f"[OK] Updated {total_updates} token-aware references in {files_updated} files")
@@ -998,19 +1106,3 @@ def comprehensive_rename_asset(project_root: Path, old_name: str, new_name: str,
         return False
     print("[OK] No executable or structured stale references remain")
     return True
-
-
-if __name__ == "__main__":
-    if len(sys.argv) != 5:
-        print("Usage: python reference_scanner.py <project_root> <old_name> <new_name> <asset_type>")
-        sys.exit(1)
-
-    try:
-        success = comprehensive_rename_asset(Path(sys.argv[1]), sys.argv[2], sys.argv[3], sys.argv[4])
-        sys.exit(0 if success else 1)
-    except GMSError as exc:
-        print(f"[ERROR] {exc.message}")
-        sys.exit(exc.exit_code)
-    except Exception as exc:
-        print(f"[ERROR] Unexpected error: {exc}")
-        sys.exit(1)

@@ -9,6 +9,7 @@ from typing import List, Dict, Any, Optional
 from pathlib import Path
 
 from ..path_safety import project_file_path
+from .path_utils import is_options_path
 from ..utils import _read_text_preserving_newlines, load_json, validate_name, find_yyp_file
 from ..naming_config import get_config, NamingConfig
 from ..diagnostics import (
@@ -121,7 +122,7 @@ class ProjectLinter:
 
         for yy_file in yy_files:
             # Skip options files - they have a special format
-            if "options" in yy_file.lower():
+            if is_options_path(yy_file, self.project_root):
                 continue
 
             try:
@@ -209,7 +210,7 @@ class ProjectLinter:
             path = resource_id.get("path", "")
 
             # Skip options files
-            if "/options/" in path.replace("\\", "/") or "\\options\\" in path:
+            if is_options_path(path):
                 continue
 
             if path and not path.startswith("folders/") and not os.path.exists(path):

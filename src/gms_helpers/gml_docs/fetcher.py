@@ -6,6 +6,7 @@ Handles HTTP requests and basic HTML parsing.
 
 from __future__ import annotations
 
+import http.client
 import re
 import time
 import urllib.request
@@ -22,6 +23,9 @@ GML_REFERENCE_URL = BASE_URL + "GameMaker_Language/GML_Reference/GML_Reference.h
 # Rate limiting: minimum seconds between requests
 MIN_REQUEST_INTERVAL = 0.5
 _last_request_time = 0.0
+
+# A refreshed index smaller than this fraction of the cached one is not saved.
+MIN_INDEX_RETENTION = 0.8
 
 
 class SimpleHTMLTextExtractor(HTMLParser):
@@ -300,6 +304,16 @@ def _fetch_url(url: str, timeout: float = 30.0) -> str:
         raise RuntimeError(f"Network error fetching {url}: {e.reason}")
     except TimeoutError:
         raise RuntimeError(f"Timeout fetching {url}")
+    except (http.client.HTTPException, ConnectionError, OSError) as e:
+        # IncompleteRead, RemoteDisconnected, resets mid-body, ...
+        raise RuntimeError(f"Network error reading {url}: {e}")
+
+
+def _looks_like_missing_page(parser: GMLDocParser) -> bool:
+    title = parser.title.strip().casefold()
+    if "not found" in title or "404" in title:
+        return True
+    return not (parser.syntax or parser.parameters or parser.get_description().strip())
 
 
 def fetch_function_index(
@@ -326,6 +340,7 @@ def fetch_function_index(
             return cached
 
     all_functions: Dict[str, FunctionIndexEntry] = {}
+    failed_pages: List[str] = []
 
     # List of category pages to fetch - these contain the actual function lists
     category_pages = [
@@ -391,12 +406,16 @@ def fetch_function_index(
                 all_functions[name] = entry
 
         except Exception:
-            # Skip categories that fail
-            continue
+            failed_pages.append(page_path)
 
-    # Save to cache
+    previous = cache.get_index(allow_stale=True) or {}
+    # Persist only a complete fetch that did not lose a large part of the index;
+    # a partial or offline fetch must not replace a good index for a whole TTL.
+    shrank = bool(previous) and len(all_functions) < MIN_INDEX_RETENTION * len(previous)
+    if failed_pages or not all_functions or shrank:
+        return {**previous, **all_functions}
+
     cache.save_index(all_functions)
-
     return all_functions
 
 
@@ -427,25 +446,31 @@ def fetch_function_doc(
         if cached is not None:
             return cached
 
-    # Get the index to find the URL
+    # Get the index to find the URL. A refresh also refreshes an index that
+    # does not know the function (e.g. one saved after a failed fetch).
     index = fetch_function_index(cache, force_refresh=False)
+    if force_refresh and name_lower not in index:
+        index = fetch_function_index(cache, force_refresh=True)
 
     if name_lower not in index:
-        # Try searching for similar names
-        return None
+        return cache.get_function(name_lower, allow_stale=True)
 
     entry = index[name_lower]
 
-    # Fetch the function page
+    # Fetch the function page; offline, fall back to a stale cached copy.
     try:
         html = _fetch_url(entry.url)
     except RuntimeError:
-        return None
+        return cache.get_function(name_lower, allow_stale=True)
 
     # Parse the documentation
     parser = GMLDocParser()
     parser.feed(html)
     parser.post_process(entry.name)
+
+    if _looks_like_missing_page(parser):
+        # Soft 404 (200 response with a "page not found" body): never cache it.
+        return cache.get_function(name_lower, allow_stale=True)
 
     # Create cached doc
     doc = CachedDoc(

@@ -157,6 +157,7 @@ class TestRunner95Coverage(unittest.TestCase):
         runner_command = "/tmp/YoYo Runner.app/Contents/MacOS/Mac_Runner -game /tmp/game.ios"
         tail_command = "tail -F /tmp/debug.log"
         session = SimpleNamespace(
+            run_id="run-10",
             pid=10,
             exe_path="/tmp/game.ios",
             log_file="/tmp/debug.log",
@@ -341,6 +342,123 @@ class TestRunner95Coverage(unittest.TestCase):
         self.assertTrue(result["ok"])
         local_process.terminate.assert_called_once()
         local_process.kill.assert_called_once()
+
+
+class TestRunnerSafetyFixes(unittest.TestCase):
+    def setUp(self):
+        self.temp_dir = tempfile.TemporaryDirectory()
+        self.addCleanup(self.temp_dir.cleanup)
+        self.project_root = Path(self.temp_dir.name)
+        (self.project_root / "TestGame.yyp").write_text('{"resources": []}', encoding="utf-8")
+        self.runner = GameMakerRunner(self.project_root)
+        for name in ("_wait_for_igor_idle",):
+            patcher = patch.object(GameMakerRunner, name)
+            patcher.start()
+            self.addCleanup(patcher.stop)
+
+    def _game(self, pid=os.getpid()):
+        game = MagicMock()
+        game.pid = pid
+        game.wait.side_effect = lambda *a, **k: None
+        return game
+
+    def test_project_lease_refuses_a_second_run_of_the_same_project(self):
+        from gms_helpers.mac_runtime import project_run_lock
+
+        held = project_run_lock(self.project_root)
+        held.acquire()
+        self.addCleanup(held.release)
+        with (
+            patch("gms_helpers.runner_support.execution._PROJECT_LEASE_TIMEOUT_SECONDS", 0.0),
+            patch.object(self.runner, "_build_platform_action_command", return_value=["igor", "Run"]),
+            patch.object(self.runner, "_run_igor_command") as launch,
+        ):
+            self.assertFalse(self.runner._run_project_classic_approach("Windows", background=True))
+        launch.assert_not_called()
+        self.assertIn("lock", self.runner.last_failure_message)
+
+    def test_background_classic_run_logs_igor_output_and_keeps_its_lease(self):
+        from gms_helpers.mac_runtime import project_run_lock
+
+        game = self._game()
+        released = []
+        with (
+            patch.object(self.runner, "_build_platform_action_command", return_value=["igor", "Run"]),
+            patch.object(self.runner, "_run_igor_command", return_value=game) as launch,
+            patch.object(self.runner, "_hold_lease_until_exit", side_effect=lambda p, lease: released.append(lease)),
+        ):
+            result = self.runner._run_project_classic_approach("Windows", background=True)
+        self.assertTrue(result["ok"])
+        log_file = launch.call_args.kwargs["output_file"]
+        self.assertEqual(str(log_file), result["log_file"])
+        self.assertEqual(self.runner._session_manager.get_current_session().log_file, str(log_file))
+        # The lease stays held for the running game; a second launcher cannot take it.
+        self.assertFalse(project_run_lock(self.project_root).try_acquire())
+        released[0].release()
+
+    def test_retry_reset_runs_under_the_machine_lock(self):
+        events = []
+
+        class _Lock:
+            def __init__(self, operation, _root):
+                self.operation = operation
+
+            def __enter__(self):
+                events.append(("lock", self.operation))
+
+            def __exit__(self, *_exc):
+                events.append(("unlock", self.operation))
+
+        def attempt(*_args):
+            self.runner.last_failure_retryable = len(events) == 0
+            return False
+
+        with (
+            patch("gms_helpers.runner_support.execution.GameMakerMachineLock", _Lock),
+            patch.object(self.runner, "_run_project_classic_approach", side_effect=attempt),
+            patch.object(
+                self.runner, "_reset_igor_transient_state", side_effect=lambda: events.append(("reset", None))
+            ),
+        ):
+            self.runner.run_project_direct("Windows", output_location="project")
+        self.assertEqual(events[:3], [("lock", "run-retry-reset"), ("reset", None), ("unlock", "run-retry-reset")])
+
+    def test_igor_is_stopped_when_reading_its_output_fails(self):
+        process = MagicMock()
+        process.poll.return_value = None
+
+        def lines():
+            yield "ok\n"
+            raise UnicodeDecodeError("utf-8", b"\xff", 0, 1, "bad byte")
+
+        process.stdout = lines()
+        with self.assertRaises(UnicodeDecodeError):
+            self.runner._stream_igor_output(process, "local run")
+        process.terminate.assert_called_once()
+
+    def test_igor_pipe_decodes_utf8_with_replacement(self):
+        with patch("gms_helpers.runner_process.subprocess.Popen", return_value=SimpleNamespace(pid=1)) as popen:
+            self.runner._run_igor_command(["/fake/Igor"])
+        self.assertEqual(popen.call_args.kwargs["encoding"], "utf-8")
+        self.assertEqual(popen.call_args.kwargs["errors"], "replace")
+
+    def test_licence_choice_across_accounts_is_the_newest_and_reported(self):
+        base = self.project_root / "home" / ".config" / "GameMakerStudio2"
+        older = base / "alice_1" / "licence.plist"
+        newer = base / "bob_2" / "licence.plist"
+        for path, mtime in ((older, 1_000_000), (newer, 2_000_000)):
+            path.parent.mkdir(parents=True)
+            path.write_text("licence")
+            os.utime(path, (mtime, mtime))
+        output = []
+        with (
+            patch("gms_helpers.runner_support.discovery.platform.system", return_value="Linux"),
+            patch("gms_helpers.runner_support.discovery.Path.home", return_value=self.project_root / "home"),
+            patch.dict(os.environ, {}, clear=True),
+            patch("builtins.print", side_effect=lambda *a, **k: output.append(" ".join(map(str, a)))),
+        ):
+            self.assertEqual(self.runner.find_license_file(), newer)
+        self.assertTrue(any("2 accounts" in line and str(newer) in line for line in output))
 
 
 if __name__ == "__main__":

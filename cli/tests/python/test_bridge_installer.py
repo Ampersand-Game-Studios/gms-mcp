@@ -51,6 +51,13 @@ class TestBridgeInstallerInit(unittest.TestCase):
             # expands to the long path (e.g. runneradmin). Compare canonical paths.
             self.assertEqual(installer.yyp_path.resolve(), yyp_path.resolve())
 
+    def test_init_refuses_several_yyp_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            for name in ("b.yyp", "a.yyp"):
+                (Path(temp_dir) / name).write_text('{"resources": []}')
+            with self.assertRaisesRegex(BridgeInstallError, "Multiple .yyp"):
+                BridgeInstaller(Path(temp_dir))
+
     def test_init_without_yyp(self):
         """Test initialization without .yyp file."""
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -197,7 +204,9 @@ class TestBridgeInstallerUninstall(unittest.TestCase):
 
         self.bridge_instance_id = "inst_bridge_cleanup_test"
         self.room_path = self.project_root / "rooms" / "r_test" / "r_test.yy"
-        self.room_creation_code = self.project_root / "rooms" / "r_test" / f"{self.bridge_instance_id}.gml"
+        self.room_creation_code = (
+            self.project_root / "rooms" / "r_test" / f"InstanceCreationCode_{self.bridge_instance_id}.gml"
+        )
 
         room_data = {
             "name": "r_test",
@@ -287,6 +296,33 @@ class TestBridgeInstallerUninstall(unittest.TestCase):
 
         self.assertTrue(result["ok"])
         self.assertTrue(result.get("already_uninstalled", False))
+
+    def test_uninstall_refuses_user_edited_assets_unless_forced(self):
+        step = self.project_root / "objects" / BRIDGE_OBJECT_NAME / "Step_0.gml"
+        step.write_text(step.read_text(encoding="utf-8") + "my_custom_command();\n", encoding="utf-8")
+        installer = BridgeInstaller(self.project_root)
+
+        refused = installer.uninstall()
+        self.assertFalse(refused["ok"])
+        self.assertEqual(refused["modified_files"], [f"objects/{BRIDGE_OBJECT_NAME}/Step_0.gml"])
+        self.assertTrue(step.exists())
+
+        self.assertTrue(installer.uninstall(force=True)["ok"])
+        self.assertFalse(step.exists())
+
+    def test_uninstall_removes_a_partial_install(self):
+        shutil.rmtree(self.project_root / "objects" / BRIDGE_OBJECT_NAME)
+        installer = BridgeInstaller(self.project_root)
+        self.assertFalse(installer.is_installed())
+
+        result = installer.uninstall()
+
+        self.assertTrue(result["ok"])
+        self.assertTrue(result["partial"])
+        self.assertIn(f"scripts/{BRIDGE_SCRIPT_NAME}", result["removed_files"])
+        self.assertFalse((self.project_root / "scripts" / BRIDGE_SCRIPT_NAME).exists())
+        resource_paths = [r.get("id", {}).get("path", "") for r in load_json(self.yyp_path)["resources"]]
+        self.assertFalse(any("__mcp" in p for p in resource_paths))
 
     def test_uninstall_removes_bridge_instances_from_rooms(self):
         """Test uninstall removes bridge instances and creation-order refs from rooms."""

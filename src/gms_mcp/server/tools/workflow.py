@@ -10,10 +10,11 @@ from ..dry_run_policy import _dry_run_policy_blocked_result, _requires_dry_run_f
 from ..mcp_types import Context
 from ..project import ProjectAccessError, _ensure_cli_on_sys_path, _resolve_project_directory, _resolve_repo_root
 from ..resolution import ResolutionRuntime
-from ..tool_types import OutputMode
+from ..tool_types import DeletableAssetType, OutputMode
 
 SafeDeleteResolution = Any
-WorkflowNameResolution = Any
+WorkflowDuplicateNameResolution = Any
+WorkflowRenameNameResolution = Any
 
 
 def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) -> None:
@@ -25,34 +26,40 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
 
     async def resolve_safe_delete_decision(
         ctx: Context,
-        asset_type: str,
+        asset_type: DeletableAssetType,
         asset_name: str,
         force: bool = False,
         dry_run: bool = True,
         project_root: str = ".",
     ):
         try:
-            return await resolution_runtime.safe_delete_resolver()(
+            return await resolution_runtime.safe_delete_resolver("gm_safe_delete")(
                 asset_type, asset_name, force, dry_run, project_root, ctx
             )
         except ProjectAccessError:
             return SafeDeleteDecision(action="cancel")
 
-    async def resolve_workflow_name(ctx: Context, asset_path: str, new_name: str, project_root: str = "."):
-        try:
-            return await resolution_runtime.name_collision_resolver()(new_name, project_root, ctx)
-        except ProjectAccessError:
-            return None
+    def workflow_name_resolution(tool_name: str) -> Any:
+        resolver = resolution_runtime.name_collision_resolver(tool_name)
+
+        async def resolve_workflow_name(ctx: Context, asset_path: str, new_name: str, project_root: str = "."):
+            try:
+                return await resolver(new_name, project_root, ctx)
+            except ProjectAccessError:
+                return None
+
+        return Annotated[NameCollisionDecision, Resolve(resolve_workflow_name)]
 
     globals()["SafeDeleteResolution"] = Annotated[SafeDeleteDecision, Resolve(resolve_safe_delete_decision)]
-    globals()["WorkflowNameResolution"] = Annotated[NameCollisionDecision, Resolve(resolve_workflow_name)]
+    globals()["WorkflowDuplicateNameResolution"] = workflow_name_resolution("gm_workflow_duplicate")
+    globals()["WorkflowRenameNameResolution"] = workflow_name_resolution("gm_workflow_rename")
 
     # -----------------------------
     # Workflow tools
     # -----------------------------
     @mcp.tool()
     def gm_safe_delete(
-        asset_type: str,
+        asset_type: DeletableAssetType,
         asset_name: str,
         force: bool = False,
         dry_run: bool = True,
@@ -60,7 +67,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         resolution: SafeDeleteResolution = None,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Dependency-aware delete for an asset by type/name."""
+        """Dependency-aware delete for a supported asset by type/name. Extensions are not supported."""
         _ = ctx
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
@@ -91,7 +98,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     async def gm_workflow_duplicate(
         asset_path: str,
         new_name: str,
-        resolution: WorkflowNameResolution = None,
+        resolution: WorkflowDuplicateNameResolution = None,
         yes: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
@@ -114,9 +121,10 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         from gms_helpers.commands.workflow_commands import handle_workflow_duplicate
 
         args = argparse.Namespace(asset_path=asset_path, new_name=new_name, yes=yes, project_root=project_root)
-        cli_args = ["workflow", "duplicate", asset_path, new_name]
+        cli_args = ["workflow", "duplicate"]
         if yes:
             cli_args.append("--yes")
+        cli_args.extend(["--", asset_path, new_name])
 
         return await _run_with_fallback(
             direct_handler=handle_workflow_duplicate,
@@ -134,7 +142,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     async def gm_workflow_rename(
         asset_path: str,
         new_name: str,
-        resolution: WorkflowNameResolution = None,
+        resolution: WorkflowRenameNameResolution = None,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: OutputMode = "full",
@@ -156,7 +164,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         from gms_helpers.commands.workflow_commands import handle_workflow_rename
 
         args = argparse.Namespace(asset_path=asset_path, new_name=new_name, project_root=project_root)
-        cli_args = ["workflow", "rename", asset_path, new_name]
+        cli_args = ["workflow", "rename", "--", asset_path, new_name]
 
         return await _run_with_fallback(
             direct_handler=handle_workflow_rename,
@@ -186,7 +194,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
 
         Args:
             asset_path: Sprite .yy path relative to project root
-            png: Path to replacement PNG file
+            png: Project-relative path to replacement PNG file (absolute paths are rejected)
             frame: Frame index to replace (0-indexed, default: 0)
         """
         repo_root = _resolve_repo_root(project_root)
@@ -194,7 +202,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         from gms_helpers.commands.workflow_commands import handle_workflow_swap_sprite
 
         args = argparse.Namespace(asset_path=asset_path, png=png, frame=frame, project_root=project_root)
-        cli_args = ["workflow", "swap-sprite", asset_path, png, "--frame", str(frame)]
+        cli_args = ["workflow", "swap-sprite", "--frame", str(frame), "--", asset_path, png]
 
         return await _run_with_fallback(
             direct_handler=handle_workflow_swap_sprite,
@@ -228,7 +236,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         Args:
             sprite_path: Sprite .yy path relative to project root
             position: Insert position (0-indexed, -1 = append at end)
-            source_png: Optional path to source PNG (creates blank if empty)
+            source_png: Optional project-relative PNG path (absolute paths are rejected; creates blank if empty)
         """
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
@@ -240,9 +248,10 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             source=source_png if source_png else None,
             project_root=project_root,
         )
-        cli_args = ["sprite-frames", "add", sprite_path, "--position", str(position)]
+        cli_args = ["sprite-frames", "add", "--position", str(position)]
         if source_png:
             cli_args.extend(["--source", source_png])
+        cli_args.extend(["--", sprite_path])
 
         return await _run_with_fallback(
             direct_handler=handle_sprite_add_frame,
@@ -278,7 +287,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         from gms_helpers.commands.sprite_commands import handle_sprite_remove_frame
 
         args = argparse.Namespace(sprite_path=sprite_path, position=position, project_root=project_root)
-        cli_args = ["sprite-frames", "remove", sprite_path, str(position)]
+        cli_args = ["sprite-frames", "remove", "--", sprite_path, str(position)]
 
         return await _run_with_fallback(
             direct_handler=handle_sprite_remove_frame,
@@ -318,7 +327,15 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         args = argparse.Namespace(
             sprite_path=sprite_path, source_position=source_position, target=target_position, project_root=project_root
         )
-        cli_args = ["sprite-frames", "duplicate", sprite_path, str(source_position), "--target", str(target_position)]
+        cli_args = [
+            "sprite-frames",
+            "duplicate",
+            "--target",
+            str(target_position),
+            "--",
+            sprite_path,
+            str(source_position),
+        ]
 
         return await _run_with_fallback(
             direct_handler=handle_sprite_duplicate_frame,
@@ -352,7 +369,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
 
         Args:
             name: Sprite name to create
-            source: Path to source PNG strip/sheet
+            source: Project-relative path to PNG strip/sheet (absolute paths are rejected)
             parent_path: Existing parent folder path; omit to reuse or create the default Sprites folder
             layout: Strip layout - "horizontal", "vertical", or "grid"
             frame_width: Frame width in pixels (0 = auto-detect)
@@ -373,13 +390,14 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             columns=columns if columns > 0 else None,
             project_root=project_root,
         )
-        cli_args = ["sprite-frames", "import-strip", name, source, "--parent-path", parent_path, "--layout", layout]
+        cli_args = ["sprite-frames", "import-strip", "--parent-path", parent_path, "--layout", layout]
         if frame_width > 0:
             cli_args.extend(["--frame-width", str(frame_width)])
         if frame_height > 0:
             cli_args.extend(["--frame-height", str(frame_height)])
         if columns > 0:
             cli_args.extend(["--columns", str(columns)])
+        cli_args.extend(["--", name, source])
 
         return await _run_with_fallback(
             direct_handler=handle_sprite_import_strip,
@@ -413,7 +431,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         from gms_helpers.commands.sprite_commands import handle_sprite_frame_count
 
         args = argparse.Namespace(sprite_path=sprite_path, project_root=project_root)
-        cli_args = ["sprite-frames", "count", sprite_path]
+        cli_args = ["sprite-frames", "count", "--", sprite_path]
 
         return await _run_with_fallback(
             direct_handler=handle_sprite_frame_count,

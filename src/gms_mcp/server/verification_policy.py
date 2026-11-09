@@ -79,7 +79,7 @@ def _env_truthy(name: str) -> bool:
     return os.environ.get(name, "").strip().lower() in _TRUE_VALUES
 
 
-def _mode_from_text(raw_value: str) -> str:
+def _mode_from_text(raw_value: str) -> str | None:
     raw = raw_value.strip().lower()
     if raw in _ALWAYS_VERIFY_VALUES:
         return "always"
@@ -87,31 +87,54 @@ def _mode_from_text(raw_value: str) -> str:
         return "smart"
     if raw in _OFF_VALUES:
         return "off"
-    return "unknown"
+    return None
+
+
+def verification_environment_error() -> str | None:
+    """Explain an unusable server-wide policy so startup can refuse it."""
+    raw_value = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY")
+    if raw_value is not None and _mode_from_text(raw_value) is None:
+        return f"Unrecognised GMS_MCP_POST_MUTATION_VERIFY value {raw_value.strip()!r}; use off, smart or always."
+    return None
+
+
+def _resolve_verification_mode(project_root: str | Path | None) -> tuple[str, str | None]:
+    """Return the active mode and a notice when an unrecognised value fell back to smart."""
+    if _env_truthy("GMS_MCP_VERIFY_COMPILE_AFTER_MUTATION"):
+        return "always", None
+    raw_value = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY")
+    source = "GMS_MCP_POST_MUTATION_VERIFY"
+    if raw_value is None and project_root is not None:
+        from gms_helpers.project_config import configured_post_mutation_verification
+
+        try:
+            raw_value = configured_post_mutation_verification(project_root)
+        except (OSError, ValueError):
+            raw_value = None
+        source = "verification.post_mutation"
+    if raw_value is None:
+        return "smart", None
+    mode = _mode_from_text(raw_value)
+    if mode is None:
+        # Never let a typo silently disable verification.
+        return "smart", f"Unrecognised {source} value {raw_value.strip()!r}; verifying in smart mode."
+    return mode, None
 
 
 def current_verification_mode(project_root: str | Path | None = None) -> str:
-    """Return off, always, smart, or unknown for the active post-mutation policy.
+    """Return off, always or smart for the active post-mutation policy.
 
     The server environment wins. Without it, a project may choose its own default with
     ``"verification": {"post_mutation": "off"}`` in ``.gms-mcp.json`` (large projects and
     projects edited by several agents verify in batches instead of after every edit).
+    An unrecognised value is treated as smart and reported by ``verification_mode_notice``.
     """
-    if _env_truthy("GMS_MCP_VERIFY_COMPILE_AFTER_MUTATION"):
-        return "always"
-    raw_value = os.environ.get("GMS_MCP_POST_MUTATION_VERIFY")
-    if raw_value is not None:
-        return _mode_from_text(raw_value)
-    if project_root is not None:
-        from gms_helpers.project_config import configured_post_mutation_verification
+    return _resolve_verification_mode(project_root)[0]
 
-        try:
-            configured = configured_post_mutation_verification(project_root)
-        except (OSError, ValueError):
-            configured = None
-        if configured is not None:
-            return _mode_from_text(configured)
-    return "smart"
+
+def verification_mode_notice(project_root: str | Path | None = None) -> str | None:
+    """Report an unrecognised policy value that was treated as smart."""
+    return _resolve_verification_mode(project_root)[1]
 
 
 def _matches_prefix(tool_name: str, prefixes: Iterable[str]) -> bool:
@@ -129,8 +152,10 @@ def _classify_risk(tool_name: str) -> tuple[str, str]:
 def decide_mutation_verification(
     tool_name: str, project_root: str | Path | None = None
 ) -> MutationVerificationDecision:
-    mode = current_verification_mode(project_root)
+    mode, notice = _resolve_verification_mode(project_root)
     risk, reason = _classify_risk(tool_name)
+    if notice:
+        reason = f"{reason}; {notice}"
 
     if mode == "always":
         return MutationVerificationDecision(mode=mode, action="compile", risk=risk, reason="compile mode is enabled")

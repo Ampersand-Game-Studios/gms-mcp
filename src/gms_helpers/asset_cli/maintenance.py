@@ -11,7 +11,7 @@ from ..maintenance.prune import print_prune_report, prune_missing_assets
 from ..maintenance.tidy_json import print_json_validation_report, validate_project_json
 from ..maintenance.trash import get_keep_patterns, move_to_trash
 from ..maintenance.validate_paths import print_path_validation_report, validate_folder_paths
-from ..utils import list_folders_in_yyp, remove_folder_from_yyp, resolve_project_directory
+from ..utils import list_folders_in_yyp, remove_folder_from_yyp
 
 
 def maint_lint_command(args):
@@ -163,12 +163,20 @@ def maint_sync_events_command(args):
         from ..maintenance.event_sync import sync_object_events, sync_all_object_events
 
         if args.object:
-            # Sync specific object
-            import os
+            # Sync specific object, located by its registered .yy path
+            from ..exceptions import GMSError
+            from ..path_safety import project_relative_path
+            from ..project_validation import resolve_asset_reference
 
-            object_path = os.path.join(getattr(args, "project_root", "."), "objects", args.object)
-            if os.path.exists(object_path):
-                stats = sync_object_events(object_path, dry_run)
+            project_root = Path(getattr(args, "project_root", None) or ".").resolve()
+            try:
+                reference = resolve_asset_reference(project_root, args.object, "GMObject")
+            except GMSError as exc:
+                print(f"[ERROR] Object {args.object} not found: {exc}")
+                return False
+            object_path = project_relative_path(reference["path"], project_root=project_root, kind="object path")
+            if object_path.is_file():
+                stats = sync_object_events(str(object_path), dry_run)
                 print(f"[OBJECT] {args.object}:")
                 if stats["orphaned_found"] > 0:
                     action_text = "FIXED" if not dry_run and stats["orphaned_fixed"] > 0 else "FOUND"
@@ -247,7 +255,7 @@ def maint_clean_orphans_command(args):
 
         if total_deleted > 0:
             if delete:
-                print(f"\n[OK] Deleted {total_deleted} orphaned files")
+                print(f"\n[OK] Moved {total_deleted} orphaned files to {cleanup_result.get('trash_folder')}")
                 if deleted_dirs > 0:
                     print(f"[DIRS] Removed {deleted_dirs} empty directories")
             else:
@@ -268,7 +276,7 @@ def maint_clean_orphans_command(args):
         if not delete and total_deleted > 0:
             deleted_files = cleanup_result.get("deleted_files", [])
             if deleted_files:
-                print(f"\nFiles that would be deleted:")
+                print(f"\nFiles that would be moved to the project trash:")
                 for file_path in deleted_files[:20]:  # Show first 20 files
                     print(f"  - {file_path}")
                 if len(deleted_files) > 20:
@@ -392,7 +400,8 @@ def maint_purge_command(args):
     delete_after_move = args.delete
     additional_keep_patterns = args.keep or []
 
-    project_root = resolve_project_directory(getattr(args, "project_root", None))
+    # "." (the CLI default) is the working directory; never let an env override pick another project.
+    project_root = Path(getattr(args, "project_root", None) or ".").resolve()
 
     if not apply_changes:
         print("[SCAN] DRY RUN: Analyzing what would be purged...")
@@ -456,7 +465,7 @@ def maint_purge_command(args):
             print("[WARN]  Final deletion from trash folder not yet implemented for safety.")
             print(f"[INFO] Files are safe in {result['trash_folder']}")
 
-        return True
+        return not result["errors"]
 
     except Exception as e:
         print(f"[ERROR] Error during purge: {e}")

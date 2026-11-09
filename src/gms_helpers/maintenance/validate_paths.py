@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 
 from ..path_safety import project_file_path
+from .path_utils import is_options_path
 from typing import List, Tuple, Dict, Set
 
 from ..utils import load_json, find_yyp_file
@@ -72,7 +73,7 @@ def validate_folder_paths(
             asset_name = resource_id.get("name", "")
 
             # Skip options files and other non-asset resources
-            if "options" in asset_path.lower() or not asset_path:
+            if not asset_path or is_options_path(asset_path):
                 continue
 
             # Load asset file and check parent reference
@@ -145,7 +146,7 @@ def validate_folder_paths(
             if (
                 asset_path
                 and os.path.exists(os.path.join(project_root, asset_path))
-                and "options" not in asset_path.lower()
+                and not is_options_path(asset_path)
             ):
                 try:
                     asset_data = load_json(project_file_path(asset_path, project_root=Path(project_root)))

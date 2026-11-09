@@ -7,6 +7,7 @@
   },
   "repository": "https://github.com/Ampersand-Game-Studios/gms-mcp",
   "license": "MIT",
+  "icon": "./documentation/assets/gms-mcp-icon.png",
   "keywords": [
     "gamemaker",
     "game-development",

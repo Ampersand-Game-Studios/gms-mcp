@@ -24,7 +24,13 @@ if str(SRC_ROOT) not in sys.path:
     sys.path.insert(0, str(SRC_ROOT))
 
 from gms_helpers import room_helper, room_instance_helper
-from gms_helpers.exceptions import AssetNotFoundError, GMSError, ProjectNotFoundError, ValidationError
+from gms_helpers.exceptions import (
+    AmbiguousProjectError,
+    AssetNotFoundError,
+    GMSError,
+    ProjectNotFoundError,
+    ValidationError,
+)
 from gms_helpers.maintenance import event_sync
 from gms_mcp import project_detection
 from gms_helpers.utils import (
@@ -177,11 +183,10 @@ class TestUtilsCoverage(unittest.TestCase):
 
         (self.temp_dir / "a.yyp").touch()
         (self.temp_dir / "b.yyp").touch()
-        result, output = _capture_output(validate_working_directory)
-        self.assertIn(result, {"a.yyp", "b.yyp"})
-        self.assertIn("Multiple .yyp files", output)
+        with self.assertRaisesRegex(AmbiguousProjectError, "Multiple .yyp files"):
+            validate_working_directory()
 
-        with self.assertRaisesRegex(ValueError, "Multiple .yyp files"):
+        with self.assertRaisesRegex(AmbiguousProjectError, "Multiple .yyp files"):
             find_yyp_file()
 
     def test_project_resolution_finds_one_tracked_nested_yyp_from_repo_root(self):
@@ -237,8 +242,10 @@ class TestUtilsCoverage(unittest.TestCase):
         subprocess.run(["git", "init", "-q", str(repo_root)], check=True)
 
         with patch.object(project_detection.subprocess, "run", side_effect=OSError("git unavailable")):
-            with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
+            with self.assertRaisesRegex(FileNotFoundError, "(?s)No GameMaker project.*git unavailable"):
                 resolve_project_directory(repo_root)
+            # A single project file directly in the candidate needs no Git answer.
+            self.assertEqual(resolve_project_directory(untracked_yyp.parent), untracked_yyp.parent.resolve())
 
         outside_yyp = self.temp_dir / "outside" / "escape.yyp"
         outside_yyp.parent.mkdir(parents=True)
@@ -247,6 +254,19 @@ class TestUtilsCoverage(unittest.TestCase):
         with patch.object(project_detection.subprocess, "run", return_value=escaped):
             with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
                 resolve_project_directory(repo_root)
+
+    def test_project_resolution_accepts_single_untracked_yyp_in_working_directory(self):
+        repo_root = self.temp_dir / "cwd-untracked-repo"
+        repo_root.mkdir()
+        (repo_root / "game.yyp").write_text('{"resources": []}', encoding="utf-8")
+        subprocess.run(["git", "init", "-q", str(repo_root)], check=True)
+        previous = Path.cwd()
+        os.chdir(repo_root)
+        try:
+            with patch.dict(os.environ, {"GM_PROJECT_ROOT": "", "PROJECT_ROOT": ""}):
+                self.assertEqual(resolve_project_directory(None), repo_root.resolve())
+        finally:
+            os.chdir(previous)
 
     def test_project_resolution_rejects_untracked_projects_from_git_subdirectories(self):
         repo_root = self.temp_dir / "subdirectory-repo"
@@ -647,10 +667,12 @@ class TestRoomHelperCoverage(unittest.TestCase):
 
         with (
             patch.object(sys, "argv", ["room_helper", "list"]),
-            patch("gms_helpers.room_helper.validate_working_directory"),
+            patch("gms_helpers.room_instance_helper.validate_working_directory"),
             patch(
                 "argparse.ArgumentParser.parse_args",
-                return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(GMSError("boom"))),
+                return_value=SimpleNamespace(
+                    command="list", func=lambda _args: (_ for _ in ()).throw(GMSError("boom"))
+                ),
             ),
         ):
             with self.assertRaises(GMSError):
@@ -658,10 +680,12 @@ class TestRoomHelperCoverage(unittest.TestCase):
 
         with (
             patch.object(sys, "argv", ["room_helper", "list"]),
-            patch("gms_helpers.room_helper.validate_working_directory"),
+            patch("gms_helpers.room_instance_helper.validate_working_directory"),
             patch(
                 "argparse.ArgumentParser.parse_args",
-                return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(RuntimeError("boom"))),
+                return_value=SimpleNamespace(
+                    command="list", func=lambda _args: (_ for _ in ()).throw(RuntimeError("boom"))
+                ),
             ),
         ):
             result, output = _capture_output(room_helper.main)
@@ -670,7 +694,7 @@ class TestRoomHelperCoverage(unittest.TestCase):
 
         with (
             patch.object(sys, "argv", ["room_helper", "list"]),
-            patch("gms_helpers.room_helper.validate_working_directory"),
+            patch("gms_helpers.room_instance_helper.validate_working_directory"),
             patch(
                 "argparse.ArgumentParser.parse_args",
                 return_value=SimpleNamespace(),
@@ -684,11 +708,11 @@ class TestRoomHelperCoverage(unittest.TestCase):
         self.assertEqual(false_exit.exception.code, 1)
 
         with (
-            patch("gms_helpers.room_helper.validate_working_directory"),
+            patch("gms_helpers.room_instance_helper.validate_working_directory"),
             patch(
                 "argparse.ArgumentParser.parse_args",
                 return_value=SimpleNamespace(
-                    func=lambda _args: (_ for _ in ()).throw(ProjectNotFoundError("missing project"))
+                    command="list", func=lambda _args: (_ for _ in ()).throw(ProjectNotFoundError("missing project"))
                 ),
             ),
             self.assertRaises(SystemExit) as gms_error_exit,
@@ -697,10 +721,12 @@ class TestRoomHelperCoverage(unittest.TestCase):
         self.assertEqual(gms_error_exit.exception.code, ProjectNotFoundError.exit_code)
 
         with (
-            patch("gms_helpers.room_helper.validate_working_directory"),
+            patch("gms_helpers.room_instance_helper.validate_working_directory"),
             patch(
                 "argparse.ArgumentParser.parse_args",
-                return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(RuntimeError("kaboom"))),
+                return_value=SimpleNamespace(
+                    command="list", func=lambda _args: (_ for _ in ()).throw(RuntimeError("kaboom"))
+                ),
             ),
             self.assertRaises(SystemExit) as generic_error_exit,
         ):
@@ -744,13 +770,15 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
         (object_dir / "o_test.yy").write_text(
             json.dumps(
                 {
+                    "name": "o_test",
+                    "resourceType": "GMObject",
                     "eventList": [
                         {"eventType": 0, "eventNum": 0, "resourceVersion": "2.0", "resourceType": "GMEvent"},
                         {"eventType": 3, "eventNum": 0, "resourceVersion": "2.0", "resourceType": "GMEvent"},
                         {"eventType": 8, "eventNum": 0, "resourceVersion": "2.0", "resourceType": "GMEvent"},
                         {"eventType": 1, "eventNum": 0, "resourceVersion": "2.0", "resourceType": "GMEvent"},
                         {"eventType": 7, "eventNum": 2, "resourceVersion": "2.0", "resourceType": "GMEvent"},
-                    ]
+                    ],
                 }
             ),
             encoding="utf-8",
@@ -774,8 +802,10 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
             room_instance_helper._load_room_data(self.temp_dir / "missing.yy")
 
         data = {
+            "$GMRoom": "v1",
             "name": "r_test",
             "resourceType": "GMRoom",
+            "resourceVersion": "2.0",
             "layers": [{"name": "Background", "resourceType": "GMRBackgroundLayer"}],
         }
         self.room_path.write_text(json.dumps(data), encoding="utf-8")
@@ -785,8 +815,10 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
         self.room_path.write_text(
             json.dumps(
                 {
+                    "$GMRoom": "v1",
                     "name": "r_test",
                     "resourceType": "GMRoom",
+                    "resourceVersion": "2.0",
                     "layers": [{"name": "Instances", "resourceType": "GMRInstanceLayer"}],
                     "instanceCreationOrder": [],
                 }
@@ -800,7 +832,7 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
         self.assertIn("instances", saved["layers"][0])
         self.assertIn("inst_abc123", [entry["name"] for entry in saved["instanceCreationOrder"]])
 
-        code_file = self.temp_dir / "rooms" / "r_test" / "inst_abc123.gml"
+        code_file = self.temp_dir / "rooms" / "r_test" / "InstanceCreationCode_inst_abc123.gml"
         code_file.write_text("// init", encoding="utf-8")
         self.assertTrue(room_instance_helper.remove_instance("r_test", "inst_abc123"))
         self.assertFalse(code_file.exists())
@@ -854,7 +886,7 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
             )
         )
         self.assertTrue(room_instance_helper.set_creation_code("r_test", "inst_mod", "show_debug_message('x');"))
-        self.assertTrue((self.temp_dir / "rooms" / "r_test" / "inst_mod.gml").exists())
+        self.assertTrue((self.temp_dir / "rooms" / "r_test" / "InstanceCreationCode_inst_mod.gml").exists())
 
         with self.assertRaises(AssetNotFoundError):
             room_instance_helper.set_creation_code("r_test", "missing", "code")
@@ -895,7 +927,9 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
             patch("gms_helpers.room_instance_helper.validate_working_directory"),
             patch(
                 "argparse.ArgumentParser.parse_args",
-                return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(GMSError("boom"))),
+                return_value=SimpleNamespace(
+                    command="list-instances", func=lambda _args: (_ for _ in ()).throw(GMSError("boom"))
+                ),
             ),
         ):
             with self.assertRaises(GMSError):
@@ -906,7 +940,9 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
             patch("gms_helpers.room_instance_helper.validate_working_directory"),
             patch(
                 "argparse.ArgumentParser.parse_args",
-                return_value=SimpleNamespace(func=lambda _args: (_ for _ in ()).throw(RuntimeError("boom"))),
+                return_value=SimpleNamespace(
+                    command="list-instances", func=lambda _args: (_ for _ in ()).throw(RuntimeError("boom"))
+                ),
             ),
         ):
             result, output = _capture_output(room_instance_helper.main)
@@ -949,13 +985,8 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
 
         empty_project = self.temp_dir / "empty_project"
         empty_project.mkdir()
-        with patch(
-            "gms_helpers.maintenance.event_sync.resolve_project_directory",
-            return_value=empty_project,
-        ):
-            self.assertEqual(
-                event_sync.sync_all_object_events(str(empty_project), dry_run=True)["objects_processed"], 0
-            )
+        (empty_project / "empty.yyp").write_text('{"resources": []}', encoding="utf-8")
+        self.assertEqual(event_sync.sync_all_object_events(str(empty_project), dry_run=True)["objects_processed"], 0)
 
         all_stats, output = _capture_output(event_sync.sync_all_object_events, str(self.temp_dir), True)
         self.assertEqual(all_stats["objects_processed"], 1)

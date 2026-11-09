@@ -152,6 +152,8 @@ Bridge installation also updates the project `.yyp`:
 
 It does NOT add room instances automatically.
 
+Every generated `.gml` file ends with a `// gms-mcp generated asset sha256:<digest>` line. If a bridge file was edited (for example to add a command), extra files were added to the bridge folders, or the assets were written by an older gms-mcp without that line, `gm_bridge_install` (reinstall) and `gm_bridge_uninstall` refuse and list `modified_files`. Keep a copy of your changes, then pass `force=true` to replace or remove them. Uninstall also removes whatever parts a partial install left behind and reports them.
+
 ## End-to-end workflow (agent runbook)
 
 This is the recommended, repeatable sequence for running a game and interacting with it.
@@ -396,12 +398,13 @@ Fix:
 
 `gm_game_start` builds a throwaway snapshot of the project, starts it and waits for a bridge endpoint in the game to connect. It then serves `gm_game_command`, `gm_game_screenshot`, `gm_game_log`, `gm_game_status` and `gm_game_stop`. Each session listens on its own free port and owns a separate macOS bundle/save root, so different projects can run concurrently. A project lease protects its saves; a label lease protects its artifacts. Closing a game archives its evidence and releases both leases. Manual games survive server exit and remain discoverable through persisted process identity; a new server can inspect or stop them, but bridge commands belong to the launching server.
 
-A game takes part by implementing this contract. Reinstall `__mcp_bridge` to upgrade older fixed-port assets. The installed bridge also works with `gm_run` / `gm_run_command`.
+A game takes part by implementing this contract. Reinstall `__mcp_bridge` with `force=true` to upgrade older fixed-port assets (they carry no generated-asset line, so they count as edited). The installed bridge also works with `gm_run` / `gm_run_command`. It provides `ping`, `help`, `state`, `screenshot [name]` and `log_tail [count]` plus `goto_room`, `get_var`, `set_var`, `spawn`, `room_info` and `instance_count`; it has no `console`.
 
 - **Transport**: TCP on `127.0.0.1`. The MCP server listens. The game connects out to the port in the `GMS_MCP_BRIDGE_PORT` environment variable. When the variable is not a valid port, or `GMS_MCP_BRIDGE_TOKEN` is empty, the game must not open a socket. Both values are supplied by gms-mcp at launch.
 - **Framing**: UTF-8 lines ending in `\n`. NUL bytes are ignored.
 - **Game to server**: `HELLO:<json>` as the first line within three seconds, with a required `token` field matching `GMS_MCP_BRIDGE_TOKEN` (other fields: `protocol`, `game`, `version`, `commands`); `RSP:<id>|<answer>`; optionally `LOG:<ms>|<text>`.
 - **Server to game**: `CMD:<id>|<name> <arguments>`.
 - **Answers**: one line. Plain text, JSON when it starts with `{` or `[` (returned parsed in `data`), or `ERR:<code> <message>` (returned as `ok: false` with `error_code`).
+- **Checked on connect**: an endpoint whose HELLO does not declare `protocol` 2 is reported as `RUNNING_UNSUPPORTED_ENDPOINT` and `gm_game_command` refuses it. When HELLO lists `commands`, any other command is refused before it is sent, with `error_code: "unsupported"` and `supported_commands`. Commands containing line breaks are rejected, never split.
 - **Standard commands**: `ping` (answers `pong`), `help`, `state`, `screenshot [name]` (answers `{"file": "<absolute path>"}` after `screen_save`), `log_tail [count]` (answers `{"lines": [...]}`), `console <command line>` (answers `{"ok": true, "output": [...]}`). `input ...` is reserved for input injection.
 - The installed endpoint is inert in builds not launched by gms-mcp. Uninstall it before release anyway; `gm_bridge_status` warns whenever bridge assets are installed.

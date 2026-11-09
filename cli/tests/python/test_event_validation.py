@@ -37,6 +37,15 @@ class TestEventValidationErrors(unittest.TestCase):
         (self.temp_dir / "objects").mkdir()
         (self.temp_dir / "test.yyp").write_text("{}")
 
+    def _register(self, *names):
+        """Register objects in the .yyp; event sync only visits registered objects."""
+        yyp = self.temp_dir / "test.yyp"
+        data = json.loads(yyp.read_text(encoding="utf-8") or "{}")
+        resources = data.setdefault("resources", [])
+        for name in names:
+            resources.append({"id": {"name": name, "path": f"objects/{name}/{name}.yy"}})
+        yyp.write_text(json.dumps(data), encoding="utf-8")
+
     def tearDown(self):
         """Clean up temporary directory."""
         os.chdir(self.original_cwd)
@@ -67,6 +76,7 @@ class TestEventValidationErrors(unittest.TestCase):
         }
         save_pretty_json(obj_dir / f"{obj_name}.yy", yy_data)
 
+        self._register(obj_name)
         # Run sync (dry run)
         stats = sync_all_object_events(str(self.temp_dir), dry_run=True)
 
@@ -85,11 +95,37 @@ class TestEventValidationErrors(unittest.TestCase):
         }
         save_pretty_json(obj_dir / f"{obj_name}.yy", yy_data)
 
+        self._register(obj_name)
         # Run sync (with fix)
         stats = sync_all_object_events(str(self.temp_dir), dry_run=False)
 
         self.assertEqual(stats["missing_created"], 1)
-        self.assertTrue((obj_dir / "Create_0.gml").exists())
+        # Stubs are empty so a deliberately empty override keeps its behaviour.
+        self.assertEqual((obj_dir / "Create_0.gml").read_text(encoding="utf-8"), "")
+
+    def test_sync_never_overwrites_case_variant_and_finds_lowercase_folders(self):
+        """A differently-cased event file counts as present; the folder spelling comes from the .yyp."""
+        obj_name = "oPlayer"
+        obj_dir = self.temp_dir / "objects" / "oplayer"
+        obj_dir.mkdir()
+        yy_data = {
+            "name": obj_name,
+            "eventList": [{"eventType": 0, "eventNum": 0, "resourceType": "GMEvent", "resourceVersion": "1.0"}],
+        }
+        save_pretty_json(obj_dir / f"{obj_name}.yy", yy_data)
+        (obj_dir / "create_0.gml").write_text("user code", encoding="utf-8")
+        yyp = self.temp_dir / "test.yyp"
+        yyp.write_text(
+            json.dumps({"resources": [{"id": {"name": obj_name, "path": f"objects/oplayer/{obj_name}.yy"}}]}),
+            encoding="utf-8",
+        )
+
+        stats = sync_all_object_events(str(self.temp_dir), dry_run=False)
+
+        self.assertEqual(stats["objects_processed"], 1)
+        self.assertEqual(stats["missing_created"], 0)
+        self.assertEqual(stats["orphaned_fixed"], 0)
+        self.assertEqual((obj_dir / "create_0.gml").read_text(encoding="utf-8"), "user code")
 
     def test_sync_round_trips_collision_event_filenames_and_references(self):
         target_name = "o_wall"
@@ -141,6 +177,7 @@ class TestEventValidationErrors(unittest.TestCase):
             encoding="utf-8",
         )
 
+        self._register(owner_name)
         missing_stats = sync_all_object_events(str(self.temp_dir), dry_run=False)
         collision_path = owner_dir / "Collision_o_wall.gml"
         self.assertEqual(missing_stats["missing_created"], 1)

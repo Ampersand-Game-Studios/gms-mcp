@@ -690,6 +690,33 @@ class TestAutoMaintenanceEdgeCases(TestAutoMaintenanceComprehensive):
         self.assertIsInstance(result, MaintenanceResult)
         # Complex projects may have warnings, but should handle them gracefully
 
+    def test_destructive_steps_are_skipped_when_validation_has_errors(self):
+        """With validation errors, fix mode must not clean, trash or write anything."""
+        with (
+            patch.object(
+                auto_maintenance, "find_missing_assets", return_value=[("objects/o_gone/o_gone.yy", "object")]
+            ),
+            patch("gms_helpers.maintenance.event_sync.sync_all_object_events") as sync_events,
+            patch("gms_helpers.maintenance.clean_unused_assets.clean_unused_folders", return_value=(0, 0)) as clean,
+            patch("gms_helpers.maintenance.clean_unused_assets.clean_old_yy_files", return_value=(0, 0)) as old_files,
+            patch.object(auto_maintenance, "delete_orphan_files", return_value={}) as orphans,
+        ):
+            sync_events.return_value = {
+                "objects_processed": 0,
+                "orphaned_found": 0,
+                "orphaned_fixed": 0,
+                "missing_found": 0,
+                "missing_created": 0,
+            }
+            result = run_auto_maintenance(self.temp_dir, fix_issues=True, verbose=False)
+
+        self.assertTrue(result.has_errors)
+        self.assertTrue(result.destructive_fixes_skipped)
+        self.assertTrue(sync_events.call_args.kwargs["dry_run"])
+        self.assertTrue(all(call.kwargs["do_delete"] is False for call in clean.call_args_list))
+        self.assertFalse(old_files.call_args.kwargs["do_delete"])
+        self.assertFalse(orphans.call_args.kwargs["fix_issues"])
+
     def test_maintenance_with_corrupted_project_file(self):
         """Test auto maintenance behavior with corrupted project file."""
         # Corrupt the main project file

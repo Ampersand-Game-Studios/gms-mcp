@@ -24,15 +24,14 @@ def _room_result(result, operation: str, **data):
 # Layer commands
 def handle_room_layer_add(args):
     """Handle room layer addition."""
-    # CLI parser provides: room_name, layer_name, layer_type, (optional) depth
+    # CLI parser provides: room_name, layer_name, layer_type, (optional) depth and tileset
     layer_type = (getattr(args, "layer_type", "") or "").strip().lower()
     # Normalize common synonyms
     if layer_type == "instances":
         layer_type = "instance"
 
-    depth = getattr(args, "depth", 0)
-    # Debug print to catch why depth might be 0
-    # print(f"[DEBUG] handle_room_layer_add: room_name={args.room_name}, layer_name={args.layer_name}, layer_type={layer_type}, depth={depth}")
+    depth = getattr(args, "depth", None)
+    tileset = getattr(args, "tileset", None)
 
     return _room_result(
         add_layer(
@@ -40,12 +39,14 @@ def handle_room_layer_add(args):
             args.layer_name,
             layer_type,
             depth,
+            tileset_name=tileset,
         ),
         "Room layer add",
         room_name=args.room_name,
         layer_name=args.layer_name,
         layer_type=layer_type,
         depth=depth,
+        tileset=tileset,
     )
 
 

@@ -1,10 +1,14 @@
 """Skills command implementations for installing agent skills."""
 
+import json
 import shutil
 from pathlib import Path
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 
 from ..bundle_assets import bundled_skills_dir
+
+# Written into each install target; uninstall removes only the files it lists.
+INSTALL_MANIFEST_NAME = ".gms-mcp-install.json"
 
 
 def get_skills_source_dir() -> Path:
@@ -42,6 +46,35 @@ def _legacy_openclaw_project_dir(*, openclaw: bool, project: bool) -> Path | Non
     return None
 
 
+def _overlaps(first: Path, second: Path) -> bool:
+    """True when either directory is, or contains, the other."""
+    a, b = first.resolve(), second.resolve()
+    return a == b or a.is_relative_to(b) or b.is_relative_to(a)
+
+
+def _read_install_manifest(target_dir: Path) -> Optional[List[str]]:
+    manifest_path = target_dir / INSTALL_MANIFEST_NAME
+    if not manifest_path.is_file():
+        return None
+    data = json.loads(manifest_path.read_text(encoding="utf-8"))
+    files = data.get("files") if isinstance(data, dict) else None
+    if not isinstance(files, list) or not all(isinstance(item, str) for item in files):
+        raise ValueError(f"Malformed skills install manifest: {manifest_path}")
+    return files
+
+
+def _write_install_manifest(target_dir: Path, files: List[str]) -> None:
+    payload = {"installer": "gms-mcp skills install", "files": sorted(set(files))}
+    (target_dir / INSTALL_MANIFEST_NAME).write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+
+
+def _manifest_file_path(target_dir: Path, relative: str) -> Optional[Path]:
+    candidate = (target_dir / relative).resolve()
+    if not candidate.is_relative_to(target_dir.resolve()) or candidate == target_dir.resolve():
+        return None
+    return candidate
+
+
 def handle_skills_install(args) -> Dict[str, Any]:
     """
     Install skills to the selected agent's skills directory.
@@ -61,6 +94,11 @@ def handle_skills_install(args) -> Dict[str, Any]:
         print(f"[ERROR] Skills source directory not found: {source_dir}")
         return {"success": False, "error": "Skills source not found"}
 
+    if _overlaps(target_dir, source_dir):
+        message = f"Install target {target_dir} overlaps the bundled skills source {source_dir}"
+        print(f"[ERROR] {message}")
+        return {"success": False, "error": message}
+
     # Create target directory structure
     target_dir.mkdir(parents=True, exist_ok=True)
 
@@ -77,10 +115,17 @@ def handle_skills_install(args) -> Dict[str, Any]:
             target_file.parent.mkdir(parents=True, exist_ok=True)
 
             if target_file.exists() and not force:
-                skipped.append(str(relative_path))
+                skipped.append(relative_path.as_posix())
             else:
                 shutil.copy2(source_file, target_file)
-                copied.append(str(relative_path))
+                copied.append(relative_path.as_posix())
+
+    # Record what this installer owns. Skipped files stay owned only if an earlier
+    # install recorded them; a pre-existing user file never becomes removable.
+    previous = _read_install_manifest(target_dir) or []
+    owned = copied + [path for path in skipped if path in previous]
+    if owned:
+        _write_install_manifest(target_dir, owned + [path for path in previous if path not in owned])
 
     # Report results
     if copied:
@@ -179,7 +224,11 @@ def handle_skills_list(args) -> Dict[str, Any]:
 
 def handle_skills_uninstall(args) -> Dict[str, Any]:
     """
-    Remove installed skills from the target directory.
+    Remove installed skill files from the target directory.
+
+    Only files listed in the install manifest are removed; files a user added to
+    the directory are kept, and a directory overlapping the bundled skills
+    source (e.g. ``./skills/gms-mcp`` in this repository) is never touched.
     """
     openclaw = bool(getattr(args, "openclaw", False))
     project = bool(getattr(args, "project", False))
@@ -197,23 +246,53 @@ def handle_skills_uninstall(args) -> Dict[str, Any]:
             print(f"[OK]    No skills installed at {target_dir}")
         return {"success": True, "removed": False}
 
-    file_count = 0
+    source_dir = get_skills_source_dir() / "gms-mcp"
     for directory in existing_dirs:
-        file_count += sum(1 for _ in directory.rglob("*") if _.is_file())
-        shutil.rmtree(directory)
+        if _overlaps(directory, source_dir):
+            message = f"Refusing to uninstall from {directory}: it overlaps the bundled skills source {source_dir}"
+            print(f"[ERROR] {message}")
+            return {"success": False, "error": message}
 
-    if len(existing_dirs) == 1:
-        print(f"[OK]    Removed {file_count} {_platform_name(openclaw)} skill file(s) from {existing_dirs[0]}")
-    else:
-        print(f"[OK]    Removed {file_count} {_platform_name(openclaw)} skill file(s) from:")
-        for directory in existing_dirs:
-            print(f"        - {directory}")
-        print("[INFO]  Removed both current and legacy OpenClaw workspace skill paths.")
+    file_count = 0
+    removed_dirs: List[str] = []
+    kept: Dict[str, List[str]] = {}
+    unmanaged: List[str] = []
+    for directory in existing_dirs:
+        manifest = _read_install_manifest(directory)
+        if manifest is None:
+            unmanaged.append(str(directory))
+            print(f"[SKIP]  {directory} has no install manifest; nothing removed (remove it manually if unwanted)")
+            continue
+        for relative in manifest:
+            file_path = _manifest_file_path(directory, relative)
+            if file_path is not None and file_path.is_file():
+                file_path.unlink()
+                file_count += 1
+        (directory / INSTALL_MANIFEST_NAME).unlink()
+        # Remove directories left empty, deepest first; keep anything still holding user files.
+        for sub in sorted((p for p in directory.rglob("*") if p.is_dir()), key=lambda p: len(p.parts), reverse=True):
+            if not any(sub.iterdir()):
+                sub.rmdir()
+        if any(directory.iterdir()):
+            kept[str(directory)] = sorted(
+                p.relative_to(directory).as_posix() for p in directory.rglob("*") if p.is_file()
+            )
+        else:
+            directory.rmdir()
+            removed_dirs.append(str(directory))
+
+    print(f"[OK]    Removed {file_count} {_platform_name(openclaw)} skill file(s)")
+    for directory in removed_dirs:
+        print(f"        - {directory}")
+    for directory, files in kept.items():
+        print(f"[INFO]  Kept {len(files)} file(s) not installed by gms-mcp in {directory}")
 
     return {
         "success": True,
-        "removed": True,
+        "removed": file_count > 0,
         "target_dir": str(target_dir),
-        "removed_dirs": [str(d) for d in existing_dirs],
+        "removed_dirs": removed_dirs,
         "file_count": file_count,
+        "kept_files": kept,
+        "unmanaged_dirs": unmanaged,
     }

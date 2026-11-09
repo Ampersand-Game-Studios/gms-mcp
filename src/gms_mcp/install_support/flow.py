@@ -15,8 +15,12 @@ from .client_configs import (
     _generate_codex_config,
     _generate_cursor_config,
     _make_claude_code_mcp_config,
+    _make_openclaw_server_entry,
     _read_codex_server_entry,
+    _read_openclaw_server_entry,
     _render_codex_privacy_safe_preview,
+    _set_openclaw_server,
+    _validate_openclaw_entry,
 )
 from .common import (
     ConfigState,
@@ -67,7 +71,7 @@ def _collect_client_check_state(
         elif scope == "workspace" and spec.workspace_relpath:
             fallback_path = str(workspace_root / spec.workspace_relpath)
         elif scope == "global" and spec.global_relpath:
-            fallback_path = str(Path.home() / spec.global_relpath)
+            fallback_path = str(spec.global_path())
         return ConfigState(
             client=spec.key,
             scope=scope,
@@ -95,6 +99,18 @@ def _collect_client_check_state(
                 exists=target.exists(),
                 entry=entry,
                 readiness=readiness,
+            )
+
+        if spec.key == "openclaw" and scope == "global" and not config_path_override:
+            entry = _read_openclaw_server_entry(server_name=server_name)
+            return ConfigState(
+                client=spec.key,
+                scope=scope,
+                server_name=server_name,
+                path=str(target),
+                exists=target.exists(),
+                entry=entry,
+                readiness=_validate_openclaw_entry(entry),
             )
 
         if spec.key == "claude-desktop":
@@ -160,6 +176,44 @@ def _run_setup_for_client(
     onboarding_profile: str | None = None,
     toolsets: str | None = None,
     config_path_override: str | None,
+    force: bool = False,
+) -> int:
+    try:
+        return _setup_client(
+            client=client,
+            scope=scope,
+            workspace_root=workspace_root,
+            gm_project_root=gm_project_root,
+            server_name=server_name,
+            command=command,
+            args_prefix=args_prefix,
+            dry_run=dry_run,
+            safe_profile=safe_profile,
+            onboarding_profile=onboarding_profile,
+            toolsets=toolsets,
+            config_path_override=config_path_override,
+            force=force,
+        )
+    except (RuntimeError, ValueError, OSError) as exc:
+        print(f"[ERROR] Could not generate {resolve_client_spec(client).key} config: {exc}")
+        return 2
+
+
+def _setup_client(
+    *,
+    client: str,
+    scope: str,
+    workspace_root: Path,
+    gm_project_root: Path | None,
+    server_name: str,
+    command: str,
+    args_prefix: list[str],
+    dry_run: bool,
+    safe_profile: bool,
+    onboarding_profile: str | None,
+    toolsets: str | None,
+    config_path_override: str | None,
+    force: bool,
 ) -> int:
     spec = resolve_client_spec(client)
     not_applicable_reason = _scope_not_applicable_reason(client=spec.key, scope=scope)
@@ -173,6 +227,28 @@ def _run_setup_for_client(
     except ValueError as exc:
         print(f"[ERROR] {exc}")
         return 2
+
+    if spec.key == "openclaw" and scope == "global" and not config_path_override:
+        entry = _make_openclaw_server_entry(
+            server_name=server_name,
+            command=command,
+            args_prefix=args_prefix,
+            workspace_root=workspace_root,
+            gm_project_root=gm_project_root,
+            safe_profile=safe_profile,
+            onboarding_profile=onboarding_profile,
+            toolsets=toolsets,
+        )
+        if dry_run:
+            print(
+                f"[DRY-RUN] OpenClaw server '{server_name}' would be saved with `openclaw mcp set` into: "
+                f"{_privacy_safe_path_label(target)}"
+            )
+            print(json.dumps(_redact_private_paths(_redact_config_value(entry)), indent=2, sort_keys=True))
+            return 0
+        _set_openclaw_server(server_name=server_name, entry=entry)
+        print(f"[INFO] OpenClaw server '{server_name}' saved with `openclaw mcp set` into: {target}")
+        return 0
 
     if spec.key == "cursor":
         gm_rel_posix = _relpath_posix_or_none(gm_project_root if scope == "workspace" else None, workspace_root)
@@ -221,7 +297,7 @@ def _run_setup_for_client(
                 onboarding_profile=onboarding_profile,
                 toolsets=toolsets,
             )
-        except (RuntimeError, ValueError) as exc:
+        except (RuntimeError, ValueError, OSError) as exc:
             print(f"[ERROR] Could not generate Codex config: {exc}")
             return 2
         if dry_run:
@@ -263,7 +339,7 @@ def _run_setup_for_client(
                     onboarding_profile=onboarding_profile,
                     toolsets=toolsets,
                 )
-            except ValueError as exc:
+            except (RuntimeError, ValueError, OSError) as exc:
                 print(f"[ERROR] Could not generate Antigravity config: {exc}")
                 return 2
             if dry_run:
@@ -311,6 +387,7 @@ def _run_setup_for_client(
             safe_profile=safe_profile,
             onboarding_profile=onboarding_profile,
             toolsets=toolsets,
+            force=force,
         )
         print(
             f"[{'DRY-RUN' if dry_run else 'INFO'}] Claude Code config {'would be written to' if dry_run else 'written to'}: "
@@ -341,6 +418,7 @@ def _run_setup_for_client(
             safe_profile=safe_profile,
             onboarding_profile=onboarding_profile,
             toolsets=toolsets,
+            force=force,
         )
         print(
             f"[{'DRY-RUN' if dry_run else 'INFO'}] Claude Desktop plugin {'would be synced to' if dry_run else 'synced to'}: {_privacy_safe_path_label(target)}"
@@ -350,7 +428,7 @@ def _run_setup_for_client(
             print(json.dumps(_redact_private_paths(_redact_config_value(mcp_payload)), indent=2, sort_keys=True))
         return 0
 
-    # Generic JSON-style path for vscode/windsurf/openclaw/generic and future clients.
+    # Generic JSON-style path for vscode/windsurf/generic, workspace openclaw examples, and future clients.
     gm_rel_posix = _relpath_posix_or_none(gm_project_root, workspace_root)
     payload = _make_server_config(
         client=spec.key,
@@ -416,6 +494,7 @@ def _run_canonical_flow(
     config_path_override: str | None,
     openclaw_install_skills: bool,
     openclaw_skills_project: bool,
+    force: bool = False,
 ) -> int:
     if action not in CLIENT_ACTIONS:
         print(f"[ERROR] Unsupported action '{action}'.")
@@ -447,6 +526,7 @@ def _run_canonical_flow(
             onboarding_profile=onboarding_profile,
             toolsets=toolsets,
             config_path_override=config_path_override,
+            force=force,
         )
 
     if action == "check":
@@ -483,6 +563,7 @@ def _run_canonical_flow(
         onboarding_profile=onboarding_profile,
         toolsets=toolsets,
         config_path_override=config_path_override,
+        force=force,
     )
     if setup_code != 0:
         return setup_code
@@ -552,9 +633,10 @@ def _install_action_label(args: argparse.Namespace, *, only_checks: bool = False
     return "init.run", "setup"
 
 
-def _should_prompt_after_init(*, args: argparse.Namespace, only_checks: bool, exit_code: int) -> bool:
+def _should_prompt_after_init(*, args: argparse.Namespace, only_checks: bool, exit_code: int, dry_run: bool) -> bool:
+    """``dry_run`` is the run's effective flag (``--dry-run`` or ``--codex-dry-run-only``)."""
     if exit_code != 0:
         return False
-    if bool(args.non_interactive) or bool(args.dry_run) or only_checks:
+    if bool(args.non_interactive) or dry_run or only_checks:
         return False
     return should_prompt_for_consent(cli_override=getattr(args, "telemetry", "inherit"), allow_prompt=True)

@@ -149,6 +149,25 @@ class TestMasterCLI(unittest.TestCase):
         # Just ensure the option is accepted
         self.assertNotIn("unrecognized arguments", stderr)
 
+    def test_cli_numeric_arguments_use_mcp_ranges_before_any_write(self):
+        sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "src"))
+        from gms_helpers.gms import _execute_project_command, create_parser
+
+        def must_not_run(_args):
+            raise AssertionError("handler ran despite invalid arguments")
+
+        for argv, field in (
+            (["asset", "create", "tileset", "ts_bad", "--tile-width", "0"], "--tile-width"),
+            (["asset", "create", "tileset", "ts_bad", "--tile-xsep", "-1"], "--tile-xsep"),
+            (["asset", "create", "sound", "snd_bad", "--volume", "2"], "--volume"),
+        ):
+            args = create_parser().parse_args(argv)
+            args.project_root = str(self.project_dir)
+            args.func = must_not_run
+            result = _execute_project_command(args)
+            self.assertFalse(result["ok"])
+            self.assertIn(field, result["error"])
+
 
 if __name__ == "__main__":
     unittest.main()

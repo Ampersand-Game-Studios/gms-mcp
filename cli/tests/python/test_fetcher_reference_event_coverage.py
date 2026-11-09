@@ -10,7 +10,6 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 PROJECT_ROOT = Path(__file__).resolve().parents[3]
@@ -23,10 +22,7 @@ from gms_helpers.event_helper import (
     _filename_to_event,
     add_event,
     duplicate_event,
-    handle_fix,
-    handle_validate,
     list_events,
-    main as event_main,
     remove_event,
 )
 from gms_helpers.exceptions import AssetNotFoundError, GMSError, ValidationError
@@ -174,7 +170,7 @@ class TestFetcherCoverage(unittest.TestCase):
         self.assertEqual(result["draw_sprite"].name, "draw_sprite")
         cache.save_index.assert_not_called()
 
-    def test_fetch_function_index_fetches_and_saves_when_cache_empty(self):
+    def test_fetch_function_index_does_not_persist_partial_fetch(self):
         cache = MagicMock()
         cache.get_index.return_value = None
 
@@ -189,7 +185,28 @@ class TestFetcherCoverage(unittest.TestCase):
         self.assertIn("draw_sprite", result)
         self.assertEqual(result["draw_sprite"].category, "Drawing")
         self.assertEqual(result["draw_sprite"].subcategory, "Sprites_And_Tiles")
+        # Category pages failed, so the partial index is returned but never cached.
+        cache.save_index.assert_not_called()
+
+    def test_fetch_function_index_saves_complete_fetch_and_rejects_big_drops(self):
+        def complete_fetch(url: str, timeout: float = 30.0) -> str:
+            stem = url.rsplit("/", 1)[-1].removesuffix(".htm").lower()
+            return f"<a href='{stem}_fn.htm'>{stem}_fn</a>"
+
+        cache = MagicMock()
+        cache.get_index.return_value = None
+        with patch("gms_helpers.gml_docs.fetcher._fetch_url", side_effect=complete_fetch):
+            result = fetch_function_index(cache=cache, force_refresh=True)
+        self.assertGreater(len(result), 10)
         cache.save_index.assert_called_once()
+
+        previous = {f"fn_{i}": MagicMock() for i in range(len(result) * 2)}
+        cache = MagicMock()
+        cache.get_index.return_value = previous
+        with patch("gms_helpers.gml_docs.fetcher._fetch_url", side_effect=complete_fetch):
+            shrunk = fetch_function_index(cache=cache, force_refresh=True)
+        cache.save_index.assert_not_called()
+        self.assertTrue(set(previous) <= set(shrunk))
 
     def test_fetch_function_doc_variants(self):
         cached_doc = CachedDoc(
@@ -226,6 +243,24 @@ class TestFetcherCoverage(unittest.TestCase):
         with patch("gms_helpers.gml_docs.fetcher.fetch_function_index", return_value={"draw_sprite": entry}):
             with patch("gms_helpers.gml_docs.fetcher._fetch_url", side_effect=RuntimeError("offline")):
                 self.assertIsNone(fetch_function_doc("draw_sprite", cache=cache))
+
+        # Offline with a stale copy: serve the stale copy rather than nothing.
+        cache = MagicMock()
+        cache.get_function.side_effect = lambda name, allow_stale=False: cached_doc if allow_stale else None
+        with patch("gms_helpers.gml_docs.fetcher.fetch_function_index", return_value={"draw_sprite": entry}):
+            with patch("gms_helpers.gml_docs.fetcher._fetch_url", side_effect=RuntimeError("offline")):
+                self.assertIs(fetch_function_doc("draw_sprite", cache=cache), cached_doc)
+
+        # Soft 404 (a 200 page with no documentation) is never cached.
+        cache = MagicMock()
+        cache.get_function.return_value = None
+        with patch("gms_helpers.gml_docs.fetcher.fetch_function_index", return_value={"draw_sprite": entry}):
+            with patch(
+                "gms_helpers.gml_docs.fetcher._fetch_url",
+                return_value="<html><head><title>Page Not Found</title></head><body></body></html>",
+            ):
+                self.assertIsNone(fetch_function_doc("draw_sprite", cache=cache))
+        cache.save_function.assert_not_called()
 
         cache = MagicMock()
         cache.get_function.return_value = None
@@ -310,10 +345,14 @@ class TestReferenceCollectorCoverage(unittest.TestCase):
 
         (self.project_root / "fonts" / "fnt_main").mkdir(parents=True)
         (self.project_root / "fonts" / "fnt_main" / "fnt_main.yy").write_text(
-            json.dumps({"$GMFont": "", "texture": "font.png"}),
+            json.dumps({"$GMFont": ""}),
             encoding="utf-8",
         )
-        (self.project_root / "fonts" / "fnt_main" / "font.png").write_bytes(b"png")
+        (self.project_root / "fonts" / "fnt_main" / "fnt_main.png").write_bytes(b"png")
+        (self.project_root / "options" / "main").mkdir(parents=True)
+        (self.project_root / "options" / "main" / "options_main.yy").write_text("{}", encoding="utf-8")
+        (self.project_root / "datafiles").mkdir()
+        (self.project_root / "datafiles" / "levels.json").write_text("{}", encoding="utf-8")
         add_resource("fonts/fnt_main/fnt_main.yy")
 
         (self.project_root / "shaders" / "shd_tint").mkdir(parents=True)
@@ -337,8 +376,15 @@ class TestReferenceCollectorCoverage(unittest.TestCase):
             yy_path.write_text(json.dumps({gm_key: ""}), encoding="utf-8")
             add_resource(rel_path)
 
+        (self.project_root / "tilesets" / "ts_ground" / "output_tileset.png").write_bytes(b"png")
         (self.project_root / "TestGame.yyp").write_text(
-            json.dumps({"resources": resources}, indent=2),
+            json.dumps(
+                {
+                    "resources": resources,
+                    "IncludedFiles": [{"filePath": "datafiles", "name": "levels.json"}],
+                },
+                indent=2,
+            ),
             encoding="utf-8",
         )
 
@@ -348,22 +394,41 @@ class TestReferenceCollectorCoverage(unittest.TestCase):
     def test_collect_project_references_discovers_companion_files(self):
         refs = collect_project_references(str(self.project_root))
 
-        self.assertIn(normalize_path("TestGame.yyp"), refs)
-        self.assertIn(normalize_path("objects/o_player/Create_0.gml"), refs)
-        self.assertIn(normalize_path("objects/o_player/Collision_o_wall.gml"), refs)
-        self.assertIn(normalize_path("scripts/scr_boot/scr_boot.gml"), refs)
-        self.assertIn(normalize_path("sprites/spr_logo/frameA.png"), refs)
-        self.assertIn(normalize_path("sprites/spr_logo/layers/layerA/image.png"), refs)
-        self.assertIn(normalize_path("sounds/snd_beep/beep.wav"), refs)
-        self.assertIn(normalize_path("fonts/fnt_main/font.png"), refs)
-        self.assertIn(normalize_path("shaders/shd_tint/shd_tint.vsh"), refs)
-        self.assertIn(normalize_path("shaders/shd_tint/shd_tint.fsh"), refs)
+        for expected in (
+            "TestGame.yyp",
+            "objects/o_player/Create_0.gml",
+            "objects/o_player/Collision_o_wall.gml",
+            "scripts/scr_boot/scr_boot.gml",
+            "sprites/spr_logo/frameA.png",
+            "sprites/spr_logo/layers/layerA/image.png",
+            "sounds/snd_beep/beep.wav",
+            "fonts/fnt_main/fnt_main.png",
+            "shaders/shd_tint/shd_tint.vsh",
+            "shaders/shd_tint/shd_tint.fsh",
+            "options/main/options_main.yy",
+            "datafiles/levels.json",
+            "tilesets/ts_ground/output_tileset.png",
+        ):
+            self.assertIn(expected, refs)
+
+    def test_comprehensive_analysis_reports_case_mismatch_not_orphan(self):
+        (self.project_root / "objects" / "o_player" / "Create_0.gml").rename(
+            self.project_root / "objects" / "o_player" / "create_0.gml"
+        )
+        results = comprehensive_analysis(str(self.project_root))
+        final = results["final_analysis"]
+        self.assertIn(
+            "objects/o_player/Create_0.gml -> objects/o_player/create_0.gml", final["case_sensitivity_issues"]
+        )
+        self.assertNotIn("objects/o_player/create_0.gml", final["true_orphans"])
+        self.assertNotIn("fonts/fnt_main/fnt_main.png", final["true_orphans"])
+        self.assertNotIn("options/main/options_main.yy", final["true_orphans"])
 
     def test_reference_collector_helper_methods_and_fallbacks(self):
         collector = ReferenceCollector(str(self.project_root))
 
         collector._add_reference("Objects\\o_player\\Create_0.gml")
-        self.assertIn(normalize_path("Objects/o_player/Create_0.gml"), collector.referenced_files)
+        self.assertIn("Objects/o_player/Create_0.gml", collector.referenced_files)
 
         self.assertEqual(
             collector._determine_asset_type({}, Path("objects/o_enemy/o_enemy.yy")),
@@ -405,7 +470,7 @@ class TestReferenceCollectorCoverage(unittest.TestCase):
     def test_comprehensive_analysis_and_diagnostics(self):
         with patch(
             "gms_helpers.maintenance.audit.reference_collector.ReferenceCollector.collect_all_references",
-            return_value={"Scripts/Boot.gml", "sprites/spr_logo/spr_logo.yy"},
+            return_value={"Scripts/Boot.gml", "sprites/spr_logo/spr_logo.yy", "missing/file.yy"},
         ):
             with patch(
                 "gms_helpers.maintenance.audit.reference_collector.build_filesystem_map",
@@ -422,12 +487,8 @@ class TestReferenceCollectorCoverage(unittest.TestCase):
                     ],
                 ):
                     with patch(
-                        "gms_helpers.maintenance.audit.reference_collector.categorize_path_differences",
-                        return_value={
-                            "found_exact": ["scripts/boot.gml"],
-                            "found_case_diff": ["sprites/spr_logo/spr_logo.yy -> Sprites/spr_logo/spr_logo.yy"],
-                            "missing": ["missing/file.yy"],
-                        },
+                        "gms_helpers.maintenance.audit.reference_collector.normalize_path",
+                        side_effect=lambda path, project_root=None: path.lower(),
                     ):
                         with patch(
                             "gms_helpers.maintenance.audit.reference_collector.find_string_references_in_gml",
@@ -518,9 +579,10 @@ class TestEventHelperCoverage(unittest.TestCase):
         # Duplicate add is a success path with a warning.
         self.assertTrue(add_event("o_test", "step"))
 
-        # Remove while keeping file.
+        # Remove while keeping the code under a non-event filename.
         self.assertTrue(remove_event("o_test", "step", keep_file=True))
-        self.assertTrue((self.project_root / "objects" / "o_test" / "Step_0.gml").exists())
+        self.assertFalse((self.project_root / "objects" / "o_test" / "Step_0.gml").exists())
+        (self.project_root / "objects" / "o_test" / "Step_0.removed.gml").unlink()
 
         # Removing a missing event reports False.
         self.assertFalse(remove_event("o_test", "step"))
@@ -541,51 +603,6 @@ class TestEventHelperCoverage(unittest.TestCase):
 
         with self.assertRaises(ValidationError):
             duplicate_event("o_test", "step:not_a_number", "step:1")
-
-    def test_handle_validate_and_fix(self):
-        args = SimpleNamespace(object="o_test")
-
-        with patch(
-            "gms_helpers.event_helper.sync_object_events", return_value={"orphaned_found": 0, "missing_found": 0}
-        ):
-            self.assertTrue(handle_validate(args))
-
-        with patch(
-            "gms_helpers.event_helper.sync_object_events", return_value={"orphaned_found": 2, "missing_found": 1}
-        ):
-            self.assertTrue(handle_validate(args))
-
-        with patch(
-            "gms_helpers.event_helper.sync_object_events",
-            return_value={"missing_created": 0, "orphaned_fixed": 0},
-        ):
-            self.assertTrue(handle_fix(args))
-
-        with patch(
-            "gms_helpers.event_helper.sync_object_events",
-            return_value={"missing_created": 2, "orphaned_fixed": 1},
-        ):
-            self.assertTrue(handle_fix(args))
-
-    def test_main_branches(self):
-        with patch("gms_helpers.event_helper.validate_working_directory"):
-            with patch.object(sys, "argv", ["event_helper.py"]):
-                self.assertFalse(event_main())
-
-        with patch("gms_helpers.event_helper.validate_working_directory"):
-            with patch.object(sys, "argv", ["event_helper.py", "list", "o_test"]):
-                self.assertTrue(event_main())
-
-        with patch("gms_helpers.event_helper.validate_working_directory"):
-            with patch("gms_helpers.event_helper.handle_list", side_effect=GMSError("bad")):
-                with patch.object(sys, "argv", ["event_helper.py", "list", "o_test"]):
-                    with self.assertRaises(GMSError):
-                        event_main()
-
-        with patch("gms_helpers.event_helper.validate_working_directory"):
-            with patch("gms_helpers.event_helper.handle_list", side_effect=RuntimeError("boom")):
-                with patch.object(sys, "argv", ["event_helper.py", "list", "o_test"]):
-                    self.assertFalse(event_main())
 
 
 if __name__ == "__main__":

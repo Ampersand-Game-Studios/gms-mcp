@@ -34,9 +34,12 @@ class RunnerArtifactMixin:
         cmd: List[str],
         *,
         environment_overrides: Mapping[str, str] | None = None,
+        output_file: Path | None = None,
     ) -> subprocess.Popen:
         """Start an Igor command with shared process settings."""
-        return run_igor_command(cmd, cwd=self.project_root, environment_overrides=environment_overrides)
+        return run_igor_command(
+            cmd, cwd=self.project_root, environment_overrides=environment_overrides, output_file=output_file
+        )
 
     def _find_macos_app_binary(self, app_bundle: Path) -> Optional[Path]:
         """Return the first executable inside a macOS .app bundle."""

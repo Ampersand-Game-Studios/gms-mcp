@@ -6,8 +6,8 @@ import os
 import re
 import shlex
 import shutil
+import subprocess
 import sys
-import tempfile
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -19,13 +19,19 @@ from .common import (
     _apply_safe_profile_env,
     _make_antigravity_server_config,
     _make_server_config,
+    _merge_server_entry,
     _parse_json_object_or_raise,
     _redact_config_value,
     _relpath_posix_or_none,
+    _report_removed_keys,
+    _update_config_text,
     _validate_common_entry,
-    _write_json,
     _validate_config_destination,
+    _write_json,
+    _write_json_atomic_with_backup,
+    validate_server_name,
 )
+from ..client_registry import codex_home
 
 if sys.version_info >= (3, 11):
     import tomllib as _toml_parser
@@ -247,6 +253,27 @@ def _validate_codex_sections(
         raise ValueError(f"Malformed TOML in {source_label}: [mcp_servers.{server_name}.env] must be a table.")
 
 
+def _merge_codex_text(
+    *,
+    existing_text: str | None,
+    source_label: str,
+    server_name: str,
+    server_block: str,
+) -> str:
+    """Return the final merged Codex TOML payload; validates existing TOML first."""
+    if existing_text is None:
+        merged = server_block if server_block.endswith("\n") else server_block + "\n"
+        _verify_codex_entry(merged_text=merged, server_name=server_name, server_block=server_block)
+        return merged
+    parsed = _parse_toml_or_raise(text=existing_text, source_label=source_label)
+    _validate_codex_sections(parsed=parsed, source_label=source_label, server_name=server_name)
+    return _upsert_codex_server_config(
+        existing_text=existing_text,
+        server_name=server_name,
+        server_block=server_block,
+    )
+
+
 def _render_codex_merged_config(
     *,
     output_path: Path,
@@ -257,17 +284,23 @@ def _render_codex_merged_config(
     Return the final merged Codex TOML payload without writing to disk.
     Validates existing TOML and section types before merging.
     """
-    if not output_path.exists():
-        return server_block + "\n" if not server_block.endswith("\n") else server_block
-
-    existing_text = output_path.read_text(encoding="utf-8")
-    parsed = _parse_toml_or_raise(text=existing_text, source_label=str(output_path))
-    _validate_codex_sections(parsed=parsed, source_label=str(output_path), server_name=server_name)
-    return _upsert_codex_server_config(
+    existing_text = output_path.read_text(encoding="utf-8") if output_path.exists() else None
+    return _merge_codex_text(
         existing_text=existing_text,
+        source_label=str(output_path),
         server_name=server_name,
         server_block=server_block,
     )
+
+
+def _verify_codex_entry(*, merged_text: str, server_name: str, server_block: str, expected: dict | None = None) -> None:
+    """Parse the merged text and confirm it defines exactly the intended server entry."""
+    merged = _parse_toml_or_raise(text=merged_text, source_label="merged config")
+    if expected is None:
+        expected = _parse_toml_or_raise(text=server_block, source_label="generated config")["mcp_servers"][server_name]
+    servers = merged.get("mcp_servers")
+    if not isinstance(servers, dict) or servers.get(server_name) != expected:
+        raise ValueError(f"Merged Codex config does not contain the expected [mcp_servers.{server_name}] entry.")
 
 
 def _redact_host_paths(value: object) -> object:
@@ -315,10 +348,25 @@ def _upsert_codex_server_config(
     server_name: str,
     server_block: str,
 ) -> str:
-    """Return TOML text with the target server block inserted or replaced."""
+    """Return TOML text with the target server entry inserted or updated.
+
+    Only installer-owned keys are replaced; other keys in an existing entry and
+    full-line comments inside its tables are kept.
+    """
+    validate_server_name(server_name)
     before = _parse_toml_or_raise(text=existing_text, source_label="existing config")
+    generated = _parse_toml_or_raise(text=server_block, source_label="generated config")["mcp_servers"][server_name]
+    existing_servers = before.get("mcp_servers")
+    existing_entry = existing_servers.get(server_name) if isinstance(existing_servers, dict) else None
+    if isinstance(existing_entry, dict):
+        entry, removed = _merge_server_entry(existing_entry, generated)
+        _report_removed_keys(server_name, removed)
+        block = _render_toml_tables(("mcp_servers", server_name), entry)
+    else:
+        entry, block = generated, server_block.strip()
     lines = existing_text.splitlines()
     kept = []
+    own_comments = []
     own_section = False
     for line in lines:
         match = re.match(r"^\s*(\[\[?.+?\]\]?)(?:\s*#.*)?\s*$", line)
@@ -328,7 +376,10 @@ def _upsert_codex_server_config(
             own_section = set(header) == {"mcp_servers"} and set(servers) == {server_name}
         if not own_section:
             kept.append(line)
-    merged = "\n".join([*kept, "", server_block]).strip() + "\n"
+        elif line.lstrip().startswith("#"):
+            own_comments.append(line)
+    merged = "\n".join([*kept, "", *own_comments, block]).strip() + "\n"
+    _verify_codex_entry(merged_text=merged, server_name=server_name, server_block=server_block, expected=entry)
     after = _parse_toml_or_raise(text=merged, source_label="merged config")
     for parsed in (before, after):
         servers = parsed.get("mcp_servers")
@@ -345,11 +396,42 @@ def _make_codex_toml_value(value: object) -> str:
     """Serialize a Python value for inclusion in Codex TOML config."""
     if isinstance(value, bool):
         return "true" if value else "false"
-    if isinstance(value, (int, float)):
+    if isinstance(value, float):
+        if value != value:
+            return "nan"
+        if value in (float("inf"), float("-inf")):
+            return "inf" if value > 0 else "-inf"
+        return repr(value)
+    if isinstance(value, int):
         return str(value)
     if isinstance(value, (list, tuple)):
         return "[" + ", ".join(_make_codex_toml_value(v) for v in value) + "]"
-    return json.dumps(value)
+    if isinstance(value, dict):
+        items = ", ".join(f"{_toml_key(key)} = {_make_codex_toml_value(item)}" for key, item in value.items())
+        return "{ " + items + " }" if items else "{}"
+    if isinstance(value, (_dt.datetime, _dt.date, _dt.time)):
+        return value.isoformat()
+    # JSON string escapes are valid TOML basic-string escapes; DEL must be escaped too.
+    return json.dumps(value).replace("\x7f", "\\u007f")
+
+
+def _toml_key(key: str) -> str:
+    return key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else json.dumps(key)
+
+
+def _render_toml_tables(path: tuple[str, ...], table: dict) -> str:
+    """Render a table and its sub-tables as standard TOML table sections."""
+    header = "[" + ".".join(_toml_key(part) for part in path) + "]"
+    lines = [header]
+    nested = []
+    for key, value in table.items():
+        if isinstance(value, dict):
+            nested.append((key, value))
+        else:
+            lines.append(f"{_toml_key(key)} = {_make_codex_toml_value(value)}")
+    sections = ["\n".join(lines)]
+    sections.extend(_render_toml_tables((*path, key), value) for key, value in nested)
+    return "\n\n".join(sections)
 
 
 def _make_codex_mcp_config(
@@ -364,7 +446,12 @@ def _make_codex_mcp_config(
     onboarding_profile: str | None = None,
     toolsets: str | None = None,
 ) -> str:
-    """Create a Codex MCP config block in TOML format."""
+    """Create a Codex MCP config block in TOML format.
+
+    Workspace configs use a relative GM_PROJECT_ROOT, so they pin ``cwd`` to the
+    workspace root that the relative path is resolved from.
+    """
+    validate_server_name(server_name)
     env: dict[str, str] = _build_codex_env(
         gm_project_root=gm_project_root,
         workspace_root=workspace_root,
@@ -378,9 +465,10 @@ def _make_codex_mcp_config(
         "[mcp_servers.{}]".format(server_name),
         f"command = {_make_codex_toml_value(command)}",
         f"args = {_make_codex_toml_value(args)}",
-        "",
-        f"[mcp_servers.{server_name}.env]",
     ]
+    if include_project_root:
+        lines.append(f"cwd = {_make_codex_toml_value(workspace_root.expanduser().resolve().as_posix())}")
+    lines += ["", f"[mcp_servers.{server_name}.env]"]
 
     for key, value in env.items():
         lines.append(f"{key} = {_make_codex_toml_value(value)}")
@@ -415,16 +503,19 @@ def _generate_codex_config(
         onboarding_profile=onboarding_profile,
         toolsets=toolsets,
     )
-    merged = _render_codex_merged_config(
-        output_path=output_path,
-        server_name=server_name,
-        server_block=payload,
-    )
     _validate_config_destination(output_path, workspace_root if include_project_root else None)
-    if not dry_run:
-        _write_text_atomic_with_backup(output_path=output_path, text=merged)
-        if output_path.read_text(encoding="utf-8") != merged:
-            raise OSError("Written Codex config failed verification")
+    merged, _backup = _update_config_text(
+        output_path=output_path,
+        render=lambda existing_text: _merge_codex_text(
+            existing_text=existing_text,
+            source_label=str(output_path),
+            server_name=server_name,
+            server_block=payload,
+        ),
+        dry_run=dry_run,
+    )
+    if not dry_run and output_path.read_text(encoding="utf-8") != merged:
+        raise OSError("Written Codex config failed verification")
 
     return output_path, payload, merged
 
@@ -468,8 +559,20 @@ def _render_antigravity_merged_config(
     server_name: str,
     server_entry: dict,
 ) -> dict:
-    if output_path.exists():
-        existing_text = output_path.read_text(encoding="utf-8")
+    existing_text = output_path.read_text(encoding="utf-8") if output_path.exists() else None
+    return _merge_antigravity_config(
+        existing_text=existing_text, output_path=output_path, server_name=server_name, server_entry=server_entry
+    )
+
+
+def _merge_antigravity_config(
+    *,
+    existing_text: str | None,
+    output_path: Path,
+    server_name: str,
+    server_entry: dict,
+) -> dict:
+    if existing_text is not None:
         parsed = _parse_json_object_or_raise(text=existing_text, source_label=str(output_path))
         _validate_antigravity_sections(parsed=parsed, source_label=str(output_path), server_name=server_name)
         merged = dict(parsed)
@@ -482,55 +585,10 @@ def _render_antigravity_merged_config(
     if not isinstance(mcp_servers, dict):
         raise ValueError(f"Malformed JSON in {output_path}: `mcpServers` must be an object.")
     mcp_servers = dict(mcp_servers)
-    mcp_servers[server_name] = server_entry
+    mcp_servers[server_name], removed = _merge_server_entry(mcp_servers.get(server_name), server_entry)
+    _report_removed_keys(server_name, removed)
     merged["mcpServers"] = mcp_servers
     return merged
-
-
-def _make_backup_path(output_path: Path) -> Path:
-    timestamp = _dt.datetime.now().strftime("%Y%m%d-%H%M%S")
-    base_name = f"{output_path.name}.bak.{timestamp}.{os.getpid()}"
-    candidate = output_path.with_name(base_name)
-    suffix = 1
-    while candidate.exists():
-        candidate = output_path.with_name(f"{base_name}.{suffix}")
-        suffix += 1
-    return candidate
-
-
-def _write_json_atomic_with_backup(*, output_path: Path, payload: dict) -> Path | None:
-    return _write_text_atomic_with_backup(output_path=output_path, text=json.dumps(payload, indent=2) + "\n")
-
-
-def _write_text_atomic_with_backup(*, output_path: Path, text: str) -> Path | None:
-    _validate_config_destination(output_path)
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    backup_path = None
-    if output_path.exists():
-        backup_path = _make_backup_path(output_path)
-        descriptor = os.open(backup_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(descriptor, "w", encoding="utf-8") as backup:
-            backup.write(output_path.read_text(encoding="utf-8"))
-    temp_path = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            mode="w",
-            encoding="utf-8",
-            dir=output_path.parent,
-            prefix=f".{output_path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            temp_path = Path(handle.name)
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        _validate_config_destination(output_path)
-        os.replace(temp_path, output_path)
-    finally:
-        if temp_path is not None:
-            temp_path.unlink(missing_ok=True)
-    return backup_path
 
 
 def _generate_antigravity_config(
@@ -557,17 +615,16 @@ def _generate_antigravity_config(
         toolsets=toolsets,
     )
     server_entry = payload["mcpServers"][server_name]
-    merged = _render_antigravity_merged_config(
-        output_path=output_path,
-        server_name=server_name,
-        server_entry=server_entry,
-    )
+    merged_holder: dict = {}
 
-    backup_path: Path | None = None
-    if not dry_run:
-        backup_path = _write_json_atomic_with_backup(output_path=output_path, payload=merged)
+    def render(existing_text: str | None) -> str:
+        merged_holder["merged"] = _merge_antigravity_config(
+            existing_text=existing_text, output_path=output_path, server_name=server_name, server_entry=server_entry
+        )
+        return json.dumps(merged_holder["merged"], indent=2) + "\n"
 
-    return output_path, payload, merged, backup_path
+    _text, backup_path = _update_config_text(output_path=output_path, render=render, dry_run=dry_run)
+    return output_path, payload, merged_holder["merged"], backup_path
 
 
 def _read_antigravity_server_entry(
@@ -712,7 +769,7 @@ def _collect_codex_check_state(*, workspace_root: Path, server_name: str) -> dic
     Active precedence: workspace .codex/mcp.toml, then ~/.codex/config.toml.
     """
     local_path = workspace_root / ".codex" / "mcp.toml"
-    global_path = Path.home() / ".codex" / "config.toml"
+    global_path = codex_home() / "config.toml"
 
     local_entry, _ = _read_codex_server_entry(config_path=local_path, server_name=server_name)
     global_entry, _ = _read_codex_server_entry(config_path=global_path, server_name=server_name)
@@ -839,10 +896,15 @@ def _copy_tree(*, source: Path, destination: Path, dry_run: bool, written: list[
         return
     if source.resolve() == destination.resolve():
         return
+    _validate_config_destination(destination)
 
-    for item in source.rglob("*"):
+    for item in sorted(source.rglob("*")):
         rel = item.relative_to(source)
         target = destination / rel
+        if item.is_symlink():
+            raise ValueError(f"Refusing to copy bundled asset symlink: {rel.as_posix()}")
+        # Never write through a link planted inside the destination tree.
+        _validate_config_destination(target, destination)
         if item.is_dir():
             if not dry_run:
                 target.mkdir(parents=True, exist_ok=True)
@@ -890,6 +952,20 @@ def _render_claude_hook_server_name(*, hooks_manifest_path: Path, server_name: s
     _write_json(hooks_manifest_path, payload, dry_run=False)
 
 
+def _check_plugin_manifest_ownership(manifest_path: Path, *, force: bool) -> None:
+    """Refuse to rewrite a .claude-plugin/plugin.json that another plugin owns."""
+    if force or not manifest_path.exists():
+        return
+    existing = _parse_json_object_or_raise(
+        text=manifest_path.read_text(encoding="utf-8"), source_label=str(manifest_path)
+    )
+    if existing.get("name") != _make_claude_code_plugin_manifest()["name"]:
+        raise ValueError(
+            f"{manifest_path} belongs to another plugin ({existing.get('name')!r}); "
+            "re-run with --force to replace it with the gms-mcp manifest."
+        )
+
+
 def _generate_claude_code_plugin(
     *,
     plugin_dir: Path,
@@ -901,6 +977,7 @@ def _generate_claude_code_plugin(
     safe_profile: bool = False,
     onboarding_profile: str | None = None,
     toolsets: str | None = None,
+    force: bool = False,
 ) -> list[Path]:
     """
     Generate Claude plugin files with MCP server configuration.
@@ -913,13 +990,33 @@ def _generate_claude_code_plugin(
 
     The same file structure works for both, but the discovery mechanism differs.
 
+    Existing files are validated before anything is written, so a malformed or
+    foreign file leaves the plugin untouched instead of half-installed.
+
     Creates:
       plugin_dir/
       ├── .claude-plugin/
       │   └── plugin.json   # For Claude Desktop only
       └── .mcp.json         # For Claude Code CLI (or Claude Desktop)
     """
+    validate_server_name(server_name)
     written: list[Path] = []
+    manifest_path = plugin_dir / ".claude-plugin" / "plugin.json"
+    mcp_config_path = plugin_dir / ".mcp.json"
+    manifest = _build_claude_plugin_manifest()
+    mcp_config = _make_claude_code_mcp_config(
+        server_name=server_name,
+        command=command,
+        args=args_prefix,
+        safe_profile=safe_profile,
+        onboarding_profile=onboarding_profile,
+        toolsets=toolsets,
+    )
+
+    _check_plugin_manifest_ownership(manifest_path, force=force)
+    # Validate both targets (dry-run parses existing files) before copying assets.
+    _write_json(manifest_path, manifest, dry_run=True)
+    _write_json(mcp_config_path, mcp_config, dry_run=True)
 
     if include_bundle_assets:
         _copy_tree(
@@ -940,24 +1037,100 @@ def _generate_claude_code_plugin(
             dry_run=dry_run,
         )
 
-    # Create plugin manifest
-    manifest_dir = plugin_dir / ".claude-plugin"
-    manifest_path = manifest_dir / "plugin.json"
-    manifest = _build_claude_plugin_manifest()
     _write_json(manifest_path, manifest, dry_run=dry_run)
     written.append(manifest_path)
-
-    # Create MCP server config
-    mcp_config_path = plugin_dir / ".mcp.json"
-    mcp_config = _make_claude_code_mcp_config(
-        server_name=server_name,
-        command=command,
-        args=args_prefix,
-        safe_profile=safe_profile,
-        onboarding_profile=onboarding_profile,
-        toolsets=toolsets,
-    )
     _write_json(mcp_config_path, mcp_config, dry_run=dry_run)
     written.append(mcp_config_path)
 
     return written
+
+
+# OpenClaw keeps saved MCP servers under `mcp.servers` in ~/.openclaw/openclaw.json (JSON5,
+# shared with all other OpenClaw settings), so global setup goes through its own CLI rather
+# than rewriting that file.
+OPENCLAW_REDACTED = "__OPENCLAW_REDACTED__"
+_OPENCLAW_TIMEOUT_SECONDS = 60
+
+
+def _openclaw_cli() -> str:
+    executable = shutil.which("openclaw")
+    if not executable:
+        raise RuntimeError(
+            "The OpenClaw CLI (`openclaw`) was not found on PATH. Install OpenClaw, "
+            "or pass --config-path to write a JSON file instead."
+        )
+    return executable
+
+
+def _make_openclaw_server_entry(
+    *,
+    server_name: str,
+    command: str,
+    args_prefix: list[str],
+    workspace_root: Path,
+    gm_project_root: Path | None,
+    safe_profile: bool,
+    onboarding_profile: str | None,
+    toolsets: str | None,
+) -> dict:
+    # OpenClaw does not expand ${workspaceFolder}, so paths are absolute.
+    payload = _make_antigravity_server_config(
+        server_name=server_name,
+        command=command,
+        args=args_prefix,
+        workspace_root=workspace_root.resolve(),
+        gm_project_root=gm_project_root.resolve() if gm_project_root is not None else None,
+        safe_profile=safe_profile,
+        onboarding_profile=onboarding_profile,
+        toolsets=toolsets,
+    )
+    entry = payload["mcpServers"][server_name]
+    return {**entry, "cwd": str(workspace_root.resolve())}
+
+
+def _run_openclaw_mcp(args: list[str]) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [_openclaw_cli(), "mcp", *args],
+        capture_output=True,
+        text=True,
+        timeout=_OPENCLAW_TIMEOUT_SECONDS,
+        check=False,
+    )
+
+
+def _set_openclaw_server(*, server_name: str, entry: dict) -> None:
+    validate_server_name(server_name)
+    result = _run_openclaw_mcp(["set", server_name, json.dumps(entry)])
+    if result.returncode != 0:
+        detail = (result.stderr or result.stdout).strip() or f"exit code {result.returncode}"
+        raise RuntimeError(
+            f"`openclaw mcp set {server_name}` failed: {detail}. "
+            "OpenClaw only changes saved servers while its Gateway is stopped; stop it and retry."
+        )
+
+
+def _read_openclaw_server_entry(*, server_name: str) -> dict | None:
+    validate_server_name(server_name)
+    result = _run_openclaw_mcp(["show", server_name, "--json"])
+    if result.returncode != 0:
+        return None
+    try:
+        parsed = json.loads(result.stdout)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"`openclaw mcp show {server_name} --json` did not return JSON: {exc}") from exc
+    if not isinstance(parsed, dict):
+        return None
+    if "command" in parsed or "url" in parsed:
+        return parsed
+    nested = parsed.get(server_name)
+    return nested if isinstance(nested, dict) else None
+
+
+def _validate_openclaw_entry(entry: object):
+    # `openclaw mcp show` hides env values, so a redacted PYTHONUNBUFFERED only proves it is set.
+    if isinstance(entry, dict) and isinstance(entry.get("env"), dict):
+        env = dict(entry["env"])
+        if env.get("PYTHONUNBUFFERED") == OPENCLAW_REDACTED:
+            env["PYTHONUNBUFFERED"] = "1"
+        entry = {**entry, "env": env}
+    return _validate_common_entry(entry, require_project_root=True, env_required=True)

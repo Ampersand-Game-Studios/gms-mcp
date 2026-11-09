@@ -172,7 +172,9 @@ class GMSMCPV2FeatureTests(unittest.IsolatedAsyncioTestCase):
         ):
             async with Client(build_server(), mode="2026-07-28") as client:
                 async with client.listen(resource_subscriptions=["gms://project/index"]) as subscription:
-                    result = await client.call_tool("gm_texture_group_create", {"name": "SyncSubscription"})
+                    result = await client.call_tool(
+                        "gm_texture_group_create", {"name": "SyncSubscription", "dry_run": False}
+                    )
                     event = await asyncio.wait_for(anext(subscription), timeout=3)
 
         self.assertFalse(result.is_error)

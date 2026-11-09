@@ -6,7 +6,9 @@ import argparse
 import contextlib
 import asyncio
 import json
+import os
 import re
+import signal
 import socket
 import subprocess
 import sys
@@ -55,15 +57,19 @@ def test_installed_gml_is_gated_and_reinstallation_upgrades(tmp_path, user_confi
     installer = BridgeInstaller(tmp_path)
     assert installer.install()["ok"]
     create_path = tmp_path / "objects/__mcp_bridge/Create_0.gml"
+    assert installer.install()["ok"]  # untouched generated assets reinstall freely
     create_path.write_text('network_connect_raw(socket, "127.0.0.1", 6502);')
-    assert installer.install()["ok"]
+    refused = installer.install()
+    assert not refused["ok"] and refused["modified_files"] == ["objects/__mcp_bridge/Create_0.gml"]
+    assert create_path.read_text() == 'network_connect_raw(socket, "127.0.0.1", 6502);'
+    assert installer.install(force=True)["ok"]
     create = create_path.read_text()
     before_connect = create[: create.index("network_create_socket")]
     assert 'environment_get_variable("GMS_MCP_BRIDGE_PORT")' in before_connect
     assert 'environment_get_variable("GMS_MCP_BRIDGE_TOKEN")' in before_connect
     assert '_credential == ""' in before_connect and "65535" in before_connect
     assert 'ord("0")' in before_connect and 'ord("9")' in before_connect
-    assert '"HELLO:" + json_stringify({protocol: 2, token: _credential})' in create
+    assert '"HELLO:" + json_stringify({protocol: 2, token: _credential, ' in create
     assert create.index('"HELLO:"') < create.index('__mcp_log("[MCP]')
     assert "6502" not in create
     events = installer._create_object_asset()[2]
@@ -202,6 +208,27 @@ def test_only_user_commands_execute(tmp_path, user_config, action):
         assert result["status"] == {"trusted": True}
     if action == "start":
         assert (tmp_path / ".gms_mcp/live_reload.log").read_text().startswith("earlier run\n")
+
+
+def test_second_live_reload_start_does_not_spawn_a_duplicate(tmp_path, user_config):
+    user_config.write_text(
+        json.dumps(
+            {
+                "live_reload": {
+                    "start": [sys.executable, "-I", "-c", "import time; time.sleep(30)"],
+                    "stop": [sys.executable, "-I", "-c", "pass"],
+                }
+            }
+        )
+    )
+    first = live_reload.start(tmp_path)
+    try:
+        assert first["ok"] and first["started"] and first["pid"]
+        second = live_reload.start(tmp_path)
+        assert second["ok"] and second["already_running"] and second["pid"] == first["pid"]
+        assert live_reload.stop(tmp_path)["stopped"]
+    finally:
+        os.kill(first["pid"], signal.SIGTERM)
 
 
 @pytest.mark.parametrize("value", ["/etc/passwd", "../outside.json", "C:\\secret.json", "nested/../../outside"])
@@ -344,7 +371,7 @@ def test_live_session_start_passes_credentials_only_after_bind(tmp_path, monkeyp
         port=43210 if enabled else 0,
         token="owned-token",
         is_connected=enabled,
-        hello={} if enabled else None,
+        hello={"protocol": 2} if enabled else None,
     )
     monkeypatch.setattr(live_session, "_SESSIONS", {})
     monkeypatch.setattr(live_session, "BridgeServer", lambda **_kwargs: bridge)
@@ -407,6 +434,17 @@ def test_authentication_rejection_preserves_active_socket_without_network(monkey
     assert server.hello == {"protocol": 2}
     candidate.close.assert_called_once()
     active.close.assert_not_called()
+
+
+def test_multi_line_commands_are_rejected_not_split():
+    server = BridgeServer()
+    server._connected = True
+    result = server.send_command("ping\nset_var global.x 1", timeout=0.1)
+    assert not result.success and "single line" in result.error
+    assert server._command_queue.empty()
+    with pytest.raises(ValueError, match="single line"):
+        server.send_command_async("ping\r")
+    assert server._command_queue.empty()
 
 
 def test_byte_framing_and_caps_without_network():
