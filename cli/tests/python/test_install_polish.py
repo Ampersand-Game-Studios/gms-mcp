@@ -1279,6 +1279,8 @@ class TestClaudeCodeSupport(unittest.TestCase):
         self.assertNotIn("version", marketplace["plugins"][0])
         self.assertEqual(set(mcp_config), {"mcpServers"})
         self.assertIn("gms", mcp_config["mcpServers"])
+        self.assertTrue((repo_root / manifest["icon"]).is_file())
+        self.assertNotIn("icon", marketplace["plugins"][0])
 
     def test_generate_claude_code_plugin_with_bundle_assets_copies_hooks(self):
         with tempfile.TemporaryDirectory() as tmpdir:

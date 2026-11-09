@@ -1,3 +1,5 @@
+<p align="center"><img src="https://raw.githubusercontent.com/Ampersand-Game-Studios/gms-mcp/main/documentation/assets/gms-mcp-icon.png" alt="GMS MCP icon" width="128" height="128"></p>
+
 # GMS MCP
 
 **Give your AI assistant tools to understand, edit, build, and interact with your GameMaker game.**
