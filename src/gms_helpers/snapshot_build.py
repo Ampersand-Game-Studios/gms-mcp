@@ -32,7 +32,7 @@ import tempfile
 import time
 import zipfile
 from dataclasses import dataclass, field
-from pathlib import Path, PurePosixPath, PureWindowsPath
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Iterable
 
 from . import yyp_registry
@@ -961,7 +961,7 @@ def launch_mac_runner(
     return process, debug_log
 
 
-def mac_game_path(path: Path) -> str:
+def mac_game_path(path: PurePath) -> str:
     """The native runner misparses the /private/var spelling of macOS temp paths."""
     value = str(path)
     return value.removeprefix("/private") if value.startswith("/private/var/") else value

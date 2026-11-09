@@ -295,7 +295,12 @@ class TestInstallParity(unittest.TestCase):
             self.assertEqual(payload["config"]["entry"]["env"]["API_KEY"], "***REDACTED***")
 
     def test_canonical_setup_global_for_supported_clients(self):
-        clients = [spec.key for spec in CLIENT_SPECS if spec.global_supported]
+        # The stand-in OpenClaw CLI below is a POSIX shell script.
+        clients = [
+            spec.key
+            for spec in CLIENT_SPECS
+            if spec.global_supported and not (spec.key == "openclaw" and os.name == "nt")
+        ]
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir) / "workspace"
             workspace.mkdir()

@@ -252,11 +252,10 @@ class ReferenceCollector:
 
             # Generate event filename using GameMaker conventions
             event_filename = self._get_event_filename(event_type, event_num, collision_object)
+            # GameMaker always pairs a listed event with its .gml, so the exact path is a
+            # reference even when the file is missing or only matches case-insensitively.
             if event_filename:
-                event_path = asset_dir / event_filename
-                if event_path.exists():
-                    rel_path = str(event_path.relative_to(self.project_root))
-                    self._add_reference(rel_path)
+                self._add_reference((asset_dir / event_filename).relative_to(self.project_root).as_posix())
 
     def _process_script_asset(self, asset_path: Path, asset_data: Dict):
         """Process script asset to find companion .gml file."""
@@ -264,9 +263,8 @@ class ReferenceCollector:
         script_dir = asset_path.parent
         gml_path = script_dir / f"{script_name}.gml"
 
-        if gml_path.exists():
-            rel_path = str(gml_path.relative_to(self.project_root))
-            self._add_reference(rel_path)
+        # A script's .gml is required, so its exact path is always a reference.
+        self._add_reference(gml_path.relative_to(self.project_root).as_posix())
 
     def _process_sprite_asset(self, asset_path: Path, asset_data: Dict):
         """Process sprite asset to find image files."""

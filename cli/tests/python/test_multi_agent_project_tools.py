@@ -11,7 +11,7 @@ import threading
 import sys
 import time
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 import pytest
 
@@ -790,7 +790,7 @@ def test_snapshot_runner_stops_on_owned_fatal_log(tmp_path, lock_dir, monkeypatc
     assert not result["timed_out"] and result["waited_seconds"] < 1
     assert "missing_variable" in result["run_log"].read_text()
     assert process.returncode == -15
-    assert snapshot_build.mac_game_path(Path("/private/var/tmp/game.ios")) == "/var/tmp/game.ios"
+    assert snapshot_build.mac_game_path(PurePosixPath("/private/var/tmp/game.ios")) == "/var/tmp/game.ios"
 
 
 def test_html5_snapshot_requires_real_web_output(repo: Path, tmp_path: Path, lock_dir: Path):

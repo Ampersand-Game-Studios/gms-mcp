@@ -397,7 +397,8 @@ def test_json_writes_merge_and_backup(tmp_path, client):
     assert not list(path.parent.glob(path.name + ".bak.*"))
     (backup,) = common._config_backups(path)
     assert json.loads(backup.read_text()) == original
-    assert stat.S_IMODE(backup.stat().st_mode) == 0o600
+    if os.name != "nt":
+        assert stat.S_IMODE(backup.stat().st_mode) == 0o600
 
 
 @pytest.mark.parametrize(
@@ -720,6 +721,7 @@ def _openclaw_global_flow(tmp_path, action, *, dry_run=False):
     )
 
 
+@pytest.mark.skipif(os.name == "nt", reason="The stand-in OpenClaw CLI is a POSIX shell script")
 def test_openclaw_global_setup_saves_through_openclaw_cli(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("HOME", str(tmp_path / "home"))
     (tmp_path / "workspace").mkdir()
@@ -820,6 +822,7 @@ def test_config_lock_serializes_installers(tmp_path):
                 pass
 
 
+@pytest.mark.skipif(os.name == "nt", reason="The stand-in interpreter is a POSIX shell script")
 def test_python_module_launcher_probes_interpreter(tmp_path):
     broken = tmp_path / "python-without-gms"
     broken.write_text("#!/bin/sh\nexit 1\n")
@@ -837,6 +840,7 @@ def test_python_module_default_does_not_warn(tmp_path, capsys):
     assert "not found; using" not in capsys.readouterr().out
 
 
+@pytest.mark.skipif(os.name == "nt", reason="The stand-in launcher is a POSIX shell script")
 def test_command_mode_writes_absolute_launcher_when_on_path(tmp_path, monkeypatch):
     binary = tmp_path / "bin" / "gms-mcp"
     binary.parent.mkdir()
@@ -933,6 +937,7 @@ def test_backups_live_outside_workspace_with_bounded_rotation(tmp_path, private_
     assert sorted(item.name for item in path.parent.iterdir()) == ["mcp.json"]
 
 
+@pytest.mark.skipif(os.name == "nt", reason="POSIX file modes")
 def test_replaced_config_keeps_file_mode(tmp_path):
     path = tmp_path / "mcp.json"
     path.write_text("{}")
@@ -1004,6 +1009,7 @@ def test_foreign_plugin_manifest_requires_force(tmp_path):
 
 def test_client_global_paths_and_keys(tmp_path, monkeypatch):
     monkeypatch.setenv("HOME", str(tmp_path))
+    monkeypatch.setenv("USERPROFILE", str(tmp_path))
     monkeypatch.setenv("CODEX_HOME", str(tmp_path / "codex-home"))
     assert resolve_client_spec("codex").global_path() == tmp_path / "codex-home" / "config.toml"
     monkeypatch.delenv("CODEX_HOME")

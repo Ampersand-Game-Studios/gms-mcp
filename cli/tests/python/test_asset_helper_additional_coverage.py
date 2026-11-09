@@ -125,6 +125,15 @@ CREATE_CASES = [
 
 
 class TestAssetHelperAdditionalCoverage(unittest.TestCase):
+    def setUp(self):
+        # Creation commands check the working directory is a GameMaker project; these tests
+        # exercise the wrappers, so they must not depend on where the test run happens to be.
+        patcher = patch(
+            "gms_helpers.asset_cli.create.validate_asset_directory_structure", return_value=Path("/tmp/project")
+        )
+        patcher.start()
+        self.addCleanup(patcher.stop)
+
     def test_validate_asset_directory_structure_rejects_cwd_outside_project(self):
         with (
             patch(

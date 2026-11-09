@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for maintenance path normalization utilities."""
 
+import os
 import unittest
 from unittest.mock import patch
 
@@ -39,7 +40,7 @@ class TestPathUtils(unittest.TestCase):
             patch("gms_helpers.maintenance.path_utils._directory_volume_case_sensitive", return_value=True) as probe,
         ):
             self.assertEqual(path_utils.normalize_path("A/B.yy", "/Volumes/Game/project"), "A/B.yy")
-        probe.assert_called_once_with("/Volumes/Game/project")
+        probe.assert_called_once_with(os.path.abspath("/Volumes/Game/project"))
 
 
 if __name__ == "__main__":

@@ -240,12 +240,12 @@ class BridgeInstaller:
         )
         for directory, yy_name, gml_names, events in layouts:
             if directory.is_symlink():
-                modified.append(str(directory.relative_to(self.project_root)))
+                modified.append(directory.relative_to(self.project_root).as_posix())
                 continue
             if not directory.is_dir():
                 continue
             for entry in sorted(directory.iterdir()):
-                relative = str(entry.relative_to(self.project_root))
+                relative = entry.relative_to(self.project_root).as_posix()
                 if entry.is_symlink() or not entry.is_file():
                     modified.append(relative)
                 elif entry.name == yy_name:
@@ -424,7 +424,7 @@ class BridgeInstaller:
                 if changed:
                     save_json(room_data, room_file)
                     summary["instances_removed"] += removed_count
-                    summary["rooms_modified"].append(str(room_file.relative_to(self.project_root)))
+                    summary["rooms_modified"].append(room_file.relative_to(self.project_root).as_posix())
             except Exception as exc:
                 raise BridgeInstallError(f"Failed to clean room '{room_file}': {exc}") from exc
 
@@ -1088,7 +1088,7 @@ global.__mcp_enabled = false;
 
             # Step 3: Delete whatever asset files exist
             print("[BRIDGE] Removing files...")
-            removed = [str(path.relative_to(self.project_root)) for path in present_files]
+            removed = [path.relative_to(self.project_root).as_posix() for path in present_files]
             for path in present_files:
                 if path.is_dir() and not path.is_symlink():
                     transactional_rmtree(path)
