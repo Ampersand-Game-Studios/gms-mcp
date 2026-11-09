@@ -19,7 +19,20 @@ os.environ.setdefault("GMS_MCP_POST_MUTATION_VERIFY", "off")
 
 
 @pytest.fixture(autouse=True)
-def private_run_session_state(tmp_path, monkeypatch):
+def private_run_session_state(tmp_path_factory, monkeypatch):
+    """Keep host session and lock state outside tmp_path, which many tests use as the project root."""
     from gms_helpers.run_session import RunSessionManager
 
-    monkeypatch.setattr(RunSessionManager, "_state_root", staticmethod(lambda: tmp_path / "host-sessions"))
+    host_state = tmp_path_factory.mktemp("host-state")
+    monkeypatch.setattr(RunSessionManager, "_state_root", staticmethod(lambda: host_state / "host-sessions"))
+    monkeypatch.setenv("GMS_MCP_LOCK_DIR", str(host_state / "host-locks"))
+
+
+@pytest.fixture(autouse=True)
+def private_installer_state(tmp_path_factory, monkeypatch):
+    """Keep installer config locks and backups out of the real ~/.gms-mcp."""
+    from gms_mcp.install_support import common
+
+    state_root = tmp_path_factory.mktemp("installer-state")
+    monkeypatch.setattr(common, "_installer_state_root", lambda: state_root)
+    return state_root

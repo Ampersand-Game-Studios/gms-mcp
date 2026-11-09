@@ -69,3 +69,7 @@ class ValidationError(GMSError):
 
     exit_code = 9
     json_rpc_code = -32008
+
+
+class AmbiguousProjectError(ValidationError):
+    """A project directory holds more than one .yyp file."""

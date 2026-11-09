@@ -504,6 +504,7 @@ class TestMacOSRunnerOwnership(unittest.TestCase):
     def test_stale_session_does_not_issue_project_wide_stop_against_user_runner(self) -> None:
         user_command = f"/runtime/Mac_Runner -game {self.game_path}"
         stale_session = SimpleNamespace(
+            run_id="run-20",
             pid=20,
             exe_path=str(self.game_path),
             log_file=str(self.debug_log),
@@ -538,6 +539,7 @@ class TestMacOSRunnerOwnership(unittest.TestCase):
         runner_command = f"/runtime/Mac_Runner -game {self.game_path}"
         igor_command = "/runtime/Igor -- Mac Run"
         session = SimpleNamespace(
+            run_id="run-20",
             pid=20,
             exe_path=str(self.game_path),
             log_file=str(self.debug_log),

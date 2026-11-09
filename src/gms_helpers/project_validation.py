@@ -14,7 +14,7 @@ from dataclasses import asdict, dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any
 
-from .exceptions import AssetNotFoundError, ValidationError
+from .exceptions import AssetNotFoundError, GMSError, ValidationError
 from .utils import find_yyp, load_json_loose, strip_trailing_commas
 
 
@@ -115,14 +115,48 @@ class ProjectValidationResult:
         return data
 
 
+_ASSET_LOCATION = re.compile(r"^(?P<path>[^/:]+/[^/:]+/[^/:]+?\.yy)(?=[.\[:])")
+_QUOTED_ASSET_PATH = re.compile(r"'(?P<path>[^/':]+/[^/':]+/[^/':]+?\.yy)'")
+_UNREADABLE_ASSET = "missing file or invalid resource JSON"
+
+
 def _validation_error_key(error: str) -> str:
     """Compare findings independent of array positions shifted by an insertion."""
     return _ARRAY_INDEX.sub("[]", error)
 
 
+def _asset_paths_in(error: str) -> set[str]:
+    paths = {match.group("path") for match in _QUOTED_ASSET_PATH.finditer(error)}
+    location = _ASSET_LOCATION.match(error)
+    if location:
+        paths.add(location.group("path"))
+    return paths
+
+
+def _with_resource_identity(error: str, current: str, original: str) -> str:
+    """Re-express an error about ``current`` as the same error about ``original``."""
+    rewritten = error.replace(current, original)
+    current_name, original_name = PurePosixPath(current).stem, PurePosixPath(original).stem
+    return re.sub(rf"(?<!\w){re.escape(current_name)}(?!\w)", original_name, rewritten)
+
+
 def errors_introduced_by_mutation(before: list[str], after: list[str]) -> tuple[list[str], list[str]]:
-    """Split post-mutation errors into (introduced, preexisting) against a baseline."""
+    """Split post-mutation errors into (introduced, preexisting) against a baseline.
+
+    Findings are matched by resource identity, not only by text: an asset that
+    was renamed (its path vanished) or duplicated (a new path appeared) keeps
+    the findings it already had, so moving a broken asset is not reported as
+    breaking it. Matching is per finding, so any new kind of error still counts.
+    An asset whose own file is missing or unreadable has no content a rename or
+    copy could carry, so that finding is always matched by text alone.
+    """
     remaining = Counter(_validation_error_key(error) for error in before)
+    baseline_keys = set(remaining)
+    before_paths = set().union(*(_asset_paths_in(error) for error in before)) if before else set()
+    after_paths = set().union(*(_asset_paths_in(error) for error in after)) if after else set()
+    appeared = after_paths - before_paths
+    vanished = before_paths - after_paths
+
     introduced: list[str] = []
     preexisting: list[str] = []
     for error in after:
@@ -130,8 +164,23 @@ def errors_introduced_by_mutation(before: list[str], after: list[str]) -> tuple[
         if remaining[key] > 0:
             remaining[key] -= 1
             preexisting.append(error)
-        else:
-            introduced.append(error)
+            continue
+        matched = False
+        identity_paths = set() if error.endswith(f": {_UNREADABLE_ASSET}") else _asset_paths_in(error)
+        for current in sorted(identity_paths & appeared):
+            directory = current.split("/", 1)[0] + "/"
+            for original in sorted(path for path in before_paths if path.startswith(directory)):
+                candidate = _validation_error_key(_with_resource_identity(error, current, original))
+                if original in vanished and remaining[candidate] > 0:
+                    remaining[candidate] -= 1  # renamed: the finding moved with the asset
+                    matched = True
+                elif original not in vanished and candidate in baseline_keys:
+                    matched = True  # duplicated: the copy carries the source's existing finding
+                if matched:
+                    break
+            if matched:
+                break
+        (preexisting if matched else introduced).append(error)
     return introduced, preexisting
 
 
@@ -325,7 +374,7 @@ class _ProjectGraph:
             names.add(name.casefold())
             data = load_json_loose(target) if target.is_file() else None
             if not isinstance(data, dict):
-                self.error(path, "missing file or invalid resource JSON")
+                self.error(path, _UNREADABLE_ASSET)
                 continue
             expected = ASSET_RESOURCE_TYPES.get(path.split("/")[0])
             if expected is None or len(path.split("/")) != 3 or PurePosixPath(path).name != f"{name}.yy":
@@ -723,7 +772,7 @@ class _ProjectGraph:
             if not target.is_file():
                 self.error(location, "included file is missing or not a regular file")
 
-    def room(self, data: dict[str, Any], path: str) -> None:
+    def room(self, data: dict[str, Any], path: str, *, check_files: bool = True) -> None:
         layers_seen: set[str] = set()
         instances: set[str] = set()
         items_seen: set[str] = set()
@@ -759,6 +808,8 @@ class _ProjectGraph:
                     items_seen.add(name)
                     if item.get("objectId") is None and item.get("inheritedItemId") is None:
                         self.error(location, f"instance '{name}' has no object reference")
+                    if check_files:
+                        self.instance_creation_code(item, location, path)
                 for collection, item_type, reference_key in (
                     ("sprites", "GMRSpriteGraphic", "spriteId"),
                     ("sequences", "GMRSequence", "sequenceId"),
@@ -814,6 +865,22 @@ class _ProjectGraph:
                     self.error(path, f"creation-order instance '{name}' has wrong room path")
         if instances - ordered:
             self.error(path, f"instances missing from creation order: {sorted(instances - ordered)}")
+
+    def instance_creation_code(self, item: dict[str, Any], location: str, path: str) -> None:
+        """``hasCreationCode`` must match GameMaker's InstanceCreationCode_<instance>.gml file."""
+        name = item["name"]
+        if item.get("inheritCode") is True and isinstance(item.get("inheritedItemId"), dict):
+            return  # The code lives with the ancestor room's instance.
+        code_file = safe_project_path(self.root, str(PurePosixPath(path).parent / f"InstanceCreationCode_{name}.gml"))
+        has_file = code_file is not None and code_file.is_file()
+        has_code = item.get("hasCreationCode") is True
+        if has_code and not has_file:
+            self.error(location, f"instance '{name}' has creation code but InstanceCreationCode_{name}.gml is missing")
+        elif has_file and not has_code:
+            # GameMaker ignores the file, so the code silently never runs.
+            self.result.warnings.append(
+                f"{location}: InstanceCreationCode_{name}.gml exists but instance '{name}' does not set hasCreationCode"
+            )
 
     def timeline(self, data: dict[str, Any], path: str, *, check_files: bool = True) -> None:
         from .event_model import event_filename_from_entry
@@ -919,15 +986,14 @@ def validate_project_after_mutation(project_root: str | Path) -> ProjectValidati
     """Validate all registered assets and embedded references without changing files."""
     root = Path(project_root).resolve()
     result = ProjectValidationResult(True)
-    yyps = sorted(root.glob("*.yyp"))
-    if not yyps:
-        return ProjectValidationResult(False, [f"No .yyp file found in {root}"])
-    if len(yyps) > 1:
-        result.warnings.append(f"Multiple .yyp files found; validating {yyps[0].name}")
-    result.yyp = yyps[0].name
+    try:
+        yyp_path = find_yyp(root)
+    except (GMSError, ValueError) as exc:
+        return ProjectValidationResult(False, [str(exc)])
+    result.yyp = yyp_path.name
     if safe_project_path(root, result.yyp) is None:
         return ProjectValidationResult(False, ["Unsafe project file path"])
-    project = load_json_loose(yyps[0])
+    project = load_json_loose(yyp_path)
     if not isinstance(project, dict):
         return ProjectValidationResult(False, [f"Invalid project JSON: {result.yyp}"], yyp=result.yyp)
     graph = _ProjectGraph(root, project, result)
@@ -984,7 +1050,7 @@ def validate_asset_metadata_references(project_root: str | Path, relative_path: 
     graph.embedded_identities(data, relative_path)
     graph.file_references(data, relative_path, check_files=False)
     if data.get("resourceType") == "GMRoom":
-        graph.room(data, relative_path)
+        graph.room(data, relative_path, check_files=False)
     if data.get("resourceType") == "GMObject":
         graph.events(data, relative_path, check_files=False)
     if data.get("resourceType") == "GMTimeline":

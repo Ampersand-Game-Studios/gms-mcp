@@ -493,20 +493,34 @@ class ResolutionRuntime:
             return None
         if not bool(facts.get("group_exists")):
             return TextureGroupDecision(action="cancel")
-        if bool(arguments.get("dry_run")):
-            return TextureGroupDecision(action="delete")
-        if int(facts.get("member_count", 0)) == 0:
-            return TextureGroupDecision(action="delete")
+        # Previews must take the same branch as the real call.
         target = str(arguments.get("reassign_to") or "").strip()
-        if target:
+        if target and int(facts.get("member_count", 0)) > 0:
             return TextureGroupDecision(action="reassign", reassign_to=target)
+        if bool(arguments.get("dry_run")) or int(facts.get("member_count", 0)) == 0:
+            return TextureGroupDecision(action="delete")
         return None
+
+    @staticmethod
+    def _call_will_be_refused(tool_name: str, call_arguments: Mapping[str, Any]) -> bool:
+        """Mirror the tool boundary checks so a refused call is never put to the user."""
+        from .dry_run_policy import destructive_policy_preflight
+        from .validation import validate_mcp_tool_arguments
+
+        if destructive_policy_preflight(tool_name, call_arguments) is not None:
+            return True
+        # Resolvers see only their own tool arguments; ignore checks on the others.
+        return any(
+            error.get("field") in call_arguments for error in validate_mcp_tool_arguments(tool_name, call_arguments)
+        )
 
     async def _resolve(
         self,
         policy: ResolutionPolicy,
         schema: type[DecisionT],
         *,
+        tool_name: str,
+        call_arguments: Mapping[str, Any],
         project_root: str,
         arguments: Mapping[str, Any],
         ctx: Context[Any, Any],
@@ -528,6 +542,13 @@ class ResolutionRuntime:
                 stale_evidence=stale,
             )
             return cast(DecisionT | None, automatic)
+        if self._call_will_be_refused(tool_name, {**call_arguments, "project_root": project_root}):
+            # Never ask the user to approve a call the tool boundary will refuse; the
+            # boundary reports the refusal and this placeholder is never applied.
+            self._telemetry(policy=policy, phase="refused", affected_count=evidence.affected_count)
+            return cast(
+                DecisionT | None, None if policy is ResolutionPolicy.NAME_COLLISION else schema(action="cancel")
+            )
         self._telemetry(
             policy=policy,
             phase="elicited",
@@ -537,7 +558,7 @@ class ResolutionRuntime:
         require_form_elicitation_capability(ctx)
         return Elicit(self._message(policy, evidence, fingerprint, stale, revision, authorized_root), schema)
 
-    def safe_delete_resolver(self):
+    def safe_delete_resolver(self, tool_name: str):
         async def resolve_safe_delete(
             asset_type: str,
             asset_name: str,
@@ -548,23 +569,26 @@ class ResolutionRuntime:
         ) -> Elicit[SafeDeleteDecision] | SafeDeleteDecision:
             if ctx is None:
                 raise ValueError("Resolution requires an active MCP context.")
+            arguments = {"asset_type": asset_type, "asset_name": asset_name, "force": force, "dry_run": dry_run}
             return cast(
                 "Elicit[SafeDeleteDecision] | SafeDeleteDecision",
                 await self._resolve(
                     ResolutionPolicy.SAFE_DELETE,
                     SafeDeleteDecision,
+                    tool_name=tool_name,
+                    call_arguments=arguments,
                     project_root=project_root,
-                    arguments={"asset_type": asset_type, "asset_name": asset_name, "force": force, "dry_run": dry_run},
+                    arguments=arguments,
                     ctx=ctx,
                 ),
             )
 
         return resolve_safe_delete
 
-    def room_delete_resolver(self):
+    def room_delete_resolver(self, tool_name: str):
         async def resolve_room_delete(
             room_name: str,
-            dry_run: bool = False,
+            dry_run: bool = True,
             project_root: str = ".",
             ctx: Context[Any, Any] | None = None,
         ) -> Elicit[RoomDeleteDecision] | RoomDeleteDecision:
@@ -575,6 +599,8 @@ class ResolutionRuntime:
                 await self._resolve(
                     ResolutionPolicy.ROOM_DELETE,
                     RoomDeleteDecision,
+                    tool_name=tool_name,
+                    call_arguments={"room_name": room_name, "dry_run": dry_run},
                     project_root=project_root,
                     arguments={"room_name": room_name, "dry_run": dry_run},
                     ctx=ctx,
@@ -583,7 +609,9 @@ class ResolutionRuntime:
 
         return resolve_room_delete
 
-    def name_collision_resolver(self):
+    def name_collision_resolver(self, tool_name: str):
+        """Return the collision resolver for one tool's ``new_name`` argument."""
+
         async def resolve_name_collision(
             new_name: str,
             project_root: str = ".",
@@ -596,6 +624,8 @@ class ResolutionRuntime:
                 await self._resolve(
                     ResolutionPolicy.NAME_COLLISION,
                     NameCollisionDecision,
+                    tool_name=tool_name,
+                    call_arguments={"new_name": new_name},
                     project_root=project_root,
                     arguments={"new_name": new_name},
                     ctx=ctx,
@@ -604,8 +634,8 @@ class ResolutionRuntime:
 
         return resolve_name_collision
 
-    def asset_name_collision_resolver(self):
-        """Return the collision resolver for asset-creation tools using ``name``."""
+    def asset_name_collision_resolver(self, tool_name: str):
+        """Return the collision resolver for an asset-creation tool using ``name``."""
 
         async def resolve_asset_name_collision(
             name: str,
@@ -619,6 +649,8 @@ class ResolutionRuntime:
                 await self._resolve(
                     ResolutionPolicy.NAME_COLLISION,
                     NameCollisionDecision,
+                    tool_name=tool_name,
+                    call_arguments={"name": name},
                     project_root=project_root,
                     arguments={"new_name": name},
                     ctx=ctx,
@@ -627,11 +659,11 @@ class ResolutionRuntime:
 
         return resolve_asset_name_collision
 
-    def texture_group_resolver(self):
+    def texture_group_resolver(self, tool_name: str):
         async def resolve_texture_group(
             name: str,
             reassign_to: str | None = None,
-            dry_run: bool = False,
+            dry_run: bool = True,
             project_root: str = ".",
             ctx: Context[Any, Any] | None = None,
         ) -> Elicit[TextureGroupDecision] | TextureGroupDecision:
@@ -642,6 +674,8 @@ class ResolutionRuntime:
                 await self._resolve(
                     ResolutionPolicy.TEXTURE_GROUP,
                     TextureGroupDecision,
+                    tool_name=tool_name,
+                    call_arguments={"name": name, "reassign_to": reassign_to, "dry_run": dry_run},
                     project_root=project_root,
                     arguments={"name": name, "reassign_to": reassign_to, "dry_run": dry_run},
                     ctx=ctx,

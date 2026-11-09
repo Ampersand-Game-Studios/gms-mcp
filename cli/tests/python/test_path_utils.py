@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Tests for maintenance path normalization utilities."""
 
+import os
 import unittest
 from unittest.mock import patch
 
@@ -30,6 +31,16 @@ class TestPathUtils(unittest.TestCase):
             patch("gms_helpers.maintenance.path_utils._is_macos_case_sensitive", return_value=False),
         ):
             self.assertEqual(normalize_path("Test/Path/FILE.GM"), "test/path/file.gm")
+
+    def test_case_sensitivity_is_probed_on_the_projects_volume(self):
+        from gms_helpers.maintenance import path_utils
+
+        with (
+            patch("gms_helpers.maintenance.path_utils.platform.system", return_value="Darwin"),
+            patch("gms_helpers.maintenance.path_utils._directory_volume_case_sensitive", return_value=True) as probe,
+        ):
+            self.assertEqual(path_utils.normalize_path("A/B.yy", "/Volumes/Game/project"), "A/B.yy")
+        probe.assert_called_once_with(os.path.abspath("/Volumes/Game/project"))
 
 
 if __name__ == "__main__":

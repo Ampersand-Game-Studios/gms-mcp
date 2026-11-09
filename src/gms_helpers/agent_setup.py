@@ -29,28 +29,45 @@ def detect_shell():
         return "bash"
 
 
-def test_gms_command():
-    """Test if gms command is already available."""
-    try:
-        executable = next(
-            (
-                found
-                for directory in os.environ.get("PATH", "").split(os.pathsep)
-                if directory and Path(directory).is_absolute() and Path(directory).resolve() != Path.cwd().resolve()
-                if (found := shutil.which(str(Path(directory) / "gms")))
-            ),
-            None,
-        )
-        if not executable:
-            raise FileNotFoundError("gms")
-        result = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=5)
-        if result.returncode == 0 and "GMS Tools" in result.stdout:
-            print("[OK] gms command is already available")
-            return True
-    except (subprocess.TimeoutExpired, FileNotFoundError, subprocess.SubprocessError):
-        pass
+def _find_gms_on_path():
+    """The gms launcher on PATH, ignoring relative entries and the current directory.
 
-    print("[ERROR] gms command not found or not working")
+    The bare name goes to shutil.which so PATHEXT (gms.cmd, gms.exe) applies; on Python 3.11 a
+    path with a directory component skips PATHEXT and never finds a Windows launcher.
+    """
+    cwd = Path.cwd().resolve()
+    search = os.pathsep.join(
+        directory
+        for directory in os.environ.get("PATH", "").split(os.pathsep)
+        if directory and Path(directory).is_absolute() and Path(directory).resolve() != cwd
+    )
+    return shutil.which("gms", path=search) if search else None
+
+
+def probe_gms_command():
+    """Return "ok", "missing", "broken" or "unresponsive" for the gms command on PATH."""
+    executable = _find_gms_on_path()
+    if not executable:
+        return "missing"
+    try:
+        result = subprocess.run([executable, "--version"], capture_output=True, text=True, timeout=5)
+    except subprocess.TimeoutExpired:
+        return "unresponsive"
+    except (FileNotFoundError, subprocess.SubprocessError, OSError):
+        return "broken"
+    return "ok" if result.returncode == 0 and "GMS Tools" in result.stdout else "broken"
+
+
+def test_gms_command(status=None):
+    """Test if gms command is already available."""
+    status = status or probe_gms_command()
+    if status == "ok":
+        print("[OK] gms command is already available")
+        return True
+    if status == "unresponsive":
+        print("[WARN] gms is on PATH but did not answer `gms --version` within 5s")
+    else:
+        print("[ERROR] gms command not found or not working")
     return False
 
 
@@ -148,23 +165,26 @@ def auto_setup():
     print("======================")
 
     # First check if already set up
-    if test_gms_command():
+    status = probe_gms_command()
+    if test_gms_command(status):
         return True
 
-    # Try automatic installation for persistent setup first
-    try:
-        subprocess.run(
-            [sys.executable, "-P", "-m", "gms_helpers.install", "--auto"],
-            capture_output=True,
-            text=True,
-            env={**os.environ, "PYTHONSAFEPATH": "1", "PYTHONPATH": str(Path(__file__).resolve().parent.parent)},
-        )
-    except Exception:
-        pass  # Ignore if auto install fails - we'll fall back to session-only function
+    # A slow gms is still an installed gms: never replace it. The installer itself also refuses
+    # to overwrite a launcher it did not write.
+    if status != "unresponsive":
+        try:
+            subprocess.run(
+                [sys.executable, "-P", "-m", "gms_helpers.install", "--auto"],
+                capture_output=True,
+                text=True,
+                env={**os.environ, "PYTHONSAFEPATH": "1", "PYTHONPATH": str(Path(__file__).resolve().parent.parent)},
+            )
+        except Exception:
+            pass  # Ignore if auto install fails - we'll fall back to session-only function
 
-    # Re-check after attempted auto-install
-    if test_gms_command():
-        return True
+        # Re-check after attempted auto-install
+        if test_gms_command():
+            return True
 
     # Detect shell and set up session function/alias accordingly
     shell = detect_shell()

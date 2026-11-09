@@ -200,8 +200,8 @@ def import_strip_to_sprite(
     )
 
     # Load the created .yy to get UUIDs
-    sprite_folder = project_root / "sprites" / sprite_name.lower()
-    yy_path = sprite_folder / f"{sprite_name}.yy"
+    yy_path = project_relative_path(relative_path, project_root=project_root, kind="sprite path")
+    sprite_folder = yy_path.parent
     yy_data = load_json_loose(yy_path)
 
     if yy_data is None:
@@ -282,6 +282,12 @@ def import_frames_to_existing_sprite(
     imported_count = len(frame_images)
 
     existing_count = get_frame_count(project_root, sprite_path)
+    final_count = imported_count if replace else existing_count + imported_count
+    if final_count > MAX_SPRITE_FRAMES:
+        raise ValidationError(
+            f"Importing {imported_count} frame(s) into a sprite with {existing_count} would give {final_count}; "
+            f"sprites are limited to {MAX_SPRITE_FRAMES} frames"
+        )
     if replace:
         # Append valid new frames first, then remove old ones. A sprite must
         # always retain at least one frame, even during replacement.

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """
 Clean Unused Asset Folders
-Deletes asset folders (objects, sprites, scripts, etc.) not referenced in the .yyp file.
-Default is dry-run (prints what would be deleted). Use --delete to actually remove folders.
+Moves asset folders (objects, sprites, scripts, etc.) not referenced in the .yyp file to the
+project trash. Default is dry-run (prints what would be moved). Use --delete to move them.
 """
 
 import argparse
@@ -13,22 +13,45 @@ import sys
 from ..utils import load_json_loose, find_yyp, resolve_project_directory
 from ..exceptions import ProjectNotFoundError, GMSError, ValidationError
 from ..path_safety import assert_project_tree_contained, project_relative_path
-from ..transactions import transactional_rmtree, transactional_unlink
+from .trash import move_to_trash
 
 
 def collect_referenced_folders(yyp_data, asset_type):
+    """Return the casefolded asset-folder names registered under ``asset_type``/."""
     referenced = set()
+    prefix = asset_type.casefold()
     for resource in yyp_data.get("resources", []):
-        path = resource.get("id", {}).get("path", "")
-        if path.startswith(f"{asset_type}/"):
-            # e.g., objects/o_enemy_boss/o_enemy_boss.yy -> o_enemy_boss
-            parts = Path(path).parts
-            if len(parts) > 1:
-                referenced.add(parts[1])
+        resource_id = resource.get("id", {}) if isinstance(resource, dict) else {}
+        path = resource_id.get("path", "") if isinstance(resource_id, dict) else ""
+        # e.g., objects/o_enemy_boss/o_enemy_boss.yy -> o_enemy_boss
+        parts = [part for part in str(path).replace("\\", "/").split("/") if part]
+        if len(parts) > 1 and parts[0].casefold() == prefix:
+            referenced.add(parts[1].casefold())
     return referenced
 
 
+def _is_asset_folder(folder: Path) -> bool:
+    """True only for a folder holding a parseable ``<folder>/<folder>.yy`` asset file."""
+    yy_files = [
+        child
+        for child in folder.iterdir()
+        if child.is_file() and child.name.casefold() == f"{folder.name}.yy".casefold()
+    ]
+    if len(yy_files) != 1:
+        return False
+    try:
+        data = load_json_loose(yy_files[0])
+    except Exception:
+        return False
+    return isinstance(data, dict)
+
+
 def clean_unused_folders(project_root, asset_type, do_delete=False):
+    """Find (and with ``do_delete`` move to the project trash) unregistered asset folders.
+
+    Only folders that contain a parseable ``<name>/<name>.yy`` are considered asset
+    folders; anything else in the directory is user data and is left alone.
+    """
     project_root = assert_project_tree_contained(Path(project_root))
     allowed_types = {
         "objects",
@@ -58,19 +81,24 @@ def clean_unused_folders(project_root, asset_type, do_delete=False):
         print(f"[SKIP] {asset_type}/ directory does not exist.")
         return 0, 0
     found = 0
-    deleted = 0
-    referenced_lower = {r.lower() for r in referenced}
-    for folder in asset_dir.iterdir():
-        if folder.is_dir():
-            found += 1
-            if folder.name.lower() not in referenced_lower:
-                if do_delete:
-                    transactional_rmtree(folder)
-                    print(f"[DELETED] {folder}")
-                    deleted += 1
-                else:
-                    print(f"[UNUSED]  {folder}")
-    return found, deleted
+    unused = []
+    for folder in sorted(asset_dir.iterdir()):
+        if not folder.is_dir():
+            continue
+        found += 1
+        if folder.name.casefold() in referenced or not _is_asset_folder(folder):
+            continue
+        unused.append(folder)
+        if not do_delete:
+            print(f"[UNUSED]  {folder}")
+    if not do_delete or not unused:
+        return found, 0
+    result = move_to_trash(str(project_root), [folder.relative_to(project_root).as_posix() for folder in unused])
+    for error in result["errors"]:
+        print(f"[ERROR] {error}")
+    for moved in result["manifest"]:
+        print(f"[TRASHED] {moved} -> {result['trash_folder']}")
+    return found, result["moved_count"]
 
 
 def main():
@@ -104,11 +132,9 @@ def main():
 
 def clean_old_yy_files(project_root: str, do_delete: bool = False) -> tuple[int, int]:
     """
-    Find and optionally delete .old.yy files throughout the project.
+    Find and optionally move .old.yy files throughout the project to the project trash.
     """
     project_path = assert_project_tree_contained(Path(project_root))
-    found = 0
-    deleted = 0
 
     # Common asset directories to scan
     search_dirs = [
@@ -126,21 +152,24 @@ def clean_old_yy_files(project_root: str, do_delete: bool = False) -> tuple[int,
         "sequences",
     ]
 
+    old_files = []
     for d in search_dirs:
         dir_path = project_path / d
         if not dir_path.exists():
             continue
-
-        for file_path in dir_path.rglob("*.old.yy"):
-            found += 1
-            if do_delete:
-                transactional_unlink(file_path)
-                print(f"[DELETED] {file_path}")
-                deleted += 1
-            else:
+        for file_path in sorted(dir_path.rglob("*.old.yy")):
+            old_files.append(file_path)
+            if not do_delete:
                 print(f"[OLD FILE] {file_path}")
 
-    return found, deleted
+    if not do_delete or not old_files:
+        return len(old_files), 0
+    result = move_to_trash(str(project_path), [path.relative_to(project_path).as_posix() for path in old_files])
+    for error in result["errors"]:
+        print(f"[ERROR] {error}")
+    for moved in result["manifest"]:
+        print(f"[TRASHED] {moved} -> {result['trash_folder']}")
+    return len(old_files), result["moved_count"]
 
 
 if __name__ == "__main__":

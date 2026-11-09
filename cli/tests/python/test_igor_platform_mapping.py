@@ -5,6 +5,7 @@ Focused tests for Igor platform token mapping and prefab auto-detection.
 These cover macOS-specific behavior without requiring Igor or a runtime install.
 """
 
+import hashlib
 import os
 import sys
 import tempfile
@@ -29,6 +30,14 @@ class TestIgorPlatformMapping(unittest.TestCase):
         self.assertEqual(_to_igor_platform("macOS"), "Mac")
         self.assertEqual(_to_igor_platform("Windows"), "Windows")
         self.assertEqual(_to_igor_platform("Linux"), "Linux")
+
+    def test_snapshot_builds_use_the_runner_igor_tokens(self):
+        from gms_helpers.snapshot_build import igor_platform
+
+        for name in ("macOS", "mac", "osx", "Windows", "linux", "Android", "ios", "iOS", "html5"):
+            with self.subTest(name=name):
+                self.assertEqual(igor_platform(name), _to_igor_platform(normalize_platform_target(name)))
+        self.assertEqual(igor_platform("ios"), "iOS")
 
 
 class TestPrefabsAutoDetection(unittest.TestCase):
@@ -66,6 +75,11 @@ class TestPrefabsAutoDetection(unittest.TestCase):
 
 
 class TestRunnerCommandSelection(unittest.TestCase):
+    def _builds(self, system_temp: Path) -> Path:
+        """The per-project build folder (keyed by .yyp path so checkouts of one game never collide)."""
+        project_file = (self.project_root / "test_project.yyp").resolve()
+        return system_temp / "GameMakerStudio2" / hashlib.sha256(str(project_file).encode()).hexdigest()[:16]
+
     def setUp(self):
         self.tmp_dir = tempfile.mkdtemp()
         self.project_root = Path(self.tmp_dir)
@@ -158,7 +172,7 @@ class TestRunnerCommandSelection(unittest.TestCase):
     def _windows_temp_run(self, output_lines, *, fresh=False):
         runner = GameMakerRunner(self.project_root)
         system_temp = self.project_root / "temp"
-        exe = system_temp / "GameMakerStudio2/test_project/test_project.exe"
+        exe = self._builds(system_temp) / "test_project/test_project.exe"
         exe.parent.mkdir(parents=True, exist_ok=True)
         exe.write_bytes(b"old build")
         process = self._fake_process()
@@ -243,7 +257,7 @@ class TestRunnerCommandSelection(unittest.TestCase):
     def test_html5_folder_action_requires_new_web_artifact(self):
         runner = GameMakerRunner(self.project_root)
         system_temp = self.project_root / "temp"
-        package = system_temp / "GameMakerStudio2/test_project_html5"
+        package = self._builds(system_temp) / "test_project_html5"
         package.mkdir(parents=True)
         commands = []
 
@@ -269,7 +283,7 @@ class TestRunnerCommandSelection(unittest.TestCase):
     def test_html5_target_type_exception_succeeds_only_with_verified_artifact(self):
         runner = GameMakerRunner(self.project_root)
         system_temp = self.project_root / "temp"
-        package_root = system_temp / "GameMakerStudio2" / "test_project_html5" / "html5game"
+        package_root = self._builds(system_temp) / "test_project_html5" / "html5game"
         package_root.mkdir(parents=True)
         process = self._fake_process()
         process.returncode = 1
@@ -339,7 +353,7 @@ class TestRunnerCommandSelection(unittest.TestCase):
         runner = GameMakerRunner(self.project_root)
         captured_cmd = []
         system_temp = self.project_root / "temp"
-        package_path = system_temp / "GameMakerStudio2" / "test_project" / "test_project.apk"
+        package_path = self._builds(system_temp) / "test_project" / "test_project.apk"
 
         def fake_run_igor(cmd, **_kwargs):
             captured_cmd[:] = cmd
@@ -375,7 +389,7 @@ class TestRunnerCommandSelection(unittest.TestCase):
         runner = GameMakerRunner(self.project_root)
         process = self._fake_process()
         system_temp = self.project_root / "temp"
-        package_path = system_temp / "GameMakerStudio2" / "test_project" / "test_project.aab"
+        package_path = self._builds(system_temp) / "test_project" / "test_project.aab"
         self._write_android_package(package_path)
 
         with patch.object(runner, "_system_temp_root", return_value=system_temp):
@@ -389,7 +403,7 @@ class TestRunnerCommandSelection(unittest.TestCase):
 
     def test_compile_project_rejects_invalid_android_package_artifacts(self):
         system_temp = self.project_root / "temp"
-        package_dir = system_temp / "GameMakerStudio2" / "test_project"
+        package_dir = self._builds(system_temp) / "test_project"
         package_dir.mkdir(parents=True)
 
         def write_empty(path: Path) -> None:
@@ -424,7 +438,7 @@ class TestRunnerCommandSelection(unittest.TestCase):
     def test_compile_project_accepts_fresh_valid_android_aab(self):
         runner = GameMakerRunner(self.project_root)
         system_temp = self.project_root / "temp"
-        package_path = system_temp / "GameMakerStudio2" / "test_project" / "test_project.aab"
+        package_path = self._builds(system_temp) / "test_project" / "test_project.aab"
 
         def fake_run_igor(_cmd, **_kwargs):
             self._write_android_package(package_path)
@@ -440,7 +454,7 @@ class TestRunnerCommandSelection(unittest.TestCase):
     def test_compile_project_accepts_rewritten_android_package(self):
         runner = GameMakerRunner(self.project_root)
         system_temp = self.project_root / "temp"
-        package_path = system_temp / "GameMakerStudio2" / "test_project" / "test_project.apk"
+        package_path = self._builds(system_temp) / "test_project" / "test_project.apk"
         self._write_android_package(package_path, marker="old")
 
         def fake_run_igor(_cmd, **_kwargs):

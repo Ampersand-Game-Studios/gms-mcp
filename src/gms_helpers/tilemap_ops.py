@@ -577,16 +577,21 @@ def patch_tilemap(
 def _validate_layer(project_root: Path, room_name: str, layer: dict[str, Any]) -> list[dict[str, Any]]:
     issues: list[dict[str, Any]] = []
     name = layer.get("name") or layer.get("%Name")
-    tiles_obj = layer.get("tiles") or {}
-    width = int(tiles_obj.get("SerialiseWidth") or 0)
-    height = int(tiles_obj.get("SerialiseHeight") or 0)
+    tiles_obj = layer.get("tiles")
+    if not isinstance(tiles_obj, dict):
+        tiles_obj = {}
+    width_value, height_value = tiles_obj.get("SerialiseWidth"), tiles_obj.get("SerialiseHeight")
+    try:
+        width, height = layer_tile_dimensions(tiles_obj)
+    except ValidationError:
+        width = height = 0
     if width <= 0 or height <= 0:
         issues.append(
             {
                 "code": "invalid_size",
                 "room": room_name,
                 "layer": name,
-                "message": f"Invalid SerialiseWidth/Height {width}x{height}",
+                "message": f"Invalid SerialiseWidth/Height {width_value!r}x{height_value!r}",
             }
         )
         return issues
@@ -604,7 +609,11 @@ def _validate_layer(project_root: Path, room_name: str, layer: dict[str, Any]) -
                 "message": f"{len(tiles)} tiles != {width}x{height}",
             }
         )
-    tileset = _tileset_info(project_root, layer)
+    try:
+        tileset = _tileset_info(project_root, layer)
+    except (GMSError, OSError, ValueError) as exc:
+        issues.append({"code": "tileset_invalid", "room": room_name, "layer": name, "message": str(exc)})
+        return issues
     if not tileset["path"]:
         issues.append(
             {"code": "tileset_missing", "room": room_name, "layer": name, "message": "Layer has no tilesetId.path"}
@@ -658,8 +667,13 @@ def validate_maps(
     issues: list[dict[str, Any]] = []
     checked = 0
     for name in rooms:
-        room_path = _find_room_file(name, root)
-        room_data = _load_room_data(room_path)
+        try:
+            room_data = _load_room_data(_find_room_file(name, root))
+        except (GMSError, OSError, ValueError) as exc:
+            if room_name:
+                raise
+            issues.append({"code": "room_unreadable", "room": name, "layer": None, "message": str(exc)})
+            continue
         for layer in _tile_layers(room_data):
             checked += 1
             issues.extend(_validate_layer(root, name, layer))

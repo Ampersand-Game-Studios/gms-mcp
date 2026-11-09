@@ -15,6 +15,7 @@ Implementation details live under `gms_mcp.server.*`.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import functools
 import inspect
 import ipaddress
@@ -28,7 +29,7 @@ from typing import Any
 from .server.http_security import local_bearer_auth, validate_local_bearer_token
 from .server.mcp_v2 import MCP_CACHE_HINTS, MCPV2Runtime, MutationSerializationMiddleware, ProjectWatchMiddleware
 from .server.project import ProjectAccessError, ProjectAccessPolicy
-from .server.register_all import register_all
+from .server.register_all import ServerConfigurationError, register_all
 from .server.results import expose_host_diagnostics_from_environment, mcp_tool_result
 from .server.validation import invalid_arguments_result, validate_mcp_tool_arguments
 from .server.verification_policy import (
@@ -36,6 +37,7 @@ from .server.verification_policy import (
     clear_pending_compile_verification,
     decide_mutation_verification,
     mark_compile_verification_pending,
+    verification_environment_error,
 )
 from .telemetry import (
     classify_error_family,
@@ -47,7 +49,13 @@ from .telemetry import (
 )
 
 
-from gms_helpers.operation_policy import is_project_mutation, is_real_destructive_operation, operation_scope
+from gms_helpers.operation_policy import (
+    canonical_operation_name,
+    is_project_mutation,
+    is_real_destructive_operation,
+    operation_scope,
+    read_only_mode_enabled,
+)
 
 _HTTP_AUTH_ENV_NAME = "GMS_MCP_HTTP_BEARER_TOKEN"
 _HTTP_MAX_REQUEST_BODY_BYTES = 1 * 1024 * 1024
@@ -85,7 +93,7 @@ def _record_mcp_event(
     error_family: str | None = None,
     execution_mode: str | None = None,
 ) -> None:
-    if os.environ.get("GMS_MCP_READ_ONLY", "").strip() == "1" or operation_scope(tool_name) in {"read", "cache"}:
+    if read_only_mode_enabled() or operation_scope(tool_name) in {"read", "cache"}:
         return
     state = resolve_state()
     if not queue_event(
@@ -267,6 +275,148 @@ async def _run_transactional_async(tool_name: str, arguments: dict[str, Any], ca
         await tx.cleanup_async()
 
 
+# Runtime operations that compile the live project tree must not observe a
+# half-applied mutation. Game control, docs, caches and snapshot builds (which
+# lock their own copy step) never queue behind a mutation or a running game.
+_SERIALIZED_RUNTIME_OPERATIONS = frozenset({"compile", "verification-flush"})
+
+
+def _requires_mutation_lock(tool_name: str, arguments: Any) -> bool:
+    scope = operation_scope(tool_name)
+    if scope in {"project", "vcs", "unknown"}:
+        return True
+    if scope != "runtime":
+        return False
+    name = canonical_operation_name(tool_name)
+    if name == "run":
+        # A foreground run lasts until the game exits; only a background launch is bounded.
+        return bool(arguments.get("background")) if hasattr(arguments, "get") else False
+    return name in _SERIALIZED_RUNTIME_OPERATIONS
+
+
+# Read tools that inspect locks, sessions or the server itself must answer while a
+# mutation holds the project lock.
+_UNLOCKED_READ_OPERATIONS = frozenset(
+    {
+        "bridge-status",
+        "capabilities",
+        "check-updates",
+        "doc-cache-stats",
+        "game-log",
+        "game-status",
+        "help",
+        "live-reload-status",
+        "lock-status",
+        "mcp-health",
+        "run-log",
+        "run-logs",
+        "run-status",
+        "skills-list",
+        "telemetry-status",
+        "verification-status",
+        "version",
+    }
+)
+_SHARED_LOCK_POLL_SECONDS = 0.05
+
+
+def _project_read_lock_path(tool_name: str, arguments: dict[str, Any]) -> Path | None:
+    """Return the transaction lock file a project reader must share, if any exists yet."""
+    if operation_scope(tool_name) != "read" or "project_root" not in arguments:
+        return None
+    if canonical_operation_name(tool_name) in _UNLOCKED_READ_OPERATIONS:
+        return None
+    try:
+        project_root = _resolve_transaction_project_root(arguments)
+    except Exception:
+        return None  # The tool itself reports an unusable project root.
+    # Same file GameMakerProjectTransaction locks exclusively. Readers never create it:
+    # if no mutation has ever run there is nothing to wait for.
+    lock_path = project_root / ".gms_mcp" / "locks" / "project-mutation.lock"
+    return lock_path if lock_path.is_file() and not lock_path.is_symlink() else None
+
+
+def _open_lock_file(lock_path: Path) -> int:
+    return os.open(lock_path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_BINARY", 0))
+
+
+def _try_lock_shared(descriptor: int) -> bool:
+    if os.name == "nt":
+        import msvcrt
+
+        # Windows byte-range locks have no shared mode; hold the same byte briefly.
+        try:
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_NBLCK, 1)
+            return True
+        except OSError:
+            return False
+    import fcntl
+
+    try:
+        fcntl.flock(descriptor, fcntl.LOCK_SH | fcntl.LOCK_NB)
+        return True
+    except BlockingIOError:
+        return False
+
+
+def _unlock_shared(descriptor: int) -> None:
+    try:
+        if os.name == "nt":
+            import msvcrt
+
+            os.lseek(descriptor, 0, os.SEEK_SET)
+            msvcrt.locking(descriptor, msvcrt.LK_UNLCK, 1)
+        else:
+            import fcntl
+
+            fcntl.flock(descriptor, fcntl.LOCK_UN)
+    finally:
+        os.close(descriptor)
+
+
+@contextlib.contextmanager
+def _shared_project_read_lock(tool_name: str, arguments: dict[str, Any]):
+    """Keep project readers from observing another process's half-applied mutation."""
+    lock_path = _project_read_lock_path(tool_name, arguments)
+    if lock_path is None:
+        yield
+        return
+    descriptor = _open_lock_file(lock_path)
+    try:
+        while not _try_lock_shared(descriptor):
+            time.sleep(_SHARED_LOCK_POLL_SECONDS)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    try:
+        yield
+    finally:
+        _unlock_shared(descriptor)
+
+
+@contextlib.asynccontextmanager
+async def _shared_project_read_lock_async(tool_name: str, arguments: dict[str, Any]):
+    """Async form of ``_shared_project_read_lock`` that stays cancellable while waiting."""
+    import anyio
+
+    lock_path = _project_read_lock_path(tool_name, arguments)
+    if lock_path is None:
+        yield
+        return
+    descriptor = _open_lock_file(lock_path)
+    try:
+        while not _try_lock_shared(descriptor):
+            await anyio.sleep(_SHARED_LOCK_POLL_SECONDS)
+    except BaseException:
+        os.close(descriptor)
+        raise
+    try:
+        yield
+    finally:
+        _unlock_shared(descriptor)
+
+
 def _project_access_error_result(tool_name: str) -> dict[str, Any]:
     return {
         "ok": False,
@@ -334,7 +484,8 @@ def _wrap_tool_registration(
                             lambda: func(*call_args, **call_kwargs),
                         )
                     else:
-                        result = await func(*call_args, **call_kwargs)
+                        async with _shared_project_read_lock_async(tool_name, arguments):
+                            result = await func(*call_args, **call_kwargs)
                     duration_ms = int((time.monotonic() - start) * 1000)
                     execution = get_tool_execution_context() or {}
                     record_event(
@@ -444,7 +595,8 @@ def _wrap_tool_registration(
                         lambda: func(*call_args, **call_kwargs),
                     )
                 else:
-                    result = func(*call_args, **call_kwargs)
+                    with _shared_project_read_lock(tool_name, arguments):
+                        result = func(*call_args, **call_kwargs)
                 duration_ms = int((time.monotonic() - start) * 1000)
                 execution = get_tool_execution_context() or {}
                 record_event(
@@ -565,7 +717,10 @@ def build_server(*, http_auth_value: str | None = None, http_auth_issuer_url: st
     globals()["Context"] = Context
 
     if (http_auth_value is None) != (http_auth_issuer_url is None):
-        raise ValueError("HTTP bearer authentication requires both token and issuer URL.")
+        raise ServerConfigurationError("HTTP bearer authentication requires both token and issuer URL.")
+    verification_error = verification_environment_error()
+    if verification_error is not None:
+        raise ServerConfigurationError(verification_error)
     auth, token_verifier = (
         local_bearer_auth(http_auth_value, http_auth_issuer_url)
         if http_auth_value is not None and http_auth_issuer_url is not None
@@ -592,7 +747,7 @@ def build_server(*, http_auth_value: str | None = None, http_auth_issuer_url: st
             ProjectWatchMiddleware(runtime),
             MutationSerializationMiddleware(
                 runtime,
-                lambda name: operation_scope(name) == "read",
+                _requires_mutation_lock,
                 _is_committed_mutation_result,
             ),
         ],
@@ -721,6 +876,10 @@ def main(argv: list[str] | None = None) -> int:
         if expose_host_diagnostics_from_environment():
             sys.stderr.write(f"Details: {e}\n")
         return 1
+    except ServerConfigurationError as exc:
+        # Configuration messages name only environment settings, never host paths.
+        sys.stderr.write(f"MCP server could not start because its configuration is invalid: {exc}\n")
+        return 2
     except Exception as exc:
         sys.stderr.write(
             "MCP server could not start because its approved GameMaker project is unavailable or unsafe.\n"

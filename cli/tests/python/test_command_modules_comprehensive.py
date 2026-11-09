@@ -169,11 +169,12 @@ class TestRoomCommands(unittest.TestCase):
         self.test_args.layer_name = "Instances_New"
         self.test_args.layer_type = "instance"
         self.test_args.depth = 100
+        self.test_args.tileset = None
 
         result = handle_room_layer_add(self.test_args)
 
         self.assertTrue(result)
-        mock_add.assert_called_once_with("r_test", "Instances_New", "instance", 100)
+        mock_add.assert_called_once_with("r_test", "Instances_New", "instance", 100, tileset_name=None)
 
     @patch("gms_helpers.commands.room_commands.list_instances")
     def test_handle_room_instance_list_returns_structured_result(self, mock_list):

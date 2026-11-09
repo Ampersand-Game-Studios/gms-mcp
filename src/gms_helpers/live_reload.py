@@ -26,11 +26,13 @@ import subprocess
 from pathlib import Path
 from typing import Any
 
+from .agent_locks import DirectoryLock
 from .exceptions import ValidationError
+from .mac_runtime import project_identity
 from .project_config import global_setting, project_setting, project_live_reload_command_warnings
 from .path_safety import project_relative_path
 from .transactions import _assert_plain_infrastructure
-from .utils import _read_text_preserving_newlines
+from .utils import _read_text_preserving_newlines, atomic_write_text
 
 
 class LiveReloadError(ValidationError):
@@ -114,9 +116,49 @@ def status(project_root: str | Path, timeout_seconds: float = 10.0) -> dict[str,
     return result
 
 
+def _state_path(project_root: Path) -> Path:
+    """Host-side record of the start process this server spawned (outside the project tree)."""
+    return Path.home() / ".gms-mcp" / "live_reload" / f"{project_identity(project_root)}.json"
+
+
+def _running_start_process(project_root: Path) -> int | None:
+    """PID of a start process we launched that is still the same process, else None."""
+    from .run_session import process_identity
+
+    try:
+        state = json.loads(_state_path(project_root).read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return None
+    pid = state.get("pid") if isinstance(state, dict) else None
+    if not isinstance(pid, int) or not state.get("started"):
+        return None
+    return pid if process_identity(pid) == (state.get("started"), state.get("exe")) else None
+
+
 def start(project_root: str | Path) -> dict[str, Any]:
+    """Start the tool once; while a start process we launched is still running, report it instead."""
     root = Path(project_root).resolve()
     command = _command(root, "start")
+    guard = DirectoryLock(f"live_reload_{project_identity(root)}.lock", purpose=f"live-reload start {root}")
+    guard.acquire(timeout_seconds=30)
+    try:
+        running = _running_start_process(root)
+        if running is not None:
+            return {
+                "ok": True,
+                "started": False,
+                "already_running": True,
+                "pid": running,
+                "log": ".gms_mcp/live_reload.log",
+                "warnings": project_live_reload_command_warnings(root),
+                "message": "The live-reload tool is already running for this project; stop it before starting again.",
+            }
+        return _start_process(root, command)
+    finally:
+        guard.release()
+
+
+def _start_process(root: Path, command: list[str]) -> dict[str, Any]:
     log_path = root / ".gms_mcp" / "live_reload.log"
     project_relative_path(".gms_mcp/live_reload.log", project_root=root, kind="live-reload log")
     _assert_plain_infrastructure(root, log_path)
@@ -135,6 +177,16 @@ def start(project_root: str | Path) -> dict[str, Any]:
         exit_code = process.wait(timeout=3.0)
     except subprocess.TimeoutExpired:
         exit_code = None
+    if exit_code is None:
+        from .run_session import process_identity
+
+        identity = process_identity(process.pid)
+        if identity is not None:
+            state_path = _state_path(root)
+            state_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+            atomic_write_text(
+                state_path, json.dumps({"pid": process.pid, "started": identity[0], "exe": identity[1]}) + "\n"
+            )
     if exit_code not in (None, 0):
         _assert_plain_infrastructure(root, log_path)
         tail = log_path.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]
@@ -160,6 +212,8 @@ def stop(project_root: str | Path, timeout_seconds: float = 30.0) -> dict[str, A
     command = _command(root, "stop")
     try:
         completed = subprocess.run(command, cwd=str(root), capture_output=True, timeout=timeout_seconds, check=False)
+        if completed.returncode == 0:
+            _state_path(root).unlink(missing_ok=True)
     except subprocess.TimeoutExpired:
         return {
             "ok": False,

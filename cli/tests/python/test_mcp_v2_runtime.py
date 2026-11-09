@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 import tempfile
 import threading
 import time
@@ -341,7 +342,7 @@ class MCPV2RuntimeTests(unittest.IsolatedAsyncioTestCase):
             runtime = _runtime(Path(temp_dir))
             middleware = MutationSerializationMiddleware(
                 runtime,
-                lambda name: name == "gm_project_info",
+                lambda name, _arguments: name != "gm_project_info",
                 lambda result: bool(result.get("committed")) if isinstance(result, dict) else False,
             )
             active_writes = 0
@@ -371,6 +372,70 @@ class MCPV2RuntimeTests(unittest.IsolatedAsyncioTestCase):
             await asyncio.gather(first, second)
 
         self.assertEqual(maximum_writes, 1)
+
+    async def test_tool_state_directories_never_trigger_project_updates(self):
+        from gms_mcp.server.mcp_v2 import _snapshot_project
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "game.yyp").write_text("{}", encoding="utf-8")
+            for state_directory in (".gms_mcp", ".gms-mcp", ".gms-backups"):
+                (root / state_directory).mkdir()
+                (root / state_directory / "state.json").write_text("{}", encoding="utf-8")
+
+            self.assertEqual([entry[0] for entry in _snapshot_project(root)], ["game.yyp"])
+
+    def test_game_control_docs_and_foreground_runs_never_take_the_mutation_lock(self):
+        from gms_mcp.gamemaker_mcp_server import _requires_mutation_lock
+
+        for name, arguments in (
+            ("gm_run_stop", {}),
+            ("gm_run", {"background": False}),
+            ("gm_run", {}),
+            ("gm_game_stop", {}),
+            ("gm_game_command", {}),
+            ("gm_run_command", {}),
+            ("gm_doc_lookup", {}),
+            ("gm_doc_cache_clear", {}),
+            ("gm_project_info", {}),
+        ):
+            self.assertFalse(_requires_mutation_lock(name, arguments), name)
+        for name, arguments in (
+            ("gm_create_object", {}),
+            ("gm_vcs_stage", {}),
+            ("gm_compile", {}),
+            ("gm_run", {"background": True}),
+        ):
+            self.assertTrue(_requires_mutation_lock(name, arguments), name)
+
+    @unittest.skipIf(os.name == "nt", "POSIX flock probe")
+    async def test_project_readers_wait_for_another_process_mutation_lock(self):
+        import fcntl
+
+        from gms_mcp.gamemaker_mcp_server import _shared_project_read_lock, _shared_project_read_lock_async
+
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir)
+            (root / "game.yyp").write_text("{}", encoding="utf-8")
+            lock_path = root / ".gms_mcp" / "locks" / "project-mutation.lock"
+            lock_path.parent.mkdir(parents=True)
+            entered = threading.Event()
+            with lock_path.open("a+", encoding="utf-8") as writer:
+                fcntl.flock(writer.fileno(), fcntl.LOCK_EX)
+
+                def read():
+                    with _shared_project_read_lock("gm_list_assets", {"project_root": str(root)}):
+                        entered.set()
+
+                reader = threading.Thread(target=read)
+                reader.start()
+                self.assertFalse(entered.wait(0.2))
+                # Lock inspection must still answer while the mutation holds the lock.
+                async with _shared_project_read_lock_async("gm_lock_status", {"project_root": str(root)}):
+                    pass
+                fcntl.flock(writer.fileno(), fcntl.LOCK_UN)
+                self.assertTrue(entered.wait(2))
+                reader.join(2)
 
     async def test_structured_tool_failures_set_is_error_without_host_leakage(self):
         result = mcp_tool_result(

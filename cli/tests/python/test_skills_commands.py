@@ -16,6 +16,7 @@ import zipfile
 from contextlib import redirect_stderr
 from io import StringIO
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import jsonschema
@@ -305,8 +306,8 @@ class TestSkillsCommands(unittest.TestCase):
         self.assertIn("Removed", stdout)
         self.assertFalse(skills_dir.exists())
 
-    def test_skills_uninstall_openclaw_project_removes_legacy_dir(self):
-        """Test uninstall removes both current and legacy OpenClaw project dirs."""
+    def test_skills_uninstall_openclaw_project_keeps_unmanaged_legacy_dir(self):
+        """Uninstall removes installed files only; a legacy dir without a manifest is left alone."""
         self.run_gms_command(["skills", "install", "--openclaw", "--project"], cwd=self.temp_project)
         current_dir = self.temp_project / "skills" / "gms-mcp"
         legacy_dir = self.temp_project / ".openclaw" / "skills" / "gms-mcp"
@@ -320,9 +321,37 @@ class TestSkillsCommands(unittest.TestCase):
             ["skills", "uninstall", "--openclaw", "--project"], cwd=self.temp_project
         )
         self.assertEqual(returncode, 0)
-        self.assertIn("both current and legacy OpenClaw workspace skill paths", stdout)
+        self.assertIn("has no install manifest", stdout)
         self.assertFalse(current_dir.exists())
-        self.assertFalse(legacy_dir.exists())
+        self.assertEqual((legacy_dir / "legacy.md").read_text(encoding="utf-8"), "legacy")
+
+    def test_skills_uninstall_keeps_user_added_files(self):
+        self.run_gms_command(["skills", "install", "--project"], cwd=self.temp_project)
+        skills_dir = self.temp_project / ".claude" / "skills" / "gms-mcp"
+        (skills_dir / "my-notes.md").write_text("mine", encoding="utf-8")
+
+        returncode, stdout, stderr = self.run_gms_command(["skills", "uninstall", "--project"], cwd=self.temp_project)
+        self.assertEqual(returncode, 0)
+        self.assertEqual((skills_dir / "my-notes.md").read_text(encoding="utf-8"), "mine")
+        self.assertEqual([p.name for p in skills_dir.rglob("*") if p.is_file()], ["my-notes.md"])
+
+    def test_skills_uninstall_refuses_the_bundled_source(self):
+        from gms_helpers.commands import skills_commands
+
+        source_parent = self.temp_project / "skills"
+        (source_parent / "gms-mcp").mkdir(parents=True)
+        (source_parent / "gms-mcp" / "SKILL.md").write_text("source", encoding="utf-8")
+        old_cwd = Path.cwd()
+        os.chdir(self.temp_project)
+        try:
+            with patch.object(skills_commands, "get_skills_source_dir", return_value=source_parent):
+                result = skills_commands.handle_skills_uninstall(SimpleNamespace(openclaw=True, project=True))
+                install = skills_commands.handle_skills_install(SimpleNamespace(openclaw=True, project=True))
+        finally:
+            os.chdir(old_cwd)
+        self.assertFalse(result["success"])
+        self.assertFalse(install["success"])
+        self.assertEqual((source_parent / "gms-mcp" / "SKILL.md").read_text(encoding="utf-8"), "source")
 
     def test_skills_uninstall_not_installed(self):
         """Test skills uninstall when nothing is installed."""
@@ -352,6 +381,15 @@ class TestSkillsSourceFiles(unittest.TestCase):
             fixture.mkdir()
             (fixture / "stale.txt").write_text("stale", encoding="utf-8")
 
+            # A non-empty folder that was not created as a synthetic project is never replaced.
+            with self.assertRaisesRegex(ValueError, "Refusing to replace"):
+                create_minimal_base_project(fixture)
+            self.assertTrue((fixture / "stale.txt").exists())
+
+            # A previous synthetic project (it carries the sentinel) is replaced wholesale.
+            (fixture / "stale.txt").unlink()
+            create_minimal_base_project(fixture)
+            (fixture / "stale.txt").write_text("stale", encoding="utf-8")
             create_minimal_base_project(fixture)
 
             self.assertFalse((fixture / "stale.txt").exists())

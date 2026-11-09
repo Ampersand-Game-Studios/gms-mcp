@@ -319,7 +319,7 @@ def test_direct_worker_timeout_reports_verified_termination(tmp_path: Path) -> N
         )
 
     assert result.timed_out
-    assert result.result == {"terminated": True}
+    assert result.result == {"terminated": True, "cancelled": False}
 
 
 def test_direct_worker_system_exit_and_request_validation(tmp_path: Path) -> None:

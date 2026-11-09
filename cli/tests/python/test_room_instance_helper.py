@@ -218,14 +218,14 @@ class TestRoomInstanceHelper(unittest.TestCase):
         self.assertEqual((modified["x"], modified["y"], modified["rotation"]), (30.0, 40.0, 15.0))
 
         self.assertTrue(set_creation_code("r_test", instance_id, 'show_debug_message("nested");'))
-        self.assertTrue((Path("rooms/r_test") / f"{instance_id}.gml").is_file())
+        self.assertTrue((Path("rooms/r_test") / f"InstanceCreationCode_{instance_id}.gml").is_file())
         with_code = _find_layer_by_name(_load_room_data(room_path), "Inherited Instances")["instances"][0]
         self.assertTrue(with_code["hasCreationCode"])
 
         self.assertTrue(remove_instance("r_test", instance_id))
         saved_layer = _find_layer_by_name(_load_room_data(room_path), "Inherited Instances")
         self.assertEqual(saved_layer["instances"], [])
-        self.assertFalse((Path("rooms/r_test") / f"{instance_id}.gml").exists())
+        self.assertFalse((Path("rooms/r_test") / f"InstanceCreationCode_{instance_id}.gml").exists())
 
     def test_add_instance_success(self):
         """Test successfully adding instances to a room."""

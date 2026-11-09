@@ -237,6 +237,26 @@ class TestAgentSetupFullCoverage(unittest.TestCase):
             result = test_gms_command()
             self.assertFalse(result)
 
+    def test_slow_gms_is_not_treated_as_missing(self):
+        from gms_helpers import agent_setup
+
+        with (
+            patch.object(agent_setup, "_find_gms_on_path", return_value="/usr/local/bin/gms"),
+            patch("subprocess.run", side_effect=subprocess.TimeoutExpired("gms", 5)) as run,
+        ):
+            self.assertEqual(agent_setup.probe_gms_command(), "unresponsive")
+            agent_setup.auto_setup()
+        # Only the two probes ran; the installer was never launched over the existing gms.
+        self.assertTrue(all("gms_helpers.install" not in call.args[0] for call in run.call_args_list))
+
+    def test_gms_lookup_uses_bare_name_so_pathext_applies(self):
+        from gms_helpers import agent_setup
+
+        with patch("gms_helpers.agent_setup.shutil.which", return_value=None) as which:
+            agent_setup._find_gms_on_path()
+        if which.called:
+            self.assertEqual(which.call_args.args[0], "gms")
+
     def test_setup_powershell_direct_execution_exception(self):
         """Test setup_powershell_function when direct execution test raises exception."""
         from gms_helpers.agent_setup import setup_powershell_function

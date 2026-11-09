@@ -12,7 +12,21 @@ from ..project import ProjectAccessError, _ensure_cli_on_sys_path, _resolve_repo
 from ..resolution import ResolutionRuntime
 from ..tool_types import OutputMode
 
-AssetNameResolution = Any
+# Per-tool name-collision resolvers; register() replaces each with its Resolve annotation.
+CreateScriptResolution = Any
+CreateObjectResolution = Any
+CreateSpriteResolution = Any
+CreateRoomResolution = Any
+CreateFolderResolution = Any
+CreateFontResolution = Any
+CreateShaderResolution = Any
+CreateAnimCurveResolution = Any
+CreateSoundResolution = Any
+CreatePathResolution = Any
+CreateTilesetResolution = Any
+CreateTimelineResolution = Any
+CreateSequenceResolution = Any
+CreateNoteResolution = Any
 
 
 def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) -> None:
@@ -21,11 +35,16 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
 
     globals()["NameCollisionDecision"] = NameCollisionDecision
 
-    async def resolve_asset_name(ctx: Context, name: str, project_root: str = "."):
-        try:
-            return await resolution_runtime.asset_name_collision_resolver()(name, project_root, ctx)
-        except ProjectAccessError:
-            return None
+    def asset_name_resolution(tool_name: str) -> Any:
+        resolver = resolution_runtime.asset_name_collision_resolver(tool_name)
+
+        async def resolve_asset_name(ctx: Context, name: str, project_root: str = "."):
+            try:
+                return await resolver(name, project_root, ctx)
+            except ProjectAccessError:
+                return None
+
+        return Annotated[NameCollisionDecision, Resolve(resolve_asset_name)]
 
     def resolved_asset_name(name: str, resolution: NameCollisionDecision | None) -> str:
         if resolution is None:
@@ -34,7 +53,24 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             return resolution.replacement_name
         return ""
 
-    globals()["AssetNameResolution"] = Annotated[NameCollisionDecision, Resolve(resolve_asset_name)]
+    # One resolver per tool, so each applies that tool's own boundary checks.
+    for kind, alias_name in {
+        "script": "CreateScriptResolution",
+        "object": "CreateObjectResolution",
+        "sprite": "CreateSpriteResolution",
+        "room": "CreateRoomResolution",
+        "folder": "CreateFolderResolution",
+        "font": "CreateFontResolution",
+        "shader": "CreateShaderResolution",
+        "animcurve": "CreateAnimCurveResolution",
+        "sound": "CreateSoundResolution",
+        "path": "CreatePathResolution",
+        "tileset": "CreateTilesetResolution",
+        "timeline": "CreateTimelineResolution",
+        "sequence": "CreateSequenceResolution",
+        "note": "CreateNoteResolution",
+    }.items():
+        globals()[alias_name] = asset_name_resolution(f"gm_create_{kind}")
 
     # -----------------------------
     # Asset creation tools
@@ -42,7 +78,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_script(
         name: str,
-        resolution: AssetNameResolution = None,
+        resolution: CreateScriptResolution = None,
         parent_path: str = "",
         is_constructor: bool = False,
         skip_maintenance: bool = True,
@@ -95,7 +131,6 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             "asset",
             "create",
             "script",
-            name,
             "--parent-path",
             parent_path,
         ]
@@ -106,6 +141,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         if no_auto_fix:
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
+        cli_args.extend(["--", name])
 
         return await _run_with_fallback(
             direct_handler=handle_asset_create,
@@ -122,7 +158,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_object(
         name: str,
-        resolution: AssetNameResolution = None,
+        resolution: CreateObjectResolution = None,
         parent_path: str = "",
         sprite_id: str = "",
         parent_object: str = "",
@@ -163,7 +199,6 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             "asset",
             "create",
             "object",
-            name,
             "--parent-path",
             parent_path,
         ]
@@ -176,6 +211,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         if no_auto_fix:
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
+        cli_args.extend(["--", name])
 
         return await _run_with_fallback(
             direct_handler=handle_asset_create,
@@ -192,7 +228,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_sprite(
         name: str,
-        resolution: AssetNameResolution = None,
+        resolution: CreateSpriteResolution = None,
         parent_path: str = "",
         frame_count: int = 1,
         skip_maintenance: bool = True,
@@ -237,7 +273,6 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             "asset",
             "create",
             "sprite",
-            name,
             "--parent-path",
             parent_path,
             "--frame-count",
@@ -248,6 +283,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         if no_auto_fix:
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
+        cli_args.extend(["--", name])
 
         return await _run_with_fallback(
             direct_handler=handle_asset_create,
@@ -264,7 +300,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_room(
         name: str,
-        resolution: AssetNameResolution = None,
+        resolution: CreateRoomResolution = None,
         parent_path: str = "",
         width: int = 1024,
         height: int = 768,
@@ -305,7 +341,6 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             "asset",
             "create",
             "room",
-            name,
             "--parent-path",
             parent_path,
             "--width",
@@ -318,6 +353,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         if no_auto_fix:
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
+        cli_args.extend(["--", name])
 
         return await _run_with_fallback(
             direct_handler=handle_asset_create,
@@ -335,7 +371,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     async def gm_create_folder(
         name: str,
         path: str,
-        resolution: AssetNameResolution = None,
+        resolution: CreateFolderResolution = None,
         skip_maintenance: bool = True,
         no_auto_fix: bool = False,
         maintenance_verbose: bool = False,
@@ -376,7 +412,6 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             "asset",
             "create",
             "folder",
-            name,
             "--path",
             path,
         ]
@@ -385,6 +420,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         if no_auto_fix:
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
+        cli_args.extend(["--", name])
 
         return await _run_with_fallback(
             direct_handler=handle_asset_create,
@@ -401,7 +437,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_font(
         name: str,
-        resolution: AssetNameResolution = None,
+        resolution: CreateFontResolution = None,
         parent_path: str = "",
         font_name: str = "Arial",
         size: int = 12,
@@ -451,7 +487,6 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             "asset",
             "create",
             "font",
-            name,
             "--parent-path",
             parent_path,
             "--font-name",
@@ -471,6 +506,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         if no_auto_fix:
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
+        cli_args.extend(["--", name])
 
         return await _run_with_fallback(
             direct_handler=handle_asset_create,
@@ -487,7 +523,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_shader(
         name: str,
-        resolution: AssetNameResolution = None,
+        resolution: CreateShaderResolution = None,
         parent_path: str = "",
         shader_type: int = 1,
         skip_maintenance: bool = True,
@@ -522,12 +558,13 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             maintenance_verbose=maintenance_verbose,
             project_root=project_root,
         )
-        cli_args = ["asset", "create", "shader", name, "--parent-path", parent_path, "--shader-type", str(shader_type)]
+        cli_args = ["asset", "create", "shader", "--parent-path", parent_path, "--shader-type", str(shader_type)]
         if skip_maintenance:
             cli_args.append("--skip-maintenance")
         if no_auto_fix:
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
+        cli_args.extend(["--", name])
 
         return await _run_with_fallback(
             direct_handler=handle_asset_create,
@@ -544,7 +581,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_animcurve(
         name: str,
-        resolution: AssetNameResolution = None,
+        resolution: CreateAnimCurveResolution = None,
         parent_path: str = "",
         curve_type: str = "linear",
         channel_name: str = "curve",
@@ -585,7 +622,6 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             "asset",
             "create",
             "animcurve",
-            name,
             "--parent-path",
             parent_path,
             "--curve-type",
@@ -598,6 +634,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         if no_auto_fix:
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
+        cli_args.extend(["--", name])
 
         return await _run_with_fallback(
             direct_handler=handle_asset_create,
@@ -614,7 +651,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_sound(
         name: str,
-        resolution: AssetNameResolution = None,
+        resolution: CreateSoundResolution = None,
         parent_path: str = "",
         volume: float = 1.0,
         pitch: float = 1.0,
@@ -663,7 +700,6 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             "asset",
             "create",
             "sound",
-            name,
             "--parent-path",
             parent_path,
             "--volume",
@@ -684,6 +720,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         if no_auto_fix:
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
+        cli_args.extend(["--", name])
 
         return await _run_with_fallback(
             direct_handler=handle_asset_create,
@@ -700,7 +737,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_path(
         name: str,
-        resolution: AssetNameResolution = None,
+        resolution: CreatePathResolution = None,
         parent_path: str = "",
         closed: bool = False,
         precision: int = 4,
@@ -743,7 +780,6 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             "asset",
             "create",
             "path",
-            name,
             "--parent-path",
             parent_path,
             "--precision",
@@ -758,6 +794,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         if no_auto_fix:
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
+        cli_args.extend(["--", name])
 
         return await _run_with_fallback(
             direct_handler=handle_asset_create,
@@ -774,7 +811,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_tileset(
         name: str,
-        resolution: AssetNameResolution = None,
+        resolution: CreateTilesetResolution = None,
         parent_path: str = "",
         sprite_id: str = "",
         tile_width: int = 32,
@@ -825,7 +862,6 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             "asset",
             "create",
             "tileset",
-            name,
             "--parent-path",
             parent_path,
             "--tile-width",
@@ -848,6 +884,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         if no_auto_fix:
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
+        cli_args.extend(["--", name])
 
         return await _run_with_fallback(
             direct_handler=handle_asset_create,
@@ -864,7 +901,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_timeline(
         name: str,
-        resolution: AssetNameResolution = None,
+        resolution: CreateTimelineResolution = None,
         parent_path: str = "",
         skip_maintenance: bool = True,
         no_auto_fix: bool = False,
@@ -897,7 +934,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             maintenance_verbose=maintenance_verbose,
             project_root=project_root,
         )
-        cli_args = ["asset", "create", "timeline", name]
+        cli_args = ["asset", "create", "timeline"]
         if parent_path:
             cli_args.extend(["--parent-path", parent_path])
         if skip_maintenance:
@@ -905,6 +942,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         if no_auto_fix:
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
+        cli_args.extend(["--", name])
 
         return await _run_with_fallback(
             direct_handler=handle_asset_create,
@@ -921,7 +959,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_sequence(
         name: str,
-        resolution: AssetNameResolution = None,
+        resolution: CreateSequenceResolution = None,
         parent_path: str = "",
         length: float = 60.0,
         playback_speed: float = 30.0,
@@ -958,7 +996,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             maintenance_verbose=maintenance_verbose,
             project_root=project_root,
         )
-        cli_args = ["asset", "create", "sequence", name]
+        cli_args = ["asset", "create", "sequence"]
         if parent_path:
             cli_args.extend(["--parent-path", parent_path])
         cli_args.extend(["--length", str(length), "--playback-speed", str(playback_speed)])
@@ -967,6 +1005,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         if no_auto_fix:
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
+        cli_args.extend(["--", name])
 
         return await _run_with_fallback(
             direct_handler=handle_asset_create,
@@ -983,7 +1022,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     @mcp.tool()
     async def gm_create_note(
         name: str,
-        resolution: AssetNameResolution = None,
+        resolution: CreateNoteResolution = None,
         parent_path: str = "",
         content: str = "",
         skip_maintenance: bool = True,
@@ -1018,7 +1057,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             maintenance_verbose=maintenance_verbose,
             project_root=project_root,
         )
-        cli_args = ["asset", "create", "note", name]
+        cli_args = ["asset", "create", "note"]
         if parent_path:
             cli_args.extend(["--parent-path", parent_path])
         if content:
@@ -1028,6 +1067,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         if no_auto_fix:
             cli_args.append("--no-auto-fix")
         cli_args.extend(["--maintenance-verbose" if maintenance_verbose else "--no-maintenance-verbose"])
+        cli_args.extend(["--", name])
 
         return await _run_with_fallback(
             direct_handler=handle_asset_create,

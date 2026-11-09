@@ -141,7 +141,44 @@ class TestInstallWrapperCoverage(unittest.TestCase):
 
             self.assertTrue(result)
             self.assertIn("WindowsApps not found", output)
-            self.assertIn("PowerShell profile", output)
+            self.assertIn("no folder to add to PATH", output)
+            self.assertNotIn("gms.bat", output)
+
+    def test_unix_install_never_replaces_foreign_files_or_symlinks(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            home = Path(temp_dir)
+            local_bin = home / ".local" / "bin"
+            local_bin.mkdir(parents=True)
+            target = local_bin / "gms"
+            other = home / "other-program"
+            other.write_text("#!/bin/sh\necho other\n", encoding="utf-8")
+            for setup in ("foreign", "symlink"):
+                if target.exists() or target.is_symlink():
+                    target.unlink()
+                if setup == "foreign":
+                    target.write_text("#!/bin/sh\necho someone else's gms\n", encoding="utf-8")
+                else:
+                    target.symlink_to(other)
+                with (
+                    patch("gms_helpers.install.platform.system", return_value="Linux"),
+                    patch("gms_helpers.install.Path.home", return_value=home),
+                ):
+                    _result, output = _capture_output(install_module.install_gms_command, auto=False)
+                self.assertIn("leaving it alone", output)
+                self.assertEqual(other.read_text(encoding="utf-8"), "#!/bin/sh\necho other\n")
+                if setup == "foreign":
+                    self.assertIn("someone else's gms", target.read_text(encoding="utf-8"))
+                else:
+                    self.assertTrue(target.is_symlink())
+
+            target.unlink()
+            target.write_text('#!/bin/sh\nexec env python3 -P -m gms_helpers.gms "$@"\n', encoding="utf-8")
+            with (
+                patch("gms_helpers.install.platform.system", return_value="Linux"),
+                patch("gms_helpers.install.Path.home", return_value=home),
+            ):
+                _capture_output(install_module.install_gms_command, auto=False)
+            self.assertIn(sys.executable, target.read_text(encoding="utf-8"))
 
     def test_parse_args_and_run_exits_with_install_result(self):
         argv_backup = sys.argv[:]

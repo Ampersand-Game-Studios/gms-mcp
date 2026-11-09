@@ -152,7 +152,13 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         Compile a throwaway copy of the project with a test script injected, run the game, and return PASS/FAIL.
 
         The test is GML passed as test_code (or a path in test_file). It must define
-        `function agent_test_step(_frame) { ... }`, which is called once per frame from frame 1.
+        `function agent_test_step(_frame) { ... }`, called once per frame from frame 1 by a
+        global time source after Begin Step and before Step. This is NOT a post-Step callback:
+        compare completed movement on the next callback against target state saved on the
+        preceding callback. Simulated input must span real frames to reach Step; project
+        transform systems may require their explicit update before isolated physics checks.
+        End Step may clear current input fields: inspect the project's previous-frame sample.
+        Position collision fixtures using actual sprite origins and mask bounds.
         Helpers available to the test:
           test_log(value)             adds a "[TEST] ..." line to the result
           test_check(condition, text) "[TEST] PASS/FAIL text"; any failed check fails the run
@@ -217,13 +223,14 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         When several people have uncommitted assets in one working tree, `git add` of the .yyp
         would commit all of their registrations too. This stages the .yyp as "HEAD plus only the
         registrations belonging to `paths`" (worked out automatically; pass yyp_entries to name
-        them: asset .yy paths, "folders/....yy", "included:datafiles/dir/file"). The .yyp in the
-        working tree is not modified.
+        them: asset .yy paths, "folders/....yy", "included:datafiles/dir/file", "texturegroup:<name>",
+        "audiogroup:<name>", "config:<name>"). Room order follows staged rooms, and a composed .yyp
+        that would be inconsistent is refused. The .yyp in the working tree is not modified.
 
         paths are relative to the folder containing the .yyp; a path outside it can be given
         relative to the repository root with a leading "/" (e.g. "/docs/systems/FOO.md"). Deleted
         paths are staged as deletions. Pass commit_message to commit what was staged; nothing is
-        ever pushed. Runs under the shared repository lock.
+        ever pushed. Runs under the project mutation lock and the shared repository lock.
         """
         _ = ctx
         from gms_helpers.vcs_stage import stage_paths

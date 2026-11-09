@@ -23,6 +23,14 @@ def test_catastrophic_pattern_is_stopped_at_deadline():
     assert time.monotonic() - started < 10
 
 
+def test_quantifier_free_alternation_is_stopped_at_deadline():
+    # Each (?:a|.) doubles the paths tried at every start position, with no quantifier in the pattern.
+    started = time.monotonic()
+    with pytest.raises(RegexTimeoutError):
+        search_many("(?:a|.)" * 40 + "b", ["a" * 80], timeout=1.0)
+    assert time.monotonic() - started < 10
+
+
 def test_invalid_and_oversized_patterns_are_rejected():
     with pytest.raises(re.error):
         search_many("(unclosed", ["x"])

@@ -11,12 +11,12 @@ import sys
 from pathlib import Path
 from typing import Dict, List, Any, Optional
 
-from .utils import load_json_loose, save_json_loose, find_yyp, validate_working_directory, validate_name
+from .utils import load_json_loose, save_json_loose, find_yyp, validate_name
 from .exceptions import GMSError, ProjectNotFoundError, AssetNotFoundError, ValidationError
 from .results import OperationResult
 from .workflow import duplicate_asset, rename_asset, delete_asset
 from .path_safety import validate_resource_name
-from .room_instance_helper import _find_room_file, _iter_layers
+from .room_instance_helper import _find_room_file, _iter_layers, run_room_helper_cli
 
 # ------------------------------------------------------------------
 # Internal Helpers
@@ -239,25 +239,9 @@ def main():
     list_parser.add_argument("--verbose", action="store_true", help="Show layer details")
     list_parser.set_defaults(func=handle_list)
 
-    if len(sys.argv) == 1:
-        parser.print_help()
-        return False
-
-    validate_working_directory()
-    args = parser.parse_args()
-
-    if hasattr(args, "func"):
-        try:
-            return args.func(args)
-        except GMSError as e:
-            print(f"[ERROR] {e.message}")
-            raise
-        except Exception as e:
-            print(f"[ERROR] Unexpected error: {e}")
-            return False
-    else:
-        parser.print_help()
-        return False
+    return run_room_helper_cli(
+        parser, "ops", {"duplicate": "duplicate", "rename": "rename", "delete": "delete", "list": "list"}
+    )
 
 
 if __name__ == "__main__":

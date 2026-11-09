@@ -1,0 +1,107 @@
+{
+ "product": "GMS MCP",
+ "text": "An MCP server and CLI (Python package `gms-mcp`, with `src/gms_mcp` and `src/gms_helpers`) that lets coding agents read, edit, build and run GameMaker projects, plus a Cloudflare telemetry service. Judge it as GameMaker agent tooling infrastructure, not as a game: tool design, GameMaker correctness, validation and agent safety.",
+ "measures": [
+  "Structure",
+  "Clarity",
+  "Tests",
+  "Safety",
+  "Runtime",
+  "Change cost",
+  "Operability"
+ ],
+ "by_mode": {
+  "Tooling": [
+   "Structure",
+   "Clarity",
+   "Tests",
+   "Safety",
+   "Operability"
+  ],
+  "Build": [
+   "Clarity",
+   "Change cost",
+   "Operability"
+  ]
+ },
+ "audience": "Callum and coding agents",
+ "paths": {
+  "ignore": [
+   "*.min.js",
+   ".coverage",
+   ".coverage.*",
+   ".gms_mcp/",
+   ".gmcache/",
+   ".pytest_cache/",
+   ".ruff_cache/",
+   ".venv/",
+   "__pycache__/",
+   "build/",
+   "dist/",
+   "node_modules/",
+   "package-lock.json",
+   "uv.lock",
+   "LICENSE",
+   "docs/",
+   "documentation/",
+   "cli/docs/",
+   "CHANGELOG.md",
+   "CONTRIBUTING.md",
+   ".agents/",
+   ".mcp.json",
+   ".cursor/",
+   ".cursorrules",
+   "gamemaker/"
+  ]
+ },
+ "layout": [
+  "MCP server: `src/gms_mcp/**` (server, tool registration in `server/tools/`, tool types and schemas).",
+  "GameMaker helpers and CLI core: `src/gms_helpers/**` (`gms.py` CLI, asset/event/room/project helpers, run sessions, runtime discovery, locks, snapshot builds, workflow); `cli/` holds the legacy launchers (`gms`, `gms.bat`, `install.py`, `agent_setup.py`).",
+  "Tests: `cli/tests/python/**` (pytest, `testpaths` in `pyproject.toml`), MCP conformance fixtures in `cli/tests/fixtures/`.",
+  "Packaging and quality tooling: `pyproject.toml`, `setup.py`, `MANIFEST.in`, `pyrightconfig.json`, `scripts/` (`build_release.py`, `verify_package_artifacts.py`, `run_mcp_tool_smoke.py`, `run_real_gamemaker_smoke.py`, `generate_quality_reports.py`, `generate_compatibility_matrix.py`, `setup_gamemaker_ci.py`), `.github/workflows/ci.yml` and `publish.yml`.",
+  "Shipped agent integration: `skills/gms-mcp/**`, `hooks/**`, `.claude-plugin/`.",
+  "Telemetry service: `services/telemetry/` (Cloudflare Worker, node:test tests, Biome).",
+  "Out of scope: prose docs (`documentation/`, `docs/`, `cli/docs/`; `documentation/COMPATIBILITY_MATRIX.md` is generated), the gitignored `gamemaker/` sample projects and `test_project.yyp` fixture, and local agent config (`.agents/`, `.mcp.json`, `.cursor/`)."
+ ],
+ "focus": [
+  "MCP tool design and ergonomics: registration, schemas, error handling and logging",
+  "GameMaker correctness of asset, event, room and `.yyp` operations, respecting GameMaker asset-organisation rules",
+  "Validation, testability and agent safety (locks, transactional writes, trusted command lookup)",
+  "Python helper architecture and the CLI/MCP boundary",
+  "Release, packaging and CI quality gates",
+  "Sample and generated GameMaker projects are fixtures, not authored product logic"
+ ],
+ "inspect": [
+  "MCP server/tool registration, schemas, command execution, error handling and logging",
+  "GameMaker asset/project helpers, `.yyp` manipulation, folder/path handling, event/room operations and validation",
+  "run sessions, runtime discovery and multi-agent locks",
+  "tests, package config, CI, setup scripts and generated-artifact exclusions"
+ ],
+ "rules": [],
+ "checks": [
+  "uv sync --frozen --all-extras",
+  "uv run --frozen ruff check . && uv run --frozen ruff format --check .",
+  "uv run --frozen pyright",
+  "uv run --frozen python scripts/generate_compatibility_matrix.py --check",
+  "COVERAGE_CORE=ctrace uv run --frozen pytest --cov --cov-context=test --junitxml=build/reports/junit.xml && uv run --frozen coverage json --show-contexts -o build/reports/coverage.json",
+  "uv run --frozen python scripts/run_mcp_tool_smoke.py --init-minimal-base --base-project build/mcp-smoke/base-project --work-root build/mcp-smoke/work --output build/reports/mcp_tool_smoke_report.json --tools gm_safe_delete gm_create_object gm_event_add gm_maintenance_validate_json gm_room_instance_add gm_room_layer_add gm_verification_status gm_list_assets gm_project_info gm_search_references gm_workflow_duplicate gm_sprite_frame_count",
+  "uv run --frozen python scripts/build_release.py --output-dir dist && uv run --frozen python scripts/verify_package_artifacts.py dist",
+  "cd services/telemetry && npm run check && node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=../../build/reports/telemetry-junit.xml test/*.test.js",
+  "uv export --frozen --all-extras --format requirements-txt --no-emit-project | uv run --frozen pip-audit --requirement /dev/stdin --no-deps --disable-pip --strict --progress-spinner off"
+ ],
+ "coverage": [
+  "build/reports/coverage.json"
+ ],
+ "timings": [
+  "build/reports/junit.xml",
+  "build/reports/telemetry-junit.xml"
+ ],
+ "private": [
+  "Do not inspect secrets or unrelated local app state."
+ ],
+ "provisional": true,
+ "sources": [
+  "Migrated on 2026-11-07 from the gms-mcp-codebase-review skill (Ampersand Game Studios/GMS MCP/gms-mcp/.agents/skills/gms-mcp-codebase-review); UI and gameplay scoring moved to ux-map and fun-map",
+  "Paths tightened, checks (from .github/workflows/ci.yml), coverage and timings filled and converter text cleaned on 2026-11-09"
+ ]
+}
