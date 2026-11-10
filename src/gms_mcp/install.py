@@ -118,6 +118,30 @@ def _privacy_safe_path_label(path: Path, *, workspace_root: Path) -> str:
     return "<host-path>"
 
 
+def _legacy_checks_only(args: argparse.Namespace) -> bool:
+    """True when the legacy flags ask only for config checks, with nothing to write."""
+    return bool(
+        (args.codex_check or args.codex_check_json or args.antigravity_check or args.antigravity_check_json)
+        and not (
+            args.cursor
+            or args.cursor_global
+            or args.claude_code
+            or args.claude_code_global
+            or args.codex
+            or args.codex_global
+            or args.codex_dry_run_only
+            or args.codex_app_setup
+            or args.antigravity_app_setup
+            or args.vscode
+            or args.windsurf
+            or args.antigravity
+            or args.antigravity_setup
+            or args.openclaw
+            or args.all
+        )
+    )
+
+
 def _write_requested_json_configs(
     *,
     args: argparse.Namespace,
@@ -447,17 +471,21 @@ def main(argv: list[str] | None = None) -> int:
     if args.codex_dry_run_only:
         dry_run = True
     workspace_root = Path(args.workspace_root).expanduser().resolve()
+    checks_only = args.action in {"check", "check-json"} if args.client else _legacy_checks_only(args)
     try:
         gm_project_root, gm_candidates = _select_gm_project_root(
             workspace_root=workspace_root,
             requested_root=args.gm_project_root,
             non_interactive=bool(args.non_interactive),
         )
-        command, args_prefix = _resolve_launcher(mode=args.mode, python_command=args.python)
+        # Checks only read existing configs, so they never need a launcher.
+        command, args_prefix = (
+            ("", []) if checks_only else _resolve_launcher(mode=args.mode, python_command=args.python)
+        )
     except ValueError as exc:
         print(f"[ERROR] {exc}")
         return _finish(2, error_family=classify_error_family(exc))
-    if args.mode == "python-module" and _which_without_cwd(args.python) != command:
+    if not checks_only and args.mode == "python-module" and _which_without_cwd(args.python) != command:
         print(f"[WARN] Python command '{args.python}' not found; using '{command}' instead.")
 
     if args.client:
@@ -579,25 +607,7 @@ def main(argv: list[str] | None = None) -> int:
                 check_exit = code
         return check_exit
 
-    only_checks = (
-        args.codex_check or args.codex_check_json or args.antigravity_check or args.antigravity_check_json
-    ) and not (
-        args.cursor
-        or args.cursor_global
-        or args.claude_code
-        or args.claude_code_global
-        or args.codex
-        or args.codex_global
-        or args.codex_dry_run_only
-        or args.codex_app_setup
-        or args.antigravity_app_setup
-        or args.vscode
-        or args.windsurf
-        or args.antigravity
-        or args.antigravity_setup
-        or args.openclaw
-        or args.all
-    )
+    only_checks = _legacy_checks_only(args)
     if only_checks:
         codex_exit = _run_requested_codex_checks()
         antigravity_exit = _run_requested_antigravity_checks()
