@@ -41,6 +41,8 @@ from typing import Callable
 
 _LOCK_DIR_ENV = "GMS_MCP_LOCK_DIR"
 _POLL_SECONDS = 1.0
+_SHARING_RETRY_SECONDS = 2.0
+_WINDOWS = os.name == "nt"
 
 REPOSITORY_LOCK = "repo.lock"
 LEGACY_GAME_RUN_LOCK = "gamerun.lock"
@@ -128,6 +130,23 @@ def _owner_process_alive(owner: dict, key: str) -> bool:
     return not (expected and actual and expected != actual)
 
 
+def _retry_while_shared(operation: Callable[[], object]) -> None:
+    """Run a delete or replace of an owner record, waiting out Windows sharing violations.
+
+    Contenders read the owner record while polling, and Windows refuses to delete or replace a
+    file another process has open. Those reads last microseconds, so a short retry suffices.
+    """
+    deadline = time.monotonic() + _SHARING_RETRY_SECONDS
+    while True:
+        try:
+            operation()
+            return
+        except PermissionError:
+            if not _WINDOWS or time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
+
+
 class DirectoryLock:
     """One named ``mkdir`` lock."""
 
@@ -173,7 +192,7 @@ class DirectoryLock:
                 json.dump(record, stream, sort_keys=True)
                 stream.flush()
                 os.fsync(stream.fileno())
-            os.replace(temporary, self.owner_path)
+            _retry_while_shared(lambda: os.replace(temporary, self.owner_path))
         except BaseException:
             try:
                 temporary.unlink()
@@ -229,7 +248,7 @@ class DirectoryLock:
         try:
             if self._is_stale():  # re-check now that nobody else can be reclaiming
                 try:
-                    self.owner_path.unlink()
+                    _retry_while_shared(self.owner_path.unlink)
                 except OSError:
                     pass
                 try:
@@ -342,7 +361,7 @@ class DirectoryLock:
             owner = self.owner()
             if not owner or owner.get("token") != self._token:
                 return
-            self.owner_path.unlink(missing_ok=True)
+            _retry_while_shared(lambda: self.owner_path.unlink(missing_ok=True))
             try:
                 self.path.rmdir()
             except FileNotFoundError:
