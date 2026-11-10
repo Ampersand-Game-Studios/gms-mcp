@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **The installer refuses a bare `gms-mcp` command.** Command-mode configs always name an absolute path: the one on PATH, or the console script beside the installer's own Python. With neither, setup stops and suggests `pipx install gms-mcp` or `--mode=python-module`.
+- `maintenance sync-events --fix` and `maintenance clean-old-files --delete` fail when any file could not be fixed or moved.
+- The GameMaker IDE check also runs on Linux. Set `GMS_MCP_BLOCK_WHEN_IDE_OPEN=1` to refuse mutations while the IDE has the project open.
 - Raise the minimum Python version to 3.11 so image imports can use Pillow 13 security fixes.
 - **OpenClaw global setup now works.** `--client openclaw --scope global` saves the server with `openclaw mcp set` into OpenClaw's own config (`~/.openclaw/openclaw.json`, `mcp.servers`) instead of writing `~/.openclaw/mcp.json`, which OpenClaw never read. It needs the `openclaw` CLI on PATH and the OpenClaw Gateway stopped; `check` reads the entry back with `openclaw mcp show`.
 

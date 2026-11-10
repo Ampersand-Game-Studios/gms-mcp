@@ -382,7 +382,9 @@ def test_compose_yyp_takes_only_named_registrations(project: Path):
     yyp_registry.add_included_files(project, ["datafiles/mine.json"])
     working = (project / "game.yyp").read_text()
 
-    entries = yyp_registry.derive_yyp_entries(project, base, ["scripts/mine", "datafiles/mine.json", "scripts/zeta"])
+    entries = yyp_registry.derive_yyp_entries(
+        project, base, working, ["scripts/mine", "datafiles/mine.json", "scripts/zeta"]
+    )
     assert entries == ["scripts/mine/mine.yy", "included:datafiles/mine.json", "scripts/zeta/zeta.yy"]
     composed = yyp_registry.compose_yyp(base, working, entries)
     assert "mine" in composed and "theirs" not in composed and "mine.json" in composed
@@ -1553,7 +1555,7 @@ def test_derive_adds_groups_a_staged_asset_references(project: Path):
     _add_script(project, "mine")
     (project / "scripts/mine/mine.yy").write_text(json.dumps(asset), encoding="utf-8")
     yyp_registry.register_assets(project, ["scripts/mine/mine.yy"])
-    entries = yyp_registry.derive_yyp_entries(project, base, ["./scripts/mine"])
+    entries = yyp_registry.derive_yyp_entries(project, base, (project / "game.yyp").read_text(), ["./scripts/mine"])
     assert entries == ["scripts/mine/mine.yy", "texturegroup:UI"]
 
 

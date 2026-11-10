@@ -512,8 +512,30 @@ class TestAssetHelperAdditionalCoverage(unittest.TestCase):
                 asset_helper.maint_clean_old_files_command,
                 _create_args("clean", delete=True),
             )
+        self.assertFalse(result)
+        self.assertIn("moved only 1", output)
+
+        with patch("gms_helpers.maintenance.clean_unused_assets.clean_old_yy_files", return_value=(2, 2)):
+            result, output = _capture_output(
+                asset_helper.maint_clean_old_files_command,
+                _create_args("clean", delete=True),
+            )
         self.assertTrue(result)
-        self.assertIn("deleted 1", output)
+        self.assertIn("deleted 2", output)
+
+        with patch(
+            "gms_helpers.maintenance.event_sync.sync_all_object_events",
+            return_value={
+                "objects_processed": 1,
+                "orphaned_found": 2,
+                "orphaned_fixed": 1,
+                "missing_found": 1,
+                "missing_created": 1,
+            },
+        ):
+            result, output = _capture_output(asset_helper.maint_sync_events_command, _create_args("sync", fix=True))
+        self.assertFalse(result)
+        self.assertIn("1 event file(s) could not be synchronized", output)
 
         with patch("gms_helpers.maintenance.clean_unused_assets.clean_old_yy_files", return_value=(0, 0)):
             result, output = _capture_output(asset_helper.maint_clean_old_files_command, _create_args("clean"))

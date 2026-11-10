@@ -6,7 +6,6 @@ from __future__ import annotations
 import argparse
 import json
 import shlex
-import shutil
 import sys
 import time
 from pathlib import Path
@@ -460,12 +459,6 @@ def main(argv: list[str] | None = None) -> int:
         return _finish(2, error_family=classify_error_family(exc))
     if args.mode == "python-module" and _which_without_cwd(args.python) != command:
         print(f"[WARN] Python command '{args.python}' not found; using '{command}' instead.")
-
-    if args.mode == "command" and shutil.which(command) is None:
-        print(
-            "[WARN] 'gms-mcp' not found on PATH. Config will still be written, but the client may fail to start it.\n"
-            "       Recommended: `pipx install gms-mcp` (or use --mode=python-module)."
-        )
 
     if args.client:
         spec = resolve_client_spec(args.client)

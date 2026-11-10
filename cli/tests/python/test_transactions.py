@@ -749,6 +749,43 @@ class TestTransactionRecoveryAndCoordination(unittest.TestCase):
         self.assertEqual(result["gamemaker_ide"]["pids"], [77])
         self.assertIn("has this project open", result["warnings"][0])
 
+    def test_begin_refuses_when_blocking_is_on_and_the_ide_has_the_project_open(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir).resolve()
+            (root / "game.yyp").write_text(json.dumps({"name": "game", "resources": [], "Folders": []}))
+            ide = {77: f"/Applications/GameMaker.app/Contents/MacOS/GameMaker {root / 'game.yyp'}"}
+            transactions_module._IDE_CHECK_CACHE.clear()
+            with (
+                patch.dict(os.environ, {"GMS_MCP_DETECT_GAMEMAKER_IDE": "1", "GMS_MCP_BLOCK_WHEN_IDE_OPEN": "1"}),
+                patch.object(transactions_module.sys, "platform", "darwin"),
+                patch.object(transactions_module, "_macos_ide_processes", return_value=ide),
+            ):
+                tx = GameMakerProjectTransaction(root, "ide-block")
+                with self.assertRaisesRegex(ValidationError, "GMS_MCP_BLOCK_WHEN_IDE_OPEN"):
+                    tx.begin()
+                # The refusal released the project lock.
+                other = GameMakerProjectTransaction(root, "after-refusal")
+                with patch.dict(os.environ, {"GMS_MCP_BLOCK_WHEN_IDE_OPEN": "0"}):
+                    other.begin()
+                    other.cleanup()
+            transactions_module._IDE_CHECK_CACHE.clear()
+
+    def test_linux_probe_finds_the_ide_holding_project_files(self):
+        with tempfile.TemporaryDirectory() as temp_dir:
+            root = Path(temp_dir).resolve()
+            (root / "game.yyp").write_text(json.dumps({"name": "game", "resources": [], "Folders": []}))
+            with (
+                patch.object(transactions_module.sys, "platform", "linux"),
+                patch.object(transactions_module.os, "name", "posix"),
+                patch.object(
+                    transactions_module, "_linux_ide_processes", return_value={88: "/opt/GameMaker-Beta/GameMaker"}
+                ),
+                patch.object(transactions_module, "_linux_processes_with_open_files_under", return_value={88}),
+            ):
+                result = transactions_module._probe_gamemaker_ide(root)
+        self.assertTrue(result["project_open"])
+        self.assertEqual(result["pids"], [88])
+
 
 if __name__ == "__main__":
     unittest.main()
