@@ -776,7 +776,6 @@ class TestTransactionRecoveryAndCoordination(unittest.TestCase):
             (root / "game.yyp").write_text(json.dumps({"name": "game", "resources": [], "Folders": []}))
             with (
                 patch.object(transactions_module.sys, "platform", "linux"),
-                patch.object(transactions_module.os, "name", "posix"),
                 patch.object(
                     transactions_module, "_linux_ide_processes", return_value={88: "/opt/GameMaker-Beta/GameMaker"}
                 ),

@@ -1570,10 +1570,10 @@ def _windows_ide_processes() -> Dict[int, str]:
 def _probe_gamemaker_ide(project_root: Path) -> Dict[str, Any] | None:
     if sys.platform == "darwin":
         processes = _macos_ide_processes()
-    elif os.name == "nt":
-        processes = _windows_ide_processes()
     elif sys.platform.startswith("linux"):
         processes = _linux_ide_processes()
+    elif os.name == "nt":
+        processes = _windows_ide_processes()
     else:
         return None
     if not processes:
