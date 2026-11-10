@@ -7,6 +7,7 @@ import re
 import shutil
 import sys
 import tempfile
+import threading
 import time
 import urllib.request
 from calendar import timegm
@@ -133,13 +134,37 @@ def get_upgrade_command() -> str:
     return f"{_default_python_command()} -m pip install -U gms-mcp"
 
 
+def _fetch_json(url: str) -> Any:
+    """Fetch JSON from ``url``, giving up after REQUEST_TIMEOUT_SECONDS of wall-clock time.
+
+    urllib applies its timeout to each socket operation and each resolved address, so a
+    host whose IPv6 addresses silently drop traffic can block for many multiples of it.
+    The request runs on a daemon thread so an abandoned attempt never delays exit.
+    """
+    outcome: dict[str, Any] = {}
+
+    def fetch() -> None:
+        try:
+            req = urllib.request.Request(url, headers={"User-Agent": "gms-mcp-update-checker"})
+            with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as response:
+                outcome["data"] = json.loads(response.read().decode())
+        except Exception as exc:
+            outcome["error"] = exc
+
+    worker = threading.Thread(target=fetch, name="gms-mcp-update-check", daemon=True)
+    worker.start()
+    worker.join(REQUEST_TIMEOUT_SECONDS)
+    if worker.is_alive():
+        raise TimeoutError(f"no response within {REQUEST_TIMEOUT_SECONDS}s")
+    if "error" in outcome:
+        raise outcome["error"]
+    return outcome["data"]
+
+
 def get_latest_version_pypi() -> str | None:
     """Check PyPI for the latest version of gms-mcp."""
     try:
-        req = urllib.request.Request(PYPI_JSON_URL, headers={"User-Agent": "gms-mcp-update-checker"})
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-            data = json.loads(response.read().decode())
-            return data["info"]["version"]
+        return _fetch_json(PYPI_JSON_URL)["info"]["version"]
     except Exception as exc:
         logger.debug("Failed to check PyPI for updates: %s", exc)
         return None
@@ -148,11 +173,8 @@ def get_latest_version_pypi() -> str | None:
 def get_latest_version_github() -> str | None:
     """Check GitHub for the latest release version of gms-mcp."""
     try:
-        req = urllib.request.Request(GITHUB_JSON_URL, headers={"User-Agent": "gms-mcp-update-checker"})
-        with urllib.request.urlopen(req, timeout=REQUEST_TIMEOUT_SECONDS) as response:
-            data = json.loads(response.read().decode())
-            tag_name = data["tag_name"]
-            return tag_name[1:] if tag_name.startswith("v") else tag_name
+        tag_name = _fetch_json(GITHUB_JSON_URL)["tag_name"]
+        return tag_name[1:] if tag_name.startswith("v") else tag_name
     except Exception as exc:
         logger.debug("Failed to check GitHub for updates: %s", exc)
         return None
