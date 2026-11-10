@@ -1,12 +1,56 @@
+import os
 import tempfile
+import threading
+import time
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
+from gms_mcp import update_notifier
 from gms_mcp.update_notifier import check_for_updates, mark_update_notified
 
 
 class TestUpdateNotifier(unittest.TestCase):
+    def setUp(self):
+        # The suite disables update checks globally; these tests exercise them with fakes.
+        env = patch.dict(os.environ)
+        env.start()
+        self.addCleanup(env.stop)
+        os.environ.pop(update_notifier.UPDATE_CHECK_DISABLE_ENV, None)
+
+    def test_stalled_request_gives_up_at_the_wall_clock_limit(self):
+        release = threading.Event()
+        self.addCleanup(release.set)
+
+        def stalled_urlopen(*_args, **_kwargs):
+            release.wait(30)
+            raise OSError("released")
+
+        with (
+            patch.object(update_notifier, "REQUEST_TIMEOUT_SECONDS", 0.2),
+            patch("gms_mcp.update_notifier.urllib.request.urlopen", side_effect=stalled_urlopen),
+        ):
+            started = time.monotonic()
+            self.assertIsNone(update_notifier.get_latest_version_pypi())
+            self.assertIsNone(update_notifier.get_latest_version_github())
+            elapsed = time.monotonic() - started
+        self.assertLess(elapsed, 2.0)
+
+    def test_latest_versions_are_read_from_json_responses(self):
+        bodies = {
+            update_notifier.PYPI_JSON_URL: b'{"info": {"version": "2.0.0"}}',
+            update_notifier.GITHUB_JSON_URL: b'{"tag_name": "v2.1.0"}',
+        }
+
+        def fake_urlopen(request, **_kwargs):
+            response = MagicMock()
+            response.__enter__.return_value.read.return_value = bodies[request.full_url]
+            return response
+
+        with patch("gms_mcp.update_notifier.urllib.request.urlopen", side_effect=fake_urlopen):
+            self.assertEqual(update_notifier.get_latest_version_pypi(), "2.0.0")
+            self.assertEqual(update_notifier.get_latest_version_github(), "2.1.0")
+
     def test_update_available_pypi(self):
         with (
             tempfile.TemporaryDirectory() as tmpdir,
