@@ -1021,3 +1021,16 @@ def test_client_global_paths_and_keys(tmp_path, monkeypatch):
     )
     assert list(vscode) == ["servers"]
     assert vscode["servers"]["gms"]["type"] == "stdio"
+
+
+def test_command_launcher_uses_the_console_script_beside_the_interpreter(tmp_path, monkeypatch):
+    script = tmp_path / ("gms-mcp.exe" if os.name == "nt" else "gms-mcp")
+    script.write_text("#!/bin/sh\n", encoding="utf-8")
+    script.chmod(0o755)
+    monkeypatch.setattr(common, "_which_without_cwd", lambda _name: None)
+    monkeypatch.setattr(common.sysconfig, "get_path", lambda _key: str(tmp_path))
+    assert common._resolve_launcher(mode="command", python_command=sys.executable) == (str(script), [])
+
+    script.unlink()
+    with pytest.raises(ValueError, match="not found on a trusted PATH"):
+        common._resolve_launcher(mode="command", python_command=sys.executable)

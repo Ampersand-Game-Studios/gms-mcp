@@ -1061,15 +1061,9 @@ class TestInstallCoverage(unittest.TestCase):
 
             with (
                 patch("gms_mcp.install._select_gm_project_root", return_value=(None, [])),
-                patch(
-                    "gms_mcp.install._resolve_launcher",
-                    return_value=("gms-mcp", []),
-                ),
-                patch("gms_mcp.install.shutil.which", return_value=None),
-                patch(
-                    "gms_mcp.install._generate_cursor_config",
-                    return_value=workspace / ".cursor" / "mcp.json",
-                ),
+                patch("gms_mcp.install_support.common._which_without_cwd", return_value=None),
+                patch("gms_mcp.install_support.common._installed_console_script", return_value=None),
+                patch("gms_mcp.install._generate_cursor_config") as mock_cursor,
             ):
                 result, output = _capture_output(
                     install_module.main,
@@ -1078,11 +1072,13 @@ class TestInstallCoverage(unittest.TestCase):
                         str(workspace),
                         "--non-interactive",
                         "--dry-run",
+                        "--mode",
+                        "command",
                     ],
                 )
-            self.assertEqual(result, 0)
-            self.assertIn("'gms-mcp' not found on PATH", output)
-            self.assertIn(f".cursor{os.sep}mcp.json", output)
+            self.assertEqual(result, 2)
+            self.assertIn("gms-mcp was not found on a trusted PATH", output)
+            mock_cursor.assert_not_called()
 
             with (
                 patch("gms_mcp.install._select_gm_project_root", return_value=(None, [])),

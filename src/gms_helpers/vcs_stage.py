@@ -214,6 +214,8 @@ def _stage_locked(
         # call staged earlier are kept. An untouched index entry is identical to HEAD.
         base_text = (indexed_before if indexed_before.returncode == 0 else head).stdout.decode("utf-8")
         staged_entries = [str(e) for e in (yyp_entries or []) if str(e).strip()]
+        # One read of the working project file serves both deriving and composing.
+        working_text = _read_text_preserving_newlines(root / yyp_name)
         if not staged_entries:
             derive_from = project_paths
             if covers_yyp:
@@ -223,9 +225,8 @@ def _stage_locked(
                     for n in _staged_names(repo)
                     if n != yyp_repo_path and (not prefix or n.startswith(prefix + "/"))
                 ]
-            staged_entries = yyp_registry.derive_yyp_entries(root, base_text, derive_from)
+            staged_entries = yyp_registry.derive_yyp_entries(root, base_text, working_text, derive_from)
         if staged_entries:
-            working_text = _read_text_preserving_newlines(root / yyp_name)
             composed = yyp_registry.compose_yyp(base_text, working_text, staged_entries)
             already = set(yyp_registry.validate_yyp_text(base_text))
             introduced = [problem for problem in yyp_registry.validate_yyp_text(composed) if problem not in already]

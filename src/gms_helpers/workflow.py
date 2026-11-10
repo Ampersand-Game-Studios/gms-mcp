@@ -907,14 +907,15 @@ def _detach_structural_references(project_root: Path, asset_path: str, asset_nam
     detached safely and raises ``ValidationError`` before anything changes.
     Returns a description of each detached reference.
     """
-    from .reference_scanner import is_ignored_project_path, load_project_json
+    from .reference_scanner import _normalized_resource_path, is_ignored_project_path, load_project_json
 
     target = asset_path.replace("\\", "/")
     target_folder = (project_root / target).parent
     detached: List[str] = []
 
     def is_target(reference: Any) -> bool:
-        return isinstance(reference, dict) and str(reference.get("path", "")).replace("\\", "/") == target
+        # Paths may carry GameMaker's ${project_dir}/ macro, as the validator accepts.
+        return isinstance(reference, dict) and _normalized_resource_path(str(reference.get("path", ""))) == target
 
     def removal(item: Any) -> str | None:
         if not isinstance(item, dict):

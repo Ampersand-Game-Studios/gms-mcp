@@ -225,7 +225,8 @@ Isolated macOS runs (`gm_run`, `gm_game_start`, and `gm_test_run`) require `runt
 | `GMS_MCP_SNAPSHOT_WORK_DIR` | Private directory for snapshots, Igor cache and output (default: `~/.gms-mcp/snapshots`). |
 | `GMS_MCP_BRIDGE_PORT` | Set by the server in the game's environment for live sessions; a game endpoint connects to it. |
 | `GMS_MCP_PROJECT_LOCK_TIMEOUT_SECONDS` | How long a mutation (or `gm_vcs_stage`) waits for another one on the same project before failing with the holder's details (default `600`). |
-| `GMS_MCP_DETECT_GAMEMAKER_IDE=0` | Skip the check at the start of each mutation for a running GameMaker IDE (macOS and Windows). When the IDE is running, the transaction result carries a `gamemaker_ide` record and a warning; mutations are never blocked. |
+| `GMS_MCP_DETECT_GAMEMAKER_IDE=0` | Skip the check at the start of each mutation for a running GameMaker IDE (macOS, Windows and Linux). When the IDE is running, the transaction result carries a `gamemaker_ide` record and a warning. |
+| `GMS_MCP_BLOCK_WHEN_IDE_OPEN=1` | Refuse a mutation instead of warning when the GameMaker IDE has this project open. Off by default. |
 | `GMS_MCP_DISABLE_UPDATE_CHECK=1` | Never contact PyPI or GitHub for update checks; doctor and update status report the last cached result or "unknown". |
 
 The built-in `agent_test_step` callback uses a global time source: it runs after Begin Step
