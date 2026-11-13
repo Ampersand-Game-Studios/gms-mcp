@@ -512,6 +512,21 @@ class TestWorkflowRegisteredPaths(unittest.TestCase):
             self._assert_committed(result)
             self.assertIsNone(load_json_loose(proj / object_path)["spriteId"])
 
+    def test_forced_delete_detaches_project_dir_prefixed_references(self):
+        with TempProject() as proj:
+            sprite_path = self._create(proj, SpriteAsset(), "sGone")
+            object_path = self._create(proj, ObjectAsset(), "oUser", sprite_id="sGone")
+            data = load_json_loose(proj / object_path)
+            data["spriteId"]["path"] = "${project_dir}/" + sprite_path
+            save_pretty_json(proj / object_path, data)
+
+            result = handle_workflow_safe_delete(
+                SimpleNamespace(project_root=str(proj), asset_type="sprite", asset_name="sGone", force=True, apply=True)
+            )
+
+            self._assert_committed(result)
+            self.assertIsNone(load_json_loose(proj / object_path)["spriteId"])
+
     def test_rename_preserves_crlf_and_refuses_non_utf8_before_moving(self):
         with TempProject() as proj:
             target_path = self._create(proj, ScriptAsset(), "scr_target")

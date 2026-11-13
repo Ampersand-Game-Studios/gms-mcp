@@ -9,6 +9,7 @@ import shutil
 import stat
 import subprocess
 import sys
+import sysconfig
 import tempfile
 import time
 from contextlib import contextmanager
@@ -935,14 +936,28 @@ def _resolve_launcher(*, mode: str, python_command: str) -> tuple[str, list[str]
         resolved_command = _which_without_cwd("gms-mcp")
         if resolved_command is not None:
             return resolved_command, []
-        if os.name == "nt":
-            raise ValueError("gms-mcp was not found on a trusted PATH; use --mode=python-module.")
-        return "gms-mcp", []
+        installed = _installed_console_script("gms-mcp")
+        if installed is not None:
+            return installed, []
+        # A bare name would leave the client to find gms-mcp on its own PATH, which GUI
+        # clients often lack; refuse instead of writing a config that may not start.
+        raise ValueError(
+            "gms-mcp was not found on a trusted PATH. Install it (`pipx install gms-mcp`) or use --mode=python-module."
+        )
     if mode == "python-module":
         resolved_python = _resolve_python_command(python_command)
         _probe_python_module_launcher(resolved_python)
         return resolved_python, ["-P", "-m", "gms_mcp.bootstrap_server"]
     raise ValueError(f"Unknown mode: {mode}")
+
+
+def _installed_console_script(name: str) -> str | None:
+    """The console script installed beside the running interpreter (same venv, pipx or uv tool)."""
+    scripts = Path(sysconfig.get_path("scripts"))
+    for candidate in (scripts / f"{name}.exe", scripts / name) if os.name == "nt" else (scripts / name,):
+        if candidate.is_file() and os.access(candidate, os.X_OK):
+            return str(candidate)
+    return None
 
 
 def _probe_python_module_launcher(python: str) -> None:

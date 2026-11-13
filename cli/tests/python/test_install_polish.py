@@ -1385,5 +1385,47 @@ class TestClaudeCodeSupport(unittest.TestCase):
                 self.assertRegex("mcp__plugin_gms-mcp_studio-gms__gm_compile", matcher)
 
 
+class TestChecksWithoutInstalledLauncher(unittest.TestCase):
+    """Checks read existing configs, so a missing gms-mcp launcher must not block them."""
+
+    def _run(self, argv: list[str]) -> tuple[int, str]:
+        buffer = io.StringIO()
+        with (
+            patch("gms_mcp.install_support.common._which_without_cwd", return_value=None),
+            patch("gms_mcp.install_support.common._installed_console_script", return_value=None),
+            redirect_stdout(buffer),
+        ):
+            ret = main(argv)
+        return ret, buffer.getvalue()
+
+    def test_check_json_actions_emit_json_when_gms_mcp_is_not_installed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            (workspace / "project.yyp").touch()
+            with temporary_home(Path(tmpdir) / "home"):
+                for flags in (
+                    ["--codex-check-json"],
+                    ["--antigravity-check-json"],
+                    ["--client", "codex", "--action", "check-json"],
+                ):
+                    with self.subTest(flags=flags):
+                        base = ["--workspace-root", str(workspace), "--non-interactive", "--dry-run"]
+                        _ret, output = self._run([*base, *flags])
+                        self.assertNotIn("[ERROR]", output)
+                        self.assertIsInstance(json.loads(output), dict)
+
+    def test_setup_still_refuses_when_gms_mcp_is_not_installed(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            workspace = Path(tmpdir) / "workspace"
+            workspace.mkdir()
+            (workspace / "project.yyp").touch()
+            with temporary_home(Path(tmpdir) / "home"):
+                argv = ["--workspace-root", str(workspace), "--non-interactive", "--dry-run", "--codex"]
+                ret, output = self._run(argv)
+            self.assertEqual(ret, 2)
+            self.assertIn("gms-mcp was not found on a trusted PATH", output)
+
+
 if __name__ == "__main__":
     unittest.main()
