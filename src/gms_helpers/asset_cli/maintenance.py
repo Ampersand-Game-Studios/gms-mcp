@@ -201,6 +201,13 @@ def maint_sync_events_command(args):
             if stats["orphaned_found"] == 0 and stats["missing_found"] == 0:
                 print("[OK] All object events are properly synchronized")
 
+        if not dry_run:
+            unresolved = (stats["orphaned_found"] - stats["orphaned_fixed"]) + (
+                stats["missing_found"] - stats.get("missing_created", 0)
+            )
+            if unresolved:
+                print(f"[ERROR] {unresolved} event file(s) could not be synchronized; see the messages above")
+                return False
         return True
 
     except Exception as e:
@@ -220,6 +227,9 @@ def maint_clean_old_files_command(args):
         found, deleted = clean_old_yy_files(getattr(args, "project_root", "."), do_delete=delete)
 
         if found > 0:
+            if delete and deleted < found:
+                print(f"\n[ERROR] Found {found} .old.yy files but moved only {deleted} to trash")
+                return False
             if delete:
                 print(f"\n[OK] Found {found} .old.yy files, deleted {deleted}")
             else:

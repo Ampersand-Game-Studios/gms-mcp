@@ -1458,6 +1458,7 @@ def _write_state_file(recovery_dir: Path, payload: Dict[str, Any]) -> None:
 # Concurrent GameMaker IDE detection (best effort, warning only)
 # ----------------------------------------------------------------------
 _IDE_CHECK_ENV = "GMS_MCP_DETECT_GAMEMAKER_IDE"
+_IDE_BLOCK_ENV = "GMS_MCP_BLOCK_WHEN_IDE_OPEN"
 _IDE_CHECK_TTL_SECONDS = 10.0
 _IDE_CHECK_CACHE: Dict[str, tuple[float, Dict[str, Any] | None]] = {}
 _IDE_CHECK_GUARD = threading.Lock()
@@ -1501,6 +1502,43 @@ def _macos_processes_with_open_files_under(pids: Iterable[int], root: Path) -> s
     return holders
 
 
+def _linux_ide_processes() -> Dict[int, str]:
+    """GameMaker IDE processes from /proc: an executable whose file name starts with GameMaker."""
+    processes: Dict[int, str] = {}
+    for entry in Path("/proc").iterdir():
+        if not entry.name.isdigit():
+            continue
+        try:
+            arguments = (entry / "cmdline").read_bytes().split(b"\0")
+        except OSError:
+            continue
+        executable = arguments[0].decode("utf-8", errors="replace") if arguments else ""
+        if Path(executable).name.startswith("GameMaker"):
+            processes[int(entry.name)] = " ".join(
+                argument.decode("utf-8", errors="replace") for argument in arguments if argument
+            )
+    return processes
+
+
+def _linux_processes_with_open_files_under(pids: Iterable[int], root: Path) -> set[int]:
+    """PIDs among ``pids`` holding a file under ``root`` open (/proc/<pid>/fd; unreadable fds are skipped)."""
+    prefix = str(root).rstrip("/") + "/"
+    holders: set[int] = set()
+    for pid in pids:
+        try:
+            descriptors = list(Path(f"/proc/{pid}/fd").iterdir())
+        except OSError:
+            continue
+        for descriptor in descriptors:
+            try:
+                if os.readlink(descriptor).startswith(prefix):
+                    holders.add(pid)
+                    break
+            except OSError:
+                continue
+    return holders
+
+
 def _windows_ide_processes() -> Dict[int, str]:
     listing = subprocess.run(
         [
@@ -1532,6 +1570,8 @@ def _windows_ide_processes() -> Dict[int, str]:
 def _probe_gamemaker_ide(project_root: Path) -> Dict[str, Any] | None:
     if sys.platform == "darwin":
         processes = _macos_ide_processes()
+    elif sys.platform.startswith("linux"):
+        processes = _linux_ide_processes()
     elif os.name == "nt":
         processes = _windows_ide_processes()
     else:
@@ -1555,6 +1595,8 @@ def _probe_gamemaker_ide(project_root: Path) -> Dict[str, Any] | None:
             holders = _macos_processes_with_open_files_under(processes, project_root)
         except (OSError, subprocess.SubprocessError):
             holders = set()
+    elif not holders and sys.platform.startswith("linux"):
+        holders = _linux_processes_with_open_files_under(processes, project_root)
     project_open: bool | None = True if holders else None
     if project_open:
         message = (
@@ -1582,10 +1624,11 @@ def _probe_gamemaker_ide(project_root: Path) -> Dict[str, Any] | None:
 def detect_gamemaker_ide(project_root: str | Path) -> Dict[str, Any] | None:
     """Best-effort check for a GameMaker IDE that may be editing this project concurrently.
 
-    Returns None when no IDE process is found (or on Linux, or when ``GMS_MCP_DETECT_GAMEMAKER_IDE``
-    is ``0``/``off``); otherwise a dict with ``project_open`` True (the IDE's command line or open
+    Returns None when no IDE process is found (or when ``GMS_MCP_DETECT_GAMEMAKER_IDE`` is
+    ``0``/``off``); otherwise a dict with ``project_open`` True (the IDE's command line or open
     files name this project) or None (an IDE is running, project unknown) and a ``message``. It
-    never raises and never blocks a mutation; results are cached for a few seconds.
+    never raises; results are cached for a few seconds. The transaction warns by default and
+    refuses the mutation when ``GMS_MCP_BLOCK_WHEN_IDE_OPEN`` is on and the project is open.
     """
     if not _env_bool(_IDE_CHECK_ENV, default=True):
         return None
@@ -1822,6 +1865,11 @@ class GameMakerProjectTransaction:
             self._recover_interrupted_locked()
             self.gamemaker_ide = detect_gamemaker_ide(self.project_root)
             if self.gamemaker_ide is not None:
+                if self.gamemaker_ide["project_open"] and _env_bool(_IDE_BLOCK_ENV, default=False):
+                    raise ValidationError(
+                        self.gamemaker_ide["message"] + f" Refused because {_IDE_BLOCK_ENV} is on.",
+                        details={"gamemaker_ide": self.gamemaker_ide},
+                    )
                 self.warnings.append(self.gamemaker_ide["message"])
             self._before_state = _snapshot_state(self.project_root)
             if not self._strict_validation():

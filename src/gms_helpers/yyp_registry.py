@@ -977,8 +977,13 @@ def _referenced_configs(value: Any) -> set[str]:
     return found
 
 
-def derive_yyp_entries(project_root: str | Path, base_text: str, changed_paths: Iterable[str]) -> list[str]:
+def derive_yyp_entries(
+    project_root: str | Path, base_text: str, working_text: str, changed_paths: Iterable[str]
+) -> list[str]:
     """Work out which registrations belong to a set of changed project-relative paths.
+
+    ``working_text`` is the working project file, passed in so the caller derives and composes
+    from the same read of it.
 
     Used when the caller isolates "these files" without spelling out registrations: every
     asset whose folder is touched, every touched included file, and anything those assets need
@@ -986,7 +991,7 @@ def derive_yyp_entries(project_root: str | Path, base_text: str, changed_paths: 
     (with their parent groups) and configs.
     """
     root = Path(project_root).resolve()
-    _yyp_path, work = load_yyp(root)
+    work = gm_json.loads(working_text)
     base = gm_json.loads(base_text)
     base_folders = {_norm(str(f.get("folderPath", ""))) for f in base.get("Folders", []) if isinstance(f, dict)}
     work_folders = {_norm(str(f.get("folderPath", ""))) for f in work.get("Folders", []) if isinstance(f, dict)}

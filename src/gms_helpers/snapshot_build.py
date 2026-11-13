@@ -424,11 +424,12 @@ def create_snapshot(
                     target.parent.mkdir(parents=True, exist_ok=True)
                     shutil.copy2(source, target)
             base_text = _read_text_preserving_newlines(base_project / yyp_name)
+            working_text = _read_text_preserving_newlines(root / yyp_name)
             entries = [str(entry) for entry in (yyp_entries or []) if str(entry).strip()]
             if not entries and relative_paths:
-                entries = yyp_registry.derive_yyp_entries(root, base_text, relative_paths)
+                entries = yyp_registry.derive_yyp_entries(root, base_text, working_text, relative_paths)
             if yyp_name not in relative_paths and entries:
-                composed = yyp_registry.compose_yyp(base_text, _read_text_preserving_newlines(root / yyp_name), entries)
+                composed = yyp_registry.compose_yyp(base_text, working_text, entries)
                 introduced = sorted(
                     set(yyp_registry.validate_yyp_text(composed)) - set(yyp_registry.validate_yyp_text(base_text))
                 )
