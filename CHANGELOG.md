@@ -12,6 +12,7 @@ All notable changes to this project will be documented in this file.
 - **OpenClaw global setup now works.** `--client openclaw --scope global` saves the server with `openclaw mcp set` into OpenClaw's own config (`~/.openclaw/openclaw.json`, `mcp.servers`) instead of writing `~/.openclaw/mcp.json`, which OpenClaw never read. It needs the `openclaw` CLI on PATH and the OpenClaw Gateway stopped; `check` reads the entry back with `openclaw mcp show`.
 
 ### Security
+- Require OpenTelemetry API 1.45.2 or newer (GHSA-mf5v-w3w3-f6cg). Older versions took quadratic time to parse a crafted `traceparent` in MCP request metadata, so one request could stall the server.
 - Require Pillow 13 and OpenTelemetry SDK 1.45.1 or newer to remove known vulnerabilities from image-import and development dependencies.
 - Require certifi 2026.10.19 and pip 26.2.2, and update build/publish tooling to distrust the compromised emSign CA chains.
 - **CLI flags must be spelled in full.** Abbreviated options such as `--max` are rejected, so a project-supplied argument cannot resolve to an unintended flag.
