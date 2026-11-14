@@ -2,10 +2,12 @@
 
 from __future__ import annotations
 
+import time
 import unittest
 
 from mcp import Client
 from mcp.server.mcpserver import MCPServer
+from mcp.shared._otel import extract_trace_context
 from mcp.types import CallToolResult, TextContent
 from opentelemetry import trace
 from opentelemetry.sdk.trace import TracerProvider
@@ -36,6 +38,14 @@ class MCPV2OpenTelemetryTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(attributes["gen_ai.operation.name"], "execute_tool")
         self.assertEqual(attributes["gen_ai.tool.name"], "failing_tool")
         self.assertEqual(attributes["error.type"], "tool_error")
+
+    def test_a_crafted_traceparent_is_parsed_in_linear_time(self):
+        # GHSA-mf5v-w3w3-f6cg: before opentelemetry-api 1.45.2 this took tens of seconds.
+        traceparent = "00-" + "a" * 32 + "-" + "b" * 16 + "-01-" + " " * 100_000 + "\nx"
+        started = time.perf_counter()
+        context = extract_trace_context({"traceparent": traceparent})
+        self.assertIsNone(context)
+        self.assertLess(time.perf_counter() - started, 2.0)
 
 
 if __name__ == "__main__":
