@@ -24,6 +24,7 @@ from typing import Optional, List, Dict, Any, Callable
 from datetime import datetime
 
 LOGGER = logging.getLogger("gms_helpers.bridge_server")
+MISSING_CREDENTIAL = "Bridge HELLO carried no credential"
 if not LOGGER.handlers:
     LOGGER.addHandler(logging.NullHandler())
 LOGGER.propagate = False
@@ -101,6 +102,8 @@ class BridgeServer:
 
         # Authenticated endpoint metadata; credentials are never exposed in status.
         self.hello: Optional[Dict[str, Any]] = None
+        # True once an endpoint connected with a HELLO that carried no credential (an outdated endpoint).
+        self.missing_credential_seen = False
 
         # Callbacks
         self._on_connect: Optional[Callable[[], None]] = None
@@ -140,6 +143,7 @@ class BridgeServer:
 
             try:
                 self.token = secrets.token_urlsafe(32)
+                self.missing_credential_seen = False
                 # Create server socket
                 self._server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
                 self._server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
@@ -245,7 +249,7 @@ class BridgeServer:
                 hello = json.loads(line[6:])
                 token = hello.get("token") if isinstance(hello, dict) else None
                 if not isinstance(token, str) or not hmac.compare_digest(token.encode(), self.token.encode()):
-                    break
+                    raise ValueError(MISSING_CREDENTIAL if token is None else "Bridge credential did not match")
                 hello.pop("token")
                 return hello, bytes(buffer[newline + 1 :])
             if len(buffer) > self.MAX_LINE_BYTES:
@@ -266,7 +270,8 @@ class BridgeServer:
             client.settimeout(self.SOCKET_TIMEOUT)
             try:
                 hello, buffered = self._read_hello(client)
-            except (OSError, ValueError, RecursionError):
+            except (OSError, ValueError, RecursionError) as rejection:
+                self.missing_credential_seen = self.missing_credential_seen or str(rejection) == MISSING_CREDENTIAL
                 client.close()
                 continue
             with self._lock:
