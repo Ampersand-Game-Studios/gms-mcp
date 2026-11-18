@@ -5,6 +5,9 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **Live sessions accept bridge protocol 3.** It keeps the framing of protocol 2 and only adds command words, so `gm_game_start` no longer reports such an endpoint as `RUNNING_UNSUPPORTED_ENDPOINT`.
+- **`gm_game_start` names an outdated bridge endpoint.** When the game connects but its HELLO carries no session credential, the `RUNNING_NOT_CONNECTED` message now says the endpoint must send `token` from `GMS_MCP_BRIDGE_TOKEN`, instead of reporting that nothing connected.
+- **Codex setup sets a one-hour tool limit.** New Codex entries get `tool_timeout_sec = 3600`, because a full compile or `gm_test_run` outlasts Codex's default limit and the call then fails while the build carries on. An existing `tool_timeout_sec` is kept.
 - **The installer refuses a bare `gms-mcp` command.** Command-mode configs always name an absolute path: the one on PATH, or the console script beside the installer's own Python. With neither, setup stops and suggests `pipx install gms-mcp` or `--mode=python-module`. Checks (`check`, `check-json`, `--codex-check-json`, `--antigravity-check-json`) only read configs and still run.
 - `maintenance sync-events --fix` and `maintenance clean-old-files --delete` fail when any file could not be fixed or moved.
 - The GameMaker IDE check also runs on Linux. Set `GMS_MCP_BLOCK_WHEN_IDE_OPEN=1` to refuse mutations while the IDE has the project open.

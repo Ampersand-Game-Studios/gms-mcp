@@ -1627,3 +1627,10 @@ def test_lock_owner_records_are_atomic_identified_and_never_stale_leftovers(lock
     with pytest.raises(OSError, match="disk full"):
         failing.try_acquire()
     assert not (lock_dir / "repo.lock").exists() and not failing.held
+
+
+def test_endpoint_problem_accepts_protocols_two_and_three():
+    for protocol in (2, 3, 3.0):
+        assert live_session.endpoint_problem({"protocol": protocol}) is None
+    for protocol in (1, 4, None, True, "3"):
+        assert "needs protocol 2 or 3" in live_session.endpoint_problem({"protocol": protocol})
