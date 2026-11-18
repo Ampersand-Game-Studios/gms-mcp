@@ -55,6 +55,15 @@ REFERENCES = [
 ]
 
 
+def symlink_or_skip(link: Path, target: Path) -> None:
+    try:
+        link.symlink_to(target)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink creation requires Developer Mode or elevation")
+        raise
+
+
 def project(root: Path) -> None:
     save_pretty_json_gm(
         root / "fixture.yyp",
@@ -613,7 +622,7 @@ def test_creation_rejects_escaping_yyp_symlink_without_writes(tmp_path, factory)
     project(outside)
     root = tmp_path / "project"
     root.mkdir()
-    (root / "fixture.yyp").symlink_to(outside / "fixture.yyp")
+    symlink_or_skip(root / "fixture.yyp", outside / "fixture.yyp")
     before = snapshot(tmp_path)
     with pytest.raises((GMSError, ValueError)):
         factory().create_files(root, "new_asset", "")
@@ -690,7 +699,7 @@ def test_schema_scalar_file_references(tmp_path, prefix, resource_type, key, val
     if damage == "directory":
         target.mkdir()
     elif damage == "external-symlink":
-        target.symlink_to(tmp_path.parent / "outside")
+        symlink_or_skip(target, tmp_path.parent / "outside")
     elif damage != "missing":
         target.write_bytes(b"fixture companion")
     if damage == "absolute":

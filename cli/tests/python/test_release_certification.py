@@ -232,7 +232,7 @@ class TestReleaseCertification(unittest.TestCase):
         self.assertIn("2036f66ac7c3a5d195434a4be528d6d9b62bffd89a65bd664c174168749bc561", setup)
         self.assertIn("ffebba4bfc90de0a6fe23f9767179bdd4336d10358555a7e3e649d6aeb91ddc0", setup)
         self.assertIn("2024.14.4.268", setup)
-        self.assertIn("2026.0.0.23", setup)
+        self.assertIn("2026.1.0.28", setup)
         self.assertIn("stdout=subprocess.DEVNULL", setup)
         self.assertIn("stderr=subprocess.DEVNULL", setup)
         self.assertIn('os.environ.pop("GAMEMAKER_ACCESS_KEY", None)', setup)

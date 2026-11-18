@@ -174,7 +174,7 @@ The same `.gms-mcp.json` carries the project's own conventions for builds, tests
 ```json
 {
   "verification": { "post_mutation": "off" },
-  "build": { "igor_attempts": 30, "max_parallel_builds": 4, "jobs": 4, "runtime_version": "2026.0.0.23" },
+  "build": { "igor_attempts": 30, "max_parallel_builds": 4, "jobs": 4, "runtime_version": "2026.1.0.28" },
   "test": { "timeout_seconds": 120, "prelude_file": null, "script_name": "__agent_test" },
   "conventions": { "allow_root_assets": ["__agent_*"] },
   "live_reload": { "status_file": null }
