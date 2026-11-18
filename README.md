@@ -303,7 +303,7 @@ uv run --frozen python scripts/run_real_gamemaker_smoke.py \
 
 uv run --frozen python scripts/run_real_gamemaker_smoke.py \
   --fixture-name gm-2026-lts \
-  --expected-runtime-version 2026.0.0.23 \
+  --expected-runtime-version 2026.1.0.28 \
   --required
 ```
 

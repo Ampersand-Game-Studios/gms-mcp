@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **GameMaker 2026.1 LTS certification.** The `gm-2026-lts` fixture now targets IDE `2026.1.0.27` and CI installs and certifies runtime `2026.1.0.28` (from the LTS2026 feed) in place of `2026.0.0.23`. The `gm-2024` fixture is unchanged.
 - **The installer refuses a bare `gms-mcp` command.** Command-mode configs always name an absolute path: the one on PATH, or the console script beside the installer's own Python. With neither, setup stops and suggests `pipx install gms-mcp` or `--mode=python-module`. Checks (`check`, `check-json`, `--codex-check-json`, `--antigravity-check-json`) only read configs and still run.
 - `maintenance sync-events --fix` and `maintenance clean-old-files --delete` fail when any file could not be fixed or moved.
 - The GameMaker IDE check also runs on Linux. Set `GMS_MCP_BLOCK_WHEN_IDE_OPEN=1` to refuse mutations while the IDE has the project open.

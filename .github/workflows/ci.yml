@@ -425,7 +425,7 @@ jobs:
           - host_platform: linux
             runner: ubuntu-24.04
             fixture_name: gm-2026-lts
-            expected_runtime: 2026.0.0.23
+            expected_runtime: 2026.1.0.28
           - host_platform: windows
             runner: windows-2025
             fixture_name: gm-2024
@@ -433,7 +433,7 @@ jobs:
           - host_platform: windows
             runner: windows-2025
             fixture_name: gm-2026-lts
-            expected_runtime: 2026.0.0.23
+            expected_runtime: 2026.1.0.28
           - host_platform: macos
             runner: macos-15
             fixture_name: gm-2024
@@ -441,7 +441,7 @@ jobs:
           - host_platform: macos
             runner: macos-15
             fixture_name: gm-2026-lts
-            expected_runtime: 2026.0.0.23
+            expected_runtime: 2026.1.0.28
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
 

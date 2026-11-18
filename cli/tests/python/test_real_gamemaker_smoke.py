@@ -253,12 +253,12 @@ class TestRealGameMakerSmoke(unittest.TestCase):
             first = real_smoke.create_synthetic_project(
                 root / "first",
                 project_name="gms_mcp_smoke_2026_lts",
-                ide_version="2026.0.0.16",
+                ide_version="2026.1.0.27",
             )
             second = real_smoke.create_synthetic_project(
                 root / "second",
                 project_name="gms_mcp_smoke_2026_lts",
-                ide_version="2026.0.0.16",
+                ide_version="2026.1.0.27",
             )
             first_bytes = first.read_bytes()
             second_bytes = second.read_bytes()
@@ -293,7 +293,7 @@ class TestRealGameMakerSmoke(unittest.TestCase):
             reference_yyp = real_smoke.create_synthetic_project(
                 temp_path / "reference",
                 project_name="gms_mcp_smoke_2026_lts",
-                ide_version="2026.0.0.16",
+                ide_version="2026.1.0.27",
             )
             expected_hash = hashlib.sha256(reference_yyp.read_bytes()).hexdigest()
             argv = [
@@ -329,7 +329,7 @@ class TestRealGameMakerSmoke(unittest.TestCase):
         self.assertEqual(report["fixture"]["expected_runtime_version"], "runtime-*")
         self.assertEqual(report["fixture"]["source_yyp_name"], "gms_mcp_smoke_2026_lts.yyp")
         self.assertEqual(report["fixture"]["source_yyp_sha256"], expected_hash)
-        self.assertEqual(report["fixture"]["source_ide_version"], "2026.0.0.16")
+        self.assertEqual(report["fixture"]["source_ide_version"], "2026.1.0.27")
         serialized_report = json.dumps(report)
         self.assertNotIn(str(work_root), serialized_report)
         self.assertNotIn("/tmp/runtime", serialized_report)
