@@ -1066,8 +1066,13 @@ def test_log_directory_uses_protected_dacl(tmp_path):
         win32security.CreateWellKnownSid(win32security.WinWorldSid),
     )
     win32security.SetNamedSecurityInfo(
-        str(parent), win32security.SE_FILE_OBJECT,
-        win32security.DACL_SECURITY_INFORMATION, None, None, acl, None,
+        str(parent),
+        win32security.SE_FILE_OBJECT,
+        win32security.DACL_SECURITY_INFORMATION,
+        None,
+        None,
+        acl,
+        None,
     )
     directory = log_paths._make_private_directory(parent / "logs")
     assert windows_path_trust_issue(directory, private=True) is None
