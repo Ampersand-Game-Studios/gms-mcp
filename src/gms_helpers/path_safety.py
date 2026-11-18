@@ -161,7 +161,7 @@ def private_directory(path: Path) -> Path:
         from .windows_security import windows_path_trust_issue
 
         if issue := windows_path_trust_issue(path, private=True):
-            raise ValidationError(f"Unsafe private directory: {issue}")
+            raise ValidationError(f"Unsafe private directory: {path}: {issue}")
     return path
 
 
