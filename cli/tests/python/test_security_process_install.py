@@ -935,6 +935,32 @@ def test_codex_merge_keeps_user_keys_and_comments(tmp_path):
     assert "# keep me" in text
 
 
+def test_codex_entry_sets_tool_timeout_and_keeps_an_existing_one(tmp_path):
+    def generate(path):
+        client_configs._generate_codex_config(
+            workspace_root=tmp_path,
+            output_path=path,
+            server_name="gms",
+            command="new",
+            args_prefix=[],
+            gm_project_root=None,
+            dry_run=False,
+            include_project_root=False,
+        )
+        return tomllib.loads(path.read_text())["mcp_servers"]["gms"]
+
+    fresh = tmp_path / "fresh.toml"
+    assert generate(fresh)["tool_timeout_sec"] == client_configs.CODEX_TOOL_TIMEOUT_SECONDS
+
+    without = tmp_path / "without.toml"
+    without.write_text('[mcp_servers.gms]\ncommand = "old"\n')
+    assert generate(without)["tool_timeout_sec"] == client_configs.CODEX_TOOL_TIMEOUT_SECONDS
+
+    chosen = tmp_path / "chosen.toml"
+    chosen.write_text('[mcp_servers.gms]\ncommand = "old"\ntool_timeout_sec = 7200\n')
+    assert generate(chosen)["tool_timeout_sec"] == 7200
+
+
 def test_backups_live_outside_workspace_with_bounded_rotation(tmp_path, private_installer_state):
     path = tmp_path / ".cursor" / "mcp.json"
     path.parent.mkdir()

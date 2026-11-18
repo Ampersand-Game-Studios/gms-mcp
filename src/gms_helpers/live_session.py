@@ -48,6 +48,8 @@ BRIDGE_PORT_ENVIRONMENT_VARIABLE = "GMS_MCP_BRIDGE_PORT"
 BRIDGE_TOKEN_ENVIRONMENT_VARIABLE = "GMS_MCP_BRIDGE_TOKEN"
 STANDARD_COMMANDS = ("ping", "help", "state", "screenshot", "log_tail", "console")
 BRIDGE_PROTOCOL = 2
+# Protocol 3 keeps the framing of 2 and only adds command words, so both can be driven.
+SUPPORTED_BRIDGE_PROTOCOLS = (BRIDGE_PROTOCOL, 3)
 
 
 class LiveSessionError(snapshot_build.SnapshotError):
@@ -101,10 +103,10 @@ def _require_session(project_root: str | Path) -> LiveSession:
 def endpoint_problem(hello: dict[str, Any] | None) -> str | None:
     """Why a connected endpoint cannot be driven by this server, or None."""
     protocol = (hello or {}).get("protocol")
-    if protocol != BRIDGE_PROTOCOL:
+    if isinstance(protocol, bool) or protocol not in SUPPORTED_BRIDGE_PROTOCOLS:
         return (
             f"The game's bridge endpoint speaks protocol {protocol!r}, but this server needs protocol "
-            f"{BRIDGE_PROTOCOL}. Reinstall the bridge with gm_bridge_install (or update the project's endpoint), "
+            f"{' or '.join(map(str, SUPPORTED_BRIDGE_PROTOCOLS))}. Reinstall the bridge with gm_bridge_install (or update the project's endpoint), "
             "then restart the game."
         )
     return None
@@ -371,6 +373,13 @@ def _start(
             f"that reads the {BRIDGE_PORT_ENVIRONMENT_VARIABLE} environment variable and is enabled in this "
             "build (see documentation/BRIDGE.md, 'Runtime bridge protocol 2')."
         )
+        if bridge.missing_credential_seen:
+            public["message"] = (
+                "The game is running and its bridge endpoint connected, but its HELLO carried no session "
+                f"credential, so it was refused. Update the project's endpoint to send `token` read from the "
+                f"{BRIDGE_TOKEN_ENVIRONMENT_VARIABLE} environment variable (see documentation/BRIDGE.md, "
+                "'Runtime bridge protocol 2'). gm_game_log still works."
+            )
     else:
         public["status"] = "RUNNING"
         public["message"] = (

@@ -33,6 +33,9 @@ from .common import (
 )
 from ..client_registry import codex_home
 
+CODEX_TOOL_TIMEOUT_KEY = "tool_timeout_sec"
+CODEX_TOOL_TIMEOUT_SECONDS = 60 * 60
+
 if sys.version_info >= (3, 11):
     import tomllib as _toml_parser
 else:
@@ -359,6 +362,8 @@ def _upsert_codex_server_config(
     existing_servers = before.get("mcp_servers")
     existing_entry = existing_servers.get(server_name) if isinstance(existing_servers, dict) else None
     if isinstance(existing_entry, dict):
+        if CODEX_TOOL_TIMEOUT_KEY in existing_entry:
+            generated = {key: value for key, value in generated.items() if key != CODEX_TOOL_TIMEOUT_KEY}
         entry, removed = _merge_server_entry(existing_entry, generated)
         _report_removed_keys(server_name, removed)
         block = _render_toml_tables(("mcp_servers", server_name), entry)
@@ -468,6 +473,8 @@ def _make_codex_mcp_config(
     ]
     if include_project_root:
         lines.append(f"cwd = {_make_codex_toml_value(workspace_root.expanduser().resolve().as_posix())}")
+    # Codex ends a tool call after its own default limit, which a full compile or test run exceeds.
+    lines.append(f"{CODEX_TOOL_TIMEOUT_KEY} = {CODEX_TOOL_TIMEOUT_SECONDS}")
     lines += ["", f"[mcp_servers.{server_name}.env]"]
 
     for key, value in env.items():
