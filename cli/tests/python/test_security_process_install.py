@@ -28,6 +28,15 @@ from gms_mcp.install_support import client_configs, common, flow
 from gms_mcp.server import debug, direct, log_paths, subprocess_runner
 
 
+def symlink_or_skip(link: Path, target: Path, *, target_is_directory: bool = False) -> None:
+    try:
+        link.symlink_to(target, target_is_directory=target_is_directory)
+    except OSError as exc:
+        if getattr(exc, "winerror", None) == 1314:
+            pytest.skip("Windows symlink creation requires Developer Mode or elevation")
+        raise
+
+
 def _direct_secure_probe(_args):
     return {"ok": True, "json_file": json.__file__}
 
@@ -156,7 +165,7 @@ def test_runtime_symlinks_are_untrusted(tmp_path, component):
     target = {"runtime": runtime, "binary": igor, "parent": igor.parent, "root": root}[component]
     moved = target.with_name(target.name + "-real")
     target.rename(moved)
-    target.symlink_to(moved, target_is_directory=moved.is_dir())
+    symlink_or_skip(target, moved, target_is_directory=moved.is_dir())
     assert runtime_manager.runtime_trust_issue(runtime, igor)
 
 
@@ -202,7 +211,7 @@ def test_default_cache_still_rejects_symlinked_components(tmp_path, monkeypatch,
     target = {"runtime": runtime, "binary": igor}[component]
     moved = target.with_name(target.name + "-real")
     target.rename(moved)
-    target.symlink_to(moved, target_is_directory=moved.is_dir())
+    symlink_or_skip(target, moved, target_is_directory=moved.is_dir())
     assert runtime_manager.runtime_trust_issue(runtime, igor) == "runtime component is a symlink or reparse point"
 
 
@@ -211,7 +220,7 @@ def test_default_cache_rejects_a_redirected_ancestor(tmp_path, monkeypatch):
     real = tmp_path / "elsewhere"
     _, runtime, igor = _runtime(real)
     link = tmp_path / "GameMakerStudio2"
-    link.symlink_to(real, target_is_directory=True)
+    symlink_or_skip(link, real, target_is_directory=True)
     root = link / "runtimes"
     monkeypatch.delenv("GMS_MCP_RUNTIME_ROOT", raising=False)
     monkeypatch.setattr(runtime_manager, "default_runtime_roots", lambda system=None: [root.absolute()])
@@ -278,7 +287,7 @@ def test_private_build_directory_refuses_unsafe_existing_paths(tmp_path):
     with pytest.raises(OSError):
         private_directory(private)
     link = tmp_path / "link"
-    link.symlink_to(private, target_is_directory=True)
+    symlink_or_skip(link, private, target_is_directory=True)
     with pytest.raises(OSError):
         private_directory(link)
     private.chmod(0o700)
@@ -287,6 +296,7 @@ def test_private_build_directory_refuses_unsafe_existing_paths(tmp_path):
             private_directory(private)
 
 
+@pytest.mark.skipif(os.name == "nt", reason="Windows uses protected DACLs instead of chmod")
 def test_log_directory_chmod_failure_is_not_ignored(tmp_path):
     with mock.patch.object(Path, "chmod", side_effect=PermissionError("denied")):
         with pytest.raises(PermissionError):
@@ -339,7 +349,7 @@ def test_artifact_freshness_rejects_symlinks(tmp_path):
     os.utime(artifact, ns=(info.st_atime_ns, info.st_mtime_ns + 1_000_000_000))
     assert RunnerArtifactMixin._artifact_is_fresh(artifact, baseline)
     link = tmp_path / "link"
-    link.symlink_to(artifact)
+    symlink_or_skip(link, artifact)
     assert not RunnerArtifactMixin._artifact_is_fresh(link, baseline)
 
 
@@ -433,7 +443,7 @@ def test_config_destinations_refuse_links_and_workspace_escape(tmp_path):
     outside.mkdir()
     workspace = tmp_path / "workspace"
     workspace.mkdir()
-    (workspace / ".cursor").symlink_to(outside, target_is_directory=True)
+    symlink_or_skip(workspace / ".cursor", outside, target_is_directory=True)
     with pytest.raises(ValueError, match="symlink"):
         common._write_json(workspace / ".cursor/mcp.json", {}, dry_run=False, workspace_root=workspace)
     with pytest.raises(ValueError, match="inside"):
@@ -441,7 +451,7 @@ def test_config_destinations_refuse_links_and_workspace_escape(tmp_path):
     destination = outside / "mcp.json"
     destination.write_text('{"keep":true}')
     link = workspace / "mcp.json"
-    link.symlink_to(destination)
+    symlink_or_skip(link, destination)
     with pytest.raises(ValueError):
         client_configs._write_json_atomic_with_backup(output_path=link, payload={})
     assert json.loads(destination.read_text()) == {"keep": True}
@@ -867,7 +877,7 @@ def test_explicit_project_root_is_resolved_and_validated(tmp_path):
     with pytest.raises(ValueError, match="inside the workspace"):
         common._select_gm_project_root(workspace_root=workspace, requested_root=str(outside), non_interactive=True)
     link = tmp_path / "workspace-link"
-    link.symlink_to(workspace, target_is_directory=True)
+    symlink_or_skip(link, workspace, target_is_directory=True)
     selected, _ = common._select_gm_project_root(
         workspace_root=workspace.resolve(), requested_root=str(link / "game"), non_interactive=True
     )
@@ -990,7 +1000,7 @@ def test_bundle_copy_refuses_symlinks(tmp_path):
     source = tmp_path / "source"
     source.mkdir()
     (source / "real.txt").write_text("x")
-    (source / "link.txt").symlink_to(source / "real.txt")
+    symlink_or_skip(source / "link.txt", source / "real.txt")
     with pytest.raises(ValueError, match="symlink"):
         client_configs._copy_tree(source=source, destination=tmp_path / "dest", dry_run=False, written=[])
 
@@ -1034,3 +1044,34 @@ def test_command_launcher_uses_the_console_script_beside_the_interpreter(tmp_pat
     script.unlink()
     with pytest.raises(ValueError, match="not found on a trusted PATH"):
         common._resolve_launcher(mode="command", python_command=sys.executable)
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows DACL regression")
+def test_log_directory_uses_protected_dacl(tmp_path):
+    import ntsecuritycon
+    import win32security
+    from gms_helpers.windows_security import windows_path_trust_issue
+
+    # A normal Windows parent can grant access to additional accounts. chmod(0700)
+    # does not remove these grants on Python 3.12.
+    parent = tmp_path / "shared-parent"
+    parent.mkdir()
+    acl = win32security.GetNamedSecurityInfo(
+        str(parent), win32security.SE_FILE_OBJECT, win32security.DACL_SECURITY_INFORMATION
+    ).GetSecurityDescriptorDacl()
+    acl.AddAccessAllowedAceEx(
+        win32security.ACL_REVISION,
+        win32security.OBJECT_INHERIT_ACE | win32security.CONTAINER_INHERIT_ACE,
+        ntsecuritycon.FILE_GENERIC_READ,
+        win32security.CreateWellKnownSid(win32security.WinWorldSid),
+    )
+    win32security.SetNamedSecurityInfo(
+        str(parent), win32security.SE_FILE_OBJECT,
+        win32security.DACL_SECURITY_INFORMATION, None, None, acl, None,
+    )
+    directory = log_paths._make_private_directory(parent / "logs")
+    assert windows_path_trust_issue(directory, private=True) is None
+    exposed = parent / "existing"
+    exposed.mkdir()
+    with pytest.raises(OSError, match="Unsafe private directory"):
+        log_paths._make_private_directory(exposed)
