@@ -2,6 +2,7 @@
 
 import os
 import stat
+from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any
 
@@ -71,36 +72,85 @@ def project_relative_path(path: Any, *, project_root: Path, kind: str = "path") 
     return project_child_path(candidate, project_root=project_root, kind=kind)
 
 
+_ESCAPING_LINK_MESSAGE = "Project contains a filesystem link that escapes the approved project root"
+_MULTIPLY_LINKED_MESSAGE = "Project contains a multiply-linked file; external write confinement cannot be proven"
+
+
+@dataclass(frozen=True)
+class ProjectTreeViolation:
+    """The first entry that stops a project tree from being provably contained."""
+
+    kind: str
+    relative_path: str
+    message: str
+
+
+def _resolves_inside(path: str, root: Path) -> bool:
+    try:
+        Path(path).resolve(strict=False).relative_to(root)
+    except (OSError, ValueError):
+        return False
+    return True
+
+
+def find_project_tree_violation(project_root: Path) -> ProjectTreeViolation | None:
+    """Return the first link that leaves ``project_root``, which must already be resolved.
+
+    Entries are visited in name order so the same tree always reports the same entry.
+    """
+    root = Path(project_root)
+    root_text = os.fspath(root)
+    # Windows junctions and other reparse points are not reported as symlinks, so every
+    # directory is resolved there. Elsewhere a directory that is not a symlink cannot leave
+    # a resolved root, and resolving each one costs a realpath per directory on every call.
+    resolve_directories = os.name == "nt"
+
+    def violation(kind: str, path: str) -> ProjectTreeViolation:
+        relative = Path(os.path.relpath(path, root_text)).as_posix()
+        message = _ESCAPING_LINK_MESSAGE if kind == "escaping_link" else _MULTIPLY_LINKED_MESSAGE
+        return ProjectTreeViolation(kind=kind, relative_path=relative, message=message)
+
+    pending = [root_text]
+    while pending:
+        directory = pending.pop()
+        try:
+            with os.scandir(directory) as scan:
+                entries = sorted(scan, key=lambda entry: entry.name)
+        except OSError:
+            # Matches os.walk: a directory that cannot be listed contributes no entries.
+            continue
+        subdirectories: list[str] = []
+        for entry in entries:
+            if entry.is_symlink():
+                if not _resolves_inside(entry.path, root):
+                    return violation("escaping_link", entry.path)
+                continue
+            try:
+                is_directory = entry.is_dir(follow_symlinks=False)
+            except OSError:
+                is_directory = False
+            if is_directory:
+                if resolve_directories and not _resolves_inside(entry.path, root):
+                    return violation("escaping_link", entry.path)
+                subdirectories.append(entry.path)
+                continue
+            # DirEntry.stat() reports st_nlink as zero on Windows, so ask the filesystem there.
+            link_count = (os.stat(entry.path) if os.name == "nt" else entry.stat(follow_symlinks=False)).st_nlink
+            if link_count > 1:
+                return violation("multiply_linked", entry.path)
+        pending.extend(reversed(subdirectories))
+    return None
+
+
 def assert_project_tree_contained(project_root: Path) -> Path:
     """Reject a project containing any symlink whose target leaves the project."""
     root = Path(project_root).resolve(strict=True)
     if not root.is_dir():
         raise ValidationError("Invalid project root: expected a directory")
 
-    for directory, directory_names, file_names in os.walk(root, followlinks=False):
-        directory_path = Path(directory)
-        # Resolve every directory entry so Windows junctions/reparse points are
-        # treated as boundaries even when pathlib does not report a symlink.
-        for name in directory_names:
-            candidate = directory_path / name
-            try:
-                candidate.resolve(strict=False).relative_to(root)
-            except (OSError, ValueError):
-                raise ValidationError("Project contains a filesystem link that escapes the approved project root")
-        for name in file_names:
-            candidate = directory_path / name
-            if not candidate.is_symlink():
-                if candidate.stat().st_nlink > 1:
-                    raise ValidationError(
-                        "Project contains a multiply-linked file; external write confinement cannot be proven"
-                    )
-                continue
-            try:
-                target = candidate.resolve(strict=False)
-                target.relative_to(root)
-            except (OSError, ValueError):
-                raise ValidationError("Project contains a filesystem link that escapes the approved project root")
-
+    found = find_project_tree_violation(root)
+    if found is not None:
+        raise ValidationError(found.message)
     return root
 
 

@@ -297,7 +297,7 @@ function game_start() {
         self.assertTrue(index.cache_path.is_file())
         self.assertTrue(index.cache_path.is_relative_to(Path(self.cache_dir)))
         self.assertFalse((Path(self.temp_dir) / index.CACHE_FILE).exists())
-        self.assertNotIn(str(Path(self.temp_dir).resolve()), index.cache_path.read_text(encoding="utf-8"))
+        self.assertNotIn(str(Path(self.temp_dir).resolve()).encode("utf-8"), index.cache_path.read_bytes())
 
     def test_read_only_build_never_writes_or_removes_cache_files(self):
         from gms_helpers.gml_index import GMLIndex

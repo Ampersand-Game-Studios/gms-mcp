@@ -90,6 +90,10 @@ EVENT_ALIASES = {
 }
 
 _EVENT_LABEL_TO_ID = {label.lower(): event_type for event_type, label in EVENT_TYPE_NAMES.items()}
+# The first alias listed for a sub-event is the name the IDE shows for it.
+_SUB_EVENT_DISPLAY_NAMES: dict[str, str] = {}
+for _alias, _canonical in EVENT_ALIASES.items():
+    _SUB_EVENT_DISPLAY_NAMES.setdefault(_canonical, _alias.replace("_", " ").title().replace("Gui", "GUI"))
 _EVENT_ID_TO_SPEC = {event_type: type_name for type_name, event_type in EVENT_TYPE_IDS.items()}
 
 
@@ -206,6 +210,43 @@ def parse_event_filename(filename: str) -> EventSpec:
         raise ValidationError(f"Invalid event filename number: {filename}") from exc
     validate_event_numbers(event_type, event_num)
     return EventSpec(_EVENT_ID_TO_SPEC[event_type], event_type, event_num=event_num)
+
+
+_GESTURE_NAMES = (
+    "Tap",
+    "Double Tap",
+    "Drag Start",
+    "Dragging",
+    "Drag End",
+    "Flick",
+    "Pinch Start",
+    "Pinch In",
+    "Pinch Out",
+    "Pinch End",
+    "Rotate Start",
+    "Rotating",
+    "Rotate End",
+)
+
+
+def event_display_name(event: Mapping[str, Any]) -> str:
+    """Name an object's event the way the IDE does, e.g. "Begin Step", "Draw GUI", "Alarm 2"."""
+    event_type = event.get("eventType")
+    event_num = event.get("eventNum")
+    if event_type == EVENT_TYPE_IDS["collision"]:
+        target = collision_object_name(event.get("collisionObjectId"))
+        return f"Collision with {target}" if target else "Collision"
+    if event_type == EVENT_TYPE_IDS["gesture"] and isinstance(event_num, int):
+        # Numbers from 64 are the same gestures detected anywhere on screen ("Global").
+        index = event_num - 64 if event_num >= 64 else event_num
+        if 0 <= index < len(_GESTURE_NAMES):
+            return f"{'Global ' if event_num >= 64 else ''}{_GESTURE_NAMES[index]}"
+    type_name = _EVENT_ID_TO_SPEC.get(event_type)
+    label = EVENT_TYPE_NAMES.get(event_type, f"Event {event_type}")
+    named = _SUB_EVENT_DISPLAY_NAMES.get(f"{type_name}:{event_num}")
+    if named:
+        return named
+    return label if event_num in (0, None) and event_type not in (2, 5, 9, 10) else f"{label} {event_num}"
 
 
 def collision_object_name(reference: Any) -> str | None:

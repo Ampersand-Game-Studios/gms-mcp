@@ -198,6 +198,7 @@ Live-reload commands run programs, so a project cannot supply them. They are rea
 | `verification.post_mutation` | server default (`smart`) | `off`, `smart` or `always`: whether a mutation is followed by a compile. `GMS_MCP_POST_MUTATION_VERIFY` overrides it; an unrecognised value there stops the server at startup, and an unrecognised project value verifies as `smart` with a warning. Large or shared projects use `off` and verify with `gm_snapshot_compile` / `gm_test_run`. |
 | `build.igor_attempts` | `10` | Attempts when Igor aborts with `System.AccessViolationException` (snapshot builds). Env: `GMS_MCP_SNAPSHOT_IGOR_ATTEMPTS`. |
 | `build.max_parallel_builds` | `4` | Machine-wide Igor build slots. Env: `GMS_MCP_MAX_PARALLEL_BUILDS`. |
+| `build.call_wait_seconds` | `20` | How long a `gm_snapshot_compile`, `gm_test_run` or `gm_game_start` call waits for its result. A run that is still going returns `STILL_RUNNING` with its stage and carries on; `gm_build_status` follows it. `0` waits until the run ends. Env: `GMS_MCP_BUILD_CALL_WAIT_SECONDS`. |
 | `build.jobs` | `4` | Igor `-j`. |
 | `build.runtime_version` | newest installed | Runtime used by snapshot builds. |
 | `test.timeout_seconds` | `120` | Default wait for a test's result line. |

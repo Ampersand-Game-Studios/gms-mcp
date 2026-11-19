@@ -10,6 +10,7 @@ import os
 import re
 import signal
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -18,7 +19,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from contextlib import contextmanager
 from pathlib import Path, PurePosixPath, PureWindowsPath
-from typing import Any, Callable, Dict, Iterable, Iterator, List, TextIO, TypeVar
+from typing import Any, Callable, Dict, Iterable, Iterator, List, TextIO, Tuple, TypeVar
 
 from .exceptions import GMSError, ValidationError
 from .gamemaker_machine_lock import GameMakerMachineLock, _lock_path
@@ -689,17 +690,61 @@ def _is_ignored_path(path: Path) -> bool:
     )
 
 
-def _iter_project_paths(project_root: Path) -> Iterable[Path]:
+_TRACKED_STATE_FILE_MARKERS = ("verification_state.json", "runtime.json")
+
+
+def _iter_project_entries(project_root: Path) -> Iterable[Tuple[str, str, os.stat_result]]:
+    """Yield (project-relative posix path, full path, lstat) for everything a mutation could change.
+
+    One directory listing and one lstat per entry. A transaction takes this snapshot several
+    times, and on a project of tens of thousands of files building a ``Path`` for every entry and
+    asking it three separate questions cost more than the mutation being protected.
+    """
     # A shared lock directory (GMS_MCP_LOCK_DIR) may sit inside the project; its owner records
     # change whenever anyone takes a lock, which is coordination, never part of a mutation.
     configured_locks = os.environ.get("GMS_MCP_LOCK_DIR", "").strip()
     lock_directory = Path(configured_locks).expanduser().resolve(strict=False) if configured_locks else None
-    for path in project_root.rglob("*"):
-        if _is_ignored_path(path.relative_to(project_root)):
+    root_text = os.fspath(project_root)
+    pending: List[Tuple[str, str]] = [(root_text, "")]
+    while pending:
+        directory, prefix = pending.pop()
+        try:
+            with os.scandir(directory) as scan:
+                entries = list(scan)
+        except OSError:
             continue
-        if lock_directory is not None and (path == lock_directory or path.is_relative_to(lock_directory)):
-            continue
-        yield path
+        for entry in entries:
+            relative = f"{prefix}{entry.name}"
+            if not prefix:
+                if entry.name == ".gms_mcp":
+                    # Verification bookkeeping is part of the mutation, unlike locks/caches.
+                    try:
+                        with os.scandir(entry.path) as state_scan:
+                            state_entries = list(state_scan)
+                    except OSError:
+                        state_entries = []
+                    for state_entry in state_entries:
+                        if any(marker in state_entry.name for marker in _TRACKED_STATE_FILE_MARKERS):
+                            try:
+                                yield f".gms_mcp/{state_entry.name}", state_entry.path, os.lstat(state_entry.path)
+                            except OSError:
+                                continue
+                    continue
+                # Only project-root infrastructure is excluded. An asset named "output"
+                # (scripts/output/output.yy) must not silently escape rollback coverage.
+                if entry.name in _IGNORED_DIR_NAMES or entry.name in _IGNORED_FILE_NAMES:
+                    continue
+            if lock_directory is not None:
+                entry_path = Path(entry.path)
+                if entry_path == lock_directory or entry_path.is_relative_to(lock_directory):
+                    continue
+            try:
+                stat_result = os.lstat(entry.path)
+            except OSError:
+                continue
+            yield relative, entry.path, stat_result
+            if stat.S_ISDIR(stat_result.st_mode):
+                pending.append((entry.path, f"{relative}/"))
 
 
 def _hash_file(path: Path) -> str:
@@ -713,27 +758,26 @@ def _hash_file(path: Path) -> str:
 def _snapshot_state(project_root: Path) -> Dict[str, str]:
     """Build a metadata manifest without copying or reading every project file."""
     state: Dict[str, str] = {}
-    for path in _iter_project_paths(project_root):
-        rel = path.relative_to(project_root).as_posix()
+    for relative, full_path, stat_result in _iter_project_entries(project_root):
+        mode = stat_result.st_mode
         try:
-            stat_result = path.lstat()
-            if path.is_symlink():
-                fingerprint = ("symlink", os.readlink(path), stat_result.st_mode, stat_result.st_ctime_ns)
-            elif path.is_dir():
+            if stat.S_ISLNK(mode):
+                fingerprint = ("symlink", os.readlink(full_path), mode, stat_result.st_ctime_ns)
+            elif stat.S_ISDIR(mode):
                 # Directory timestamps change when children change.  Type and
                 # mode still detect creation, deletion, replacement, and chmod.
-                fingerprint = ("directory", stat_result.st_mode)
-            elif path.is_file():
+                fingerprint = ("directory", mode)
+            elif stat.S_ISREG(mode):
                 fingerprint = (
                     "file",
-                    stat_result.st_mode,
+                    mode,
                     stat_result.st_size,
                     stat_result.st_mtime_ns,
                     stat_result.st_ctime_ns,
                 )
             else:
-                fingerprint = ("other", stat_result.st_mode, stat_result.st_ctime_ns)
-            state[rel] = json.dumps(fingerprint, separators=(",", ":"), ensure_ascii=True)
+                fingerprint = ("other", mode, stat_result.st_ctime_ns)
+            state[relative] = json.dumps(fingerprint, separators=(",", ":"), ensure_ascii=True)
         except OSError:
             continue
     return state

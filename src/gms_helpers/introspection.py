@@ -284,6 +284,27 @@ def list_assets_by_type(
     return assets
 
 
+def list_asset_folders(project_root: Path, name_contains: Optional[str] = None) -> List[Dict[str, Any]]:
+    """List the asset-browser folders recorded in the .yyp, by name and folder path."""
+    _, yyp_data = _safe_load_yyp(project_root)
+    if not yyp_data:
+        return []
+    name_filter = name_contains.lower() if name_contains else None
+    folders = []
+    for folder in yyp_data.get("Folders", []) or []:
+        if not isinstance(folder, dict):
+            continue
+        name = folder.get("name")
+        folder_path = folder.get("folderPath")
+        if not isinstance(name, str) or not isinstance(folder_path, str):
+            continue
+        if name_filter and name_filter not in folder_path.lower():
+            continue
+        folders.append({"name": name, "path": folder_path, "type": "folder"})
+    folders.sort(key=lambda item: item["path"].lower())
+    return folders
+
+
 def get_asset_yy_path(project_root: Path, asset_identifier: str) -> Optional[Path]:
     """
     Resolve an asset identifier to its .yy file path.
@@ -338,6 +359,162 @@ def read_asset_yy(project_root: Path, asset_identifier: str) -> Optional[Dict[st
         return None
 
     return load_json_loose(yy_path)
+
+
+_MAX_LISTED_ROOM_INSTANCES = 60
+_CODE_SUFFIXES = {".gml", ".fsh", ".vsh", ".txt", ".md", ".json", ".ini", ".csv"}
+_MAX_CODE_CHARS = 60_000
+
+
+def _relative_to_project(project_root: Path, path: Path) -> Optional[str]:
+    """Express a path already resolved inside the project relative to it."""
+    try:
+        return path.resolve().relative_to(project_root.resolve()).as_posix()
+    except (OSError, ValueError):
+        return None
+
+
+def _line_count(path: Path) -> Optional[int]:
+    try:
+        with path.open("rb") as handle:
+            return sum(1 for _ in handle)
+    except OSError:
+        return None
+
+
+def _reference_name(reference: Any) -> Optional[str]:
+    return reference.get("name") if isinstance(reference, dict) and isinstance(reference.get("name"), str) else None
+
+
+def read_project_text_file(project_root: Path, relative_path: str) -> Optional[Dict[str, Any]]:
+    """Read one code or text file inside the project, capped so a huge file cannot flood a caller."""
+    path = _safe_project_path(project_root, relative_path)
+    if path is None or path.suffix.lower() not in _CODE_SUFFIXES or path.is_symlink() or not path.is_file():
+        return None
+    text = path.read_text(encoding="utf-8", errors="replace")
+    truncated = len(text) > _MAX_CODE_CHARS
+    return {
+        "path": _relative_to_project(project_root, path),
+        "lines": text.count("\n") + (1 if text and not text.endswith("\n") else 0),
+        "code": text[:_MAX_CODE_CHARS],
+        "truncated": truncated,
+    }
+
+
+def describe_asset(project_root: Path, asset_identifier: str) -> Optional[Dict[str, Any]]:
+    """Summarise an asset from its .yy: type, folder, and the code files that hold its behaviour."""
+    yy_path = get_asset_yy_path(project_root, asset_identifier)
+    if yy_path is None:
+        return None
+    data = read_asset_yy(project_root, asset_identifier)
+    if not isinstance(data, dict):
+        return None
+    directory = yy_path.parent
+    summary: Dict[str, Any] = {
+        "name": data.get("name") or yy_path.stem,
+        "asset_type": _infer_asset_type(_relative_to_project(project_root, yy_path) or ""),
+        "path": _relative_to_project(project_root, yy_path),
+        "folder": data.get("parent", {}).get("path") if isinstance(data.get("parent"), dict) else None,
+    }
+
+    def code_file(path: Path) -> Dict[str, Any]:
+        return {"file": _relative_to_project(project_root, path), "lines": _line_count(path)}
+
+    if isinstance(data.get("eventList"), list):
+        from .event_model import event_display_name, event_filename_from_entry
+
+        events = []
+        for entry in data["eventList"]:
+            if not isinstance(entry, dict):
+                continue
+            try:
+                file_path = directory / event_filename_from_entry(entry)
+            except Exception:  # noqa: BLE001 - an event this model cannot name is still listed
+                events.append({"event": "unknown", "event_type": entry.get("eventType")})
+                continue
+            events.append({"event": event_display_name(entry), **code_file(file_path)})
+        summary["events"] = events
+        summary["sprite"] = _reference_name(data.get("spriteId"))
+        summary["parent_object"] = _reference_name(data.get("parentObjectId"))
+    else:
+        code_files = sorted(
+            path for path in directory.iterdir() if path.is_file() and path.suffix.lower() in {".gml", ".fsh", ".vsh"}
+        )
+        if code_files:
+            summary["code_files"] = [code_file(path) for path in code_files]
+    if isinstance(data.get("layers"), list):
+        layers = [layer for layer in _iter_room_layers(data["layers"]) if isinstance(layer, dict)]
+        summary["layers"] = [layer.get("name") for layer in layers]
+        summary["instances"] = sum(len(layer.get("instances") or []) for layer in layers)
+        # Which objects are in the room, by layer. Named individually while that stays short;
+        # a room with hundreds of instances gets a count per object instead.
+        placed: Dict[str, Any] = {}
+        for layer in layers:
+            instances = [item for item in layer.get("instances") or [] if isinstance(item, dict)]
+            if not instances:
+                continue
+            if summary["instances"] <= _MAX_LISTED_ROOM_INSTANCES:
+                placed[str(layer.get("name"))] = [
+                    {"instance": item.get("name"), "object": _reference_name(item.get("objectId"))}
+                    for item in instances
+                ]
+            else:
+                counts: Dict[str, int] = {}
+                for item in instances:
+                    name = _reference_name(item.get("objectId")) or "unknown"
+                    counts[name] = counts.get(name, 0) + 1
+                placed[str(layer.get("name"))] = counts
+        summary["instances_by_layer"] = placed
+        order = data.get("instanceCreationOrder")
+        if isinstance(order, list) and len(order) <= _MAX_LISTED_ROOM_INSTANCES:
+            summary["creation_order"] = [_reference_name(item) for item in order]
+        settings = data.get("roomSettings") if isinstance(data.get("roomSettings"), dict) else {}
+        summary["size"] = [settings.get("Width"), settings.get("Height")]
+    if isinstance(data.get("frames"), list):
+        summary["frames"] = len(data["frames"])
+        summary["size"] = [data.get("width"), data.get("height")]
+    return summary
+
+
+def asset_code_uses(project_root: Path, asset_name: str, asset_types: Dict[str, str]) -> List[Dict[str, str]]:
+    """List the assets that ``asset_name``'s own code names, using the same token rules as safe delete."""
+    from .reference_scanner import count_gml_identifier, read_gml_source
+
+    summary = describe_asset(project_root, asset_name)
+    if summary is None:
+        return []
+    found: Dict[str, None] = {}
+    for entry in [*summary.get("events", []), *summary.get("code_files", [])]:
+        path = _safe_project_path(project_root, entry.get("file") or "")
+        if path is None or not path.is_file():
+            continue
+        try:
+            source = read_gml_source(path)
+        except OSError:
+            continue
+        candidates = set(re.findall(r"[A-Za-z_]\w*", source)) & asset_types.keys()
+        for candidate in sorted(candidates - {asset_name}):
+            if candidate not in found and count_gml_identifier(source, candidate) > 0:
+                found[candidate] = None
+    return [{"asset": name, "type": asset_types[name], "relation": "code_reference"} for name in found]
+
+
+def closest_asset_names(project_root: Path, asset_identifier: str, limit: int = 5) -> List[str]:
+    """Suggest registered asset names close to one that was not found."""
+    import difflib
+
+    _, yyp_data = _safe_load_yyp(project_root)
+    names = [
+        resource.get("id", {}).get("name")
+        for resource in (yyp_data or {}).get("resources", [])
+        if isinstance(resource, dict)
+    ]
+    names = [name for name in names if isinstance(name, str)]
+    wanted = Path(asset_identifier.replace("\\", "/")).stem
+    close = difflib.get_close_matches(wanted, names, n=limit, cutoff=0.6)
+    if len(close) < limit:
+        close += [name for name in names if wanted.lower() in name.lower() and name not in close][: limit - len(close)]
+    return close
 
 
 def search_references(
@@ -555,7 +732,10 @@ def build_asset_graph(project_root: Path, *, deep: bool = False, include_code_re
         for asset in asset_list:
             nodes.append({"id": asset["name"], "type": asset["type"], "path": asset["path"]})
 
-            # Parse .yy for structural references
+            # Parse .yy for structural references. Included files have no .yy, and asking for
+            # one by a non-.yy path falls back to a name search that re-reads the whole .yyp.
+            if not asset["path"].endswith(".yy"):
+                continue
             yy_data = read_asset_yy(project_root, asset["path"])
             if yy_data:
                 _extract_yy_references(asset, yy_data, add_edge)
@@ -702,6 +882,17 @@ def _scan_gml_references(project_root: Path, asset_names: Dict[str, str], add_ed
 # =============================================================================
 # Utility Functions for External Use
 # =============================================================================
+
+
+def room_order(project_root: Path) -> List[str]:
+    """Rooms in the order the project runs them; the first is where the game starts."""
+    _, yyp_data = _safe_load_yyp(project_root)
+    names = []
+    for node in (yyp_data or {}).get("RoomOrderNodes", []) or []:
+        room = node.get("roomId") if isinstance(node, dict) else None
+        if isinstance(room, dict) and isinstance(room.get("name"), str):
+            names.append(room["name"])
+    return names
 
 
 def get_project_stats(project_root: Path) -> Dict[str, Any]:

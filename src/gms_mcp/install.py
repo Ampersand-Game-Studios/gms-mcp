@@ -5,12 +5,18 @@ from __future__ import annotations
 
 import argparse
 import json
-import shlex
 import sys
 import time
 from pathlib import Path
 
-from .client_registry import CLIENT_ACTIONS, CLIENT_SCOPES, all_client_names, codex_home, resolve_client_spec
+from .client_registry import (
+    CLIENT_ACTIONS,
+    CLIENT_SCOPES,
+    CODEX_WORKSPACE_CONFIG_RELPATH,
+    all_client_names,
+    codex_home,
+    resolve_client_spec,
+)
 from .install_support.client_configs import (
     _build_claude_plugin_manifest,
     _build_codex_env,
@@ -323,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument(
         "--codex",
         action="store_true",
-        help="Write a Codex configuration snippet to .codex/mcp.toml in the workspace root.",
+        help="Write the Codex project config to .codex/config.toml in the workspace root (read by Codex for trusted projects).",
     )
     parser.add_argument(
         "--codex-global",
@@ -643,7 +649,7 @@ def main(argv: list[str] | None = None) -> int:
         try:
             codex_path, _codex_payload, codex_merged = _generate_codex_config(
                 workspace_root=workspace_root,
-                output_path=workspace_root / ".codex" / "mcp.toml",
+                output_path=workspace_root / CODEX_WORKSPACE_CONFIG_RELPATH,
                 server_name=args.server_name,
                 command=command,
                 args_prefix=args_prefix,
@@ -663,30 +669,13 @@ def main(argv: list[str] | None = None) -> int:
                 server_name=args.server_name,
                 source_label=str(codex_path),
             )
-            print("[DRY-RUN] Codex config would be written to: .codex/mcp.toml")
+            print(f"[DRY-RUN] Codex config would be written to: {CODEX_WORKSPACE_CONFIG_RELPATH}")
             print("[DRY-RUN] Codex redacted target entry (unrelated configuration omitted):")
             print(codex_preview)
         else:
             print(f"[INFO] Codex config written to: {codex_path}")
-            print("       This is a workspace-scoped config file.")
-            command_line = " ".join(
-                [
-                    "codex mcp add",
-                    shlex.quote(args.server_name),
-                    "--",
-                    shlex.quote(command),
-                ]
-                + [shlex.quote(item) for item in args_prefix]
-            )
-            command_line += _build_codex_env_args(
-                _build_codex_env(
-                    gm_project_root,
-                    workspace_root,
-                    include_project_root=False,
-                    safe_profile=bool(args.safe_profile),
-                )
-            )
-            print(f"[INFO] Registering command: {command_line}")
+            print("       Codex reads this project config once the project is trusted in Codex.")
+            print("       Start a new Codex session to load it.")
 
     if args.codex_global:
         codex_global_path = codex_home() / "config.toml"

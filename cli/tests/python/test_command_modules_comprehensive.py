@@ -99,7 +99,7 @@ class TestEventCommands(unittest.TestCase):
         result = handle_event_add(self.test_args)
 
         self.assertTrue(result)
-        mock_add.assert_called_once_with("o_player", "create", "")
+        mock_add.assert_called_once_with("o_player", "create", "", overwrite=False)
 
     @patch("gms_helpers.commands.event_commands.list_events")
     def test_handle_event_list_returns_structured_result(self, mock_list):

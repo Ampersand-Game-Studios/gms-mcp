@@ -89,7 +89,23 @@ def list_events(object_name: str, project_root: str | Path | None = None) -> Lis
     return events
 
 
-def add_event(object_name: str, event_spec: str, template: str = "", project_root: str | Path | None = None) -> bool:
+def _is_generated_event_placeholder(content: str, object_name: str, filename: str) -> bool:
+    """True for an event file that still holds only what this tool generated for it."""
+    return content.strip() in {
+        "",
+        f"/// Create Event for {object_name}\n// Initialize variables here",
+        f"// {filename} event",
+    }
+
+
+def add_event(
+    object_name: str,
+    event_spec: str,
+    template: str = "",
+    project_root: str | Path | None = None,
+    *,
+    overwrite: bool = False,
+) -> bool:
     """Add a new event to an object."""
     spec = parse_event_spec(event_spec)
 
@@ -111,8 +127,33 @@ def add_event(object_name: str, event_spec: str, template: str = "", project_roo
     event_list = data.get("eventList", [])
     for event in event_list:
         if event_matches(event, spec):
-            print(f"[WARN] Event {event_spec} already exists for {object_name}")
-            return True
+            existing_path = obj_dir / event_filename_from_entry(event)
+            existing_file = f"objects/{object_name}/{existing_path.name}"
+            if not template:
+                print(f"[WARN] Event {event_spec} already exists for {object_name}; nothing was changed.")
+                print(f"[INFO] Its code is in {existing_file}.")
+                return True
+            current = read_gml_source(existing_path) if existing_path.exists() else ""
+            if current == template:
+                print(f"[OK] Event {event_spec} already exists for {object_name} with this code; nothing to change.")
+                return True
+            if overwrite:
+                atomic_write_text(existing_path, template)
+                print(f"[OK] Replaced the code of event {event_spec} of {object_name} ({existing_file})")
+                return True
+            if _is_generated_event_placeholder(current, object_name, existing_path.name):
+                # Creating an object also creates its Create event, so "create the object, then add
+                # its Create code" always arrives here. Nothing anyone wrote is being replaced.
+                atomic_write_text(existing_path, template)
+                print(
+                    f"[OK] Event {event_spec} of {object_name} held only its generated placeholder; "
+                    f"wrote the supplied code to {existing_file}"
+                )
+                return True
+            raise ValidationError(
+                f"Event {event_spec} already exists for {object_name} with its own code, so the supplied "
+                f"code was not written. Pass overwrite to replace it, or edit {existing_file}."
+            )
 
     # Create the GML file
     new_event = build_event_entry(spec, collision_reference, object_data=data)

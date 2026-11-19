@@ -31,7 +31,7 @@ from .common import (
     _write_json_atomic_with_backup,
     validate_server_name,
 )
-from ..client_registry import codex_home
+from ..client_registry import CODEX_UNREAD_WORKSPACE_RELPATH, CODEX_WORKSPACE_CONFIG_RELPATH, codex_home
 
 CODEX_TOOL_TIMEOUT_KEY = "tool_timeout_sec"
 CODEX_TOOL_TIMEOUT_SECONDS = 60 * 60
@@ -773,13 +773,21 @@ def _read_codex_server_entry(
 def _collect_codex_check_state(*, workspace_root: Path, server_name: str) -> dict:
     """
     Collect Codex config discovery state for text and JSON check outputs.
-    Active precedence: workspace .codex/mcp.toml, then ~/.codex/config.toml.
+    Active precedence: workspace .codex/config.toml (trusted projects), then ~/.codex/config.toml.
     """
-    local_path = workspace_root / ".codex" / "mcp.toml"
+    local_path = workspace_root / CODEX_WORKSPACE_CONFIG_RELPATH
     global_path = codex_home() / "config.toml"
 
     local_entry, _ = _read_codex_server_entry(config_path=local_path, server_name=server_name)
     global_entry, _ = _read_codex_server_entry(config_path=global_path, server_name=server_name)
+    unread_entry = None
+    if local_entry is None:
+        try:
+            unread_entry, _ = _read_codex_server_entry(
+                config_path=workspace_root / CODEX_UNREAD_WORKSPACE_RELPATH, server_name=server_name
+            )
+        except (RuntimeError, ValueError):
+            unread_entry = None
 
     active_scope = "none"
     active_path: str | None = None
@@ -798,6 +806,16 @@ def _collect_codex_check_state(*, workspace_root: Path, server_name: str) -> dic
         require_project_root=active_scope != "global",
         env_required=True,
     )
+
+    ready = readiness.ready
+    problems = list(readiness.problems)
+    if unread_entry is not None:
+        # The project pin the user set up is not in effect, whatever the global entry says.
+        ready = False
+        problems.append(
+            f"`{CODEX_UNREAD_WORKSPACE_RELPATH}` defines `{server_name}`, but Codex does not read that file. "
+            f"Run setup again to write `{CODEX_WORKSPACE_CONFIG_RELPATH}`, then delete the old file."
+        )
 
     local_entry_redacted = _redact_config_value(local_entry)
     global_entry_redacted = _redact_config_value(global_entry)
@@ -822,8 +840,8 @@ def _collect_codex_check_state(*, workspace_root: Path, server_name: str) -> dic
             "path": active_path,
             "entry": active_entry_redacted,
         },
-        "ready": readiness.ready,
-        "problems": readiness.problems,
+        "ready": ready,
+        "problems": problems,
         "not_applicable": False,
     }
 
@@ -837,7 +855,7 @@ def _codex_entry_readiness(entry: object) -> tuple[bool, list[str]]:
 def _print_codex_check(*, workspace_root: Path, server_name: str) -> int:
     """
     Print Codex config discovery status and the active server entry.
-    Active precedence: workspace .codex/mcp.toml, then ~/.codex/config.toml.
+    Active precedence: workspace .codex/config.toml (trusted projects), then ~/.codex/config.toml.
     """
     try:
         state = _collect_codex_check_state(workspace_root=workspace_root, server_name=server_name)
@@ -859,6 +877,8 @@ def _print_codex_check(*, workspace_root: Path, server_name: str) -> int:
         print(f"[INFO] Active server entry '{server_name}': not found")
     else:
         print(f"[INFO] Active server entry '{server_name}' source: {state['active']['path']}")
+        if state["active"]["scope"] == "workspace":
+            print("[INFO] Codex applies workspace config only after the project is trusted in Codex.")
         print("[INFO] Active server entry payload:")
         print(json.dumps(_redact_config_value(active_entry), indent=2, sort_keys=True))
 
@@ -929,7 +949,12 @@ def _build_claude_plugin_manifest() -> dict:
 
 
 def _render_claude_hook_server_name(*, hooks_manifest_path: Path, server_name: str, dry_run: bool) -> None:
-    """Bind bundled MCP hook matchers to the configured plugin server name."""
+    """Bind bundled MCP hook matchers to the configured server name.
+
+    The matchers accept the server both as this plugin's own (``mcp__plugin_gms-mcp_<name>__``)
+    and as a workspace ``.mcp.json`` entry (``mcp__<name>__``): Claude Code drops a plugin
+    server that duplicates a workspace one, and the hooks must still see its tools.
+    """
     if dry_run or not hooks_manifest_path.is_file():
         return
     payload = _parse_json_object_or_raise(
@@ -940,8 +965,8 @@ def _render_claude_hook_server_name(*, hooks_manifest_path: Path, server_name: s
     if not isinstance(hooks, dict):
         raise ValueError(f"Malformed Claude hooks manifest: {hooks_manifest_path}")
 
-    source_prefix = "mcp__plugin_gms-mcp_gms__"
-    target_prefix = f"mcp__plugin_gms-mcp_{re.escape(server_name)}__"
+    source_prefix = "mcp__(plugin_gms-mcp_)?gms__"
+    target_prefix = f"mcp__(plugin_gms-mcp_)?{re.escape(server_name)}__"
     replacements = 0
     for event_name in ("PostToolUse", "PostToolUseFailure"):
         groups = hooks.get(event_name)

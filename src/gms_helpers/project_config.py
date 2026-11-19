@@ -42,6 +42,9 @@ DEFAULTS: dict[str, Any] = {
         "max_parallel_builds": 4,
         "jobs": 4,
         "runtime_version": None,
+        # How long a build tool's call waits for its result before returning the run's stage
+        # for gm_build_status to follow. 0 waits until the build ends.
+        "call_wait_seconds": 20,
     },
     "test": {
         "script_name": "__agent_test",
@@ -72,6 +75,7 @@ _ENVIRONMENT_OVERRIDES: dict[str, tuple[str, type]] = {
     "build.igor_attempts": ("GMS_MCP_SNAPSHOT_IGOR_ATTEMPTS", int),
     "build.max_parallel_builds": ("GMS_MCP_MAX_PARALLEL_BUILDS", int),
     "build.jobs": ("GMS_MCP_IGOR_JOBS", int),
+    "build.call_wait_seconds": ("GMS_MCP_BUILD_CALL_WAIT_SECONDS", int),
     "bridge.port": ("GMS_MCP_BRIDGE_PORT", int),
 }
 
