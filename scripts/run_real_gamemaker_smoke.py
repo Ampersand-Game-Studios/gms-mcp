@@ -40,7 +40,7 @@ _TRUE_VALUES = {"1", "true", "yes", "on"}
 _MIN_COMPILE_TIMEOUT_SECONDS = 120
 _SYNTHETIC_FIXTURES = {
     "gm-2024": {"project_name": "gms_mcp_smoke_2024", "ide_version": "2024.14.3.217"},
-    "gm-2026-lts": {"project_name": "gms_mcp_smoke_2026_lts", "ide_version": "2026.0.0.16"},
+    "gm-2026-lts": {"project_name": "gms_mcp_smoke_2026_lts", "ide_version": "2026.1.0.27"},
 }
 _HOST_PLATFORM_NAMES = {"Darwin": "macos", "Windows": "windows", "Linux": "linux"}
 _SAFE_DIAGNOSTIC_FIELDS = {

@@ -26,6 +26,10 @@ def _is_within(path: Path, directory: Path) -> bool:
 
 
 def _make_private_directory(path: Path) -> Path:
+    if os.name == "nt":
+        from gms_helpers.runner_support.security import private_directory
+
+        return private_directory(path)
     if path.is_symlink():
         raise OSError("Refusing symlink diagnostic directory")
     path.mkdir(mode=_PRIVATE_DIRECTORY_MODE, parents=True, exist_ok=True)

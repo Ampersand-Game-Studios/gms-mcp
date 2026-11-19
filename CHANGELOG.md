@@ -5,6 +5,7 @@ All notable changes to this project will be documented in this file.
 ## [Unreleased]
 
 ### Changed
+- **GameMaker 2026.1 LTS certification.** The `gm-2026-lts` fixture now targets IDE `2026.1.0.27` and CI installs and certifies runtime `2026.1.0.28` (from the LTS2026 feed) in place of `2026.0.0.23`. The `gm-2024` fixture is unchanged.
 - **Live sessions accept bridge protocol 3.** It keeps the framing of protocol 2 and only adds command words, so `gm_game_start` no longer reports such an endpoint as `RUNNING_UNSUPPORTED_ENDPOINT`.
 - **`gm_game_start` names an outdated bridge endpoint.** When the game connects but its HELLO carries no session credential, the `RUNNING_NOT_CONNECTED` message now says the endpoint must send `token` from `GMS_MCP_BRIDGE_TOKEN`, instead of reporting that nothing connected.
 - **Codex setup sets a one-hour tool limit.** New Codex entries get `tool_timeout_sec = 3600`, because a full compile or `gm_test_run` outlasts Codex's default limit and the call then fails while the build carries on. An existing `tool_timeout_sec` is kept.
