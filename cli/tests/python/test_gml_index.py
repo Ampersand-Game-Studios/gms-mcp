@@ -496,6 +496,30 @@ function cached_func() {}
         self.assertEqual(stats3.get("removed_files", 0), 1)
         self.assertEqual(index3.find_definition("b"), [])
 
+    def test_two_sessions_building_at_once_do_not_store_a_file_twice(self):
+        """A second session can open the database the first has just created, and fill it first."""
+        from gms_helpers.gml_index import GMLIndex
+
+        self._write_gml("scripts/only.gml", "function only() { return other_thing; }\n")
+        first = GMLIndex(Path(self.temp_dir))
+        second = GMLIndex(Path(self.temp_dir))
+        scan = first._scan_files
+        others = []
+
+        def scan_after_the_other_session(rel_paths):
+            others.append(second.build())
+            return scan(rel_paths)
+
+        first._scan_files = scan_after_the_other_session
+        self.assertEqual(first.build()["status"], "built")
+        self.assertEqual((others[0]["status"], others[0]["added_files"]), ("incremental", 1))
+
+        third = GMLIndex(Path(self.temp_dir))
+        stats = third.build()
+        self.assertEqual((stats["status"], stats["symbols"]), ("cached", 1))
+        self.assertEqual(len(third.find_definition("only")), 1)
+        self.assertEqual(len(third.find_references("other_thing")), 1)
+
 
 class TestSymbolDataclasses(unittest.TestCase):
     """Tests for symbol dataclasses."""

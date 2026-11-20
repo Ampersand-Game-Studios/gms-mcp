@@ -283,6 +283,11 @@ class GMLIndex:
             except Exception:
                 # Skip files that can't be read
                 continue
+            # Another session may have stored this file since this one looked: it can open a database
+            # this session has only just created, or see the same new file. Replacing the file's rows
+            # in the transaction that adds them keeps one copy whichever session commits last.
+            self._connection.execute("DELETE FROM definitions WHERE file = ?", (rel_path,))
+            self._connection.execute("DELETE FROM refs WHERE file = ?", (rel_path,))
             self._connection.execute(
                 "INSERT OR REPLACE INTO files VALUES (?, ?, ?)", (rel_path, stat.st_mtime_ns, stat.st_size)
             )
