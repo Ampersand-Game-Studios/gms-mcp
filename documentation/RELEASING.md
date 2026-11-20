@@ -17,7 +17,7 @@ uv run --frozen pyright
 
 Final verification must execute every required child suite; missing, empty, all-skipped, or failed suites block it. Coverage requires 85% overall statements, 50% per module, and 75% measured branches. Test-source mentions are not executed MCP evidence.
 
-CI runs the Python suite on Linux, Windows, and macOS. Licensed GameMaker certification requires both synthetic fixture families (`gm-2024` with runtime `2024.14.4.268`, `gm-2026-lts` with runtime `2026.0.0.23`) on all three host platforms. Each report must pass every semantic check, match the exact clean release commit, and use identical fixture source hashes across hosts. Missing or skipped certification blocks publication. Licensing is isolated in the branch-restricted `gamemaker-ci` environment and cleaned up after each job.
+CI runs the Python suite on Linux, Windows, and macOS. Licensed GameMaker certification requires both synthetic fixture families (`gm-2024` with runtime `2024.14.4.268`, `gm-2026-lts` with runtime `2026.1.0.28`) on all three host platforms. Each report must pass every semantic check, match the exact clean release commit, and use identical fixture source hashes across hosts. Missing or skipped certification blocks publication. Licensing is isolated in the branch-restricted `gamemaker-ci` environment and cleaned up after each job.
 
 ```sh
 uv run --frozen python3 scripts/verify_release_certification.py build/release-certification \

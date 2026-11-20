@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
-from typing import Any, Dict
+from typing import Annotated, Any, Dict
+
+from pydantic import Field
 
 from ..dispatch import _run_with_fallback
 from ..mcp_types import Context
@@ -18,8 +20,20 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_event_add(
         object: str,
-        event: str,
-        template: str = "",
+        event: Annotated[
+            str,
+            Field(
+                description=(
+                    'The event: "create", "step", "begin_step", "end_step", "draw", "draw_gui", "destroy", '
+                    '"cleanup", "room_start", "alarm:0", "collision:o_wall", "user_event_0", or type:number.'
+                )
+            ),
+        ],
+        template: Annotated[str, Field(description="The event's GML code (the text itself, not a filename).")] = "",
+        overwrite: Annotated[
+            bool,
+            Field(description="Replace the code of an event that already exists with `template`."),
+        ] = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: OutputMode = "full",
@@ -27,21 +41,28 @@ def register(mcp: Any, ContextType: Any) -> None:
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Add an event to an object.
+        """Add an event to an object, or set an existing event's code.
 
-        Args:
-            template: Inline GML event content, not a filename.
+        `template` is the event's GML. If the event already exists: a generated placeholder (such
+        as the Create event a new object starts with) is filled in; real code is replaced only with
+        `overwrite=true`, otherwise the call fails and nothing is written.
         """
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.event_commands import handle_event_add
 
         args = argparse.Namespace(
-            object=object, event=event, template=template if template else None, project_root=project_root
+            object=object,
+            event=event,
+            template=template if template else None,
+            overwrite=overwrite,
+            project_root=project_root,
         )
         cli_args = ["event", "add"]
         if template:
-            cli_args.extend(["--template", template])
+            cli_args.append(f"--template={template}")
+        if overwrite:
+            cli_args.append("--overwrite")
         cli_args.extend(["--", object, event])
 
         return await _run_with_fallback(
@@ -165,7 +186,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Validate object events."""
+        """Check that an object's event files and its .yy event list agree, and report any mismatch."""
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.event_commands import handle_event_validate

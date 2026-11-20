@@ -190,7 +190,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """List rooms."""
+        """List the project's rooms; verbose=true adds each room's size and layers."""
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
         from gms_helpers.commands.room_commands import handle_room_list

@@ -291,3 +291,64 @@ class MutationSerializationMiddleware:
             if self._is_committed_mutation_result(result):
                 await self._runtime.publish_committed_mutation()
             return result
+
+
+class UnknownArgumentMiddleware:
+    """Refuse a tool call that names an argument the tool does not have.
+
+    The SDK drops unknown arguments before the tool runs, so a misspelt filter ("symbol_type" for
+    "kind") silently returns unfiltered results. Saying which names exist costs the caller one retry
+    instead of a wrong answer.
+    """
+
+    def __init__(self, list_tools: Callable[[], Any], make_result: Callable[[dict[str, Any]], Any]) -> None:
+        self._list_tools = list_tools
+        self._make_result = make_result
+        self._known: dict[str, frozenset[str]] | None = None
+
+    async def _known_arguments(self, tool_name: str) -> frozenset[str] | None:
+        if self._known is None:
+            self._known = {
+                tool.name: frozenset((tool.input_schema or {}).get("properties", {}))
+                for tool in await self._list_tools()
+            }
+        return self._known.get(tool_name)
+
+    async def __call__(
+        self,
+        ctx: ServerRequestContext[Any, Any],
+        call_next: CallNext,
+    ) -> HandlerResult:
+        if ctx.method != "tools/call":
+            return await call_next(ctx)
+        if isinstance(ctx.params, Mapping):
+            tool_name = ctx.params.get("name")
+            arguments = ctx.params.get("arguments")
+        else:
+            tool_name = getattr(ctx.params, "name", None)
+            arguments = getattr(ctx.params, "arguments", None)
+        if not isinstance(tool_name, str) or not isinstance(arguments, Mapping) or not arguments:
+            return await call_next(ctx)
+        known = await self._known_arguments(tool_name)
+        if known is None:
+            return await call_next(ctx)
+        # Nearly every tool takes `project_root`, so callers pass it uniformly; the few tools
+        # that have no use for it ignore it as before.
+        unknown = sorted(str(name) for name in arguments if name not in known and name != "project_root")
+        if not unknown:
+            return await call_next(ctx)
+        import difflib
+
+        suggestions = {
+            name: close[0] for name in unknown if (close := difflib.get_close_matches(name, sorted(known), n=1))
+        }
+        failure: dict[str, Any] = {
+            "ok": False,
+            "tool": tool_name,
+            "error": f"Unknown argument{'s' if len(unknown) > 1 else ''}: {', '.join(unknown)}",
+            "error_code": "invalid_arguments",
+            "valid_arguments": sorted(known - {"ctx"}),
+        }
+        if suggestions:
+            failure["did_you_mean"] = suggestions
+        return self._make_result(failure)

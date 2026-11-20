@@ -31,7 +31,8 @@ class SymbolLocation:
     def to_dict(self) -> dict:
         """Convert to dictionary for JSON serialization."""
         result = {
-            "file": str(self.file_path),
+            # Project-relative, and the same text on every platform.
+            "file": self.file_path.as_posix(),
             "line": self.line,
             "column": self.column,
         }

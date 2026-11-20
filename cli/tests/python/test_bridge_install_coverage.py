@@ -267,7 +267,7 @@ class TestInstallCoverage(unittest.TestCase):
 
             workspace = Path(temp_dir) / "workspace"
             workspace.mkdir()
-            output_toml = workspace / ".codex" / "mcp.toml"
+            output_toml = workspace / ".codex" / "config.toml"
             output_toml.parent.mkdir(parents=True)
             output_toml.write_text("[mcp_servers]\ngms = []\n", encoding="utf-8")
             with self.assertRaises(ValueError):
@@ -715,7 +715,7 @@ class TestInstallCoverage(unittest.TestCase):
 
             with patch(
                 "gms_mcp.install_support.flow._generate_codex_config",
-                return_value=(workspace / ".codex" / "mcp.toml", "payload", "merged\n"),
+                return_value=(workspace / ".codex" / "config.toml", "payload", "merged\n"),
             ):
                 result, output = _capture_output(
                     install_module._run_setup_for_client,
