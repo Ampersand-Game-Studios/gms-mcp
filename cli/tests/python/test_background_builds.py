@@ -650,7 +650,7 @@ def test_a_working_tree_compile_can_be_stopped_and_frees_the_project(tmp_path: P
                         {"label": "working_tree", "until": "compiling", "wait_seconds": 20},
                     )
                 )
-                assert at_stage["stage"] == "compiling"
+                assert at_stage.get("stage") == "compiling", at_stage
 
                 # No label: the one run this session has going, whatever tool started it.
                 stopped = unwrap_call_tool_result(await client.call_tool("gm_build_stop", {}))
@@ -1103,3 +1103,27 @@ def test_a_working_tree_compile_stopped_as_it_starts_ends_at_once(tmp_path: Path
         assert compiled == [], "no compiler was started"
     # Handed over a moment before the stop, the compile may have begun; whatever began was ended.
     assert ended == compiled
+
+
+def test_a_run_that_ends_after_another_took_its_label_leaves_that_runs_record_alone(tmp_path: Path):
+    directory = _run_dir(tmp_path)
+    with run_status.track_run(directory, "compile", "gm_snapshot_compile") as first:
+        first.stage("compiling")
+        # Its label has been given back, and another session's run has taken it and started its record.
+        newer = {
+            "version": 1,
+            "state": "running",
+            "operation": "gm_snapshot_compile",
+            "label": "compile",
+            "pid": os.getpid() + 1,
+            "started_at": first.started_at + 5,
+            "stage": "compiling",
+        }
+        (directory / run_status.STATUS_FILE).write_text(json.dumps(newer), encoding="utf-8")
+
+        first.finish({"ok": True, "status": "COMPILED"})
+
+        # The first run still knows its own outcome; the files now describe the run that holds the label.
+        assert first.snapshot()["state"] == "finished"
+    assert json.loads((directory / run_status.STATUS_FILE).read_text(encoding="utf-8")) == newer
+    assert not (directory / run_status.RESULT_FILE).exists()
