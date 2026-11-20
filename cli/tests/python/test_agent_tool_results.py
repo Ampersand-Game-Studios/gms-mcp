@@ -698,6 +698,45 @@ def test_compile_errors_are_located_in_project_files(tmp_path: Path):
     ]
 
 
+def test_compile_errors_show_the_line_that_was_compiled_not_the_working_trees(tmp_path: Path):
+    import shutil
+
+    from gms_helpers.snapshot_build import locate_compile_errors
+
+    project = _make_project(tmp_path)
+    compiled = tmp_path / "work" / "project"
+    shutil.copytree(project, compiled)
+    # The build was of another revision (or the file was edited since): the working tree's line is fine.
+    (compiled / "scripts" / "scr_helper_0" / "scr_helper_0.gml").write_text(
+        "function scr_helper_0() {\n\tvar value = (1 + ;\n}\n", encoding="utf-8"
+    )
+    # A file only the build has: another revision's script, or the injected test.
+    (compiled / "scripts" / "__agent_test").mkdir()
+    (compiled / "scripts" / "__agent_test" / "__agent_test.gml").write_text("test_chekc(true);\n", encoding="utf-8")
+    errors = [
+        "Error : gml_GlobalScript_scr_helper_0(1) : got ';' expected ')'",
+        "Error : gml_GlobalScript___agent_test(0) : unknown function test_chekc",
+    ]
+
+    located = locate_compile_errors(project, errors, compiled_root=compiled)
+
+    assert located == [
+        {
+            "file": "scripts/scr_helper_0/scr_helper_0.gml",
+            "line": 2,
+            "message": "got ';' expected ')'",
+            "source": "var value = (1 + ;",
+        },
+        {
+            "file": "scripts/__agent_test/__agent_test.gml",
+            "line": 1,
+            "message": "unknown function test_chekc",
+            "only_in_build": True,
+            "source": "test_chekc(true);",
+        },
+    ]
+
+
 def test_unknown_asset_type_is_an_error_not_an_empty_list(tmp_path: Path):
     project = _make_project(tmp_path)
     with _server(project) as server:

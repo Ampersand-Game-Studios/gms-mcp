@@ -39,7 +39,7 @@ from typing import Any, Callable, Iterable
 
 from . import run_status, yyp_registry
 from .bounded_regex import search_many
-from .agent_locks import MOBILE_BUILD_LOCK, BuildSlot, DirectoryLock
+from .agent_locks import MOBILE_BUILD_LOCK, BuildSlot, DirectoryLock, _process_alive
 from .mac_runtime import prepare_mac_runtime, project_run_lock
 from .exceptions import ValidationError
 from .project_config import project_setting
@@ -642,15 +642,23 @@ _OBJECT_EVENT_UNIT = re.compile(
 )
 
 
-def locate_compile_errors(project_root: Path, errors: list[str]) -> list[dict[str, Any]]:
+def locate_compile_errors(
+    project_root: Path, errors: list[str], *, compiled_root: Path | None = None
+) -> list[dict[str, Any]]:
     """Turn the compiler's internal unit names into project files and lines an editor can open.
 
     Igor reports "gml_GlobalScript_scr_x(3) : message": the unit is a script or an object event,
     and its line number counts from zero. Each located error carries the source text of that
     line so a reader can see at once that it is the right one.
+
+    ``compiled_root`` is the copy that was actually compiled. The line is read from there: the
+    working tree may hold another revision of the file, or have been edited since, and would
+    show valid code beside the error. A file the working tree does not have (another revision's,
+    or the injected test) is still located and marked ``only_in_build``.
     """
     located: list[dict[str, Any]] = []
-    root = Path(project_root)
+    project = Path(project_root)
+    root = Path(compiled_root) if compiled_root is not None else project
     for error in errors:
         match = _COMPILED_UNIT.search(error)
         if match is None:
@@ -668,6 +676,8 @@ def locate_compile_errors(project_root: Path, errors: list[str]) -> list[dict[st
             continue
         line = int(match.group("line")) + 1
         entry: dict[str, Any] = {"file": relative, "line": line, "message": match.group("message").strip()}
+        if compiled_root is not None and not (project / relative).is_file():
+            entry["only_in_build"] = True
         try:
             lines = path.read_text(encoding="utf-8", errors="replace").split("\n")
         except OSError:
@@ -724,11 +734,34 @@ def _end_process_tree(process: subprocess.Popen, *, grace_seconds: float = 3.0) 
                 with contextlib.suppress(ProcessLookupError, PermissionError):
                     os.kill(process_id, signal_number)
 
+        def anything_left() -> bool:
+            # Igor itself is this process's child: it has to be collected before it stops counting.
+            if process.poll() is None:
+                return True
+            if leads_its_group:
+                try:
+                    os.killpg(process.pid, 0)
+                except ProcessLookupError:
+                    return False
+                except PermissionError:
+                    return True
+                return True
+            return any(_process_alive(process_id) for process_id in tree[1:])
+
+        def gone_within(seconds: float) -> bool:
+            deadline = time.monotonic() + seconds
+            while anything_left():
+                if time.monotonic() >= deadline:
+                    return False
+                time.sleep(0.05)
+            return True
+
         send(signal.SIGTERM)
-        try:
-            process.wait(timeout=grace_seconds)
-        except subprocess.TimeoutExpired:
+        # Igor leaving is not the end of it: a tool it started may ignore the request, and would go
+        # on writing into the build's output after the build slot had been given to someone else.
+        if not gone_within(grace_seconds):
             send(signal.SIGKILL)
+            gone_within(5.0)
     with contextlib.suppress(subprocess.TimeoutExpired):
         process.wait(timeout=5)
 
@@ -1437,7 +1470,7 @@ def snapshot_compile(
         public["other_target_warnings_omitted"] = build.other_target_warnings
     if not build.ok and not build.errors:
         public["log_tail"] = tail_lines(run_dir / "build.log", 25)
-    error_locations = locate_compile_errors(root, build.errors[:80])
+    error_locations = locate_compile_errors(root, build.errors[:80], compiled_root=snapshot_root)
     if error_locations:
         # Placed ahead of the raw messages: this is the version a reader can act on.
         located = {
