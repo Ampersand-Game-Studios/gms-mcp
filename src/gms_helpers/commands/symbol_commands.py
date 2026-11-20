@@ -298,8 +298,8 @@ def _get_project_root(args) -> Path:
 
 
 def _make_relative(path: Path, project_root: Path) -> str:
-    """Make a path relative to project root if possible."""
+    """Name a file relative to the project, with forward slashes on every platform."""
     try:
-        return str(path.relative_to(project_root))
+        return path.relative_to(project_root).as_posix()
     except ValueError:
-        return str(path)
+        return str(path) if path.is_absolute() else path.as_posix()

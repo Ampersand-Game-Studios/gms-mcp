@@ -91,11 +91,16 @@ def list_events(object_name: str, project_root: str | Path | None = None) -> Lis
 
 def _is_generated_event_placeholder(content: str, object_name: str, filename: str) -> bool:
     """True for an event file that still holds only what this tool generated for it."""
-    return content.strip() in {
+    return _unix_newlines(content).strip() in {
         "",
         f"/// Create Event for {object_name}\n// Initialize variables here",
         f"// {filename} event",
     }
+
+
+def _unix_newlines(text: str) -> str:
+    """The same code reads the same whichever line endings its file was saved with."""
+    return text.replace("\r\n", "\n")
 
 
 def add_event(
@@ -134,7 +139,7 @@ def add_event(
                 print(f"[INFO] Its code is in {existing_file}.")
                 return True
             current = read_gml_source(existing_path) if existing_path.exists() else ""
-            if current == template:
+            if _unix_newlines(current) == _unix_newlines(template):
                 print(f"[OK] Event {event_spec} already exists for {object_name} with this code; nothing to change.")
                 return True
             if overwrite:

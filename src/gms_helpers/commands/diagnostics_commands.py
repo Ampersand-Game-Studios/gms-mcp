@@ -13,6 +13,14 @@ from ..maintenance.audit.reference_collector import audit_to_diagnostics
 _MAX_PRINTED_DIAGNOSTICS = 40
 
 
+def _shown_path(file_path: str, project_root: Path) -> str:
+    """Name a file the way the other tools do: relative to the project, with forward slashes."""
+    try:
+        return Path(file_path).resolve().relative_to(project_root).as_posix()
+    except (OSError, ValueError):
+        return file_path
+
+
 def handle_diagnostics(args) -> Dict[str, Any]:
     """
     Handle project diagnostics command.
@@ -60,7 +68,8 @@ def handle_diagnostics(args) -> Dict[str, Any]:
     else:
         print(f"[DIAGNOSTICS] {counted} ({depth} check):")
         for d in diagnostics[:_MAX_PRINTED_DIAGNOSTICS]:
-            location = f"{d.file_path}:{d.line}" if d.line else d.file_path
+            shown = _shown_path(d.file_path, project_root)
+            location = f"{shown}:{d.line}" if d.line else shown
             code = f" {d.code}" if d.code else ""
             fix = f" Fix: {d.suggested_fix}" if d.suggested_fix else ""
             print(f"  {d.severity}{code}  {location}  {d.message}{fix}")

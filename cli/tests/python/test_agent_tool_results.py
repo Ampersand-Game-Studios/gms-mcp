@@ -414,7 +414,8 @@ def test_diagnostics_prints_what_it_found(tmp_path: Path, capsys, monkeypatch):
     printed = capsys.readouterr().out
 
     assert result["summary"]["error"] >= 1
-    assert "[DIAGNOSTICS]" in printed and "objects/o_player/o_player.yy" in printed
+    # The file is named relative to the project with forward slashes, on Windows too.
+    assert "[DIAGNOSTICS]" in printed and "  objects/o_player/o_player.yy  " in printed
     assert 'depth="deep"' in printed
 
 
@@ -444,8 +445,11 @@ def test_lookups_read_a_saved_index_without_writing_to_it(tmp_path: Path, index_
 
     assert report["status"] == "cached"
     assert [
-        (str(ref.location.file_path), ref.context) for ref in references if "objects" in str(ref.location.file_path)
+        (ref.location.file_path.as_posix(), ref.context)
+        for ref in references
+        if "objects" in str(ref.location.file_path)
     ] == [("objects/o_player/Create_0.gml", "scr_helper_0();")]
+    assert references[0].location.to_dict()["file"] == references[0].location.file_path.as_posix()
     assert lookup.find_definition("scr_helper_1")[0].location.line == 1
     assert saved.cache_path.stat().st_mtime_ns == before
 
@@ -658,6 +662,13 @@ def test_generated_create_event_can_be_filled_in_after_creating_an_object(tmp_pa
 
     assert add_event("o_player", "create", "show_debug_message(1);\n", project) is True
     assert create.read_text() == "show_debug_message(1);\n"
+
+    # The same placeholder and the same code, saved with Windows line endings.
+    create.write_bytes(b"/// Create Event for o_player\r\n// Initialize variables here\r\n")
+    assert add_event("o_player", "create", "x = 1;\ny = 2;\n", project) is True
+    create.write_bytes(b"x = 1;\r\ny = 2;\r\n")
+    assert add_event("o_player", "create", "x = 1;\ny = 2;\n", project) is True
+    assert create.read_bytes() == b"x = 1;\r\ny = 2;\r\n", "identical code is left as it was saved"
 
 
 def test_compile_errors_are_located_in_project_files(tmp_path: Path):
