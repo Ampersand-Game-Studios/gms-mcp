@@ -779,3 +779,70 @@ def test_warnings_about_other_targets_are_counted_not_listed():
     _errors, warnings, _packaging = snapshot_build.classify_build_log(log)
     assert warnings == ["Warning : variable used before it is set in scr_thing"]
     assert snapshot_build.count_other_target_warnings(log) == 2
+
+
+# --- leaving ---------------------------------------------------------------------------------
+
+
+def test_a_build_is_stopped_when_the_server_leaves_with_nothing_else_running(tmp_path: Path):
+    from gms_mcp import gamemaker_mcp_server
+
+    stopped = threading.Event()
+
+    def work() -> dict:
+        run_status.report_stage("compiling", attempt=1, attempts=10)
+        try:
+            run_status.sleep_unless_stopped(60)
+        finally:
+            stopped.set()
+        raise AssertionError("the build should have been stopped")
+
+    directory = _run_dir(tmp_path)
+    _start(directory, work)
+    _wait_until(lambda: background_runs.status(directory).get("stage") == "compiling")
+
+    # A build's thread is a daemon: on its own it neither keeps the process alive nor counts as
+    # work in progress, so the ordinary exit must still end it and its compiler.
+    with patch.object(gamemaker_mcp_server, "_wait_for_mutations_then_exit") as forced_exit:
+        gamemaker_mcp_server._leave_after_client_disconnect(set(threading.enumerate()))
+
+    assert stopped.wait(5)
+    forced_exit.assert_not_called()
+    _wait_until(lambda: background_runs.status(directory).get("finished") is True)
+    assert background_runs.status(directory)["status"] == "STOPPED"
+
+
+def test_stopping_a_windows_build_ends_the_tools_igor_started(monkeypatch):
+    calls = []
+
+    class Igor:
+        pid = 4242
+        killed = False
+        ended = False
+
+        def poll(self):
+            return 0 if self.ended else None
+
+        def kill(self):
+            self.killed = True
+            self.ended = True
+
+    def taskkill_that_works(command, **_options):
+        calls.append(command)
+        igor.ended = True
+
+    monkeypatch.setenv("SystemRoot", "C:\\Windows")
+    igor = Igor()
+    monkeypatch.setattr(snapshot_build.subprocess, "run", taskkill_that_works)
+    snapshot_build._end_windows_process_tree(igor)
+    # /T takes the whole tree: the compiler and packaging tools, not Igor alone.
+    assert calls == [["C:\\Windows\\System32\\taskkill.exe", "/PID", "4242", "/T", "/F"]]
+    assert igor.killed is False
+
+    def taskkill_that_is_missing(command, **_options):
+        raise FileNotFoundError(command[0])
+
+    igor = Igor()
+    monkeypatch.setattr(snapshot_build.subprocess, "run", taskkill_that_is_missing)
+    snapshot_build._end_windows_process_tree(igor)
+    assert igor.killed is True, "Igor itself is still ended when the tree cannot be"

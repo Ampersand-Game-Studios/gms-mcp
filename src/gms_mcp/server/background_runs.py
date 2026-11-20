@@ -238,11 +238,11 @@ def stop_all() -> None:
     from gms_helpers.snapshot_build import stop_builds
 
     with _RUNS_LOCK:
-        runs = list(_RUNS.values())
+        runs = [run for run in _RUNS.values() if not run.done.is_set()]
+    if not runs:
+        return
     cancelled = []
     for run in runs:
-        if run.done.is_set():
-            continue
         if run.tracker is not None:
             run.tracker.request_stop()
         if run.cancel is not None:
