@@ -43,6 +43,9 @@ Client products evolve independently, so installer support does not imply that e
 | Server behavior | Protocol/capability needed | Behavior without it |
 |---|---|---|
 | Named tools, resources, prompts, and structured tool payloads | Base MCP support | Required; the client is not compatible without the base MCP contract |
+| Server instructions listing the main tools and the toolsets that are not enabled | Client passes MCP `instructions` to the model | Call `gm_capabilities` to see enabled and disabled toolsets |
+| Progress reports while a build runs or waits for another session | Client sends a progress token with the tool call | Start the build with `background=true` and follow it with `gm_build_status(label)`, which reports the stage and the last log lines and then returns the result; `gm_lock_status` shows who holds the build turn |
+| Screenshot image in the `gm_game_screenshot` result | Client renders image content in tool results | The saved file path is in the structured result |
 | Legacy tool contract | MCP `2025-11-25` | Same registered tool names and core capability payload as modern mode |
 | Cache hints | MCP `2026-07-28` cache fields | Results still work; the client receives no negotiated cache benefit |
 | Structured `is_error` failures | MCP `2026-07-28` result model | Legacy clients retain the compatible tool result envelope |

@@ -471,6 +471,10 @@ def iter_gml_asset_lookup_string_spans(source: str, identifier: str) -> Iterator
 
 def iter_gml_asset_reference_spans(source: str, identifier: str) -> Iterator[Tuple[int, int, str]]:
     """Yield bare resource tokens and explicit name-lookup string arguments."""
+    if identifier not in source:
+        # Both kinds of reference spell the name out, so a file without the text has none.
+        # Tokenising every code file in a project to learn that took minutes per lookup.
+        return
     yield from iter_gml_asset_identifier_spans(source, identifier)
     yield from iter_gml_asset_lookup_string_spans(source, identifier)
 

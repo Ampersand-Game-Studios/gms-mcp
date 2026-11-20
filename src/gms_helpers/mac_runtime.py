@@ -17,7 +17,7 @@ import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
-from .agent_locks import DirectoryLock
+from .agent_locks import GAME_LEASE_PREFIX, GAME_LEASE_STALE_SECONDS, DirectoryLock
 
 
 CODESIGN_TIMEOUT_SECONDS = 300
@@ -53,8 +53,8 @@ def project_identity(project_root: str | Path) -> str:
 
 def project_run_lock(project_root: str | Path) -> DirectoryLock:
     return DirectoryLock(
-        f"game_{project_identity(project_root)}.lock",
-        stale_seconds=4 * 3600,
+        f"{GAME_LEASE_PREFIX}{project_identity(project_root)}.lock",
+        stale_seconds=GAME_LEASE_STALE_SECONDS,
         purpose=f"game {Path(project_root).resolve()}",
     )
 

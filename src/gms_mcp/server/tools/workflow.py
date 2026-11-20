@@ -17,6 +17,32 @@ WorkflowDuplicateNameResolution = Any
 WorkflowRenameNameResolution = Any
 
 
+def _name_room_instances(project_directory: Any, object_name: str, dependencies: Any) -> None:
+    """Add to each room dependency the instances to remove, so the next call needs no lookup."""
+    from gms_helpers.introspection import _iter_room_layers, read_asset_yy
+
+    for dependency in dependencies if isinstance(dependencies, list) else []:
+        if not isinstance(dependency, dict) or dependency.get("asset_type") != "room":
+            continue
+        room = read_asset_yy(project_directory, str(dependency.get("asset_path") or dependency.get("asset_name")))
+        if not isinstance(room, dict):
+            continue
+        instances = [
+            item.get("name")
+            for layer in _iter_room_layers(room.get("layers", []))
+            if isinstance(layer, dict)
+            for item in layer.get("instances") or []
+            if isinstance(item, dict)
+            and isinstance(item.get("objectId"), dict)
+            and item["objectId"].get("name") == object_name
+        ]
+        if instances:
+            dependency["instances"] = instances
+            dependency["remove_with"] = (
+                f'gm_room_instance_remove(room_name="{dependency.get("asset_name")}", instance_id=<each instance>)'
+            )
+
+
 def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) -> None:
     globals()["Context"] = ContextType
     from ..resolution import NameCollisionDecision, SafeDeleteDecision
@@ -67,7 +93,14 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         resolution: SafeDeleteResolution = None,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Dependency-aware delete for a supported asset by type/name. Extensions are not supported."""
+        """Delete an asset after checking what still refers to it. Extensions are not supported.
+
+        The default (`dry_run=true`) only previews: it lists every asset whose data or code names
+        this one. `dry_run=false` deletes it and its registration when nothing refers to it, and is
+        refused while something does. Remove those references first (a room placement with
+        gm_room_instance_remove), or pass `force=true` to delete anyway: that rewrites nothing, so
+        the remaining references are left pointing at an asset that no longer exists.
+        """
         _ = ctx
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
@@ -91,7 +124,19 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             dry_run=dry_run,
         )
         if result.get("blocked"):
-            result = {**result, "ok": False, "error": "Safe delete blocked by dependencies"}
+            advice = (
+                "Remove what refers to it first (a room placement: gm_room_instance_remove; code: edit it), "
+                "or pass force=true, which deletes the asset and leaves those references pointing at nothing."
+            )
+            if dry_run:
+                # A preview that finds dependencies has done its job; it is not a failed call.
+                result = {**result, "ok": True, "would_be_blocked": True, "next": advice}
+            else:
+                result = {**result, "ok": False, "error": "Safe delete blocked by dependencies", "next": advice}
+        # The preflight repeats the same asset and dependency fields one level down.
+        result = {key: value for key, value in result.items() if key != "preflight"}
+        if asset_type == "object":
+            _name_room_instances(project_directory, asset_name, result.get("dependencies"))
         return normalize_result(result, operation="Safe delete").to_dict()
 
     @mcp.tool()

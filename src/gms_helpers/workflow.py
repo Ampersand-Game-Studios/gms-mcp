@@ -1004,7 +1004,9 @@ def _resolve_asset_path(project_root: Path, asset_type: str, asset_name: str) ->
     return None
 
 
-def _collect_incoming_dependencies(project_root: Path, asset_name: str) -> List[Dict[str, Any]]:
+def _collect_incoming_dependencies(
+    project_root: Path, asset_name: str, graph: Dict[str, Any] | None = None
+) -> List[Dict[str, Any]]:
     """Find all incoming graph edges that point to the target asset."""
     from .introspection import build_asset_graph
     from .reference_scanner import (
@@ -1016,7 +1018,8 @@ def _collect_incoming_dependencies(project_root: Path, asset_name: str) -> List[
     )
 
     owners = _registered_owners(project_root)
-    graph = build_asset_graph(project_root, deep=False)
+    if graph is None:
+        graph = build_asset_graph(project_root, deep=False)
     node_by_id = {node.get("id"): node for node in graph.get("nodes", []) if isinstance(node, dict)}
     directory_types = {directory: asset_type for asset_type, directory in _ASSET_DIRECTORIES.items()}
 
@@ -1106,6 +1109,14 @@ def _collect_incoming_dependencies(project_root: Path, asset_name: str) -> List[
     return incoming
 
 
+def find_asset_users(project_root: Path, asset_name: str, graph: Dict[str, Any] | None = None) -> List[Dict[str, Any]]:
+    """List every asset that refers to ``asset_name``: in its .yy data or anywhere in its code.
+
+    This is the scan a safe delete relies on, so "who uses this?" and "can I delete this?" agree.
+    """
+    return _collect_incoming_dependencies(Path(project_root).resolve(), asset_name, graph)
+
+
 def safe_delete_preflight(
     project_root: Path, asset_type: str, asset_name: str, *, force: bool = False
 ) -> Dict[str, Any]:
@@ -1184,7 +1195,10 @@ def safe_delete_asset(
     warnings: List[str] = []
 
     if blocked:
-        warnings.append("Deletion blocked because dependent assets reference this target. Use force=True to continue.")
+        warnings.append(
+            "Deletion blocked because other assets refer to this one. Remove those references first, "
+            "or pass force=True to delete anyway and leave them pointing at nothing."
+        )
     elif dependencies:
         warnings.append(
             f"Force permits deletion with {len(dependencies)} unresolved dependent reference(s); no code will be rewritten."

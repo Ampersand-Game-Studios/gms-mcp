@@ -23,7 +23,7 @@ This file applies to the `gms-mcp` repository root.
   - `python scripts/generate_quality_reports.py`
 - On a machine with GameMaker installed, run real compile smoke:
   - `uv run python3 scripts/run_real_gamemaker_smoke.py --fixture-name gm-2024 --expected-runtime-version 2024.14.4.268 --required`
-  - `uv run python3 scripts/run_real_gamemaker_smoke.py --fixture-name gm-2026-lts --expected-runtime-version 2026.0.0.23 --required`
+  - `uv run python3 scripts/run_real_gamemaker_smoke.py --fixture-name gm-2026-lts --expected-runtime-version 2026.1.0.28 --required`
 - For release-bound updates, confirm GitHub Actions `CI` passes on `main`.
 
 ## Codex App Changes

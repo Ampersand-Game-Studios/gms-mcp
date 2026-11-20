@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import base64
+import contextvars
 import datetime as dt
 import json
 import re
@@ -23,10 +25,146 @@ _HOST_ONLY_RESULT_KEYS = {
     "pid",
     "python_executable",
     "runtime_path",
+    "save_directory",
     "traceback",
 }
 _PROJECT_ROOT_RESULT_KEYS = {"project_directory", "project_path", "project_root"}
 _TRUTHY_VALUES = {"1", "true", "yes", "on"}
+
+# Larger images are left on disk: a client that inlines every tool result would pay for them.
+MAX_INLINE_IMAGE_BYTES = 1_500_000
+_RESULT_IMAGES: contextvars.ContextVar[tuple[tuple[bytes, str], ...]] = contextvars.ContextVar(
+    "gms_mcp_result_images", default=()
+)
+
+
+def attach_result_image(data: bytes, *, mime_type: str = "image/png") -> None:
+    """Return an image beside the current tool call's structured result.
+
+    Call it from the tool's own task; ``mcp_tool_result`` collects it when the call returns.
+    """
+    _RESULT_IMAGES.set((*_RESULT_IMAGES.get(), (data, mime_type)))
+
+
+# How a command-backed tool ran is the server's business. A caller needs the outcome, the output
+# and how long it took, so fields that only repeat "nothing unusual happened" are left out.
+_RUN_PLUMBING_DEFAULTS: dict[str, Any] = {
+    "stderr": "",
+    "error": None,
+    "direct_error": None,
+    "timed_out": False,
+    "result": None,
+    "transaction": None,
+    "validation": None,
+    "exit_code": 0,
+}
+_RUN_PLUMBING_ALWAYS = ("direct_used", "execution_mode", "fallback_skipped", "fallback_skipped_reason")
+_SLOW_CALL_SECONDS = 2.0
+
+
+def _compact_handler_result(value: Any) -> Any:
+    """Keep what a handler reported; drop its empty slots and the second copy of its outcome."""
+    if not isinstance(value, dict):
+        return value
+    compact = {
+        key: item
+        for key, item in value.items()
+        if not (key in ("warnings", "data") and not item) and not (key == "error" and item is None)
+    }
+    if compact.get("success") == compact.get("ok"):
+        compact.pop("success", None)
+    return compact
+
+
+def _compact_transaction(value: Any) -> Any:
+    """Reduce a committed transaction to what changed and anything that needs attention.
+
+    A change that was rolled back, or left a recovery directory, keeps every field: that is when
+    the bookkeeping matters. A clean commit repeated two dozen fields of it after every edit,
+    including a sample of problems the project already had before the edit.
+    """
+    if not isinstance(value, dict) or value.get("recovery_path") or value.get("rollback_conflicts"):
+        return value
+    if value.get("committed") is True and not value.get("rolled_back"):
+        compact: Dict[str, Any] = {"committed": True}
+    elif value.get("rolled_back") is True and value.get("rollback_complete") is True:
+        # Undone cleanly: the project is as it was. What matters is why, which the error carries.
+        compact = {"committed": False, "rolled_back": True}
+    else:
+        return value
+    changes = value.get("changes")
+    if isinstance(changes, dict):
+        listed = {key: changes[key] for key in ("created", "modified", "deleted") if changes.get(key)}
+        if changes.get("truncated"):
+            listed.update({key: changes[key] for key in changes if key.endswith("_count")}, truncated=True)
+        if compact["committed"]:
+            compact["changes"] = listed
+            if not listed:
+                compact["changed"] = False
+        elif listed:
+            compact["changes_undone"] = listed
+    validation = value.get("validation")
+    if isinstance(validation, dict):
+        for key in ("errors", "warnings"):
+            if validation.get(key):
+                compact.setdefault("validation", {})[key] = validation[key]
+        if validation.get("success") is False:
+            compact.setdefault("validation", {})["success"] = False
+        preexisting = validation.get("preexisting_error_count")
+        if preexisting:
+            compact["preexisting_issues"] = (
+                f"{preexisting} validation issue(s) were already in the project before this change; "
+                "gm_project_check lists them under asset_reference_issues."
+            )
+    for key in ("compile_verification", "gamemaker_ide"):
+        if value.get(key) is not None:
+            compact[key] = value[key]
+    if value.get("warnings"):
+        compact["warnings"] = value["warnings"]
+    policy = value.get("verification_policy")
+    if isinstance(policy, dict) and policy.get("action") != "skip":
+        compact["verification_policy"] = policy
+    extra = set(value) - _TRANSACTION_KNOWN_KEYS
+    compact.update({key: value[key] for key in sorted(extra) if value[key] not in (None, [], {}, False)})
+    return compact
+
+
+_TRANSACTION_KNOWN_KEYS = {
+    "enabled",
+    "tool",
+    "project_root",
+    "committed",
+    "recovery_path",
+    "rolled_back",
+    "rollback_complete",
+    "rollback_conflicts",
+    "ownership_checkpoint_captured",
+    "owned_path_count",
+    "changes",
+    "validation",
+    "compile_verification",
+    "gamemaker_ide",
+    "warnings",
+    "verification_policy",
+}
+
+
+def _without_run_plumbing(value: Any) -> Any:
+    if not isinstance(value, dict) or "execution_mode" not in value or "stdout" not in value:
+        return value
+    compact = {
+        key: item
+        for key, item in value.items()
+        if key not in _RUN_PLUMBING_ALWAYS
+        and not (key in _RUN_PLUMBING_DEFAULTS and item == _RUN_PLUMBING_DEFAULTS[key] and item is not True)
+    }
+    if isinstance(compact.get("elapsed_seconds"), float):
+        compact["elapsed_seconds"] = round(compact["elapsed_seconds"], 2)
+    if "result" in compact:
+        compact["result"] = _compact_handler_result(compact["result"])
+    if "transaction" in compact:
+        compact["transaction"] = _compact_transaction(compact["transaction"])
+    return compact
 
 
 def mcp_tool_result(
@@ -34,10 +172,18 @@ def mcp_tool_result(
     *,
     project_root: str | Path | None,
     expose_host_diagnostics: bool = False,
+    total_seconds: float | None = None,
 ) -> Any:
-    """Return a native v2 tool result with structured, sanitized failure data."""
-    from mcp.types import CallToolResult, TextContent
+    """Return a native v2 tool result with structured, sanitized failure data.
 
+    ``total_seconds`` is the whole call as the caller experienced it. It is added when the call
+    was slow, because a tool's own timer covers only its work and not the locking, snapshots and
+    validation around it, and a result claiming 0.2 s for a 20 s wait is worse than no timer.
+    """
+    from mcp.types import CallToolResult, ImageContent, TextContent
+
+    images = _RESULT_IMAGES.get()
+    _RESULT_IMAGES.set(())
     if isinstance(value, CallToolResult):
         return value
     public_value = public_mcp_result(
@@ -45,7 +191,25 @@ def mcp_tool_result(
         project_root=project_root,
         expose_host_diagnostics=expose_host_diagnostics,
     )
-    is_error = isinstance(public_value, Mapping) and public_value.get("ok") is False
+    public_value = _without_run_plumbing(public_value)
+    if isinstance(public_value, dict) and "success" in public_value and "ok" in public_value:
+        # An operation result reported directly by a tool: same tidy-up as a nested one.
+        public_value = _compact_handler_result(public_value)
+    if isinstance(public_value, dict):
+        for holder in (public_value, public_value.get("data")):
+            if isinstance(holder, dict) and isinstance(holder.get("transaction"), dict):
+                holder["transaction"] = _compact_transaction(holder["transaction"])
+    if (
+        total_seconds is not None
+        and total_seconds >= _SLOW_CALL_SECONDS
+        and isinstance(public_value, dict)
+        # A report on another call's run carries that run's own times; how long the look took is not one of them.
+        and "finished" not in public_value
+    ):
+        public_value = {**public_value, "total_seconds": round(total_seconds, 1)}
+    # A report that another call's run failed is a successful look at it: `ok` there is the run's own.
+    is_report = isinstance(public_value, Mapping) and public_value.get("finished") is True
+    is_error = isinstance(public_value, Mapping) and public_value.get("ok") is False and not is_report
     if is_error and isinstance(public_value, Mapping) and "error_code" not in public_value:
         error_type = public_value.get("error_type")
         if "validation_errors" in public_value:
@@ -63,8 +227,13 @@ def mcp_tool_result(
         content=[
             TextContent(
                 type="text",
-                text=json.dumps(public_value, ensure_ascii=False, indent=2),
-            )
+                # No indentation: the model reads this text, and whitespace is a third of its cost.
+                text=json.dumps(public_value, ensure_ascii=False),
+            ),
+            *(
+                ImageContent(type="image", data=base64.b64encode(data).decode("ascii"), mime_type=mime_type)
+                for data, mime_type in images
+            ),
         ],
         # Every registered GMS tool returns Dict[str, Any], whose SDK output
         # schema uses a sole `result` envelope.
