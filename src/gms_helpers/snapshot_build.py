@@ -696,19 +696,29 @@ _ACTIVE_BUILDS_LOCK = threading.Lock()
 
 
 def _end_process_tree(process: subprocess.Popen, *, grace_seconds: float = 3.0) -> None:
-    """Stop Igor and whatever it started. It runs in its own process group where the OS has them."""
+    """Stop Igor and whatever it started: its process group when it leads one, else Igor itself."""
     if process.poll() is not None:
         return
     if os.name == "nt":
         _end_windows_process_tree(process)
     else:
+        leads_its_group = False
         with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(process.pid, signal.SIGTERM)
+            leads_its_group = os.getpgid(process.pid) == process.pid
+
+        def send(signal_number: int) -> None:
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                if leads_its_group:
+                    os.killpg(process.pid, signal_number)
+                else:
+                    # Igor shares this process's group; signalling that would end this process too.
+                    process.send_signal(signal_number)
+
+        send(signal.SIGTERM)
         try:
             process.wait(timeout=grace_seconds)
         except subprocess.TimeoutExpired:
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(process.pid, signal.SIGKILL)
+            send(signal.SIGKILL)
     with contextlib.suppress(subprocess.TimeoutExpired):
         process.wait(timeout=5)
 
@@ -748,8 +758,11 @@ def _default_run_igor(command: list[str], log_path: Path, timeout_seconds: float
             stdout=log,
             stderr=subprocess.STDOUT,
             env={**os.environ, "DOTNET_PROCESSOR_COUNT": os.environ.get("DOTNET_PROCESSOR_COUNT", "1")},
-            # Its own process group, so stopping the build also stops the tools Igor starts.
-            start_new_session=os.name != "nt",
+            # A run this process tracks is stopped by signalling Igor's own group, which also ends the
+            # tools Igor starts. An untracked build is a command someone else started (gm_compile
+            # runs it that way) and stops by ending that command's group: Igor has to stay in it, or
+            # the stop would end the command and leave the compiler running.
+            start_new_session=tracker is not None and os.name != "nt",
         )
         with _ACTIVE_BUILDS_LOCK:
             _ACTIVE_BUILDS[process] = tracker

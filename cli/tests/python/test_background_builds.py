@@ -846,3 +846,30 @@ def test_stopping_a_windows_build_ends_the_tools_igor_started(monkeypatch):
     monkeypatch.setattr(snapshot_build.subprocess, "run", taskkill_that_is_missing)
     snapshot_build._end_windows_process_tree(igor)
     assert igor.killed is True, "Igor itself is still ended when the tree cannot be"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="process groups are a POSIX notion")
+def test_igor_leaves_the_callers_process_group_only_when_this_process_can_stop_it(tmp_path: Path):
+    report_group = [sys.executable, "-c", "import os; print(os.getpgid(0))"]
+
+    # Run as a command (how gm_compile builds): whoever ends this process's group must end Igor with it.
+    assert snapshot_build._default_run_igor(report_group, tmp_path / "untracked.log", 30) == 0
+    assert int((tmp_path / "untracked.log").read_text().split()[0]) == os.getpgid(0)
+
+    # Tracked here: stopped by signalling a group of its own, tools and all.
+    with run_status.track_run(_run_dir(tmp_path), "compile", "gm_snapshot_compile"):
+        assert snapshot_build._default_run_igor(report_group, tmp_path / "tracked.log", 30) == 0
+    assert int((tmp_path / "tracked.log").read_text().split()[0]) != os.getpgid(0)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="process groups are a POSIX notion")
+def test_ending_a_compiler_that_shares_this_process_group_ends_only_the_compiler(tmp_path: Path):
+    import subprocess
+
+    compiler = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    try:
+        assert os.getpgid(compiler.pid) == os.getpgid(0)
+        snapshot_build._end_process_tree(compiler, grace_seconds=5)
+        assert compiler.poll() is not None
+    finally:
+        compiler.kill()
