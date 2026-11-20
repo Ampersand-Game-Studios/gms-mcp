@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import argparse
+import subprocess
+from pathlib import Path
 from typing import Annotated, Any, Dict
 
 from pydantic import Field
@@ -8,11 +10,14 @@ from pydantic import Field
 from ...update_status import get_update_status
 from ..dispatch import _run_with_fallback
 from ..mcp_types import Context
+from ...project_detection import safe_git_command
 from ..project import (
+    _SERVER_START_DIRECTORY,
     _ensure_cli_on_sys_path,
     _find_yyp_file,
     _resolve_project_directory_no_deps,
     _resolve_repo_root,
+    configured_project_root,
 )
 from ..tool_types import OutputMode
 
@@ -21,6 +26,40 @@ ProjectRootHeader = Annotated[
     str,
     Field(json_schema_extra={"x-mcp-header": "project-root"}),
 ]
+
+
+def _git_lines(directory: Path, *args: str) -> list[str]:
+    try:
+        completed = subprocess.run(
+            safe_git_command(directory, *args),
+            capture_output=True,
+            text=True,
+            timeout=5,
+            check=False,
+            stdin=subprocess.DEVNULL,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return completed.stdout.splitlines() if completed.returncode == 0 else []
+
+
+def _workspace_identity(project_directory: Path) -> Dict[str, Any]:
+    """Identify the pinned checkout by names an agent can compare with its own, never a host path."""
+    try:
+        project_folder = project_directory.resolve().relative_to(_SERVER_START_DIRECTORY).as_posix()
+    except ValueError:
+        project_folder = None
+    # "project_folder" is the project's place inside the workspace ("." when they are the same).
+    identity: Dict[str, Any] = {"folder": _SERVER_START_DIRECTORY.name, "project_folder": project_folder}
+    branch = _git_lines(project_directory, "rev-parse", "--abbrev-ref", "HEAD")
+    commit = _git_lines(project_directory, "rev-parse", "--short", "HEAD")
+    git_dirs = _git_lines(project_directory, "rev-parse", "--path-format=absolute", "--git-dir", "--git-common-dir")
+    if branch and commit and len(git_dirs) == 2:
+        identity["git_branch"] = branch[0].strip()
+        identity["git_commit"] = commit[0].strip()
+        # A linked worktree keeps its own git directory beside the repository's shared one.
+        identity["git_linked_worktree"] = Path(git_dirs[0]) != Path(git_dirs[1])
+    return identity
 
 
 def register(mcp: Any, ContextType: Any) -> None:
@@ -32,17 +71,56 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     def gm_project_info(project_root: ProjectRootHeader = ".", ctx: Context | None = None) -> Dict[str, Any]:
         """
-        Resolve GameMaker project directory (where the .yyp lives) and return basic info.
+        Start here: say which GameMaker project and checkout this server is pinned to.
+
+        Returns the project name, where it sits inside the workspace the server was started in, the
+        git branch and commit of that checkout (so a session in a worktree can confirm the tools act
+        on its own copy), asset counts by type, the room the game starts in, the enabled and
+        disabled toolsets, a guide to the tools by task, and any notice about how the project was
+        chosen.
         """
         _ = ctx
         project_directory = _resolve_project_directory_no_deps(project_root)
-        update_info = get_update_status(persist=False).to_dict()
+        yyp = _find_yyp_file(project_directory)
+        updates = get_update_status(persist=False).to_dict()
+        update_keys = ["status", "message", "current_version", "latest_version", "update_available"]
+        if updates.get("update_available"):
+            update_keys.append("upgrade_command")
+        from gms_helpers.introspection import get_project_stats, room_order
 
+        from gms_helpers.operation_policy import read_only_mode_enabled
+
+        from ..register_all import enabled_toolsets, optional_toolsets
+        from .capabilities import tool_guide
+
+        stats = get_project_stats(project_directory)
+        rooms = room_order(project_directory)
+        enabled = enabled_toolsets()
+        notice = configured_project_root()[1]
         return {
+            "ok": True,
+            "project": Path(yyp).stem if yyp else None,
+            "yyp": yyp,
             "project_directory": str(project_directory),
-            "yyp": _find_yyp_file(project_directory),
-            "tools_mode": "installed",
-            "updates": update_info,
+            "workspace": _workspace_identity(project_directory),
+            "assets": {
+                "total": stats.get("total_resources"),
+                "by_type": stats.get("counts_by_type"),
+                "folders": stats.get("total_folders"),
+            },
+            "rooms": {"first": rooms[0] if rooms else None, "order": rooms},
+            "toolsets": {
+                "enabled": list(enabled),
+                "disabled": [name for name in optional_toolsets() if name not in enabled],
+            },
+            "notices": [notice] if notice else [],
+            "guide": tool_guide(enabled=enabled, read_only=read_only_mode_enabled()),
+            "version": updates.get("current_version"),
+            **(
+                {"updates": {key: updates[key] for key in update_keys if key in updates}}
+                if updates.get("update_available") or "current_version" not in updates
+                else {}
+            ),
         }
 
     @mcp.tool()

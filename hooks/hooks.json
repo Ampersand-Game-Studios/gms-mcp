@@ -18,7 +18,7 @@
     ],
     "PostToolUse": [
       {
-        "matcher": "^mcp__plugin_gms-mcp_gms__(gm_run|gm_compile)$",
+        "matcher": "^mcp__(plugin_gms-mcp_)?gms__(gm_run|gm_compile)$",
         "hooks": [
           {
             "type": "command",
@@ -33,7 +33,7 @@
     ],
     "PostToolUseFailure": [
       {
-        "matcher": "^mcp__plugin_gms-mcp_gms__(gm_run|gm_compile)$",
+        "matcher": "^mcp__(plugin_gms-mcp_)?gms__(gm_run|gm_compile)$",
         "hooks": [
           {
             "type": "command",

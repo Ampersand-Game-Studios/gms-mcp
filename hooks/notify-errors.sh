@@ -1,6 +1,6 @@
 #!/bin/bash
 # Hook: notify-errors
-# Triggers: After the packaged gm_run or gm_compile MCP tool fails
+# Triggers: After gm_run or gm_compile fails, whether the server is the plugin's or a workspace .mcp.json entry
 # Surfaces compact GameMaker failure context without external dependencies
 
 # This hook receives the tool output via stdin

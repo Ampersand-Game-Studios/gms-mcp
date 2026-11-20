@@ -304,6 +304,7 @@ def setup_script_parser(subparsers):
     parser.add_argument(
         "--constructor", action="store_true", help="Create a constructor script (allows PascalCase naming)"
     )
+    parser.add_argument("--code", default=None, help="GML source for the script, written instead of the stub")
     parser.add_argument("--skip-maintenance", action="store_true", help="Skip pre/post validation")
     parser.add_argument("--no-auto-fix", action="store_true", help="Do not automatically fix issues")
     parser.add_argument(
@@ -326,6 +327,7 @@ def setup_object_parser(subparsers):
     )
     parser.add_argument("--sprite-id", help="Sprite resource ID")
     parser.add_argument("--parent-object", help="Parent object name (for inheritance)")
+    parser.add_argument("--create-code", default=None, help="GML for the Create event, written instead of the stub")
     parser.add_argument("--skip-maintenance", action="store_true", help="Skip pre/post validation")
     parser.add_argument("--no-auto-fix", action="store_true", help="Do not automatically fix issues")
     parser.add_argument(
@@ -643,6 +645,7 @@ def setup_event_commands(subparsers):
     add_parser.add_argument("object", help="Object name (e.g., o_player)")
     add_parser.add_argument("event", help="Event specification (e.g., create, step:1)")
     add_parser.add_argument("--template", help="Inline GML event content (not a file path)")
+    add_parser.add_argument("--overwrite", action="store_true", help="Replace the code of an event that already exists")
     add_parser.set_defaults(func=handle_event_add)
 
     # Remove command

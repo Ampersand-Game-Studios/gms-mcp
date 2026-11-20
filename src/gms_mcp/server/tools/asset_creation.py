@@ -3,6 +3,8 @@ from __future__ import annotations
 import argparse
 from typing import Annotated, Any, Dict
 
+from pydantic import Field
+
 from mcp.server.mcpserver import Resolve
 
 from ..debug import _dbg
@@ -80,6 +82,15 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         name: str,
         resolution: CreateScriptResolution = None,
         parent_path: str = "",
+        code: Annotated[
+            str,
+            Field(
+                description=(
+                    "The script's GML source, written to its .gml file. Without it a stub function "
+                    "named after the script is created for you to replace."
+                )
+            ),
+        ] = "",
         is_constructor: bool = False,
         skip_maintenance: bool = True,
         no_auto_fix: bool = False,
@@ -91,7 +102,11 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Create a GameMaker script asset."""
+        """Create a new GameMaker script asset and register it in the project (.yyp).
+
+        `parent_path` is an existing folder such as "folders/Scripts.yy"; omit it to reuse or create
+        the default folder for this asset type. An existing asset is never overwritten.
+        """
         name = resolved_asset_name(name, resolution)
         if not name:
             return {
@@ -122,6 +137,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             name=name,
             parent_path=parent_path,
             constructor=is_constructor,
+            code=code or None,
             skip_maintenance=skip_maintenance,
             no_auto_fix=no_auto_fix,
             maintenance_verbose=maintenance_verbose,
@@ -136,6 +152,9 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         ]
         if is_constructor:
             cli_args.append("--constructor")
+        if code:
+            # One argument, so code that starts with "-" is never read as an option.
+            cli_args.append(f"--code={code}")
         if skip_maintenance:
             cli_args.append("--skip-maintenance")
         if no_auto_fix:
@@ -162,6 +181,15 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         parent_path: str = "",
         sprite_id: str = "",
         parent_object: str = "",
+        create_code: Annotated[
+            str,
+            Field(
+                description=(
+                    "GML for the object's Create event. Every new object gets a Create event; without "
+                    "this it holds a placeholder that gm_event_add can fill in later."
+                )
+            ),
+        ] = "",
         skip_maintenance: bool = True,
         no_auto_fix: bool = False,
         maintenance_verbose: bool = False,
@@ -172,7 +200,12 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Create a GameMaker object asset."""
+        """Create a new GameMaker object asset, with its Create event, and register it in the project.
+
+        `parent_path` is an existing folder such as "folders/Objects.yy"; omit it to reuse or create
+        the default folder for this asset type. An existing asset is never overwritten. Add other
+        events with gm_event_add and place the object in a room with gm_room_instance_add.
+        """
         name = resolved_asset_name(name, resolution)
         if not name:
             return {
@@ -190,6 +223,7 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             parent_path=parent_path,
             sprite_id=sprite_id or None,
             parent_object=parent_object or None,
+            create_code=create_code or None,
             skip_maintenance=skip_maintenance,
             no_auto_fix=no_auto_fix,
             maintenance_verbose=maintenance_verbose,
@@ -206,6 +240,8 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
             cli_args.extend(["--sprite-id", sprite_id])
         if parent_object:
             cli_args.extend(["--parent-object", parent_object])
+        if create_code:
+            cli_args.append(f"--create-code={create_code}")
         if skip_maintenance:
             cli_args.append("--skip-maintenance")
         if no_auto_fix:
@@ -314,7 +350,11 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Create a GameMaker room asset."""
+        """Create a new GameMaker room asset and register it in the project (.yyp).
+
+        `parent_path` is an existing folder such as "folders/Scripts.yy"; omit it to reuse or create
+        the default folder for this asset type. An existing asset is never overwritten.
+        """
         name = resolved_asset_name(name, resolution)
         if not name:
             return {
@@ -455,7 +495,11 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Create a GameMaker font asset."""
+        """Create a new GameMaker font asset and register it in the project (.yyp).
+
+        `parent_path` is an existing folder such as "folders/Scripts.yy"; omit it to reuse or create
+        the default folder for this asset type. An existing asset is never overwritten.
+        """
         name = resolved_asset_name(name, resolution)
         if not name:
             return {
@@ -536,7 +580,11 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Create a GameMaker shader asset."""
+        """Create a new GameMaker shader asset and register it in the project (.yyp).
+
+        `parent_path` is an existing folder such as "folders/Scripts.yy"; omit it to reuse or create
+        the default folder for this asset type. An existing asset is never overwritten.
+        """
         name = resolved_asset_name(name, resolution)
         if not name:
             return {
@@ -595,7 +643,11 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Create an animation curve asset."""
+        """Create an new GameMaker animation curve asset and register it in the project (.yyp).
+
+        `parent_path` is an existing folder such as "folders/Scripts.yy"; omit it to reuse or create
+        the default folder for this asset type. An existing asset is never overwritten.
+        """
         name = resolved_asset_name(name, resolution)
         if not name:
             return {
@@ -669,7 +721,11 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Create a sound asset."""
+        """Create a new GameMaker sound asset and register it in the project (.yyp).
+
+        `parent_path` is an existing folder such as "folders/Scripts.yy"; omit it to reuse or create
+        the default folder for this asset type. An existing asset is never overwritten.
+        """
         name = resolved_asset_name(name, resolution)
         if not name:
             return {
@@ -752,7 +808,11 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Create a path asset."""
+        """Create a new GameMaker path asset and register it in the project (.yyp).
+
+        `parent_path` is an existing folder such as "folders/Scripts.yy"; omit it to reuse or create
+        the default folder for this asset type. An existing asset is never overwritten.
+        """
         name = resolved_asset_name(name, resolution)
         if not name:
             return {
@@ -830,7 +890,11 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Create a tileset asset."""
+        """Create a new GameMaker tileset asset and register it in the project (.yyp).
+
+        `parent_path` is an existing folder such as "folders/Scripts.yy"; omit it to reuse or create
+        the default folder for this asset type. An existing asset is never overwritten.
+        """
         name = resolved_asset_name(name, resolution)
         if not name:
             return {
@@ -913,7 +977,11 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Create a timeline asset."""
+        """Create a new GameMaker timeline asset and register it in the project (.yyp).
+
+        `parent_path` is an existing folder such as "folders/Scripts.yy"; omit it to reuse or create
+        the default folder for this asset type. An existing asset is never overwritten.
+        """
         name = resolved_asset_name(name, resolution)
         if not name:
             return {
@@ -973,7 +1041,11 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Create a sequence asset."""
+        """Create a new GameMaker sequence asset and register it in the project (.yyp).
+
+        `parent_path` is an existing folder such as "folders/Scripts.yy"; omit it to reuse or create
+        the default folder for this asset type. An existing asset is never overwritten.
+        """
         name = resolved_asset_name(name, resolution)
         if not name:
             return {
@@ -1035,7 +1107,11 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Create a note asset."""
+        """Create a new GameMaker note asset and register it in the project (.yyp).
+
+        `parent_path` is an existing folder such as "folders/Scripts.yy"; omit it to reuse or create
+        the default folder for this asset type. An existing asset is never overwritten.
+        """
         name = resolved_asset_name(name, resolution)
         if not name:
             return {

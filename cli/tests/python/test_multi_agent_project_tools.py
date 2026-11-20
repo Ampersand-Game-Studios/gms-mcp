@@ -553,6 +553,52 @@ def test_stale_locks_are_reclaimed(lock_dir: Path):
     assert not agent_locks.DirectoryLock("live.lock", stale_seconds=100).try_acquire()
 
 
+def test_a_heartbeat_leaves_the_holder_able_to_release(lock_dir: Path):
+    lock = agent_locks.DirectoryLock("game_x.lock", stale_seconds=4 * 3600, purpose="game x")
+    lock.acquire()
+    lock.bind_process(os.getpid())
+    before = (lock_dir / "game_x.lock").stat().st_mtime_ns
+    time.sleep(0.02)
+    lock.heartbeat()
+    assert (lock_dir / "game_x.lock").stat().st_mtime_ns > before
+    # A record older than its lock reads as an earlier holder's; the heartbeat must not make it one.
+    assert lock.owner()["purpose"] == "game x"
+    lock.release()
+    assert not (lock_dir / "game_x.lock").exists() and not (lock_dir / "game_x.lock.owner").exists()
+    assert agent_locks.DirectoryLock("game_x.lock").try_acquire()
+
+
+def test_lock_status_says_which_locks_were_left_behind(lock_dir: Path):
+    lock_dir.mkdir()
+    here = socket.gethostname()
+    for name, owner, age in (
+        ("build_slot_1", {"pid": 2**30, "host": here}, 5),  # its process has ended
+        ("repo.lock", {"pid": os.getpid(), "host": here}, 50_000),  # alive, however old
+        ("game_young.lock", None, 3_000),  # nobody to ask, and younger than a game lease may be
+        ("game_old.lock", None, 20_000),
+        ("script.lock", None, 1_000),
+    ):
+        (lock_dir / name).mkdir()
+        stamp = time.time() - age
+        if owner is not None:
+            (lock_dir / f"{name}.owner").write_text(json.dumps(owner), encoding="utf-8")
+            os.utime(lock_dir / f"{name}.owner", (stamp, stamp))
+        os.utime(lock_dir / name, (stamp, stamp))
+    described = {lock["name"]: lock for lock in agent_locks.lock_status(2)["locks"]}
+    assert {name for name, lock in described.items() if lock["left_behind"]} == {
+        "build_slot_1",
+        "game_old.lock",
+        "script.lock",
+    }
+    assert described["build_slot_2"] == {
+        "name": "build_slot_2",
+        "held": False,
+        "age_seconds": None,
+        "owner": None,
+        "left_behind": False,
+    }
+
+
 def test_reclaiming_a_stale_lock_clears_its_owner_record(lock_dir: Path):
     lock_dir.mkdir()
     (lock_dir / "repo.lock").mkdir()
@@ -794,7 +840,7 @@ def test_snapshot_runner_stops_on_owned_fatal_log(tmp_path, lock_dir, monkeypatc
     staging = tmp_path / "staging"
     staging.mkdir()
     log = staging / "debug.txt"
-    log.write_text("ERROR in action number 1 of Step Event\nmissing_variable\n")
+    log.write_text("[TEST_FRAME] 42\nERROR in action number 1 of Step Event\nmissing_variable\n")
     save = tmp_path / "save"
     save.mkdir()
 
@@ -825,7 +871,10 @@ def test_snapshot_runner_stops_on_owned_fatal_log(tmp_path, lock_dir, monkeypatc
         Path("game.zip"), None, label="fatal", run_dir=tmp_path / "run", project_root=project
     )
     assert not result["timed_out"] and result["waited_seconds"] < 1
+    assert result["test_frame"] == 42, "the frame the test had reached when it stopped"
     assert "missing_variable" in result["run_log"].read_text()
+    # The run kept its lease fresh while it ran and still gave it back at the end.
+    assert not list(lock_dir.glob("game_*"))
     assert process.returncode == -15
     assert snapshot_build.mac_game_path(PurePosixPath("/private/var/tmp/game.ios")) == "/var/tmp/game.ios"
 
@@ -1627,3 +1676,10 @@ def test_lock_owner_records_are_atomic_identified_and_never_stale_leftovers(lock
     with pytest.raises(OSError, match="disk full"):
         failing.try_acquire()
     assert not (lock_dir / "repo.lock").exists() and not failing.held
+
+
+def test_endpoint_problem_accepts_protocols_two_and_three():
+    for protocol in (2, 3, 3.0):
+        assert live_session.endpoint_problem({"protocol": protocol}) is None
+    for protocol in (1, 4, None, True, "3"):
+        assert "needs protocol 2 or 3" in live_session.endpoint_problem({"protocol": protocol})

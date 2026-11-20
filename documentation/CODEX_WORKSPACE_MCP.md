@@ -11,7 +11,7 @@ This document defines the standard Codex setup for GameMaker projects in this wo
 ## Required Configuration Model
 
 1. Do not keep `gms` in global Codex MCP config (`~/.codex/config.toml`).
-2. For each GameMaker repository root, create `.codex/mcp.toml` with:
+2. For each GameMaker repository root, create `.codex/config.toml` (Codex loads it once the project is trusted) with:
 
 ```toml
 [mcp_servers.gms]
@@ -71,7 +71,7 @@ scripts/audit_codex_workspace_mcp.sh --scan-root "$HOME/Documents" --strict
 What it checks:
 
 - Global Codex config does not define `[mcp_servers.gms]`
-- Workspace `.codex/mcp.toml` exists for every discovered GameMaker repo
+- Workspace `.codex/config.toml` exists for every discovered GameMaker repo
 - Workspace config includes `[mcp_servers.gms]` and `GM_PROJECT_ROOT`
 - `GM_PROJECT_ROOT` matches a discovered non-prefab `.yyp` directory in that repo
 

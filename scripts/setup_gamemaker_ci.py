@@ -19,7 +19,7 @@ from pathlib import Path
 
 APPROVED_RUNTIME_FEEDS = {
     "2024.14.4.268": "https://gms.yoyogames.com/Zeus-Runtime.rss",
-    "2026.0.0.23": "https://gms.yoyogames.com/Zeus-Runtime-LTS2026.rss",
+    "2026.1.0.28": "https://gms.yoyogames.com/Zeus-Runtime-LTS2026.rss",
 }
 
 

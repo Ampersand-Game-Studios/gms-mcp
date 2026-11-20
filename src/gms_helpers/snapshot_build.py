@@ -28,14 +28,16 @@ import re
 import shutil
 import subprocess
 import sys
+import signal
 import tempfile
+import threading
 import time
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Iterable
 
-from . import yyp_registry
+from . import run_status, yyp_registry
 from .bounded_regex import search_many
 from .agent_locks import MOBILE_BUILD_LOCK, BuildSlot, DirectoryLock
 from .mac_runtime import prepare_mac_runtime, project_run_lock
@@ -49,6 +51,10 @@ ACCESS_VIOLATION_MARKER = "AccessViolationException"
 _COMPILE_FINISHED_MARKER = "Final Compile finished"
 _ERROR_LINE = re.compile(r"Error :|error :|Project Error")
 _WARNING_LINE = re.compile(r"Warning : ")
+# The compiler prints one of these for every macro of an extension that does not target the platform
+# being built: dozens in a project with store or platform extensions, and nothing to act on.
+_OTHER_TARGET_WARNING = "not available for this target"
+TEST_FRAME_MARKER = run_status.TEST_FRAME_MARKER
 _LABEL = re.compile(r"[^A-Za-z0-9_]")
 _SNAPSHOT_IGNORED = {".git", ".gms_mcp", ".gms-mcp", "output", "__pycache__", ".pytest_cache", ".gml_index_cache"}
 _MAX_TEST_BYTES = 2 * 1024 * 1024
@@ -60,6 +66,7 @@ DEFAULT_TEST_PRELUDE = r"""
 // ---- injected by gms-mcp (snapshot only; never part of the project) ----
 global.__agent_test_failures = 0;
 global.__agent_test_frame = 0;
+global.__agent_test_beat = current_time;
 global.__agent_test_done = false;
 function test_log(_msg) { show_debug_message("[TEST] " + string(_msg)); }
 function test_check(_ok, _msg) {
@@ -83,6 +90,11 @@ global.__agent_test_ts = time_source_create(time_source_global, 1, time_source_u
 	global.__agent_test_frame++;
 	if (global.__agent_test_frame == 1) {
 		show_debug_message("[TEST_SAVE_DIR] " + string(game_save_id));
+	}
+	if (current_time - global.__agent_test_beat >= 1000) {
+		// About once a second: lets whoever follows the run see the frame the test has reached.
+		global.__agent_test_beat = current_time;
+		show_debug_message("[TEST_FRAME] " + string(global.__agent_test_frame));
 	}
 	agent_test_step(global.__agent_test_frame);
 }, [], -1);
@@ -128,7 +140,8 @@ class BuildResult:
     build_log: Path | None = None
     game_archive: Path | None = None
     waited_for_slot_seconds: float = 0.0
-    elapsed_seconds: float = 0.0
+    build_seconds: float = 0.0
+    other_target_warnings: int = 0
 
 
 # ----------------------------------------------------------------------
@@ -150,7 +163,8 @@ def pipeline_lock(project_root: str | Path, label: str) -> DirectoryLock:
 def label_pipeline(project_root: str | Path, label: str, timeout_seconds: float = 7200.0):
     """Serialize writers to one project's labelled artifact directory."""
     lock = pipeline_lock(project_root, label)
-    lock.acquire(timeout_seconds=timeout_seconds)
+    lock.acquire(timeout_seconds=timeout_seconds, sleep=run_status.sleep_unless_stopped)
+    run_status.report_stage("starting")
     try:
         yield
     finally:
@@ -593,10 +607,69 @@ def classify_build_log(text: str) -> tuple[list[str], list[str], list[str]]:
             bucket = errors if index <= finished_at else packaging
             if stripped not in bucket:
                 bucket.append(stripped)
-        elif _WARNING_LINE.search(stripped) and "not available for this target" not in stripped:
+        elif _WARNING_LINE.search(stripped) and _OTHER_TARGET_WARNING not in stripped:
             if stripped not in warnings:
                 warnings.append(stripped)
     return errors, warnings, packaging
+
+
+def count_other_target_warnings(text: str) -> int:
+    """How many warnings the build log holds that `classify_build_log` leaves out of its warnings."""
+    return sum(1 for line in text.splitlines() if _OTHER_TARGET_WARNING in line and _WARNING_LINE.search(line))
+
+
+def last_test_frame(text: str) -> int | None:
+    """The frame a running test last reported in the game's log, or None when it has reported none."""
+    at = text.rfind(TEST_FRAME_MARKER)
+    if at < 0:
+        return None
+    digits = text[at + len(TEST_FRAME_MARKER) :].split("\n", 1)[0].strip()
+    return int(digits) if digits.isdigit() else None
+
+
+_COMPILED_UNIT = re.compile(
+    r"gml_(?P<kind>GlobalScript|Object)_(?P<name>[A-Za-z0-9_]+)\((?P<line>\d+)\)\s*:\s*(?P<message>.*)"
+)
+_OBJECT_EVENT_UNIT = re.compile(
+    r"^(?P<object>.+)_(?P<event>PreCreate|Create|Destroy|CleanUp|Alarm|Step|Collision|Keyboard|KeyPress|KeyRelease|"
+    r"Mouse|Gesture|Other|Draw)_(?P<number>[A-Za-z0-9_]+)$"
+)
+
+
+def locate_compile_errors(project_root: Path, errors: list[str]) -> list[dict[str, Any]]:
+    """Turn the compiler's internal unit names into project files and lines an editor can open.
+
+    Igor reports "gml_GlobalScript_scr_x(3) : message": the unit is a script or an object event,
+    and its line number counts from zero. Each located error carries the source text of that
+    line so a reader can see at once that it is the right one.
+    """
+    located: list[dict[str, Any]] = []
+    root = Path(project_root)
+    for error in errors:
+        match = _COMPILED_UNIT.search(error)
+        if match is None:
+            continue
+        name = match.group("name")
+        if match.group("kind") == "GlobalScript":
+            relative = f"scripts/{name}/{name}.gml"
+        else:
+            event = _OBJECT_EVENT_UNIT.match(name)
+            if event is None:
+                continue
+            relative = f"objects/{event.group('object')}/{event.group('event')}_{event.group('number')}.gml"
+        path = root / relative
+        if path.is_symlink() or not path.is_file():
+            continue
+        line = int(match.group("line")) + 1
+        entry: dict[str, Any] = {"file": relative, "line": line, "message": match.group("message").strip()}
+        try:
+            lines = path.read_text(encoding="utf-8", errors="replace").split("\n")
+        except OSError:
+            lines = []
+        if 0 < line <= len(lines):
+            entry["source"] = lines[line - 1].strip()[:200]
+        located.append(entry)
+    return located
 
 
 @contextlib.contextmanager
@@ -616,21 +689,94 @@ def copy_artifact(source: Path, destination: Path) -> None:
         shutil.copyfileobj(incoming, outgoing)
 
 
-def _default_run_igor(command: list[str], log_path: Path, timeout_seconds: float) -> int:
-    with artifact_writer(log_path) as log:
+# Igor processes started by this process, with the run each belongs to, so that one run can be
+# stopped and none is left building after the server has gone.
+_ACTIVE_BUILDS: dict[subprocess.Popen, run_status.RunTracker | None] = {}
+_ACTIVE_BUILDS_LOCK = threading.Lock()
+
+
+def _end_process_tree(process: subprocess.Popen, *, grace_seconds: float = 3.0) -> None:
+    """Stop Igor and whatever it started. It runs in its own process group where the OS has them."""
+    if process.poll() is not None:
+        return
+    if os.name == "nt":
+        _end_windows_process_tree(process)
+    else:
+        with contextlib.suppress(ProcessLookupError, PermissionError):
+            os.killpg(process.pid, signal.SIGTERM)
         try:
-            completed = subprocess.run(
-                command,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                timeout=timeout_seconds,
-                check=False,
-                env={**os.environ, "DOTNET_PROCESSOR_COUNT": os.environ.get("DOTNET_PROCESSOR_COUNT", "1")},
-            )
-            return completed.returncode
+            process.wait(timeout=grace_seconds)
         except subprocess.TimeoutExpired:
-            log.write(f"\n[gms-mcp] Igor was stopped after {int(timeout_seconds)}s without finishing.\n".encode())
-            return -9
+            with contextlib.suppress(ProcessLookupError, PermissionError):
+                os.killpg(process.pid, signal.SIGKILL)
+    with contextlib.suppress(subprocess.TimeoutExpired):
+        process.wait(timeout=5)
+
+
+def _end_windows_process_tree(process: subprocess.Popen) -> None:
+    """End Igor and the compiler and packaging tools it started.
+
+    Killing Igor alone leaves those tools running: they would go on writing into packaging
+    output the next build shares, after this build's slot had been given away.
+    """
+    import ntpath
+
+    system_root = os.environ.get("SystemRoot", "C:\\Windows")
+    taskkill = ntpath.join(system_root, "System32", "taskkill.exe")
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run([taskkill, "/PID", str(process.pid), "/T", "/F"], capture_output=True, timeout=30)
+    if process.poll() is None:
+        # taskkill could not be run, or left Igor itself behind.
+        with contextlib.suppress(OSError):
+            process.kill()
+
+
+def stop_builds(tracker: run_status.RunTracker | None = None, *, grace_seconds: float = 3.0) -> int:
+    """Stop the Igor processes of one run, or of every run when no tracker is given."""
+    with _ACTIVE_BUILDS_LOCK:
+        processes = [process for process, owner in _ACTIVE_BUILDS.items() if tracker is None or owner is tracker]
+    for process in processes:
+        _end_process_tree(process, grace_seconds=grace_seconds)
+    return len(processes)
+
+
+def _default_run_igor(command: list[str], log_path: Path, timeout_seconds: float) -> int:
+    tracker = run_status.current()
+    with artifact_writer(log_path) as log:
+        process = subprocess.Popen(
+            command,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            env={**os.environ, "DOTNET_PROCESSOR_COUNT": os.environ.get("DOTNET_PROCESSOR_COUNT", "1")},
+            # Its own process group, so stopping the build also stops the tools Igor starts.
+            start_new_session=os.name != "nt",
+        )
+        with _ACTIVE_BUILDS_LOCK:
+            _ACTIVE_BUILDS[process] = tracker
+        deadline = time.monotonic() + timeout_seconds
+        try:
+            while True:
+                try:
+                    code = process.wait(timeout=0.5)
+                except subprocess.TimeoutExpired:
+                    code = None
+                if tracker is not None and tracker.stop_requested:
+                    # Checked first: the stop may already have ended the process.
+                    _end_process_tree(process)
+                    log.write(b"\n[gms-mcp] The build was stopped on request.\n")
+                    return -15
+                if code is not None:
+                    return code
+                if time.monotonic() >= deadline:
+                    _end_process_tree(process)
+                    log.write(
+                        f"\n[gms-mcp] Igor was stopped after {int(timeout_seconds)}s without finishing.\n".encode()
+                    )
+                    return -9
+        finally:
+            _end_process_tree(process)
+            with _ACTIVE_BUILDS_LOCK:
+                _ACTIVE_BUILDS.pop(process, None)
 
 
 def compile_snapshot(
@@ -687,19 +833,29 @@ def compile_snapshot(
     mobile = str(platform).lower() in {"android", "ios"}
     attempt_limit = max(1, int(attempts))
     text = ""
+    retry_note: dict[str, str] = {}
     for attempt in range(1, attempt_limit + 1):
         result.attempts = attempt
         # Mobile packaging shares Xcode/Gradle output folders and attached devices, so only one
         # mobile build runs at a time. Its lock is taken before a capacity slot: a mobile build
         # waiting its turn must not sit on a slot that a desktop build could be using.
         mobile_lock = DirectoryLock(MOBILE_BUILD_LOCK, purpose=f"mobile build {project_file.name}") if mobile else None
-        slot = BuildSlot(max_parallel_builds, purpose=f"igor build {project_file.name}")
+        # The run's label and attempt let a caller find its own build in gm_lock_status.
+        run_label = Path(build_log or log_path).parent.name
+        slot = BuildSlot(max_parallel_builds, purpose=f"igor build {project_file.name} [{run_label}] attempt {attempt}")
         try:
+            waiting = run_status.waiting_sleep(
+                "waiting for a build slot", attempt=attempt, attempts=attempt_limit, **retry_note
+            )
             if mobile_lock is not None:
-                mobile_lock.acquire(timeout_seconds=slot_timeout_seconds)
-            slot.acquire(timeout_seconds=slot_timeout_seconds)
+                mobile_lock.acquire(timeout_seconds=slot_timeout_seconds, sleep=waiting)
+            slot.acquire(timeout_seconds=slot_timeout_seconds, sleep=waiting)
             result.waited_for_slot_seconds += slot.waited_seconds
             try:
+                run_status.report_stage(
+                    "compiling", attempt=attempt, attempts=attempt_limit, live_log=str(log_path), **retry_note
+                )
+                run_status.publish_live_log(log_path)
                 return_code = runner(command, log_path, igor_timeout_seconds)
             finally:
                 slot.release()
@@ -708,11 +864,20 @@ def compile_snapshot(
                 mobile_lock.release()
         text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
         result.errors, result.warnings, result.packaging_errors = classify_build_log(text)
+        result.other_target_warnings = count_other_target_warnings(text)
         # The crash can hit the project loader or a later packaging step; either way the
         # output is unusable. Real compiler errors are final: retrying cannot fix them.
         if ACCESS_VIOLATION_MARKER not in text or result.errors or attempt == attempt_limit:
             break
+        run_status.raise_if_stopped()
         result.access_violation_retries += 1
+        retry_note = {
+            "previous_attempt": (
+                f"Attempt {attempt} hit Igor's random crash ({ACCESS_VIOLATION_MARKER}), which is retried automatically."
+            )
+        }
+    run_status.raise_if_stopped()
+    run_status.report_stage("reading the build result")
     if build_log is not None and log_path.is_file() and Path(build_log) != log_path:
         try:
             Path(build_log).parent.mkdir(parents=True, exist_ok=True)
@@ -725,7 +890,7 @@ def compile_snapshot(
             )
             error.retain_work_dir = True
             raise error from exc
-    result.elapsed_seconds = round(time.monotonic() - started, 1)
+    result.build_seconds = round(time.monotonic() - started, 1)
     # Igor's final packaging step can fail on a shared staging folder after the game data
     # was written; the compiled game archive is what a run needs.
     archive = next((p for p in (out_dir / "game.zip", out_dir / "build.zip") if p.is_file()), None)
@@ -823,7 +988,9 @@ def tail_lines(path: Path, count: int) -> list[str]:
     lines = [
         line[:400]
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
-        if not line.lstrip().startswith("at System.") and not line.lstrip().startswith("at Microsoft.")
+        if not line.lstrip().startswith("at System.")
+        and not line.lstrip().startswith("at Microsoft.")
+        and TEST_FRAME_MARKER not in line
     ]
     return lines[-max(0, count) :]
 
@@ -1045,7 +1212,10 @@ def run_game_archive(
     error_patterns = _test_runtime_error_patterns(project_root)
     lock = run_lock or project_run_lock(project_root)
     if not lock.held:
-        lock.acquire(timeout_seconds=lock_timeout_seconds)
+        lock.acquire(
+            timeout_seconds=lock_timeout_seconds,
+            sleep=run_status.waiting_sleep("waiting for this project's game to be free"),
+        )
     process: subprocess.Popen | None = None
     staging: Path | None = None
     timed_out = False
@@ -1056,17 +1226,23 @@ def run_game_archive(
         staging, game_file = stage_game_archive(game_archive, staging)
         clear_stale_screenshots(screenshot_prefix, owned_runtime.save_dir)
         started_wall = time.time()
+        run_status.report_stage("starting the game")
         process, debug_log = launch_mac_runner(owned_runtime.runner, staging, game_file, run_dir, environment)
         lock.bind_process(process.pid)
         started = time.monotonic()
+        run_status.report_stage("running the test", live_log=str(debug_log), timeout_seconds=timeout_seconds)
+        reported_frame: int | None = None
         while True:
             time.sleep(0.5)
             waited = time.monotonic() - started
-            try:
-                os.utime(lock.path, None)  # heartbeat so a long run is not mistaken for a dead one
-            except OSError:
-                pass
+            if run_status.stop_requested():
+                break
+            lock.heartbeat()  # so a long run is not mistaken for a dead one
             text = debug_log.read_text(encoding="utf-8", errors="replace") if debug_log.is_file() else ""
+            frame = last_test_frame(text)
+            if frame is not None and frame != reported_frame:
+                reported_frame = frame
+                run_status.report_detail(test_frame=frame)
             if result_marker in text:
                 time.sleep(1.0)  # let screen_save and the final log lines land
                 break
@@ -1077,6 +1253,7 @@ def run_game_archive(
             if waited >= timeout_seconds:
                 timed_out = True
                 break
+        run_status.report_stage("collecting the test result")
         if debug_log.is_file():
             copy_artifact(debug_log, run_log)
         else:
@@ -1086,6 +1263,7 @@ def run_game_archive(
         stop_process(process)
         return {
             "timed_out": timed_out,
+            "test_frame": reported_frame,
             "waited_seconds": round(waited, 1),
             "waited_for_lock_seconds": round(lock.waited_seconds, 1),
             "run_log": run_log,
@@ -1153,6 +1331,7 @@ def snapshot_compile(
     work = Path(tempfile.mkdtemp(prefix=f"{safe_label(root.name)}_{label}_", dir=_work_root()))
     snapshot_root = work / "project"
     try:
+        run_status.report_stage("copying the project")
         snapshot_info = create_snapshot(
             root, snapshot_root, isolate_paths=isolate_paths, yyp_entries=yyp_entries, ref=ref, base_only=base_only
         )
@@ -1187,7 +1366,9 @@ def snapshot_compile(
             run_igor=run_igor,
         )
     except BaseException as exc:
-        if not keep_work_dir and not (isinstance(exc, SnapshotError) and exc.retain_work_dir):
+        # A stopped run never hands its work directory to the caller, so nothing else would remove it.
+        stopped = isinstance(exc, run_status.RunStopped)
+        if stopped or (not keep_work_dir and not (isinstance(exc, SnapshotError) and exc.retain_work_dir)):
             shutil.rmtree(work, ignore_errors=True)
         raise
     public = {
@@ -1204,11 +1385,29 @@ def snapshot_compile(
         "warnings": build.warnings[:40],
         "packaging_errors": build.packaging_errors[:20],
         "build_log": _relative(root, build.build_log),
-        "elapsed_seconds": build.elapsed_seconds,
+        # The build alone, slot wait and retries included. A followed run adds run_seconds for the whole run.
+        "build_seconds": build.build_seconds,
         "waited_for_build_slot_seconds": round(build.waited_for_slot_seconds, 1),
     }
+    if build.other_target_warnings:
+        # Otherwise `warnings` reads as "none" beside a log that is full of the word.
+        public["other_target_warnings_omitted"] = build.other_target_warnings
     if not build.ok and not build.errors:
         public["log_tail"] = tail_lines(run_dir / "build.log", 25)
+    error_locations = locate_compile_errors(root, build.errors[:80])
+    if error_locations:
+        # Placed ahead of the raw messages: this is the version a reader can act on.
+        located = {
+            "error_locations": error_locations,
+            "error_locations_note": (
+                "`line` is the 1-based line in the file; the compiler's own messages in `errors` count from 0."
+            ),
+        }
+        public = {
+            **{key: value for key, value in public.items() if key in ("ok", "status", "message")},
+            **located,
+            **{key: value for key, value in public.items() if key not in ("ok", "status", "message")},
+        }
     return public, build, work, tools
 
 
@@ -1290,6 +1489,9 @@ def _run_test_pipeline(
         public["run_log"] = _relative(root, run_log)
         public["screenshots"] = [_relative(root, shot) for shot in outcome.get("screenshots", [])]
         public["waited_seconds"] = outcome.get("waited_seconds")
+        if isinstance(outcome.get("test_frame"), int):
+            # Reported about once a second, so the last frame before a timeout or crash is close to this.
+            public["test_frame"] = outcome["test_frame"]
         public["waited_for_game_lock_seconds"] = outcome.get("waited_for_lock_seconds")
         if not verdict["passed"]:
             public["log_tail"] = tail_lines(run_log, 40)
@@ -1315,6 +1517,9 @@ def read_run_artifact(
             f"{', '.join(available) or 'none yet'}. Run gm_test_run or gm_snapshot_compile first."
         )
     content = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if not pattern:
+        # The once-a-second frame reports would crowd out the game's own lines; a pattern can still find them.
+        content = [line for line in content if TEST_FRAME_MARKER not in line]
     if pattern:
         try:
             content = [content[index] for index, _ in search_many(pattern, content)]
@@ -1354,23 +1559,28 @@ def run_test(
 ) -> dict[str, Any]:
     """Build and run a scripted test; same-label runs for one project are serialised end to end."""
     require_vm_runtime(runtime)
-    with label_pipeline(project_root, label), project_run_lock(project_root) as run_lock:
-        return _run_test_pipeline(
-            project_root,
-            test_code=test_code,
-            test_file=test_file,
-            label=label,
-            timeout_seconds=timeout_seconds,
-            isolate_paths=isolate_paths,
-            yyp_entries=yyp_entries,
-            ref=ref,
-            base_only=base_only,
-            runtime=runtime,
-            runtime_version=runtime_version,
-            attempts=attempts,
-            environment=environment,
-            run_igor=run_igor,
-            run_game=run_game,
-            toolchain=toolchain,
-            run_lock=run_lock,
-        )
+    with label_pipeline(project_root, label):
+        run_lock = project_run_lock(project_root)
+        run_lock.acquire(sleep=run_status.waiting_sleep("waiting for this project's game to be free"))
+        try:
+            return _run_test_pipeline(
+                project_root,
+                test_code=test_code,
+                test_file=test_file,
+                label=label,
+                timeout_seconds=timeout_seconds,
+                isolate_paths=isolate_paths,
+                yyp_entries=yyp_entries,
+                ref=ref,
+                base_only=base_only,
+                runtime=runtime,
+                runtime_version=runtime_version,
+                attempts=attempts,
+                environment=environment,
+                run_igor=run_igor,
+                run_game=run_game,
+                toolchain=toolchain,
+                run_lock=run_lock,
+            )
+        finally:
+            run_lock.release()
