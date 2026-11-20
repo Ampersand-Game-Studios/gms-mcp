@@ -711,14 +711,18 @@ def _end_process_tree(process: subprocess.Popen, *, grace_seconds: float = 3.0) 
         leads_its_group = False
         with contextlib.suppress(ProcessLookupError, PermissionError):
             leads_its_group = os.getpgid(process.pid) == process.pid
+        # Igor shares this process's group, so the group cannot be signalled: that would end this
+        # process too. Its tools are found now, while they can still be told from anything else.
+        tree = [] if leads_its_group else [process.pid, *_descendant_process_ids(process.pid)]
 
         def send(signal_number: int) -> None:
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                if leads_its_group:
+            if leads_its_group:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
                     os.killpg(process.pid, signal_number)
-                else:
-                    # Igor shares this process's group; signalling that would end this process too.
-                    process.send_signal(signal_number)
+                return
+            for process_id in tree:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.kill(process_id, signal_number)
 
         send(signal.SIGTERM)
         try:
@@ -727,6 +731,26 @@ def _end_process_tree(process: subprocess.Popen, *, grace_seconds: float = 3.0) 
             send(signal.SIGKILL)
     with contextlib.suppress(subprocess.TimeoutExpired):
         process.wait(timeout=5)
+
+
+def _descendant_process_ids(process_id: int) -> list[int]:
+    """The processes started by ``process_id`` and by those, as the system lists them now."""
+    try:
+        listing = subprocess.run(["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    children: dict[int, list[int]] = {}
+    for line in listing.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0].isdigit() and fields[1].isdigit():
+            children.setdefault(int(fields[1]), []).append(int(fields[0]))
+    found: list[int] = []
+    pending = [process_id]
+    while pending:
+        for child in children.get(pending.pop(), []):
+            found.append(child)
+            pending.append(child)
+    return found
 
 
 def _end_windows_process_tree(process: subprocess.Popen) -> None:

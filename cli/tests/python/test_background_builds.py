@@ -863,6 +863,26 @@ def test_igor_leaves_the_callers_process_group_only_when_this_process_can_stop_i
 
 
 @pytest.mark.skipif(os.name == "nt", reason="process groups are a POSIX notion")
+def test_a_command_line_build_that_times_out_ends_the_tools_its_compiler_started(tmp_path: Path):
+    from gms_helpers.agent_locks import _process_alive
+
+    tool_pid_file = tmp_path / "tool.pid"
+    # A stand-in Igor that starts a tool of its own and then never finishes.
+    stand_in = (
+        "import subprocess, sys, time\n"
+        "tool = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
+        f"open({str(tool_pid_file)!r}, 'w').write(str(tool.pid))\n"
+        "time.sleep(300)\n"
+    )
+
+    assert snapshot_build._default_run_igor([sys.executable, "-c", stand_in], tmp_path / "build.log", 2.0) == -9
+
+    tool_pid = int(tool_pid_file.read_text())
+    _wait_until(lambda: not _process_alive(tool_pid), seconds=10)
+    assert "without finishing" in (tmp_path / "build.log").read_text()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="process groups are a POSIX notion")
 def test_ending_a_compiler_that_shares_this_process_group_ends_only_the_compiler(tmp_path: Path):
     import subprocess
 
