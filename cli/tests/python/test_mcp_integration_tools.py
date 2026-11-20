@@ -389,7 +389,7 @@ class TestMCPIntegrationTools(unittest.TestCase):
             direct_thread.join(timeout=5)
 
         self.assertTrue(deleted["ok"])
-        self.assertEqual(deleted["transaction"]["project_root"], ".")
+        self.assertTrue(deleted["transaction"]["committed"])
         self.assertFalse((self.project_root / "scripts" / "scr_target").exists())
         self.assertFalse((other_root / "scripts" / "scr_target").exists())
 
@@ -738,8 +738,11 @@ class TestMCPIntegrationTools(unittest.TestCase):
                 "project_root": str(self.project_root),
             },
         )
-        self.assertFalse(dry_run.get("ok"))
+        # A preview that finds dependents has succeeded; only the delete itself would be refused.
+        self.assertTrue(dry_run.get("ok"), msg=dry_run)
         self.assertTrue(dry_run.get("data", {}).get("blocked"))
+        self.assertTrue(dry_run.get("data", {}).get("would_be_blocked"))
+        self.assertIn("force=true", dry_run.get("data", {}).get("next", ""))
         self.assertFalse(dry_run.get("data", {}).get("deleted"))
 
         applied = self._call_tool(

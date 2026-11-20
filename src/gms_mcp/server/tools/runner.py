@@ -1,9 +1,16 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
+import concurrent.futures
 import os
-from typing import Any, Dict
+import shutil
+import tempfile
+import threading
+from pathlib import Path
+from typing import Any, Callable, Dict
 
+from .. import background_runs
 from ..direct import _run_direct, _run_direct_thread_shielded
 from ..dispatch import _run_with_fallback
 from ..output import _apply_output_mode
@@ -32,7 +39,18 @@ def handle_runner_run(args: argparse.Namespace) -> Any:
             os.environ.pop(key, None)
 
 
-def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
+# The label a working-tree compile is filed under for gm_build_status and gm_build_stop.
+WORKING_TREE_LABEL = "working_tree"
+
+
+def register(
+    mcp: Any,
+    ContextType: Any,
+    *,
+    read_only: bool = False,
+    mutation_scope: Callable[[], Any] | None = None,
+) -> None:
+    """``mutation_scope`` is the server's lock on changes to the project, held for a whole working-tree compile."""
     globals()["Context"] = ContextType
     mutating_tool = (lambda function: function) if read_only else mcp.tool()
 
@@ -60,6 +78,7 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         platform: RunnerPlatform | None = None,
         runtime: str = "VM",
         runtime_version: str | None = None,
+        background: bool = False,
         project_root: str = ".",
         prefer_cli: bool = False,
         output_mode: OutputMode = "full",
@@ -67,7 +86,20 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Compile the project using Igor."""
+        """Compile the project in its working tree to check that it builds, without running it.
+
+        Returns the compiler output and any errors. Use it after changing code or assets.
+        Builds take turns across every session on this machine, so the compile may wait for
+        another session's build before it starts; gm_lock_status shows who holds the turn. Tools
+        that change the project wait until it ends.
+
+        A compile takes minutes. A call that has no result after about 20 seconds returns status
+        STILL_RUNNING, and the compile carries on: follow it with
+        gm_build_status(label="working_tree"), which returns this result when it ends, or end it
+        with gm_build_stop(label="working_tree"). background=true returns at once instead.
+        gm_snapshot_compile checks the same thing on a copy, shows the compiler's log lines while
+        it runs, and does not hold up changes to the project.
+        """
         selected_platform = platform or _default_target_platform()
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
@@ -83,17 +115,116 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         if runtime_version:
             cli_args.extend(["--runtime-version", runtime_version])
 
-        return await _run_with_fallback(
-            direct_handler=handle_runner_compile,
-            direct_args=args,
-            cli_args=cli_args,
-            project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
-        )
+        _ = ctx  # The compile can outlive this request, so it is never handed the request's context.
+        from gms_helpers import run_status
+        from gms_helpers.snapshot_build import label_pipeline, runs_directory
+
+        root = _resolve_project_directory(project_root)
+        loop = asyncio.get_running_loop()
+        pending: list[concurrent.futures.Future] = []
+        began = threading.Event()
+        unwound = threading.Event()
+
+        async def compile_holding_the_project() -> Dict[str, Any]:
+            began.set()
+            try:
+                return await compile_serialized()
+            finally:
+                # Set only once a cancelled compile has finished ending its compiler processes.
+                unwound.set()
+
+        async def compile_serialized() -> Dict[str, Any]:
+            async def compile_now() -> Dict[str, Any]:
+                run_status.report_stage("compiling")
+                # The compiler runs in a child process and may write its output to a file of its own.
+                # The child names that file here, in a folder only this server can write to.
+                hint_directory = tempfile.mkdtemp(prefix="gms-mcp-live-log-")
+                hint = Path(hint_directory) / "live_log.json"
+
+                async def follow_compiler_log() -> None:
+                    shown = None
+                    while True:
+                        await asyncio.sleep(0.5)
+                        live_log = run_status.read_live_log_hint(hint)
+                        if live_log is not None and live_log != shown:
+                            shown = live_log
+                            run_status.report_detail(live_log=live_log)
+
+                follower = asyncio.create_task(follow_compiler_log())
+                try:
+                    result = await _run_with_fallback(
+                        direct_handler=handle_runner_compile,
+                        direct_args=args,
+                        cli_args=cli_args,
+                        project_root=project_root,
+                        prefer_cli=prefer_cli,
+                        output_mode=output_mode,
+                        tail_lines=tail_lines,
+                        quiet=quiet,
+                        ctx=None,
+                        extra_environment={run_status.LIVE_LOG_HINT_ENV: str(hint)},
+                    )
+                finally:
+                    follower.cancel()
+                    shutil.rmtree(hint_directory, ignore_errors=True)
+                compiled = result
+                if isinstance(result, dict) and "status" not in result:
+                    # The same word a snapshot build gives, so a caller reads one field for either.
+                    result = {**result, "status": "COMPILE_OK" if result.get("ok") else "BUILD_FAILED"}
+                if isinstance(result, dict) and isinstance(result.get("elapsed_seconds"), (int, float)):
+                    # The name a snapshot build gives its own time, apart from run_seconds for the whole run.
+                    result = {key: value for key, value in result.items() if key != "elapsed_seconds"}
+                    result["build_seconds"] = round(float(compiled["elapsed_seconds"]), 1)
+                return result
+
+            if mutation_scope is None:
+                return await compile_now()
+            # Taken here, not around the request: the request may return while the compile is still
+            # reading the project, and no change may land under it.
+            # Named as a stage only when there is a wait: a free project is taken at once.
+            waiting = loop.call_later(0.25, run_status.report_stage, "waiting for a change to the project to finish")
+            try:
+                async with mutation_scope():
+                    waiting.cancel()
+                    return await compile_now()
+            finally:
+                waiting.cancel()
+
+        def work() -> Dict[str, Any]:
+            with label_pipeline(root, WORKING_TREE_LABEL):
+                # Stopped while this run was still taking its label: nothing has been started.
+                run_status.raise_if_stopped()
+                future = asyncio.run_coroutine_threadsafe(compile_holding_the_project(), loop)
+                pending.append(future)
+                if run_status.stop_requested():
+                    # The stop came after that check and before there was anything for it to cancel.
+                    future.cancel()
+                try:
+                    return future.result()
+                except concurrent.futures.CancelledError:
+                    # The future reads as cancelled at once; the compiler is gone only when the task
+                    # has unwound. A task cancelled before it ran a line has nothing to unwind, and
+                    # would never say that it had.
+                    if began.is_set():
+                        unwound.wait(timeout=30)
+                    raise run_status.RunStopped("The compile was stopped on request.") from None
+
+        def cancel() -> None:
+            # Cancelling the task ends the compiler's process tree and releases the project.
+            for future in pending:
+                future.cancel()
+
+        try:
+            return await background_runs.run(
+                runs_directory(root, WORKING_TREE_LABEL),
+                WORKING_TREE_LABEL,
+                "gm_compile",
+                work,
+                wait_seconds=background_runs.call_wait_seconds(root, background),
+                cancel=cancel,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return {"ok": False, "tool": "gm_compile", "error": str(exc), "error_type": type(exc).__name__}
 
     @mutating_tool
     async def gm_run(

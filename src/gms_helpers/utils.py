@@ -56,21 +56,27 @@ def _iter_json_structural_characters(raw_text: str):
             yield index, character
 
 
+# A whole string literal (consumed so that nothing inside it is inspected), or a comma outside
+# any string that is followed only by whitespace before a closing bracket. An unterminated
+# string runs to the end of the text, as does a lone trailing backslash inside one.
+_STRING_OR_TRAILING_COMMA = re.compile(r""""(?:[^"\\]|\\(?:.|\Z))*(?:"|\Z)|,(?=\s*[}\]])""", re.DOTALL)
+
+
 def _trailing_comma_positions(raw_text: str):
-    for index, character in _iter_json_structural_characters(raw_text):
-        if character != ",":
-            continue
-        next_index = index + 1
-        while next_index < len(raw_text) and raw_text[next_index].isspace():
-            next_index += 1
-        if next_index < len(raw_text) and raw_text[next_index] in "}]":
-            yield index
+    for match in _STRING_OR_TRAILING_COMMA.finditer(raw_text):
+        if raw_text[match.start()] == ",":
+            yield match.start()
 
 
 def strip_trailing_commas(raw_text: str) -> str:
     """Remove JSON-breaking trailing commas without changing string contents."""
-    trailing_positions = set(_trailing_comma_positions(raw_text))
-    return "".join(character for index, character in enumerate(raw_text) if index not in trailing_positions)
+    pieces = []
+    position = 0
+    for index in _trailing_comma_positions(raw_text):
+        pieces.append(raw_text[position:index])
+        position = index + 1
+    pieces.append(raw_text[position:])
+    return "".join(pieces)
 
 
 def _has_trailing_commas(raw_text: str) -> bool:
@@ -662,31 +668,6 @@ def _list_yyp_files(directory: Path) -> List[Path]:
         return sorted(directory.glob("*.yyp"))
     except Exception:
         return []
-
-
-def _search_upwards_for_yyp(start_dir: Path) -> Path | None:
-    """
-    Search upward from start_dir for a directory that contains a .yyp file.
-    Returns the directory containing the .yyp, or None.
-    """
-    start_dir = Path(start_dir).resolve()
-    for candidate in [start_dir, *start_dir.parents]:
-        if _list_yyp_files(candidate):
-            return candidate
-    return None
-
-
-def _search_upwards_for_gamemaker_yyp(start_dir: Path) -> Path | None:
-    """
-    Search upward from start_dir for a 'gamemaker/' sibling that contains a .yyp.
-    This supports running commands from repo root or other subdirectories.
-    """
-    start_dir = Path(start_dir).resolve()
-    for candidate in [start_dir, *start_dir.parents]:
-        gm = candidate / "gamemaker"
-        if gm.exists() and gm.is_dir() and _list_yyp_files(gm):
-            return gm
-    return None
 
 
 def resolve_project_directory(project_root_arg: str | Path | None = None) -> Path:

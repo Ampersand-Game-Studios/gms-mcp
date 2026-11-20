@@ -1,6 +1,7 @@
 """Portable regressions for Windows rooted paths at project boundaries."""
 
 import json
+import sqlite3
 from pathlib import PurePosixPath, PureWindowsPath
 from unittest.mock import PropertyMock, patch
 
@@ -133,16 +134,22 @@ def test_helpers_allow_project_relative_paths_and_confine_resolved_links(tmp_pat
 def test_public_index_build_recovers_from_windows_rooted_cache_locations(tmp_path, location, section, syntax_path):
     project = tmp_path / "project"
     project.mkdir()
-    cache = tmp_path / "cache.json"
-    data = {"version": 3, "file_mtimes_ns": {}, "file_sizes": {}, "definitions": [], "references": []}
+    cache = tmp_path / "cache.sqlite3"
+    connection = sqlite3.connect(cache)
+    from gms_helpers.gml_index import index as index_module
+
+    connection.executescript(index_module._SCHEMA)
+    connection.execute(f"PRAGMA user_version = {GMLIndex.CACHE_VERSION}")
     if section == "file_metadata":
-        data["file_mtimes_ns"] = {location: 1}
-        data["file_sizes"] = {location: 1}
+        connection.execute("INSERT INTO files VALUES (?, 1, 1)", (location,))
     elif section == "definitions":
-        data[section] = [{"name": "unsafe", "kind": "function", "location": {"file": location, "line": 1}}]
+        connection.execute(
+            "INSERT INTO definitions (name, kind, file, line, col) VALUES ('unsafe', 'function', ?, 1, 0)", (location,)
+        )
     else:
-        data[section] = [{"symbol": "unsafe", "location": {"file": location, "line": 1}}]
-    cache.write_text(json.dumps(data), encoding="utf-8")
+        connection.execute("INSERT INTO refs VALUES ('unsafe', ?, 1, 0)", (location,))
+    connection.commit()
+    connection.close()
     index = GMLIndex(project)
     with (
         patch("gms_helpers.gml_index.index.Path", syntax_path),
@@ -158,20 +165,18 @@ def test_public_index_build_recovers_from_windows_rooted_cache_locations(tmp_pat
 def test_public_index_build_preserves_legitimate_relative_cached_locations(tmp_path, separator, syntax_path):
     project = tmp_path / "project"
     project.mkdir()
-    cache = tmp_path / "cache.json"
+    cache = tmp_path / "cache.sqlite3"
     location = separator.join(["scripts", "scr", "scr.gml"])
-    cache.write_text(
-        json.dumps(
-            {
-                "version": 3,
-                "file_mtimes_ns": {},
-                "file_sizes": {},
-                "definitions": [{"name": "safe", "kind": "function", "location": {"file": location, "line": 1}}],
-                "references": [],
-            }
-        ),
-        encoding="utf-8",
+    connection = sqlite3.connect(cache)
+    from gms_helpers.gml_index import index as index_module
+
+    connection.executescript(index_module._SCHEMA)
+    connection.execute(f"PRAGMA user_version = {GMLIndex.CACHE_VERSION}")
+    connection.execute(
+        "INSERT INTO definitions (name, kind, file, line, col) VALUES ('safe', 'function', ?, 1, 0)", (location,)
     )
+    connection.commit()
+    connection.close()
     index = GMLIndex(project)
     with (
         patch("gms_helpers.gml_index.index.Path", syntax_path),

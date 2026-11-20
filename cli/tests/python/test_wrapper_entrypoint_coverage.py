@@ -200,6 +200,7 @@ class TestEntrypoints(unittest.TestCase):
             project_access_policy=ANY,
             expose_host_diagnostics=ANY,
             resolution_runtime=ANY,
+            mutation_scope=ANY,
         )
 
         run_server = Mock()
@@ -238,19 +239,47 @@ class TestEntrypoints(unittest.TestCase):
         self.assertEqual(result, 1)
         self.assertIn("MCP dependency is missing", stderr.getvalue())
 
+        # No usable project: the server still connects, with one tool that says why.
+        for failure, reason, said in (
+            (
+                FileNotFoundError("/Users/private/studio/project.yyp"),
+                gamemaker_mcp_server._NO_PROJECT_REASON,
+                "No GameMaker project was found",
+            ),
+            (
+                ValueError("/Users/private/studio/link"),
+                gamemaker_mcp_server._UNSAFE_PROJECT_REASON,
+                "approved GameMaker project is unsafe",
+            ),
+        ):
+            stderr = io.StringIO()
+            explaining = Mock()
+            with (
+                patch("gms_mcp.gamemaker_mcp_server.build_server", side_effect=failure),
+                patch(
+                    "gms_mcp.gamemaker_mcp_server.build_unavailable_server", return_value=explaining
+                ) as build_unavailable,
+                patch("gms_mcp.gamemaker_mcp_server._watch_for_departed_client"),
+                patch.dict(os.environ, {"GMS_MCP_EXPOSE_HOST_DIAGNOSTICS": ""}, clear=False),
+                redirect_stderr(stderr),
+            ):
+                result = gamemaker_mcp_server.main()
+            self.assertEqual(result, 0)
+            build_unavailable.assert_called_once_with(reason)
+            explaining.run.assert_called_once_with()
+            self.assertIn(said, stderr.getvalue())
+            self.assertNotIn("/Users/private", stderr.getvalue())
+            self.assertNotIn("/Users/private", reason)
+
+        # Over HTTP nobody is waiting on a pipe for an explanation: the server does not start.
         stderr = io.StringIO()
         with (
-            patch(
-                "gms_mcp.gamemaker_mcp_server.build_server",
-                side_effect=FileNotFoundError("/Users/private/studio/project.yyp"),
-            ),
-            patch.dict(os.environ, {"GMS_MCP_EXPOSE_HOST_DIAGNOSTICS": ""}, clear=False),
+            patch("gms_mcp.gamemaker_mcp_server.build_server", side_effect=FileNotFoundError("gone")),
+            patch.dict(os.environ, {gamemaker_mcp_server._HTTP_AUTH_ENV_NAME: "t" * 40}, clear=False),
             redirect_stderr(stderr),
         ):
-            result = gamemaker_mcp_server.main()
+            result = gamemaker_mcp_server.main(["--transport", "streamable-http"])
         self.assertEqual(result, 1)
-        self.assertIn("approved GameMaker project is unavailable or unsafe", stderr.getvalue())
-        self.assertNotIn("/Users/private", stderr.getvalue())
 
 
 class TestCommandWrappers(unittest.TestCase):
@@ -295,7 +324,7 @@ class TestCommandWrappers(unittest.TestCase):
             self.assertTrue(
                 event_commands.handle_event_add(SimpleNamespace(object="o_player", event="create", template=None))
             )
-        add_event.assert_called_once_with("o_player", "create", "")
+        add_event.assert_called_once_with("o_player", "create", "", overwrite=False)
 
         with patch.object(event_commands, "remove_event", return_value=True) as remove_event:
             self.assertTrue(
@@ -803,20 +832,31 @@ class TestIntrospectionTools(MCPToolTestCase):
         with (
             patch("gms_mcp.server.tools.introspection._resolve_project_directory", return_value=Path("/tmp/project")),
             patch("gms_helpers.introspection.list_assets_by_type", return_value={"script": [{"name": "scr_test"}]}),
-            patch("gms_helpers.introspection.read_asset_yy", side_effect=[{"name": "scr_test"}, None]),
+            patch(
+                "gms_helpers.introspection.describe_asset",
+                side_effect=[{"name": "scr_test", "asset_type": "script"}, None],
+            ),
+            patch("gms_helpers.introspection.closest_asset_names", return_value=["scr_tests"]),
+            patch("gms_helpers.introspection.read_asset_yy", return_value={"name": "scr_test"}),
             patch("gms_helpers.introspection.search_references", return_value=[{"path": "scripts/scr.gml"}]),
-            patch("gms_helpers.introspection.build_asset_graph", return_value={"nodes": []}),
+            patch(
+                "gms_helpers.introspection.build_asset_graph",
+                return_value={"nodes": [], "edges": [], "node_count": 0, "edge_count": 0, "deep_scan": True},
+            ),
             patch("gms_helpers.introspection.get_project_stats", return_value={"objects": 1}),
         ):
             listed = self.call_tool("gm_list_assets", project_root="/tmp/project", asset_type="script")
             found = self.call_tool("gm_read_asset", project_root="/tmp/project", asset_identifier="scr_test")
             missing = self.call_tool("gm_read_asset", project_root="/tmp/project", asset_identifier="missing")
             refs = self.call_tool("gm_search_references", project_root="/tmp/project", pattern="player")
-            graph = self.call_tool("gm_get_asset_graph", project_root="/tmp/project", deep=True)
+            graph = self.call_tool("gm_get_asset_graph", project_root="/tmp/project", deep=True, full=True)
             stats = self.call_tool("gm_get_project_stats", project_root="/tmp/project")
 
         self.assertEqual(listed["count"], 1)
         self.assertTrue(found["ok"])
+        self.assertEqual(found["asset_type"], "script")
+        self.assertEqual(found["asset_data"], {"name": "scr_test"})
+        self.assertEqual(missing["did_you_mean"], ["scr_tests"])
         self.assertFalse(missing["ok"])
         self.assertEqual(refs["count"], 1)
         self.assertEqual(graph["nodes"], [])
@@ -839,7 +879,7 @@ class TestEventTools(MCPToolTestCase):
                 (
                     "gm_event_add",
                     {"object": "o_player", "event": "create", "template": "basic", "project_root": "/tmp/project"},
-                    ["event", "add", "--template", "basic", "--", "o_player", "create"],
+                    ["event", "add", "--template=basic", "--", "o_player", "create"],
                 ),
                 (
                     "gm_event_remove",

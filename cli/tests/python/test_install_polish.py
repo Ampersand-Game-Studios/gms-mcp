@@ -193,7 +193,7 @@ class TestInstallAutodetect(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
             (workspace / "project.yyp").touch()
-            local_codex = workspace / ".codex" / "mcp.toml"
+            local_codex = workspace / ".codex" / "config.toml"
             local_codex.parent.mkdir(parents=True, exist_ok=True)
             local_codex.write_text(
                 "\n".join(
@@ -527,7 +527,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
 
             path, payload, merged = _generate_codex_config(
                 workspace_root=workspace,
-                output_path=workspace / ".codex" / "mcp.toml",
+                output_path=workspace / ".codex" / "config.toml",
                 server_name="gms",
                 command="gms-mcp",
                 args_prefix=[],
@@ -535,7 +535,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
                 dry_run=True,
             )
 
-            self.assertEqual(path, workspace / ".codex" / "mcp.toml")
+            self.assertEqual(path, workspace / ".codex" / "config.toml")
             self.assertIn("[mcp_servers.gms]", payload)
             self.assertIn("[mcp_servers.gms]", merged)
             self.assertFalse(path.exists())
@@ -549,7 +549,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
 
             path, payload, merged = _generate_codex_config(
                 workspace_root=workspace,
-                output_path=workspace / ".codex" / "mcp.toml",
+                output_path=workspace / ".codex" / "config.toml",
                 server_name="gms",
                 command="gms-mcp",
                 args_prefix=[],
@@ -608,13 +608,13 @@ class TestClaudeCodeSupport(unittest.TestCase):
         self.assertIn('GM_PROJECT_ROOT = "/workspace"', merged)
 
     def test_generate_codex_config_merge_existing_file(self):
-        """Existing mcp.toml entries should be preserved when writing Codex config."""
+        """Existing workspace config entries should be preserved when writing Codex config."""
         self._require_toml_parser()
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
             gm_project = workspace / "gamemaker"
             gm_project.mkdir()
-            config_path = workspace / ".codex" / "mcp.toml"
+            config_path = workspace / ".codex" / "config.toml"
             config_path.parent.mkdir(parents=True, exist_ok=True)
             config_path.write_text(
                 "\n".join(
@@ -653,7 +653,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
             workspace = Path(tmpdir)
             gm_project = workspace / "gamemaker"
             gm_project.mkdir()
-            config_path = workspace / ".codex" / "mcp.toml"
+            config_path = workspace / ".codex" / "config.toml"
             config_path.parent.mkdir(parents=True, exist_ok=True)
             config_path.write_text(
                 "\n".join(
@@ -722,7 +722,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
             workspace.mkdir()
             home_dir = Path(tmpdir) / "home"
             with temporary_home(home_dir):
-                local_codex = workspace / ".codex" / "mcp.toml"
+                local_codex = workspace / ".codex" / "config.toml"
                 local_codex.parent.mkdir(parents=True, exist_ok=True)
                 local_codex.write_text(
                     "\n".join(
@@ -789,7 +789,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
             self.assertIn('"GM_PROJECT_ROOT": "."', output)
             self.assertNotIn(f'GM_PROJECT_ROOT = "{workspace}"', output)
             self.assertNotIn(str(workspace), output)
-            self.assertFalse((workspace / ".codex" / "mcp.toml").exists())
+            self.assertFalse((workspace / ".codex" / "config.toml").exists())
 
     def test_main_openclaw_dry_run(self):
         """CLI dry-run for --openclaw reports target path and does not write files."""
@@ -1013,7 +1013,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
                 self.assertNotIn("existing-cmd", output)
                 self.assertNotIn(str(home_dir), output)
                 self.assertIn("[DRY-RUN] Codex dry-run-only mode complete.", output)
-                self.assertFalse((workspace / ".codex" / "mcp.toml").exists())
+                self.assertFalse((workspace / ".codex" / "config.toml").exists())
 
     def test_codex_privacy_safe_preview_redacts_secrets_paths_and_unrelated_entries(self):
         merged = "\n".join(
@@ -1092,7 +1092,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
             (workspace / "project.yyp").touch()
-            local_codex = workspace / ".codex" / "mcp.toml"
+            local_codex = workspace / ".codex" / "config.toml"
             local_codex.parent.mkdir(parents=True, exist_ok=True)
             local_codex.write_text(
                 "\n".join(
@@ -1136,7 +1136,7 @@ class TestClaudeCodeSupport(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmpdir:
             workspace = Path(tmpdir)
             (workspace / "project.yyp").touch()
-            local_codex = workspace / ".codex" / "mcp.toml"
+            local_codex = workspace / ".codex" / "config.toml"
             local_codex.parent.mkdir(parents=True, exist_ok=True)
             local_codex.write_text(
                 "\n".join(
@@ -1198,8 +1198,8 @@ class TestClaudeCodeSupport(unittest.TestCase):
                 output = buffer.getvalue()
 
             self.assertEqual(ret, 0)
-            self.assertTrue((workspace / ".codex" / "mcp.toml").exists())
-            workspace_config = (workspace / ".codex" / "mcp.toml").read_text(encoding="utf-8")
+            self.assertTrue((workspace / ".codex" / "config.toml").exists())
+            workspace_config = (workspace / ".codex" / "config.toml").read_text(encoding="utf-8")
             self.assertIn('GM_PROJECT_ROOT = "."', workspace_config)
             # The relative project root is resolved from the pinned server cwd.
             self.assertIn(f"cwd = {json.dumps(workspace.resolve().as_posix())}", workspace_config)
@@ -1327,7 +1327,10 @@ class TestClaudeCodeSupport(unittest.TestCase):
 
                 if event_name in {"PostToolUse", "PostToolUseFailure"}:
                     self.assertIn("gm_run|gm_compile", groups[0]["matcher"])
-                    self.assertIn("mcp__plugin_gms-mcp_gms__", groups[0]["matcher"])
+                    self.assertRegex("mcp__plugin_gms-mcp_gms__gm_compile", groups[0]["matcher"])
+                    self.assertRegex("mcp__gms__gm_run", groups[0]["matcher"])
+                    self.assertNotRegex("mcp__other__gm_run", groups[0]["matcher"])
+                    self.assertNotRegex("mcp__gms__gm_run_status", groups[0]["matcher"])
 
             bash = shutil.which("bash")
             if bash:
@@ -1383,6 +1386,8 @@ class TestClaudeCodeSupport(unittest.TestCase):
                 matcher = hooks[event_name][0]["matcher"]
                 self.assertNotIn("gms-mcp_gms__", matcher)
                 self.assertRegex("mcp__plugin_gms-mcp_studio-gms__gm_compile", matcher)
+                self.assertRegex("mcp__studio-gms__gm_compile", matcher)
+                self.assertNotRegex("mcp__gms__gm_compile", matcher)
 
 
 class TestChecksWithoutInstalledLauncher(unittest.TestCase):

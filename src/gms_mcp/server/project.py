@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -25,13 +26,52 @@ class ProjectAccessError(ValueError):
     """Raised when an MCP request tries to leave the server's pinned project."""
 
 
+_NOTICE_NO_ACTION = (
+    "This session is working normally. To remove this notice, give the client config a root that "
+    'exists, such as "${CLAUDE_PROJECT_DIR:-.}/<folder>".'
+)
+_UNEXPANDED_VARIABLE = re.compile(r"\$\{[^}]*\}|\$[A-Za-z_][A-Za-z0-9_]*")
+
+
+def configured_project_root() -> tuple[Path, str | None]:
+    """Return the folder the client pointed this server at, and a notice if its setting was unusable.
+
+    Clients build GM_PROJECT_ROOT from their own variables, for example "${CLAUDE_PROJECT_DIR}/game".
+    A client that does not define the variable passes "/game" or the text unexpanded, and the server
+    would refuse to start with nothing but "connection closed" for the agent to go on. The part after
+    the variable still says where the project is inside the workspace the server was started in, so it
+    is tried there before the workspace itself.
+    """
+    raw = str(os.environ.get("GM_PROJECT_ROOT") or "").strip()
+    if not raw:
+        return _SERVER_START_DIRECTORY, None
+    unexpanded = _UNEXPANDED_VARIABLE.search(raw) is not None
+    if not unexpanded:
+        candidate = Path(raw).expanduser()
+        if not candidate.is_absolute():
+            candidate = _SERVER_START_DIRECTORY / candidate
+        if candidate.exists():
+            return candidate, None
+    remainder = _UNEXPANDED_VARIABLE.sub("", raw).replace("\\", "/").strip("/")
+    inside_workspace = _SERVER_START_DIRECTORY / remainder if remainder and ".." not in Path(remainder).parts else None
+    reason = (
+        "GM_PROJECT_ROOT contains a variable the client did not expand"
+        if unexpanded
+        else "GM_PROJECT_ROOT names a folder that does not exist"
+    )
+    if inside_workspace is not None and inside_workspace.is_dir():
+        return inside_workspace, (
+            f"{reason}; using `{Path(remainder).as_posix()}` inside the folder the server was started in. "
+            f"{_NOTICE_NO_ACTION}"
+        )
+    return _SERVER_START_DIRECTORY, (
+        f"{reason}; using the project found from the folder the server was started in. {_NOTICE_NO_ACTION}"
+    )
+
+
 def _server_default_candidate() -> Path:
     """Resolve the one project candidate captured when the server starts."""
-    raw = str(os.environ.get("GM_PROJECT_ROOT") or _SERVER_START_DIRECTORY).strip()
-    candidate = Path(raw).expanduser()
-    if not candidate.is_absolute():
-        candidate = _SERVER_START_DIRECTORY / candidate
-    return candidate
+    return configured_project_root()[0]
 
 
 def _lexical_server_path(raw: str | Path) -> Path:
@@ -103,7 +143,7 @@ class ProjectAccessPolicy:
 def _stable_project_candidate(project_root: str | None) -> Path:
     raw = str(project_root or "").strip()
     if not raw or raw == ".":
-        raw = str(os.environ.get("GM_PROJECT_ROOT") or _SERVER_START_DIRECTORY)
+        return configured_project_root()[0].resolve()
     candidate = Path(raw).expanduser()
     if not candidate.is_absolute():
         candidate = _SERVER_START_DIRECTORY / candidate
