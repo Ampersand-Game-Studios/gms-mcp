@@ -41,6 +41,7 @@ class ActiveRun:
     cancel: Callable[[], None] | None = None
     result: Dict[str, Any] | None = None
     done: threading.Event = field(default_factory=threading.Event)
+    started: float = field(default_factory=time.monotonic)
 
 
 _RUNS: dict[tuple[str, str], ActiveRun] = {}
@@ -96,13 +97,13 @@ def _start(
     operation: str,
     work: Callable[[], Dict[str, Any]],
     cancel: Callable[[], None] | None = None,
-):
+) -> ActiveRun | Dict[str, Any]:
     """Start ``work`` on a thread of this server. One run per label at a time; returns the run or a refusal."""
     key = _key(directory)
     with _RUNS_LOCK:
         existing = _RUNS.get(key)
         if existing is not None and not existing.done.is_set():
-            return None, {
+            return {
                 "ok": False,
                 "status": "ALREADY_RUNNING",
                 "label": label,
@@ -121,7 +122,7 @@ def _start(
         name=f"gms-mcp-{operation}-{label}",
         daemon=True,
     ).start()
-    return run, None
+    return run
 
 
 async def run(
@@ -138,9 +139,9 @@ async def run(
     0 answers at once. None waits for the result however long it takes. Either way the work carries on
     to its end on its own thread, and gm_build_status follows it.
     """
-    started, refusal = _start(directory, label, operation, work, cancel)
-    if started is None:
-        return refusal
+    started = _start(directory, label, operation, work, cancel)
+    if not isinstance(started, ActiveRun):
+        return started
     if wait_seconds is not None and wait_seconds <= 0:
         return {
             "ok": True,
@@ -153,9 +154,9 @@ async def run(
                 'until="compiling" (any stage name) returns as soon as the run is at that stage.'
             ),
         }
-    deadline = None if wait_seconds is None else time.monotonic() + wait_seconds
+    began = time.monotonic()
     while not started.done.is_set():
-        if deadline is not None and time.monotonic() >= deadline:
+        if wait_seconds is not None and time.monotonic() - began >= wait_seconds:
             state = started.tracker.snapshot() if started.tracker is not None else {"operation": operation}
             return {
                 **_running_report(state, label, DEFAULT_LOG_LINES, own=True),
@@ -269,7 +270,11 @@ def _tail(path_text: Any, lines: int) -> list[str]:
             text = stream.read().decode("utf-8", errors="replace")
     except OSError:
         return []
-    return [line.rstrip()[:400] for line in text.splitlines() if line.strip()][-lines:]
+    # A test's once-a-second frame reports are shown as `test_frame`, not as log lines.
+    kept = [
+        line.rstrip()[:400] for line in text.splitlines() if line.strip() and run_status.TEST_FRAME_MARKER not in line
+    ]
+    return kept[-lines:]
 
 
 def _running_report(state: Dict[str, Any], label: str, log_lines: int, *, own: bool) -> Dict[str, Any]:
@@ -296,6 +301,7 @@ def _running_report(state: Dict[str, Any], label: str, log_lines: int, *, own: b
         ("attempt", "attempt"),
         ("attempts", "max_attempts"),
         ("timeout_seconds", "stage_timeout_seconds"),
+        ("test_frame", "test_frame"),
     ):
         if isinstance(state.get(key), (int, float)):
             report[name] = state[key]
@@ -328,6 +334,33 @@ def running_labels(project_root: Path) -> list[str]:
     root = str(Path(project_root).resolve())
     with _RUNS_LOCK:
         return sorted(key[1] for key, run in _RUNS.items() if key[0] == root and not run.done.is_set())
+
+
+def latest_own_label(project_root: Path) -> str | None:
+    """The label of the run this server started most recently for a project, running or ended."""
+    root = str(Path(project_root).resolve())
+    with _RUNS_LOCK:
+        own = [run for key, run in _RUNS.items() if key[0] == root]
+    return max(own, key=lambda run: run.started).label if own else None
+
+
+def latest_label(project_root: Path) -> str | None:
+    """The label to follow when none is named: this session's most recent run, else the project's."""
+    root = Path(project_root).resolve()
+    own = latest_own_label(root)
+    if own is not None:
+        return own
+    newest: tuple[float, str] | None = None
+    try:
+        recorded = [item for item in (root / ".gms_mcp" / "runs").iterdir() if item.is_dir()]
+    except OSError:
+        return None
+    for directory in recorded:
+        saved = run_status.read_status(directory)
+        started = saved.get("started_at") if saved is not None else None
+        if isinstance(started, (int, float)) and (newest is None or started > newest[0]):
+            newest = (float(started), directory.name)
+    return None if newest is None else newest[1]
 
 
 def status(directory: Path, *, log_lines: int = DEFAULT_LOG_LINES) -> Dict[str, Any]:
@@ -364,7 +397,9 @@ def status(directory: Path, *, log_lines: int = DEFAULT_LOG_LINES) -> Dict[str, 
             failure["known_labels"] = known[:40]
         return failure
     if saved.get("state") == "finished":
-        outcome = saved.get("outcome") if isinstance(saved.get("outcome"), dict) else {}
+        outcome = saved.get("outcome")
+        if not isinstance(outcome, dict):
+            outcome = {}
         result = run_status.read_result(directory)
         if result is None:
             result = {"ok": bool(outcome.get("ok")), "status": outcome.get("status")}

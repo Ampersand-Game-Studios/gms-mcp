@@ -468,7 +468,9 @@ def describe_asset(project_root: Path, asset_identifier: str) -> Optional[Dict[s
         order = data.get("instanceCreationOrder")
         if isinstance(order, list) and len(order) <= _MAX_LISTED_ROOM_INSTANCES:
             summary["creation_order"] = [_reference_name(item) for item in order]
-        settings = data.get("roomSettings") if isinstance(data.get("roomSettings"), dict) else {}
+        settings = data.get("roomSettings")
+        if not isinstance(settings, dict):
+            settings = {}
         summary["size"] = [settings.get("Width"), settings.get("Height")]
     if isinstance(data.get("frames"), list):
         summary["frames"] = len(data["frames"])

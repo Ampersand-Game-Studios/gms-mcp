@@ -51,6 +51,10 @@ ACCESS_VIOLATION_MARKER = "AccessViolationException"
 _COMPILE_FINISHED_MARKER = "Final Compile finished"
 _ERROR_LINE = re.compile(r"Error :|error :|Project Error")
 _WARNING_LINE = re.compile(r"Warning : ")
+# The compiler prints one of these for every macro of an extension that does not target the platform
+# being built: dozens in a project with store or platform extensions, and nothing to act on.
+_OTHER_TARGET_WARNING = "not available for this target"
+TEST_FRAME_MARKER = run_status.TEST_FRAME_MARKER
 _LABEL = re.compile(r"[^A-Za-z0-9_]")
 _SNAPSHOT_IGNORED = {".git", ".gms_mcp", ".gms-mcp", "output", "__pycache__", ".pytest_cache", ".gml_index_cache"}
 _MAX_TEST_BYTES = 2 * 1024 * 1024
@@ -62,6 +66,7 @@ DEFAULT_TEST_PRELUDE = r"""
 // ---- injected by gms-mcp (snapshot only; never part of the project) ----
 global.__agent_test_failures = 0;
 global.__agent_test_frame = 0;
+global.__agent_test_beat = current_time;
 global.__agent_test_done = false;
 function test_log(_msg) { show_debug_message("[TEST] " + string(_msg)); }
 function test_check(_ok, _msg) {
@@ -85,6 +90,11 @@ global.__agent_test_ts = time_source_create(time_source_global, 1, time_source_u
 	global.__agent_test_frame++;
 	if (global.__agent_test_frame == 1) {
 		show_debug_message("[TEST_SAVE_DIR] " + string(game_save_id));
+	}
+	if (current_time - global.__agent_test_beat >= 1000) {
+		// About once a second: lets whoever follows the run see the frame the test has reached.
+		global.__agent_test_beat = current_time;
+		show_debug_message("[TEST_FRAME] " + string(global.__agent_test_frame));
 	}
 	agent_test_step(global.__agent_test_frame);
 }, [], -1);
@@ -130,7 +140,8 @@ class BuildResult:
     build_log: Path | None = None
     game_archive: Path | None = None
     waited_for_slot_seconds: float = 0.0
-    elapsed_seconds: float = 0.0
+    build_seconds: float = 0.0
+    other_target_warnings: int = 0
 
 
 # ----------------------------------------------------------------------
@@ -596,10 +607,24 @@ def classify_build_log(text: str) -> tuple[list[str], list[str], list[str]]:
             bucket = errors if index <= finished_at else packaging
             if stripped not in bucket:
                 bucket.append(stripped)
-        elif _WARNING_LINE.search(stripped) and "not available for this target" not in stripped:
+        elif _WARNING_LINE.search(stripped) and _OTHER_TARGET_WARNING not in stripped:
             if stripped not in warnings:
                 warnings.append(stripped)
     return errors, warnings, packaging
+
+
+def count_other_target_warnings(text: str) -> int:
+    """How many warnings the build log holds that `classify_build_log` leaves out of its warnings."""
+    return sum(1 for line in text.splitlines() if _OTHER_TARGET_WARNING in line and _WARNING_LINE.search(line))
+
+
+def last_test_frame(text: str) -> int | None:
+    """The frame a running test last reported in the game's log, or None when it has reported none."""
+    at = text.rfind(TEST_FRAME_MARKER)
+    if at < 0:
+        return None
+    digits = text[at + len(TEST_FRAME_MARKER) :].split("\n", 1)[0].strip()
+    return int(digits) if digits.isdigit() else None
 
 
 _COMPILED_UNIT = re.compile(
@@ -706,7 +731,7 @@ def _default_run_igor(command: list[str], log_path: Path, timeout_seconds: float
             stderr=subprocess.STDOUT,
             env={**os.environ, "DOTNET_PROCESSOR_COUNT": os.environ.get("DOTNET_PROCESSOR_COUNT", "1")},
             # Its own process group, so stopping the build also stops the tools Igor starts.
-            **({} if os.name == "nt" else {"start_new_session": True}),
+            start_new_session=os.name != "nt",
         )
         with _ACTIVE_BUILDS_LOCK:
             _ACTIVE_BUILDS[process] = tracker
@@ -821,6 +846,7 @@ def compile_snapshot(
                 mobile_lock.release()
         text = log_path.read_text(encoding="utf-8", errors="replace") if log_path.is_file() else ""
         result.errors, result.warnings, result.packaging_errors = classify_build_log(text)
+        result.other_target_warnings = count_other_target_warnings(text)
         # The crash can hit the project loader or a later packaging step; either way the
         # output is unusable. Real compiler errors are final: retrying cannot fix them.
         if ACCESS_VIOLATION_MARKER not in text or result.errors or attempt == attempt_limit:
@@ -846,7 +872,7 @@ def compile_snapshot(
             )
             error.retain_work_dir = True
             raise error from exc
-    result.elapsed_seconds = round(time.monotonic() - started, 1)
+    result.build_seconds = round(time.monotonic() - started, 1)
     # Igor's final packaging step can fail on a shared staging folder after the game data
     # was written; the compiled game archive is what a run needs.
     archive = next((p for p in (out_dir / "game.zip", out_dir / "build.zip") if p.is_file()), None)
@@ -944,7 +970,9 @@ def tail_lines(path: Path, count: int) -> list[str]:
     lines = [
         line[:400]
         for line in path.read_text(encoding="utf-8", errors="replace").splitlines()
-        if not line.lstrip().startswith("at System.") and not line.lstrip().startswith("at Microsoft.")
+        if not line.lstrip().startswith("at System.")
+        and not line.lstrip().startswith("at Microsoft.")
+        and TEST_FRAME_MARKER not in line
     ]
     return lines[-max(0, count) :]
 
@@ -1185,16 +1213,18 @@ def run_game_archive(
         lock.bind_process(process.pid)
         started = time.monotonic()
         run_status.report_stage("running the test", live_log=str(debug_log), timeout_seconds=timeout_seconds)
+        reported_frame: int | None = None
         while True:
             time.sleep(0.5)
             waited = time.monotonic() - started
             if run_status.stop_requested():
                 break
-            try:
-                os.utime(lock.path, None)  # heartbeat so a long run is not mistaken for a dead one
-            except OSError:
-                pass
+            lock.heartbeat()  # so a long run is not mistaken for a dead one
             text = debug_log.read_text(encoding="utf-8", errors="replace") if debug_log.is_file() else ""
+            frame = last_test_frame(text)
+            if frame is not None and frame != reported_frame:
+                reported_frame = frame
+                run_status.report_detail(test_frame=frame)
             if result_marker in text:
                 time.sleep(1.0)  # let screen_save and the final log lines land
                 break
@@ -1215,6 +1245,7 @@ def run_game_archive(
         stop_process(process)
         return {
             "timed_out": timed_out,
+            "test_frame": reported_frame,
             "waited_seconds": round(waited, 1),
             "waited_for_lock_seconds": round(lock.waited_seconds, 1),
             "run_log": run_log,
@@ -1336,9 +1367,13 @@ def snapshot_compile(
         "warnings": build.warnings[:40],
         "packaging_errors": build.packaging_errors[:20],
         "build_log": _relative(root, build.build_log),
-        "elapsed_seconds": build.elapsed_seconds,
+        # The build alone, slot wait and retries included. A followed run adds run_seconds for the whole run.
+        "build_seconds": build.build_seconds,
         "waited_for_build_slot_seconds": round(build.waited_for_slot_seconds, 1),
     }
+    if build.other_target_warnings:
+        # Otherwise `warnings` reads as "none" beside a log that is full of the word.
+        public["other_target_warnings_omitted"] = build.other_target_warnings
     if not build.ok and not build.errors:
         public["log_tail"] = tail_lines(run_dir / "build.log", 25)
     error_locations = locate_compile_errors(root, build.errors[:80])
@@ -1436,6 +1471,9 @@ def _run_test_pipeline(
         public["run_log"] = _relative(root, run_log)
         public["screenshots"] = [_relative(root, shot) for shot in outcome.get("screenshots", [])]
         public["waited_seconds"] = outcome.get("waited_seconds")
+        if isinstance(outcome.get("test_frame"), int):
+            # Reported about once a second, so the last frame before a timeout or crash is close to this.
+            public["test_frame"] = outcome["test_frame"]
         public["waited_for_game_lock_seconds"] = outcome.get("waited_for_lock_seconds")
         if not verdict["passed"]:
             public["log_tail"] = tail_lines(run_log, 40)
@@ -1461,6 +1499,9 @@ def read_run_artifact(
             f"{', '.join(available) or 'none yet'}. Run gm_test_run or gm_snapshot_compile first."
         )
     content = path.read_text(encoding="utf-8", errors="replace").splitlines()
+    if not pattern:
+        # The once-a-second frame reports would crowd out the game's own lines; a pattern can still find them.
+        content = [line for line in content if TEST_FRAME_MARKER not in line]
     if pattern:
         try:
             content = [content[index] for index, _ in search_many(pattern, content)]

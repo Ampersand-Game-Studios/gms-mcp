@@ -369,9 +369,16 @@ def test_lock_status_lists_only_held_locks_without_owner_secrets(tmp_path: Path)
         "owner": {"purpose": "igor build", "token": "abc123", "host": "mac"},
     }
     free = {"name": "repo.lock", "held": False, "age_seconds": None, "owner": None}
+    # Left by processes that have ended: they hold nobody up, so they are counted and not listed.
+    left = [
+        {"name": "game_abc.lock", "held": True, "age_seconds": 86400.0, "owner": None, "left_behind": True},
+        {"name": "runlabel_abc.lock", "held": True, "age_seconds": 9000.0, "owner": {"pid": 1}, "left_behind": True},
+    ]
+    live_label = {"name": "runlabel_def.lock", "held": True, "age_seconds": 3.0, "owner": {"pid": 2}}
+    locks = [free, held, *left, live_label]
     with (
         _server(project) as server,
-        patch("gms_helpers.agent_locks.lock_status", return_value={"lock_directory": "/x", "locks": [free, held]}),
+        patch("gms_helpers.agent_locks.lock_status", return_value={"lock_directory": "/x", "locks": locks}),
         patch("gms_helpers.gamemaker_machine_lock.machine_lock_holder", return_value=None),
     ):
         compact = _call(server, "gm_lock_status")
@@ -380,7 +387,16 @@ def test_lock_status_lists_only_held_locks_without_owner_secrets(tmp_path: Path)
     assert compact["locks"] == [{"name": "build_slot_1", "held": True, "age_seconds": 12.5, "purpose": "igor build"}]
     assert compact["build_turn"] == {"held": False}
     assert compact["summary"].startswith("1 lock(s) held")
-    assert [lock["name"] for lock in everything["locks"]] == ["repo.lock", "build_slot_1"]
+    assert (compact["left_behind"], compact["run_labels_in_use"]) == (2, 1)
+    assert [lock["name"] for lock in everything["locks"]] == [
+        "repo.lock",
+        "build_slot_1",
+        "game_abc.lock",
+        "runlabel_abc.lock",
+        "runlabel_def.lock",
+    ]
+    assert [lock.get("left_behind", False) for lock in everything["locks"]] == [False, False, True, True, False]
+    assert everything["summary"].startswith("2 lock(s) held")
     assert "abc123" not in json.dumps(everything)
 
 

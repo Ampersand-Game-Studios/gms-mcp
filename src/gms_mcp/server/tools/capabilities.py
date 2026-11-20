@@ -74,8 +74,8 @@ def tool_guide(*, enabled: tuple[str, ...], read_only: bool) -> Dict[str, str]:
         "gm_compile builds inside the working tree (its run label is working_tree) and holds up changes "
         "to the project while it runs. gm_project_check and gm_diagnostics report problems "
         "without building. A build takes minutes: a call with no result after 20 s returns "
-        "STILL_RUNNING (background=true returns at once), and gm_build_status(label) reports the stage "
-        "and log lines, then the result; gm_build_stop(label) ends it. Builds take turns across sessions on this machine: gm_lock_status shows who holds the turn."
+        "STILL_RUNNING (background=true returns at once), and gm_build_status reports the stage "
+        "and log lines, then the result; gm_build_stop ends it (no label: your latest run). Builds take turns across sessions on this machine: gm_lock_status shows who holds the turn."
     )
     if "bridge" in enabled_set:
         guide["run"] = (

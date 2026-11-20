@@ -580,7 +580,12 @@ def test_a_working_tree_compile_hands_over_and_still_holds_up_changes(tmp_path: 
             with patch.dict(os.environ, options["extra_environment"]):
                 run_status.publish_live_log(compiler_log)
             await gate.wait()
-            return {"ok": False, "stdout": "Error : scripts/a.gml(3) : unknown variable", "exit_code": 1}
+            return {
+                "ok": False,
+                "stdout": "Error : scripts/a.gml(3) : unknown variable",
+                "exit_code": 1,
+                "elapsed_seconds": 41.2345,
+            }
 
         with patch("gms_mcp.server.tools.runner._run_with_fallback", fake_compile):
             async with Client(server, mode="2026-07-28") as client:
@@ -610,7 +615,11 @@ def test_a_working_tree_compile_hands_over_and_still_holds_up_changes(tmp_path: 
                 assert raw.is_error is False
                 assert (result["finished"], result["ok"], result["exit_code"]) == (True, False, 1)
                 assert result["status"] == "BUILD_FAILED"
-                assert "compiling" in result["stages"]
+                # Nothing was changing the project, so the compile never waited for it and does not say it did.
+                assert list(result["stages"]) == ["starting", "compiling"]
+                # One name for the build's own time, whichever tool built; run_seconds is the whole run.
+                assert result["build_seconds"] == 41.2 and "elapsed_seconds" not in result
+                assert "run_seconds" in result
                 await asyncio.wait_for(change, timeout=20)
 
     with _server(tmp_path) as (server, _project), patch.dict(os.environ, {"GMS_MCP_BUILD_CALL_WAIT_SECONDS": "1"}):
@@ -642,12 +651,11 @@ def test_a_working_tree_compile_can_be_stopped_and_frees_the_project(tmp_path: P
                 )
                 assert at_stage["stage"] == "compiling"
 
-                stopped = unwrap_call_tool_result(await client.call_tool("gm_build_stop", {"label": "working_tree"}))
-                assert stopped["stopped"] is True
-                report = unwrap_call_tool_result(
-                    await client.call_tool("gm_build_status", {"label": "working_tree", "wait_seconds": 0})
-                )
-                assert (report["finished"], report["status"]) == (True, "STOPPED")
+                # No label: the one run this session has going, whatever tool started it.
+                stopped = unwrap_call_tool_result(await client.call_tool("gm_build_stop", {}))
+                assert (stopped["stopped"], stopped["label"]) == (True, "working_tree")
+                report = unwrap_call_tool_result(await client.call_tool("gm_build_status", {"wait_seconds": 0}))
+                assert (report["finished"], report["status"], report["label"]) == (True, "STOPPED", "working_tree")
                 # The lock went with the compile: a change to the project is not left waiting.
                 await asyncio.wait_for(
                     client.call_tool("gm_safe_delete", {"asset_type": "script", "asset_name": "scr_none"}), timeout=20
@@ -667,3 +675,107 @@ def test_status_is_a_reader_and_stop_is_not_offered_read_only(tmp_path: Path):
         names = {tool.name for tool in asyncio.run(build_server().list_tools())}
     assert "gm_build_status" in names
     assert "gm_build_stop" not in names and "gm_snapshot_compile" not in names
+
+
+# --- no label named ------------------------------------------------------------------------------
+
+
+def test_status_and_stop_without_a_label_mean_this_sessions_run(tmp_path: Path):
+    def fake_compile(root, *, label, **_options):
+        run_status.report_stage("compiling", attempt=1, attempts=10)
+        run_status.sleep_unless_stopped(120)
+        raise AssertionError("the build should have been stopped")
+
+    with _server(tmp_path) as (server, project), patch.object(snapshot_build, "snapshot_compile", fake_compile):
+        nothing = _call(server, "gm_build_status", wait_seconds=0)
+        assert nothing["ok"] is False and "No build or test run has been recorded" in nothing["error"]
+        assert "started no build" in _call(server, "gm_build_stop")["error"]
+
+        _call(server, "gm_snapshot_compile", label="first", background=True)
+        _wait_until(lambda: _call(server, "gm_build_status", label="first", wait_seconds=0).get("stage") == "compiling")
+        _call(server, "gm_snapshot_compile", label="second", background=True)
+        _wait_until(
+            lambda: _call(server, "gm_build_status", label="second", wait_seconds=0).get("stage") == "compiling"
+        )
+
+        # The latest one started is the one followed.
+        assert _call(server, "gm_build_status", wait_seconds=0)["label"] == "second"
+        # Stopping is not guessed at when more than one is going.
+        refused = _call(server, "gm_build_stop")
+        assert refused["ok"] is False and refused["running_labels"] == ["first", "second"]
+
+        assert _call(server, "gm_build_stop", label="first")["stopped"] is True
+        only = _call(server, "gm_build_stop")
+        assert (only["stopped"], only["label"]) == (True, "second")
+        assert _call(server, "gm_build_stop")["already_finished"] is True
+
+
+def test_status_without_a_label_falls_to_the_projects_latest_recorded_run(tmp_path: Path):
+    with _server(tmp_path) as (server, project):
+        for label, started in (("older", 100.0), ("newer", 200.0)):
+            directory = project / ".gms_mcp" / "runs" / label
+            directory.mkdir(parents=True)
+            state = {"state": "finished", "operation": "gm_test_run", "started_at": started, "finished_at": started + 5}
+            (directory / run_status.STATUS_FILE).write_text(json.dumps(state), encoding="utf-8")
+            (directory / run_status.RESULT_FILE).write_text(json.dumps({"ok": True, "status": label}), encoding="utf-8")
+        report = _call(server, "gm_build_status", wait_seconds=0)
+    assert (report["label"], report["status"], report["finished"]) == ("newer", "newer", True)
+
+
+# --- a test run's frame --------------------------------------------------------------------------
+
+
+def test_a_followed_test_shows_the_frame_it_has_reached_not_the_frame_lines(tmp_path: Path):
+    assert snapshot_build.TEST_FRAME_MARKER in snapshot_build.DEFAULT_TEST_PRELUDE
+    assert snapshot_build.last_test_frame("boot\n[TEST_FRAME] 60\n[TEST] hello\n[TEST_FRAME] 121\n") == 121
+    assert snapshot_build.last_test_frame("boot\n[TEST] hello\n") is None
+    assert snapshot_build.last_test_frame("[TEST_FRAME] 12") == 12, "a line still being written"
+
+    log = tmp_path / "game.log"
+    log.write_text("room started\n[TEST_FRAME] 60\n[TEST] hello\n[TEST_FRAME] 121\n", encoding="utf-8")
+    seen = threading.Event()
+    release = threading.Event()
+
+    def work() -> dict:
+        run_status.report_stage("running the test", live_log=str(log), timeout_seconds=120)
+        run_status.report_detail(test_frame=121)
+        seen.set()
+        assert release.wait(20)
+        return {"ok": True, "status": "TEST_PASSED"}
+
+    directory = _run_dir(tmp_path, "test")
+    asyncio.run(background_runs.run(directory, "test", "gm_test_run", work, wait_seconds=0))
+    assert seen.wait(5)
+    running = background_runs.status(directory)
+    release.set()
+    assert running["test_frame"] == 121
+    assert running["log_tail"] == ["room started", "[TEST] hello"]
+    # The saved log keeps every line; reading it leaves the frame reports out unless they are asked for.
+    assert snapshot_build.tail_lines(log, 10) == ["room started", "[TEST] hello"]
+
+
+def test_reading_a_run_log_leaves_out_frame_reports_unless_searched_for(tmp_path: Path):
+    project = tmp_path / "game"
+    run_dir = project / ".gms_mcp" / "runs" / "test"
+    run_dir.mkdir(parents=True)
+    (run_dir / "run.log").write_text("boot\n[TEST_FRAME] 60\n[TEST] PASS ok\n", encoding="utf-8")
+    assert snapshot_build.read_run_artifact(project, "test")["lines"] == ["boot", "[TEST] PASS ok"]
+    assert snapshot_build.read_run_artifact(project, "test", pattern="TEST_FRAME")["lines"] == ["[TEST_FRAME] 60"]
+
+
+# --- warnings left out of a build result ---------------------------------------------------------
+
+
+def test_warnings_about_other_targets_are_counted_not_listed():
+    log = "\n".join(
+        [
+            "Compile Scripts...Warning : reference to extension macro iap_no_error which is not available for this "
+            "target - macro is in extension AppleIAP and file AppleIAP.ext",
+            "Warning : reference to extension macro ugc_match_Items which is not available for this target - macro "
+            "is in extension Steamworks and file Steamworks.ext",
+            "Warning : variable used before it is set in scr_thing",
+        ]
+    )
+    _errors, warnings, _packaging = snapshot_build.classify_build_log(log)
+    assert warnings == ["Warning : variable used before it is set in scr_thing"]
+    assert snapshot_build.count_other_target_warnings(log) == 2

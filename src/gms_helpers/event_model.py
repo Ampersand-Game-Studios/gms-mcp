@@ -241,8 +241,9 @@ def event_display_name(event: Mapping[str, Any]) -> str:
         index = event_num - 64 if event_num >= 64 else event_num
         if 0 <= index < len(_GESTURE_NAMES):
             return f"{'Global ' if event_num >= 64 else ''}{_GESTURE_NAMES[index]}"
-    type_name = _EVENT_ID_TO_SPEC.get(event_type)
-    label = EVENT_TYPE_NAMES.get(event_type, f"Event {event_type}")
+    known_type = event_type if isinstance(event_type, int) else -1
+    type_name = _EVENT_ID_TO_SPEC.get(known_type)
+    label = EVENT_TYPE_NAMES.get(known_type, f"Event {event_type}")
     named = _SUB_EVENT_DISPLAY_NAMES.get(f"{type_name}:{event_num}")
     if named:
         return named

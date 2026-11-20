@@ -35,15 +35,15 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         build lock and the Igor build slots) with what each is for and how long it has been held,
         plus the machine's build turn. A build slot's purpose names the project, the run label and
         the attempt; a lock this session holds has this_session=true and `this_session_runs` lists
-        the runs this session still has going (empty: none). owner_gone=true marks a lock whose
-        process has ended. `include_free=true` lists every lock,
-        including the per-run label locks that are otherwise only counted.
+        the runs this session still has going (empty: none). Locks left behind by a process that
+        has ended hold nobody up (the next run to need one takes it over), so they are only
+        counted, in `left_behind`. `include_free=true` lists every lock, with left_behind=true on
+        those, and the per-run label locks that are otherwise only counted.
         """
         _ = ctx
         import os
-        import socket
 
-        from gms_helpers.agent_locks import _owner_process_alive, lock_status
+        from gms_helpers.agent_locks import lock_status
         from gms_helpers.gamemaker_machine_lock import machine_lock_holder
         from gms_helpers.project_config import project_setting
 
@@ -51,12 +51,15 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         slots = int(project_setting(root, "build.max_parallel_builds", 4))
         locks = []
         run_labels_held = 0
+        left_behind = 0
         for lock in lock_status(slots)["locks"]:
-            if not lock.get("held") and not include_free:
+            if lock.get("left_behind"):
+                left_behind += 1
+            if not include_free and (not lock.get("held") or lock.get("left_behind")):
                 continue
             if str(lock.get("name", "")).startswith("runlabel_") and not include_free:
                 # One per named run that is in use, on any project: dozens on a busy machine.
-                run_labels_held += bool(lock.get("held"))
+                run_labels_held += 1
                 continue
             owner = lock.get("owner") if isinstance(lock.get("owner"), dict) else {}
             entry: Dict[str, Any] = {"name": lock.get("name"), "held": bool(lock.get("held"))}
@@ -64,16 +67,10 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
                 entry["age_seconds"] = lock.get("age_seconds")
                 # The owner record also carries a claim token and process details nobody can act on.
                 entry["purpose"] = owner.get("purpose")
-                if owner.get("pid") == os.getpid():
+                if lock.get("left_behind"):
+                    entry["left_behind"] = True
+                elif owner.get("pid") == os.getpid() or owner.get("supervisor_pid") == os.getpid():
                     entry["this_session"] = True
-                elif (
-                    owner.get("host") == socket.gethostname()
-                    and isinstance(owner.get("pid"), int)
-                    and not _owner_process_alive(owner, "pid")
-                    and not _owner_process_alive(owner, "supervisor_pid")
-                ):
-                    # Left behind by a process that has ended; the next one to need it takes it over.
-                    entry["owner_gone"] = True
             locks.append(entry)
         holder = machine_lock_holder()
         build_turn: Dict[str, Any] = {"held": holder is not None}
@@ -86,7 +83,7 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
                 this_project=isinstance(holder_root, str)
                 and os.path.normcase(holder_root) == os.path.normcase(str(root)),
             )
-        held_count = sum(1 for lock in locks if lock["held"])
+        held_count = sum(1 for lock in locks if lock["held"] and not lock.get("left_behind"))
         return {
             "ok": True,
             "summary": (
@@ -96,6 +93,7 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
             "build_turn": build_turn,
             "locks": locks,
             **({"run_labels_in_use": run_labels_held} if run_labels_held else {}),
+            **({"left_behind": left_behind} if left_behind else {}),
             # Empty means nothing this session started is still building or running.
             "this_session_runs": background_runs.running_labels(root),
         }
@@ -297,7 +295,7 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
 
     @mcp.tool()
     async def gm_build_status(
-        label: str = "compile",
+        label: str = "",
         wait_seconds: float = 30.0,
         until: str = "end",
         log_lines: int = background_runs.DEFAULT_LOG_LINES,
@@ -305,10 +303,12 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Follow a build, test run or game start by its label: where it has got to, or its result once it has ended.
+        Follow a build, test run or game start: where it has got to, or its result once it has ended.
 
-        Works for a run started with background=true, for one another call is still waiting on,
-        and for one started by another session on this project. A gm_compile run has the label
+        With no label it follows the run this session started most recently (if it has started
+        none, the project's most recent); the report names the label. Pass label to follow a
+        particular run: one started with background=true, one another call is still waiting on,
+        or one started by another session on this project. A gm_compile run has the label
         "working_tree". Waits up to wait_seconds (at most
         300) for the run to end, so one call usually returns the result; pass 0 to look once.
         until names something sooner to return at: a stage ("compiling" returns as soon as the
@@ -324,18 +324,33 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         "starting", "copying the project", "waiting for a build slot" (only when all slots are
         taken), "compiling", "reading the build result"; then for a test "waiting for this
         project's game to be free" (only when it is busy), "starting the game", "running the
-        test" (stage_timeout_seconds is its limit, on the stage_seconds clock), "collecting the
-        test result"; for a game start "starting the game", "connecting to the game".
+        test" (stage_timeout_seconds is its limit, on the stage_seconds clock; test_frame is the
+        frame the test has reached, updated about once a second), "collecting the test result";
+        for a game start "starting the game", "connecting to the game". A gm_compile run goes
+        "starting", "waiting for a change to the project to finish" (only when one is under
+        way), "compiling".
         When it has ended: finished=true with the result the tool that started it returns (ok,
-        status, errors, error_locations, and so on), run_seconds for the whole run and `stages`,
-        the seconds spent in each stage. A run that failed or was stopped is still a successful
+        status, errors, error_locations, and so on), `stages`, the seconds spent in each stage,
+        and two times: build_seconds for the build alone and run_seconds for the whole run,
+        waits and a test's game included. A run that failed or was stopped is still a successful
         status call: read its `ok` and `status`.
         """
         _ = ctx
         from gms_helpers.snapshot_build import runs_directory
 
         try:
-            run_dir = runs_directory(_resolve_project_directory(project_root), label)
+            root = _resolve_project_directory(project_root)
+            if not str(label or "").strip():
+                latest = background_runs.latest_label(root)
+                if latest is None:
+                    return {
+                        "ok": False,
+                        "finished": False,
+                        "error": "No build or test run has been recorded for this project.",
+                        "hint": "Start one with gm_snapshot_compile, gm_compile, gm_test_run or gm_game_start.",
+                    }
+                label = latest
+            run_dir = runs_directory(root, label)
         except Exception as exc:  # noqa: BLE001
             return _failure("gm_build_status", exc)
         until = str(until or "end").strip()
@@ -356,21 +371,38 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
             await asyncio.sleep(min(0.25, max(0.05, deadline - time.monotonic())))
 
     @mutating_tool
-    async def gm_build_stop(
-        label: str = "compile", project_root: str = ".", ctx: Context | None = None
-    ) -> Dict[str, Any]:
+    async def gm_build_stop(label: str = "", project_root: str = ".", ctx: Context | None = None) -> Dict[str, Any]:
         """
-        Stop a build or test run this session started, by its label, and end its compiler process.
+        Stop a build or test run this session started, and end its compiler process.
 
-        The project is not affected: builds work on a throwaway copy, and a gm_compile run (label
-        "working_tree") only reads the project. A game started with gm_game_start is stopped with
-        gm_game_stop instead.
+        With no label it stops the one run this session has going; when several are going it
+        stops none and lists their labels, so name one. The project is not affected: builds work
+        on a throwaway copy, and a gm_compile run (label "working_tree") only reads the project.
+        A game started with gm_game_start is stopped with gm_game_stop instead.
         """
         _ = ctx
         from gms_helpers.snapshot_build import runs_directory
 
         try:
-            run_dir = runs_directory(_resolve_project_directory(project_root), label)
+            root = _resolve_project_directory(project_root)
+            if not str(label or "").strip():
+                running = background_runs.running_labels(root)
+                if len(running) > 1:
+                    return {
+                        "ok": False,
+                        "running_labels": running,
+                        "error": f"This session has {len(running)} runs going ({', '.join(running)}); pass label to say which.",
+                    }
+                # With nothing going, the latest run answers for itself: it has already ended.
+                latest = running[0] if running else background_runs.latest_own_label(root)
+                if latest is None:
+                    return {
+                        "ok": False,
+                        "error": "This session has started no build or test run, so there is nothing to stop.",
+                        "hint": "Only a run this session started can be stopped. gm_game_stop stops a running game.",
+                    }
+                label = latest
+            run_dir = runs_directory(root, label)
         except Exception as exc:  # noqa: BLE001
             return _failure("gm_build_stop", exc)
         return await asyncio.to_thread(background_runs.stop, run_dir)

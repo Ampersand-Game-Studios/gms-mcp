@@ -258,6 +258,7 @@ class GMLIndex:
         working = None if read_only else self._create_stored(cache_path)
         self._adopt(working if working is not None else self._new_memory_database())
         files_scanned = self._scan_files(sorted(current_files))
+        assert self._connection is not None
         self._connection.commit()
         self._is_built = True
         return {"status": "built", **self._counts(), "files": files_scanned, "saved": working is not None}
@@ -365,7 +366,7 @@ class GMLIndex:
         for file, line, col in rows:
             if file not in lines_by_file:
                 try:
-                    text = (self.project_root / file).read_text(encoding="utf-8", errors="replace")
+                    text: str = (self.project_root / file).read_text(encoding="utf-8", errors="replace")
                 except OSError:
                     text = ""
                 lines_by_file[file] = text.split("\n")

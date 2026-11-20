@@ -22,6 +22,8 @@ RESULT_FILE = "result.json"
 # Names a file, in a private folder of the process that started this one, where a build run in a
 # child process says which log its compiler is writing, so the parent can show the log's last lines.
 LIVE_LOG_HINT_ENV = "GMS_MCP_LIVE_LOG_HINT"
+# Printed about once a second by the test prelude so a followed run can show the frame it has reached.
+TEST_FRAME_MARKER = "[TEST_FRAME]"
 _VERSION = 1
 
 

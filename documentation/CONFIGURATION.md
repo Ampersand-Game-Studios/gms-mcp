@@ -202,7 +202,7 @@ Live-reload commands run programs, so a project cannot supply them. They are rea
 | `build.jobs` | `4` | Igor `-j`. |
 | `build.runtime_version` | newest installed | Runtime used by snapshot builds. |
 | `test.timeout_seconds` | `120` | Default wait for a test's result line. |
-| `test.prelude_file` | built in | Project-relative GML file replacing the built-in test API; it must print the same marker lines. |
+| `test.prelude_file` | built in | Project-relative GML file replacing the built-in test API; it must print the same marker lines. Printing `[TEST_FRAME] <frame>` about once a second is optional: it is what `gm_build_status` shows as `test_frame`. |
 | `test.result_marker`, `line_marker`, `started_marker`, `screenshot_prefix`, `runtime_error_patterns` | `[TEST_RESULT]`, `[TEST]`, `[TEST_SAVE_DIR]`, `__agent_shot_`, GameMaker's error banners | How a run log is read. Markers and the prefix are non-empty strings; `runtime_error_patterns` is a list of non-empty literal strings. |
 | `conventions.allow_root_assets` | `[]` | Name patterns `gm_project_check` accepts at the project root. |
 | `live_reload.start`, `stop`, `status` | unset | User config only. Argument lists (never shell strings) for an external live-reload tool. `{project}` becomes the project directory. |

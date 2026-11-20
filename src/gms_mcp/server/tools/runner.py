@@ -165,18 +165,28 @@ def register(
                 finally:
                     follower.cancel()
                     shutil.rmtree(hint_directory, ignore_errors=True)
+                compiled = result
                 if isinstance(result, dict) and "status" not in result:
                     # The same word a snapshot build gives, so a caller reads one field for either.
                     result = {**result, "status": "COMPILE_OK" if result.get("ok") else "BUILD_FAILED"}
+                if isinstance(result, dict) and isinstance(result.get("elapsed_seconds"), (int, float)):
+                    # The name a snapshot build gives its own time, apart from run_seconds for the whole run.
+                    result = {key: value for key, value in result.items() if key != "elapsed_seconds"}
+                    result["build_seconds"] = round(float(compiled["elapsed_seconds"]), 1)
                 return result
 
             if mutation_scope is None:
                 return await compile_now()
             # Taken here, not around the request: the request may return while the compile is still
             # reading the project, and no change may land under it.
-            run_status.report_stage("waiting for a change to the project to finish")
-            async with mutation_scope():
-                return await compile_now()
+            # Named as a stage only when there is a wait: a free project is taken at once.
+            waiting = loop.call_later(0.25, run_status.report_stage, "waiting for a change to the project to finish")
+            try:
+                async with mutation_scope():
+                    waiting.cancel()
+                    return await compile_now()
+            finally:
+                waiting.cancel()
 
         def work() -> Dict[str, Any]:
             with label_pipeline(root, WORKING_TREE_LABEL):
