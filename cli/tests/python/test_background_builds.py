@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 import os
 import sys
@@ -881,6 +882,38 @@ def test_a_command_line_build_that_times_out_ends_the_tools_its_compiler_started
     tool_pid = int(tool_pid_file.read_text())
     _wait_until(lambda: not _process_alive(tool_pid), seconds=10)
     assert "without finishing" in (tmp_path / "build.log").read_text()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="process groups are a POSIX notion")
+@pytest.mark.parametrize("own_group", [True, False], ids=["its own process group", "this process's group"])
+def test_a_stop_is_not_over_while_a_tool_that_ignores_it_is_still_running(tmp_path: Path, own_group: bool):
+    import subprocess
+
+    from gms_helpers.agent_locks import _process_alive
+
+    ready = tmp_path / "tool.ready"
+    # A stand-in Igor that leaves when asked, with a tool that does not.
+    tool = (
+        "import os, signal, time\n"
+        "signal.signal(signal.SIGTERM, signal.SIG_IGN)\n"
+        f"open({str(ready)!r}, 'w').write(str(os.getpid()))\n"
+        "time.sleep(300)\n"
+    )
+    stand_in = f"import subprocess, sys, time\nsubprocess.Popen([sys.executable, '-c', {tool!r}])\ntime.sleep(300)\n"
+    compiler = subprocess.Popen([sys.executable, "-c", stand_in], start_new_session=own_group)
+    try:
+        _wait_until(lambda: ready.is_file() and ready.read_text().isdigit(), seconds=20)
+        tool_pid = int(ready.read_text())
+
+        snapshot_build._end_process_tree(compiler, grace_seconds=1.0)
+
+        assert compiler.poll() is not None
+        assert not _process_alive(tool_pid), "the build slot would be released with the tool still writing"
+    finally:
+        compiler.kill()
+        if ready.is_file() and ready.read_text().isdigit():
+            with contextlib.suppress(OSError):
+                os.kill(int(ready.read_text()), 9)
 
 
 @pytest.mark.skipif(os.name == "nt", reason="process groups are a POSIX notion")
