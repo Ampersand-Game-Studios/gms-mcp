@@ -17,6 +17,8 @@ import time
 from pathlib import Path
 from typing import Any, Iterator
 
+from .agent_locks import _retry_while_shared
+
 STATUS_FILE = "status.json"
 RESULT_FILE = "result.json"
 # Names a file, in a private folder of the process that started this one, where a build run in a
@@ -38,7 +40,9 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
     try:
         with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             json.dump(data, stream)
-        os.replace(temporary, path)
+        # Windows refuses to replace a file another process has open, and a follower reads this
+        # one several times a second. The reads are brief, so a short retry gets the write through.
+        _retry_while_shared(lambda: os.replace(temporary, path))
     except BaseException:
         with contextlib.suppress(OSError):
             temporary.unlink()
@@ -88,7 +92,7 @@ class RunTracker:
                 self._owns_directory = True
                 # A result left by an earlier run with this label would otherwise read as this run's.
                 with contextlib.suppress(OSError):
-                    (self.directory / RESULT_FILE).unlink()
+                    _retry_while_shared((self.directory / RESULT_FILE).unlink)
             self._close_stage(now)
             kept = {key: self._state[key] for key in ("version", "state", "operation", "label", "pid", "started_at")}
             self._state = {**kept, "stage": name, "stage_started_at": now, "updated_at": now, **details}

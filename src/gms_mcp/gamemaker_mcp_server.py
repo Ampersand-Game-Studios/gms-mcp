@@ -20,6 +20,7 @@ import functools
 import inspect
 import ipaddress
 import os
+import signal
 import sys
 import threading
 import time
@@ -262,6 +263,27 @@ def _stop_builds_nobody_can_follow() -> None:
         from .server import background_runs
 
         background_runs.stop_all()
+
+
+def _leave_when_told_to_terminate() -> None:
+    """Stop builds before going when the client ends this server with a signal instead of closing stdin.
+
+    Left to the default action the process dies at once, and a compiler or a test's game it
+    started, each in a process group of its own, would carry on with nobody able to stop it.
+    """
+
+    def leave(_signal_number, _frame) -> None:
+        # On a thread of its own: the event loop on this one has to keep running, because ending
+        # a working-tree compile means cancelling a task it owns.
+        threading.Thread(target=_wait_for_mutations_then_exit, name="gms-mcp-terminate", daemon=True).start()
+
+    for name in ("SIGTERM", "SIGHUP"):
+        number = getattr(signal, name, None)
+        if number is None:
+            continue
+        # ValueError: not the main thread (the server is embedded in something else's process).
+        with contextlib.suppress(ValueError, OSError):
+            signal.signal(number, leave)
 
 
 def _wait_for_mutations_then_exit() -> None:
@@ -1099,7 +1121,13 @@ def main(argv: list[str] | None = None) -> int:
         if server_args.transport == "stdio":
             threads_before = set(threading.enumerate())
             _watch_for_departed_client()
-            server.run()
+            _leave_when_told_to_terminate()
+            try:
+                server.run()
+            except BaseException:
+                # Interrupted (Ctrl-C) or failed: still not a reason to leave a compiler behind.
+                _stop_builds_nobody_can_follow()
+                raise
             _leave_after_client_disconnect(threads_before)
         else:
             server.run(

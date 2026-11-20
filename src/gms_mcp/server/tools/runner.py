@@ -192,6 +192,10 @@ def register(
             with label_pipeline(root, WORKING_TREE_LABEL):
                 future = asyncio.run_coroutine_threadsafe(compile_holding_the_project(), loop)
                 pending.append(future)
+                if run_status.stop_requested():
+                    # The stop arrived while this run was still taking its label, before there was
+                    # anything for it to cancel.
+                    future.cancel()
                 try:
                     return future.result()
                 except concurrent.futures.CancelledError:

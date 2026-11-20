@@ -25,6 +25,8 @@ MAX_LOG_LINES = 200
 MAX_WAIT_SECONDS = 300.0
 _WAITING_FOR_LABEL = "waiting for an earlier run with this label to finish"
 _KEPT_WHEN_STOPPED = ("build_log", "run_log")
+# How long an exiting server gives its runs to end what they started.
+_EXIT_WAIT_SECONDS = 8.0
 
 
 @dataclass
@@ -221,6 +223,20 @@ def stop(directory: Path) -> Dict[str, Any]:
         with contextlib.suppress(Exception):
             run.cancel()
     finished = run.done.wait(timeout=20)
+    if finished and run.result is not None and run.result.get("status") != "STOPPED":
+        # The stop came too late to matter: the run got to its own end, and what it started may be up.
+        status = run.result.get("status")
+        return {
+            "ok": True,
+            "label": label,
+            "stopped": False,
+            "already_finished": True,
+            "status": status,
+            "message": (
+                f"'{label}' ended on its own (status {status}) before the stop took effect; "
+                "gm_build_status has its result. A game it started is stopped with gm_game_stop."
+            ),
+        }
     return {
         "ok": True,
         "label": label,
@@ -241,18 +257,17 @@ def stop_all() -> None:
         runs = [run for run in _RUNS.values() if not run.done.is_set()]
     if not runs:
         return
-    cancelled = []
     for run in runs:
         if run.tracker is not None:
             run.tracker.request_stop()
         if run.cancel is not None:
             with contextlib.suppress(Exception):
                 run.cancel()
-            cancelled.append(run)
     stop_builds(None, grace_seconds=1.0)
-    # A cancelled compile ends its compiler from the event loop; give that the moment it needs.
-    deadline = time.monotonic() + 8.0
-    for run in cancelled:
+    # Asking is not enough: the process is about to go, and a run's own thread is what ends the
+    # game a test started, gives back its leases and removes its copy of the project.
+    deadline = time.monotonic() + _EXIT_WAIT_SECONDS
+    for run in runs:
         run.done.wait(timeout=max(0.0, deadline - time.monotonic()))
 
 
@@ -277,9 +292,14 @@ def _tail(path_text: Any, lines: int) -> list[str]:
     return kept[-lines:]
 
 
+def _number(value: Any, default: float) -> float:
+    """A time read from a status file. The file sits in the project, where anything may have written it."""
+    return float(value) if isinstance(value, (int, float)) and not isinstance(value, bool) else default
+
+
 def _running_report(state: Dict[str, Any], label: str, log_lines: int, *, own: bool) -> Dict[str, Any]:
     now = time.time()
-    started = float(state.get("started_at") or now)
+    started = _number(state.get("started_at"), now)
     report: Dict[str, Any] = {
         "ok": True,
         "finished": False,
@@ -287,7 +307,7 @@ def _running_report(state: Dict[str, Any], label: str, log_lines: int, *, own: b
         "label": label,
         "operation": state.get("operation"),
         "stage": state.get("stage") or _WAITING_FOR_LABEL,
-        "stage_seconds": round(max(0.0, now - float(state.get("stage_started_at") or started)), 1),
+        "stage_seconds": round(max(0.0, now - _number(state.get("stage_started_at"), started)), 1),
         "run_seconds": round(max(0.0, now - started), 1),
     }
     done = state.get("stages_done")
@@ -373,7 +393,7 @@ def status(directory: Path, *, log_lines: int = DEFAULT_LOG_LINES) -> Dict[str, 
     saved = run_status.read_status(directory)
     if run is not None and run.done.is_set() and run.tracker is not None and saved is not None:
         # Another session has used the label since: what it recorded is the newer run.
-        if float(saved.get("started_at") or 0) > run.tracker.started_at:
+        if _number(saved.get("started_at"), 0.0) > run.tracker.started_at:
             run = None
     if run is not None:
         state = run.tracker.snapshot() if run.tracker is not None else {"operation": run.operation}
@@ -405,7 +425,8 @@ def status(directory: Path, *, log_lines: int = DEFAULT_LOG_LINES) -> Dict[str, 
             result = {"ok": bool(outcome.get("ok")), "status": outcome.get("status")}
         return _finished_report(label, saved, result)
     owner = saved.get("pid")
-    if not (isinstance(owner, int) and not isinstance(owner, bool) and _process_alive(owner)):
+    # A process id from a file anyone may have written: only one that could be real is asked about.
+    if not (isinstance(owner, int) and not isinstance(owner, bool) and 0 < owner < 2**31 and _process_alive(owner)):
         return _finished_report(
             label,
             saved,

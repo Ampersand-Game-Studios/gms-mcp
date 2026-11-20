@@ -873,3 +873,150 @@ def test_ending_a_compiler_that_shares_this_process_group_ends_only_the_compiler
         assert compiler.poll() is not None
     finally:
         compiler.kill()
+
+
+# --- found by review -----------------------------------------------------------------------------
+
+
+def test_an_exiting_server_waits_for_its_runs_to_end_what_they_started(tmp_path: Path):
+    cleaned_up = []
+
+    def test_run() -> dict:
+        run_status.report_stage("running the test")
+        try:
+            while not run_status.stop_requested():
+                time.sleep(0.01)
+            raise run_status.RunStopped("stopped")
+        finally:
+            time.sleep(0.4)  # ending the game, giving back the lease, removing the project copy
+            cleaned_up.append(True)
+
+    directory = _run_dir(tmp_path, "test")
+    asyncio.run(background_runs.run(directory, "test", "gm_test_run", test_run, wait_seconds=0))
+    _wait_until(lambda: background_runs.status(directory).get("stage") == "running the test")
+
+    background_runs.stop_all()
+
+    assert cleaned_up == [True], "the server would have exited with the game still running"
+
+
+def test_the_server_stops_its_builds_when_it_is_told_to_terminate():
+    from gms_mcp import gamemaker_mcp_server
+
+    installed = {}
+    left = threading.Event()
+    with (
+        patch.object(
+            gamemaker_mcp_server.signal, "signal", lambda number, handler: installed.update({number: handler})
+        ),
+        patch.object(gamemaker_mcp_server, "_wait_for_mutations_then_exit", left.set),
+    ):
+        gamemaker_mcp_server._leave_when_told_to_terminate()
+        assert gamemaker_mcp_server.signal.SIGTERM in installed
+        handler_returned_at = time.monotonic()
+        installed[gamemaker_mcp_server.signal.SIGTERM](gamemaker_mcp_server.signal.SIGTERM, None)
+        # The handler hands over and returns: the event loop it interrupted must keep running.
+        assert time.monotonic() - handler_returned_at < 1
+        assert left.wait(5)
+
+
+def test_a_status_file_is_still_written_while_a_follower_has_it_open(tmp_path: Path, monkeypatch):
+    from gms_helpers import agent_locks
+
+    target = tmp_path / "status.json"
+    target.write_text("{}", encoding="utf-8")
+    real_replace = os.replace
+    refusals = [PermissionError("in use"), PermissionError("in use")]
+
+    def replace_like_windows(source, destination):
+        if refusals:
+            raise refusals.pop()
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(agent_locks, "_WINDOWS", True)
+    monkeypatch.setattr(run_status.os, "replace", replace_like_windows)
+    run_status._write_json(target, {"state": "finished"})
+
+    assert json.loads(target.read_text(encoding="utf-8")) == {"state": "finished"}
+    assert refusals == [] and list(tmp_path.iterdir()) == [target]
+
+
+def test_a_stop_that_came_too_late_does_not_claim_to_have_stopped_anything(tmp_path: Path):
+    release = threading.Event()
+
+    def game_start() -> dict:
+        run_status.report_stage("connecting to the game")
+        assert release.wait(20)
+        return {"ok": True, "status": "RUNNING", "running": True}
+
+    directory = _run_dir(tmp_path, "live")
+    asyncio.run(background_runs.run(directory, "live", "gm_game_start", game_start, wait_seconds=0))
+    _wait_until(lambda: background_runs.status(directory).get("stage") == "connecting to the game")
+    threading.Timer(0.2, release.set).start()
+
+    report = background_runs.stop(directory)
+
+    assert (report["stopped"], report["already_finished"], report["status"]) == (False, True, "RUNNING")
+    assert "gm_game_stop" in report["message"]
+
+
+def test_a_status_file_holding_nonsense_is_reported_not_raised(tmp_path: Path):
+    directory = _run_dir(tmp_path)
+    directory.mkdir(parents=True)
+    for nonsense in (
+        {"state": "running", "started_at": "yesterday", "stage_started_at": [], "pid": 10**40, "stage": "compiling"},
+        {"state": "running", "started_at": None, "pid": -5, "stage": 7},
+        {"state": "running", "started_at": True, "pid": "1", "stages_done": "x"},
+        {"state": "running", "started_at": "soon", "pid": os.getpid(), "stage": "compiling", "attempt": "two"},
+    ):
+        (directory / run_status.STATUS_FILE).write_text(json.dumps(nonsense), encoding="utf-8")
+        report = background_runs.status(directory)
+        assert "finished" in report and report["label"] == "compile"
+    assert report["status"] == "RUNNING", "a live process with unreadable times is still a running run"
+
+
+def test_housekeeping_under_another_label_does_not_start_the_current_runs_record(tmp_path: Path):
+    project = tmp_path / "game"
+    project.mkdir()
+    directory = _run_dir(tmp_path, "live")
+    with patch.dict(os.environ, {"GMS_MCP_LOCK_DIR": str(tmp_path / "locks")}):
+        with run_status.track_run(directory, "live", "gm_game_start") as tracker:
+            with snapshot_build.label_pipeline(project, "earlier", timeout_seconds=5, is_run=False):
+                pass
+            assert "stage" not in tracker.snapshot() and not directory.exists()
+            with snapshot_build.label_pipeline(project, "live", timeout_seconds=5):
+                assert tracker.snapshot()["stage"] == "starting"
+
+
+def test_a_working_tree_compile_stopped_while_taking_its_label_never_compiles(tmp_path: Path):
+    from contextlib import contextmanager as make_context_manager
+
+    from mcp import Client
+
+    compiled = []
+
+    @make_context_manager
+    def label_taken_as_the_stop_arrives(_root, _label, *args, **kwargs):
+        # Too early for the stop to find anything to cancel: the compile has not been handed over yet.
+        run_status.current().request_stop()
+        yield
+
+    async def scenario(server) -> None:
+        async def fake_compile(**_options):
+            compiled.append(True)
+            await asyncio.Event().wait()
+
+        with (
+            patch("gms_mcp.server.tools.runner._run_with_fallback", fake_compile),
+            patch.object(snapshot_build, "label_pipeline", label_taken_as_the_stop_arrives),
+        ):
+            async with Client(server, mode="2026-07-28") as client:
+                result = unwrap_call_tool_result(await asyncio.wait_for(client.call_tool("gm_compile", {}), timeout=20))
+                assert (result["finished"], result["status"]) == (True, "STOPPED")
+                # The project is free again: a change is not left waiting behind a compile nobody wants.
+                await asyncio.wait_for(
+                    client.call_tool("gm_safe_delete", {"asset_type": "script", "asset_name": "scr_none"}), timeout=20
+                )
+
+    with _server(tmp_path) as (server, _project):
+        asyncio.run(scenario(server))

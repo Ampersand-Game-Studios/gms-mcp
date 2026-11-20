@@ -160,11 +160,17 @@ def pipeline_lock(project_root: str | Path, label: str) -> DirectoryLock:
 
 
 @contextlib.contextmanager
-def label_pipeline(project_root: str | Path, label: str, timeout_seconds: float = 7200.0):
-    """Serialize writers to one project's labelled artifact directory."""
+def label_pipeline(project_root: str | Path, label: str, timeout_seconds: float = 7200.0, *, is_run: bool = True):
+    """Serialize writers to one project's labelled artifact directory.
+
+    ``is_run=False`` takes the label for housekeeping inside another run (clearing up an earlier
+    session). The run in progress then does not record a stage, which would claim its own
+    directory before it holds its own label.
+    """
     lock = pipeline_lock(project_root, label)
     lock.acquire(timeout_seconds=timeout_seconds, sleep=run_status.sleep_unless_stopped)
-    run_status.report_stage("starting")
+    if is_run:
+        run_status.report_stage("starting")
     try:
         yield
     finally:
