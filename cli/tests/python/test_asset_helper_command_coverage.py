@@ -198,7 +198,7 @@ class TestCreateCommands(unittest.TestCase):
         validate_name.assert_called_once_with("PlayerData", "script", allow_constructor=True)
         validate_parent.assert_called_once_with(Path.cwd(), "folders/Test.yy")
         script_instance.create_files.assert_called_once_with(
-            Path.cwd(), "PlayerData", "folders/Test.yy", is_constructor=True
+            Path.cwd(), "PlayerData", "folders/Test.yy", is_constructor=True, code=None
         )
         update_yyp.assert_called_once_with(
             {"id": {"name": "PlayerData", "path": "scripts/PlayerData/PlayerData.yy"}},

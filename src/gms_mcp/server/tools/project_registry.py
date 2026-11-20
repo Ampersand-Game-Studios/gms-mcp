@@ -27,6 +27,30 @@ def _guard(tool: str, operation: Callable[[], Dict[str, Any]]) -> Dict[str, Any]
         return _failure(tool, exc)
 
 
+_MAX_LISTED_REFERENCE_ISSUES = 40
+
+
+def _with_asset_reference_issues(root: Any, report: Dict[str, Any]) -> Dict[str, Any]:
+    """Add the problems found inside asset files to the registry report.
+
+    Every change is validated against these, and its result says how many were already there.
+    Listing them here gives that count somewhere to be read; they are reported apart from the
+    registry problems and do not change `ok`, because a project can build with them.
+    """
+    from gms_helpers.project_validation import validate_project_after_mutation
+
+    try:
+        validation = validate_project_after_mutation(root)
+    except Exception:  # noqa: BLE001 - the registry report stands on its own
+        return report
+    issues = [*validation.errors, *validation.preexisting_errors]
+    report["asset_reference_issue_count"] = len(issues)
+    report["asset_reference_issues"] = issues[:_MAX_LISTED_REFERENCE_ISSUES]
+    if len(issues) > _MAX_LISTED_REFERENCE_ISSUES:
+        report["asset_reference_issues_truncated"] = True
+    return report
+
+
 def register_core(mcp: Any, ContextType: Any) -> None:
     """Read-only registry tools that belong to every profile."""
     globals()["Context"] = ContextType
@@ -45,7 +69,9 @@ def register_core(mcp: Any, ContextType: Any) -> None:
         - registry ordering (GameMaker 2026's Igor can crash on a mis-ordered .yyp) and file layout
 
         Returns ok=false when there are problems (things that break the IDE or a build);
-        warnings alone leave ok=true.
+        warnings alone leave ok=true. `asset_reference_issues` lists problems inside asset files
+        (orphaned event files, references to missing assets or folders): the ones a change's result
+        counts as already present. They are reported separately and do not affect `ok`.
         """
         _ = ctx
         from gms_helpers.project_config import project_setting
@@ -53,7 +79,8 @@ def register_core(mcp: Any, ContextType: Any) -> None:
 
         root = _resolve_project_directory(project_root)
         try:
-            return check_registry(root, allow_root_assets=project_setting(root, "conventions.allow_root_assets", []))
+            report = check_registry(root, allow_root_assets=project_setting(root, "conventions.allow_root_assets", []))
+            return _with_asset_reference_issues(root, report)
         except Exception as exc:  # noqa: BLE001 - reported to the caller with a remedy
             return _failure("gm_project_check", exc)
 

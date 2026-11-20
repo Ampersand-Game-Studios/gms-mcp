@@ -165,7 +165,7 @@ echo "=== Workspace Coverage Check ==="
 while IFS= read -r repo; do
   [[ -n "$repo" ]] || continue
   checked=$((checked + 1))
-  workspace_config="$repo/.codex/mcp.toml"
+  workspace_config="$repo/.codex/config.toml"
   expected_dirs="$(awk -F'|' -v r="$repo" '$1 == r { print $2 }' "$MAP_FILE" | sort -u)"
 
   echo "[$checked] $repo"

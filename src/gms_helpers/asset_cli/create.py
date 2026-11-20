@@ -37,7 +37,10 @@ def create_script(args):
             asset=ScriptAsset(),
             asset_type="script",
             label="Script",
-            kwargs={"is_constructor": getattr(args, "constructor", False)},
+            kwargs={
+                "is_constructor": getattr(args, "constructor", False),
+                "code": getattr(args, "code", None),
+            },
             allow_constructor=getattr(args, "constructor", False),
         )
     except Exception as e:
@@ -54,6 +57,8 @@ def create_object(args):
             kwargs["sprite_id"] = args.sprite_id
         if args.parent_object:
             kwargs["parent_object"] = args.parent_object
+        if getattr(args, "create_code", None):
+            kwargs["create_code"] = args.create_code
         return create_project_asset(args, asset=ObjectAsset(), asset_type="object", label="Object", kwargs=kwargs)
 
     except Exception as e:
