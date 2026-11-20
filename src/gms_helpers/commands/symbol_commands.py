@@ -64,6 +64,24 @@ def handle_build_index(args) -> OperationResult:
         )
 
 
+def _note_unsaved_index(build_report: dict) -> None:
+    """Tell the caller why a lookup was slow and the one call that makes later ones fast."""
+    from ..operation_policy import read_only_mode_enabled
+
+    if build_report.get("status") != "built" or read_only_mode_enabled():
+        return
+    if build_report.get("saved"):
+        print(
+            "[INFO] First symbol lookup in this checkout: every code file was scanned and the index "
+            "saved, so later lookups are fast."
+        )
+    else:
+        print(
+            "[INFO] Every code file was scanned for this lookup: the saved index was not available "
+            "(another lookup may be writing it now). Lookups made one at a time reuse it."
+        )
+
+
 def handle_find_definition(args) -> dict:
     """Find definition(s) of a symbol."""
     from ..gml_index import GMLIndex
@@ -84,7 +102,7 @@ def handle_find_definition(args) -> dict:
         print(f"[SEARCH] Finding definition of '{symbol_name}'...")
 
         index = GMLIndex(project_root)
-        index.build(persist=False)
+        _note_unsaved_index(index.build())
 
         definitions = index.find_definition(symbol_name)
 
@@ -148,7 +166,7 @@ def handle_find_references(args) -> dict:
         print(f"[SEARCH] Finding references to '{symbol_name}'...")
 
         index = GMLIndex(project_root)
-        index.build(persist=False)
+        _note_unsaved_index(index.build())
 
         references = index.find_references(symbol_name)
 
@@ -162,6 +180,11 @@ def handle_find_references(args) -> dict:
 
         print(f"[OK] Found {total_count} reference(s)" + (f" (showing first {max_results})" if truncated else "") + ":")
 
+        # The line that defines the symbol also names it; say so, so it is not read as a use.
+        defined_at = {
+            (definition.location.file_path.as_posix(), definition.location.line)
+            for definition in index.find_definition(symbol_name)
+        }
         result_refs = []
         for ref in display_refs:
             loc = ref.location
@@ -169,8 +192,9 @@ def handle_find_references(args) -> dict:
             context_preview = (
                 (ref.context[:60] + "...") if ref.context and len(ref.context) > 60 else (ref.context or "")
             )
-            print(f"  {rel_path}:{loc.line} - {context_preview}")
-            result_refs.append(ref.to_dict())
+            is_definition = (loc.file_path.as_posix(), loc.line) in defined_at
+            print(f"  {rel_path}:{loc.line} - {context_preview}{'  [definition]' if is_definition else ''}")
+            result_refs.append({**ref.to_dict(), **({"definition": True} if is_definition else {})})
 
         return _ok_payload(
             {
@@ -214,7 +238,7 @@ def handle_list_symbols(args) -> dict:
                 print(f"[WARN] Unknown symbol kind '{kind_filter}', ignoring filter")
 
         index = GMLIndex(project_root)
-        index.build(persist=False)
+        _note_unsaved_index(index.build())
 
         symbols = index.list_symbols(
             kind=kind_enum,
@@ -274,8 +298,8 @@ def _get_project_root(args) -> Path:
 
 
 def _make_relative(path: Path, project_root: Path) -> str:
-    """Make a path relative to project root if possible."""
+    """Name a file relative to the project, with forward slashes on every platform."""
     try:
-        return str(path.relative_to(project_root))
+        return path.relative_to(project_root).as_posix()
     except ValueError:
-        return str(path)
+        return str(path) if path.is_absolute() else path.as_posix()

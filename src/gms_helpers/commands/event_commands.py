@@ -31,10 +31,11 @@ def handle_event_add(args):
     """Handle event addition."""
     template = getattr(args, "template", None) or ""
     project_root = _project_root(args)
+    overwrite = getattr(args, "overwrite", False) is True
     success = (
-        add_event(args.object, args.event, template, project_root)
+        add_event(args.object, args.event, template, project_root, overwrite=overwrite)
         if project_root is not None
-        else add_event(args.object, args.event, template)
+        else add_event(args.object, args.event, template, overwrite=overwrite)
     )
     return _event_result(
         success,

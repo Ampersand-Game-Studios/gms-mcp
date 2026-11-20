@@ -22,8 +22,8 @@ class TestMCPProfiles(unittest.TestCase):
         all_tools = {tool.name for tool in all_specs}
 
         self.assertLessEqual(
-            len(core), 36
-        )  # 30 original + project check, locks, snapshot build/test/log, partial staging
+            len(core), 38
+        )  # 30 original + project check, locks, snapshot build/test/log, partial staging, build status/stop
         self.assertTrue(core < all_tools)
         self.assertIn("gm_capabilities", core)
         self.assertIn("gm_safe_delete", core)

@@ -259,3 +259,65 @@ def _consume_valid_delegation(operation: str, project_root: Path) -> bool:
             claimed_path.unlink()
         except FileNotFoundError:
             pass
+
+
+def _probe_lock_is_free(lock_file: BinaryIO) -> bool:
+    """Report whether nobody holds the lock, without keeping it."""
+    lock_file.seek(0)
+    if os.name == "nt":
+        import msvcrt
+
+        try:
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError:
+            return False
+        lock_file.seek(0)
+        msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+        return True
+
+    import fcntl
+
+    try:
+        # A shared lock fails only against an exclusive holder and never blocks another probe.
+        fcntl.flock(lock_file.fileno(), fcntl.LOCK_SH | fcntl.LOCK_NB)
+    except OSError:
+        return False
+    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+    return True
+
+
+def machine_lock_holder() -> dict[str, object] | None:
+    """Describe the operation holding the runtime lock right now, or None when it is free.
+
+    Used to tell a waiting caller what it is queued behind. The probe holds the lock for an
+    instant, which can cost a waiting build at most one poll interval.
+    """
+    # Read-only on purpose: status tools may run where nothing is allowed to write, and neither
+    # the probe nor reading the owner's record needs more. The directory is never created here.
+    configured = os.environ.get("GMS_MCP_MACHINE_LOCK_PATH", "").strip()
+    path = (
+        Path(configured).expanduser()
+        if configured
+        else Path.home() / ".gms-mcp" / "runtime-locks" / "gamemaker-runtime.lock"
+    )
+    try:
+        descriptor = os.open(path, os.O_RDONLY | getattr(os, "O_NOFOLLOW", 0))
+    except (OSError, ValueError):
+        return None
+    with os.fdopen(descriptor, "rb") as lock_file:
+        try:
+            if _probe_lock_is_free(lock_file):
+                return None
+            lock_file.seek(1)
+            metadata = json.loads(lock_file.read(65_536).decode("utf-8"))
+        except (OSError, UnicodeDecodeError, json.JSONDecodeError):
+            # Held, but the owner has not finished writing its record.
+            return {"operation": None, "project_root": None, "held_seconds": None}
+    if not isinstance(metadata, dict):
+        return {"operation": None, "project_root": None, "held_seconds": None}
+    acquired_at = metadata.get("acquired_at_unix")
+    return {
+        "operation": metadata.get("delegate_operation") or metadata.get("operation"),
+        "project_root": metadata.get("project_root"),
+        "held_seconds": max(0.0, time.time() - acquired_at) if isinstance(acquired_at, (int, float)) else None,
+    }

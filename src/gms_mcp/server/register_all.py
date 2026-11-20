@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import Any, Callable
 
 from gms_helpers.operation_policy import read_only_mode_enabled
 
@@ -69,6 +69,11 @@ def enabled_toolsets() -> tuple[str, ...]:
     return ("core", *sorted(requested - {"core"}))
 
 
+def optional_toolsets() -> tuple[str, ...]:
+    """Return every optional toolset name in a stable order."""
+    return tuple(sorted(_OPTIONAL_TOOLSETS))
+
+
 def register_all(
     mcp: Any,
     Context: Any,
@@ -76,14 +81,15 @@ def register_all(
     project_access_policy: ProjectAccessPolicy,
     expose_host_diagnostics: bool,
     resolution_runtime: ResolutionRuntime,
+    mutation_scope: Callable[[], Any] | None = None,
 ) -> None:
     toolsets = enabled_toolsets()
     read_only = read_only_mode_enabled()
     if read_only and toolsets != ("core",):
         raise ServerConfigurationError("GMS_MCP_READ_ONLY only supports GMS_MCP_TOOLSETS=core.")
-    capabilities.register(mcp, Context, enabled=toolsets, optional=tuple(sorted(_OPTIONAL_TOOLSETS)))
+    capabilities.register(mcp, Context, enabled=toolsets, optional=optional_toolsets())
     project_health.register(mcp, Context)
-    runner.register(mcp, Context, read_only=read_only)
+    runner.register(mcp, Context, read_only=read_only, mutation_scope=mutation_scope)
     snapshot.register(mcp, Context, read_only=read_only)
     project_registry.register_core(mcp, Context)
     verification.register(mcp, Context, read_only=read_only)

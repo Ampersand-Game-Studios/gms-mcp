@@ -295,6 +295,20 @@ class TestBridgeServerConnection(unittest.TestCase):
         finally:
             client.close()
 
+    def test_hello_without_credential_is_refused_and_remembered(self):
+        """An outdated endpoint is refused, and the refusal is distinguishable from a wrong credential."""
+        for hello, expected in (('{"token":"wrong"}', False), ('{"protocol":3}', True)):
+            client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            client.settimeout(2.0)
+            try:
+                client.connect(("127.0.0.1", self.port))
+                client.sendall(("HELLO:" + hello + "\n").encode())
+                time.sleep(0.2)
+                self.assertFalse(self.server.is_connected)
+                self.assertEqual(self.server.missing_credential_seen, expected)
+            finally:
+                client.close()
+
     def test_client_sends_log(self):
         """Test receiving log from client."""
         client = socket.socket(socket.AF_INET, socket.SOCK_STREAM)

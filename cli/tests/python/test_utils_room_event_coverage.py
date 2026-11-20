@@ -35,8 +35,6 @@ from gms_helpers.maintenance import event_sync
 from gms_mcp import project_detection
 from gms_helpers.utils import (
     _list_yyp_files,
-    _search_upwards_for_gamemaker_yyp,
-    _search_upwards_for_yyp,
     check_resource_conflicts,
     detect_asset_format_version,
     find_yyp_file,
@@ -146,8 +144,8 @@ class TestUtilsCoverage(unittest.TestCase):
         nested = repo_root / "scripts" / "nested"
         nested.mkdir(parents=True)
 
-        self.assertEqual(_search_upwards_for_yyp(gm_dir), gm_dir.resolve())
-        self.assertEqual(_search_upwards_for_gamemaker_yyp(nested), gm_dir.resolve())
+        self.assertEqual(project_detection._search_upwards_for_yyp(gm_dir), gm_dir.resolve())
+        self.assertEqual(project_detection._search_upwards_for_gamemaker_yyp(nested), gm_dir.resolve())
         self.assertEqual(resolve_project_directory(repo_root).resolve(), gm_dir.resolve())
 
         direct_root = self.temp_dir / "direct"
@@ -161,17 +159,7 @@ class TestUtilsCoverage(unittest.TestCase):
             with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
                 resolve_project_directory(self.temp_dir / "missing-explicit")
 
-        with (
-            patch("gms_helpers.utils._list_yyp_files", return_value=[]),
-            patch(
-                "gms_helpers.utils._search_upwards_for_yyp",
-                return_value=None,
-            ),
-            patch(
-                "gms_helpers.utils._search_upwards_for_gamemaker_yyp",
-                return_value=None,
-            ),
-        ):
+        with patch("gms_helpers.utils._list_yyp_files", return_value=[]):
             with self.assertRaisesRegex(FileNotFoundError, "No GameMaker project"):
                 resolve_project_directory(self.temp_dir / "missing")
 
@@ -825,16 +813,16 @@ class TestRoomInstanceAndEventSyncCoverage(unittest.TestCase):
             ),
             encoding="utf-8",
         )
-        with patch("uuid.uuid4", return_value=SimpleNamespace(hex="abc123")):
+        with patch("secrets.randbits", return_value=0xABC123):
             instance_id = room_instance_helper.add_instance("r_test", "o_player", 3, 4, "Instances")
-        self.assertEqual(instance_id, "inst_abc123")
+        self.assertEqual(instance_id, "inst_00ABC123")
         saved = load_json_loose(self.room_path)
         self.assertIn("instances", saved["layers"][0])
-        self.assertIn("inst_abc123", [entry["name"] for entry in saved["instanceCreationOrder"]])
+        self.assertIn("inst_00ABC123", [entry["name"] for entry in saved["instanceCreationOrder"]])
 
-        code_file = self.temp_dir / "rooms" / "r_test" / "InstanceCreationCode_inst_abc123.gml"
+        code_file = self.temp_dir / "rooms" / "r_test" / "InstanceCreationCode_inst_00ABC123.gml"
         code_file.write_text("// init", encoding="utf-8")
-        self.assertTrue(room_instance_helper.remove_instance("r_test", "inst_abc123"))
+        self.assertTrue(room_instance_helper.remove_instance("r_test", "inst_00ABC123"))
         self.assertFalse(code_file.exists())
 
         with self.assertRaises(AssetNotFoundError):

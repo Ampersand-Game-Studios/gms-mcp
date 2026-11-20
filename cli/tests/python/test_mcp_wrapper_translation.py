@@ -632,10 +632,20 @@ class TestRunnerWrappers(MCPToolTestCase):
     module = runner
 
     def test_compile_uses_fallback_and_foreground_run_uses_isolated_worker(self):
+        import os
+        import tempfile
+
+        scratch = tempfile.TemporaryDirectory()
+        self.addCleanup(scratch.cleanup)
+        project = Path(scratch.name) / "project"
+        project.mkdir()
         with (
             patch(
                 "gms_mcp.server.tools.runner._run_with_fallback", new=AsyncMock(return_value={"ok": True})
             ) as fallback,
+            # The compile files its stage and result beside the project, so it needs a real folder.
+            patch("gms_mcp.server.tools.runner._resolve_project_directory", return_value=project),
+            patch.dict(os.environ, {"GMS_MCP_LOCK_DIR": str(Path(scratch.name) / "locks")}),
             patch(
                 "gms_mcp.server.tools.runner._run_direct",
                 return_value=ToolRunResult(ok=True, stdout="", stderr="", direct_used=True),

@@ -33,8 +33,13 @@ class ScriptAsset(BaseAsset):
         gml_path = asset_folder / f"{name}.gml"
         if not gml_path.exists():
             is_constructor = kwargs.get("is_constructor", False)
+            code = kwargs.get("code")
 
-            if is_constructor:
+            if code:
+                # The caller's code is the script. A stub they then have to overwrite is a second
+                # step, and a forgotten one leaves an empty function of the wrong name behind.
+                gml_content = code if code.endswith("\n") else f"{code}\n"
+            elif is_constructor:
                 gml_content = f"""/// @function {name}
 /// @description Constructor for {name}
 /// @returns {{struct}} {name} instance
@@ -138,7 +143,11 @@ class ObjectAsset(BaseAsset):
         if kwargs.get("create_event", True):
             create_path = asset_folder / "Create_0.gml"
             if not create_path.exists():
-                create_content = f"""/// Create Event for {name}
+                create_code = kwargs.get("create_code")
+                if create_code:
+                    create_content = create_code if create_code.endswith("\n") else f"{create_code}\n"
+                else:
+                    create_content = f"""/// Create Event for {name}
 // Initialize variables here
 """
                 atomic_write_text(create_path, create_content)

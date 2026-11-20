@@ -3,12 +3,35 @@
 import hashlib
 import json
 import os
+import sqlite3
 from pathlib import Path, PureWindowsPath
-from typing import Dict, List, Optional, Set
+from typing import Dict, Iterable, List, Optional, Set
 
 from .symbols import Symbol, SymbolKind, SymbolLocation, SymbolReference
 from .scanner import GMLScanner
 from ..operation_policy import read_only_mode_enabled
+
+_SCHEMA = """
+CREATE TABLE files (path TEXT PRIMARY KEY, mtime_ns INTEGER NOT NULL, size INTEGER NOT NULL);
+CREATE TABLE definitions (
+    name TEXT NOT NULL,
+    kind TEXT NOT NULL,
+    file TEXT NOT NULL,
+    line INTEGER NOT NULL,
+    col INTEGER NOT NULL,
+    end_line INTEGER,
+    end_col INTEGER,
+    doc TEXT,
+    parameters TEXT,
+    parent_enum TEXT
+);
+CREATE TABLE refs (symbol TEXT NOT NULL, file TEXT NOT NULL, line INTEGER NOT NULL, col INTEGER NOT NULL);
+CREATE INDEX definitions_by_name ON definitions (name);
+CREATE INDEX definitions_by_file ON definitions (file);
+CREATE INDEX refs_by_symbol ON refs (symbol);
+CREATE INDEX refs_by_file ON refs (file);
+"""
+_TABLES = {"files", "definitions", "refs"}
 
 
 class GMLIndex:
@@ -19,26 +42,20 @@ class GMLIndex:
     - Finding symbol definitions
     - Finding symbol references
     - Listing all symbols (optionally filtered)
+
+    The index is a SQLite database kept outside the project. A lookup reads only the rows it
+    needs, where the earlier JSON cache had to be parsed whole (hundreds of megabytes on a large
+    project) before the first answer. A build that must not write (``persist=False`` or read-only
+    mode) still reads an existing database and applies newer file changes in memory.
     """
 
     CACHE_FILE = ".gml_index_cache.json"
-    CACHE_VERSION = 3
+    CACHE_VERSION = 4
 
     def __init__(self, project_root: Path):
         self.project_root = project_root.resolve(strict=True)
         self.scanner = GMLScanner()
-
-        # Symbol name -> list of Symbol definitions (can have multiple with same name)
-        self.definitions: Dict[str, List[Symbol]] = {}
-
-        # Symbol name -> list of SymbolReference
-        self.references: Dict[str, List[SymbolReference]] = {}
-
-        # Track which files have been indexed. We use cheap metadata so we can
-        # detect changes without reading every file on every build.
-        self.file_mtimes_ns: Dict[str, int] = {}
-        self.file_sizes: Dict[str, int] = {}
-
+        self._connection: Optional[sqlite3.Connection] = None
         self._is_built = False
 
     @property
@@ -47,7 +64,7 @@ class GMLIndex:
         configured = os.environ.get("GMS_MCP_GML_INDEX_CACHE_DIR", "").strip()
         cache_root = Path(configured).expanduser() if configured else Path.home() / ".gms-mcp" / "gml-index"
         project_key = hashlib.sha256(str(self.project_root).encode("utf-8")).hexdigest()
-        return cache_root / f"{project_key}.json"
+        return cache_root / f"{project_key}.sqlite3"
 
     @staticmethod
     def _valid_relative_path(raw_path: str) -> bool:
@@ -63,11 +80,108 @@ class GMLIndex:
         )
 
     def _remove_legacy_project_cache(self) -> None:
-        legacy_path = self.project_root / self.CACHE_FILE
+        legacy_paths = [self.project_root / self.CACHE_FILE]
+        cache_path = self.cache_path
+        if cache_path.suffix == ".sqlite3":
+            # The JSON cache this database replaces, under the same project key.
+            legacy_paths.append(cache_path.with_suffix(".json"))
+        for legacy_path in legacy_paths:
+            try:
+                legacy_path.unlink(missing_ok=True)
+            except OSError:
+                pass
+
+    # ------------------------------------------------------------------
+    # Database handling
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _new_memory_database() -> sqlite3.Connection:
+        connection = sqlite3.connect(":memory:")
+        connection.executescript(_SCHEMA)
+        return connection
+
+    def _usable(self, connection: sqlite3.Connection) -> bool:
+        """Accept a stored database only if it has this version's shape and no path leaves the project."""
         try:
-            legacy_path.unlink(missing_ok=True)
-        except OSError:
-            pass
+            if connection.execute("PRAGMA user_version").fetchone()[0] != self.CACHE_VERSION:
+                return False
+            tables = {row[0] for row in connection.execute("SELECT name FROM sqlite_master WHERE type = 'table'")}
+            if not _TABLES <= tables:
+                return False
+            stored_paths = [row[0] for row in connection.execute("SELECT path FROM files")]
+            for table in ("definitions", "refs"):
+                # Step through the file index one distinct value at a time; reading every row
+                # to find a few thousand distinct files would cost more than the lookup itself.
+                stored_paths += [
+                    row[0]
+                    for row in connection.execute(
+                        f"WITH RECURSIVE distinct_files(file) AS ("
+                        f"SELECT MIN(file) FROM {table} UNION ALL "
+                        f"SELECT (SELECT MIN(file) FROM {table} WHERE file > distinct_files.file) "
+                        f"FROM distinct_files WHERE distinct_files.file IS NOT NULL) "
+                        f"SELECT file FROM distinct_files WHERE file IS NOT NULL"
+                    )
+                ]
+            return all(isinstance(path, str) and self._valid_relative_path(path) for path in stored_paths)
+        except (sqlite3.Error, TypeError, ValueError):
+            return False
+
+    def _open_stored(self, cache_path: Path, *, writable: bool) -> Optional[sqlite3.Connection]:
+        """Open the stored database if it exists and can be trusted, else None."""
+        if not cache_path.is_file():
+            return None
+        try:
+            if writable:
+                connection = sqlite3.connect(os.fspath(cache_path))
+                # This is a cache: losing it to a power cut costs one rebuild, not correctness.
+                connection.execute("PRAGMA synchronous = OFF")
+            else:
+                connection = sqlite3.connect(f"{cache_path.as_uri()}?mode=ro", uri=True)
+        except (sqlite3.Error, ValueError):
+            return None
+        if self._usable(connection):
+            return connection
+        connection.close()
+        return None
+
+    def _create_stored(self, cache_path: Path) -> Optional[sqlite3.Connection]:
+        """Start an empty stored database, replacing whatever is at the path."""
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            try:
+                cache_path.parent.chmod(0o700)
+            except OSError:
+                pass
+            cache_path.unlink(missing_ok=True)
+            connection = sqlite3.connect(os.fspath(cache_path))
+            try:
+                cache_path.chmod(0o600)
+            except OSError:
+                pass
+            connection.execute("PRAGMA synchronous = OFF")
+            connection.executescript(_SCHEMA)
+            connection.execute(f"PRAGMA user_version = {self.CACHE_VERSION}")
+            return connection
+        except (OSError, sqlite3.Error):
+            # A cache that cannot be written is not a reason to fail the lookup.
+            return None
+
+    def _adopt(self, connection: sqlite3.Connection) -> None:
+        if self._connection is not None and self._connection is not connection:
+            self._connection.close()
+        self._connection = connection
+
+    def _counts(self) -> Dict[str, int]:
+        assert self._connection is not None
+        return {
+            "symbols": self._connection.execute("SELECT COUNT(*) FROM definitions").fetchone()[0],
+            "references": self._connection.execute("SELECT COUNT(*) FROM refs").fetchone()[0],
+        }
+
+    # ------------------------------------------------------------------
+    # Building
+    # ------------------------------------------------------------------
 
     def build(self, force: bool = False, *, persist: bool = True) -> dict:
         """Build or rebuild the symbol index.
@@ -82,154 +196,159 @@ class GMLIndex:
         read_only = not persist or read_only_mode_enabled()
         if not read_only:
             self._remove_legacy_project_cache()
+            try:
+                return self._build(force, read_only=False)
+            except sqlite3.Error:
+                # Another session is writing the same index, or the cache cannot be written.
+                # The lookup still has to answer, so index in memory and leave the file alone.
+                if self._connection is not None:
+                    self._connection.close()
+                    self._connection = None
+                force = True
+        return self._build(force, read_only=True)
+
+    def _build(self, force: bool, *, read_only: bool) -> dict:
         cache_path = self.cache_path
 
-        # Try to load cache if not forcing rebuild
-        if not read_only and not force and cache_path.exists():
-            if self._load_cache(cache_path):
-                # Incremental update: only rescan changed/new files and purge deleted files.
-                current_files = {f.relative_to(self.project_root).as_posix() for f in self._find_gml_files()}
-                cached_files = set(self.file_mtimes_ns.keys())
+        stored = None if force else self._open_stored(cache_path, writable=not read_only)
+        current_files = {f.relative_to(self.project_root).as_posix() for f in self._find_gml_files()}
 
-                added_files = current_files - cached_files
-                removed_files = cached_files - current_files
+        if stored is not None:
+            cached = {path: (mtime_ns, size) for path, mtime_ns, size in stored.execute("SELECT * FROM files")}
+            added_files = current_files - set(cached)
+            removed_files = set(cached) - current_files
+            changed_files: Set[str] = set()
+            for rel_path in sorted(current_files & set(cached)):
+                try:
+                    stat = (self.project_root / rel_path).stat()
+                except Exception:
+                    # If we can't stat a file now, treat as changed so we drop stale entries.
+                    changed_files.add(rel_path)
+                    continue
+                if (stat.st_mtime_ns, stat.st_size) != cached[rel_path]:
+                    changed_files.add(rel_path)
 
-                changed_files: Set[str] = set()
-                for rel_path in sorted(current_files & cached_files):
-                    file_path = self.project_root / rel_path
-                    try:
-                        stat = file_path.stat()
-                    except Exception:
-                        # If we can't stat a file now, treat as changed so we drop stale entries.
-                        changed_files.add(rel_path)
-                        continue
-
-                    if stat.st_mtime_ns != self.file_mtimes_ns.get(rel_path) or stat.st_size != self.file_sizes.get(
-                        rel_path
-                    ):
-                        changed_files.add(rel_path)
-
-                if not added_files and not removed_files and not changed_files:
-                    return {
-                        "status": "cached",
-                        "symbols": sum(len(defs) for defs in self.definitions.values()),
-                        "references": sum(len(refs) for refs in self.references.values()),
-                        "files": len(self.file_mtimes_ns),
-                    }
-
-                # Purge entries for removed/changed files, then rescan changed/new files.
-                touched_files = set(added_files) | set(changed_files)
-                for rel_path in sorted(set(removed_files) | set(changed_files)):
-                    self._remove_file_entries(rel_path)
-                    self.file_mtimes_ns.pop(rel_path, None)
-                    self.file_sizes.pop(rel_path, None)
-
-                files_scanned = 0
-                total_symbols = sum(len(defs) for defs in self.definitions.values())
-                total_refs = sum(len(refs) for refs in self.references.values())
-
-                for rel_path in sorted(touched_files):
-                    file_path = self.project_root / rel_path
-                    try:
-                        stat = file_path.stat()
-                        content = file_path.read_text(encoding="utf-8", errors="replace")
-                    except Exception:
-                        continue
-                    self.file_mtimes_ns[rel_path] = stat.st_mtime_ns
-                    self.file_sizes[rel_path] = stat.st_size
-
-                    symbols, refs = self.scanner.scan_content(content, Path(rel_path))
-                    for symbol in symbols:
-                        self.definitions.setdefault(symbol.name, []).append(symbol)
-                        total_symbols += 1
-                    for ref in refs:
-                        self.references.setdefault(ref.symbol_name, []).append(ref)
-                        total_refs += 1
-                    files_scanned += 1
-
+            if not added_files and not removed_files and not changed_files:
+                self._adopt(stored)
                 self._is_built = True
-                if not read_only:
-                    self._save_cache(cache_path)
-                return {
-                    "status": "incremental",
-                    "symbols": total_symbols,
-                    "references": total_refs,
-                    "files": files_scanned,
-                    "added_files": len(added_files),
-                    "changed_files": len(changed_files),
-                    "removed_files": len(removed_files),
-                }
+                return {"status": "cached", **self._counts(), "files": len(cached), "saved": True}
 
-        # Find all GML files
-        gml_files = self._find_gml_files()
+            if read_only:
+                # Bring the stored index up to date in memory, leaving the file as it is.
+                working = sqlite3.connect(":memory:")
+                stored.backup(working)
+                stored.close()
+            else:
+                working = stored
+            self._adopt(working)
+            self._forget_files(sorted(removed_files | changed_files))
+            files_scanned = self._scan_files(sorted(added_files | changed_files))
+            working.commit()
+            self._is_built = True
+            return {
+                "status": "incremental",
+                **self._counts(),
+                "files": files_scanned,
+                "added_files": len(added_files),
+                "changed_files": len(changed_files),
+                "removed_files": len(removed_files),
+                "saved": not read_only,
+            }
 
-        # Clear existing data
-        self.definitions.clear()
-        self.references.clear()
-        self.file_mtimes_ns.clear()
-        self.file_sizes.clear()
+        working = None if read_only else self._create_stored(cache_path)
+        self._adopt(working if working is not None else self._new_memory_database())
+        files_scanned = self._scan_files(sorted(current_files))
+        assert self._connection is not None
+        self._connection.commit()
+        self._is_built = True
+        return {"status": "built", **self._counts(), "files": files_scanned, "saved": working is not None}
 
+    def _forget_files(self, rel_paths: Iterable[str]) -> None:
+        """Remove every stored symbol, reference and file record for these project-relative files."""
+        assert self._connection is not None
+        for rel_path in rel_paths:
+            normalized = Path(rel_path).as_posix()
+            for table, column in (("definitions", "file"), ("refs", "file"), ("files", "path")):
+                self._connection.execute(f"DELETE FROM {table} WHERE {column} IN (?, ?)", (rel_path, normalized))
+
+    def _scan_files(self, rel_paths: Iterable[str]) -> int:
+        assert self._connection is not None
         files_scanned = 0
-        total_symbols = 0
-        total_refs = 0
-
-        for gml_file in gml_files:
+        for rel_path in rel_paths:
+            file_path = self.project_root / rel_path
             try:
-                stat = gml_file.stat()
-                content = gml_file.read_text(encoding="utf-8", errors="replace")
-                rel_path = gml_file.relative_to(self.project_root).as_posix()
-                self.file_mtimes_ns[rel_path] = stat.st_mtime_ns
-                self.file_sizes[rel_path] = stat.st_size
-
-                # Scan the file
+                stat = file_path.stat()
+                content = file_path.read_text(encoding="utf-8", errors="replace")
                 symbols, refs = self.scanner.scan_content(content, Path(rel_path))
-
-                # Add symbols to index
-                for symbol in symbols:
-                    if symbol.name not in self.definitions:
-                        self.definitions[symbol.name] = []
-                    self.definitions[symbol.name].append(symbol)
-                    total_symbols += 1
-
-                # Add references to index
-                for ref in refs:
-                    if ref.symbol_name not in self.references:
-                        self.references[ref.symbol_name] = []
-                    self.references[ref.symbol_name].append(ref)
-                    total_refs += 1
-
-                files_scanned += 1
-
             except Exception:
                 # Skip files that can't be read
                 continue
+            # Another session may have stored this file since this one looked: it can open a database
+            # this session has only just created, or see the same new file. Replacing the file's rows
+            # in the transaction that adds them keeps one copy whichever session commits last.
+            self._connection.execute("DELETE FROM definitions WHERE file = ?", (rel_path,))
+            self._connection.execute("DELETE FROM refs WHERE file = ?", (rel_path,))
+            self._connection.execute(
+                "INSERT OR REPLACE INTO files VALUES (?, ?, ?)", (rel_path, stat.st_mtime_ns, stat.st_size)
+            )
+            self._connection.executemany(
+                "INSERT INTO definitions VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                (
+                    (
+                        symbol.name,
+                        symbol.kind.value,
+                        rel_path,
+                        symbol.location.line,
+                        symbol.location.column,
+                        symbol.location.end_line,
+                        symbol.location.end_column,
+                        symbol.doc_comment,
+                        json.dumps(symbol.parameters) if symbol.parameters else None,
+                        symbol.parent_enum,
+                    )
+                    for symbol in symbols
+                ),
+            )
+            self._connection.executemany(
+                "INSERT INTO refs VALUES (?, ?, ?, ?)",
+                ((ref.symbol_name, rel_path, ref.location.line, ref.location.column) for ref in refs),
+            )
+            files_scanned += 1
+        return files_scanned
 
-        self._is_built = True
+    # ------------------------------------------------------------------
+    # Queries
+    # ------------------------------------------------------------------
 
-        # Save cache
-        if not read_only:
-            self._save_cache(cache_path)
+    def _ready(self) -> sqlite3.Connection:
+        if not self._is_built:
+            self.build(persist=False)
+        assert self._connection is not None
+        return self._connection
 
-        return {
-            "status": "built",
-            "symbols": total_symbols,
-            "references": total_refs,
-            "files": files_scanned,
-        }
+    @staticmethod
+    def _symbol_from_row(row: tuple) -> Symbol:
+        name, kind, file, line, col, end_line, end_col, doc, parameters, parent_enum = row
+        return Symbol(
+            name=name,
+            kind=SymbolKind(kind),
+            location=SymbolLocation(file_path=Path(file), line=line, column=col, end_line=end_line, end_column=end_col),
+            doc_comment=doc,
+            parameters=json.loads(parameters) if parameters else [],
+            parent_enum=parent_enum,
+        )
 
     def find_definition(self, symbol_name: str) -> List[Symbol]:
-        """Find all definitions of a symbol.
+        """Find definition(s) of a symbol.
 
         Args:
             symbol_name: Name of the symbol to find
 
         Returns:
-            List of Symbol objects (empty if not found)
+            List of Symbol objects (may be multiple if overloaded/redefined)
         """
-        if not self._is_built:
-            self.build(persist=False)
-
-        return self.definitions.get(symbol_name, [])
+        rows = self._ready().execute("SELECT * FROM definitions WHERE name = ? ORDER BY file, line", (symbol_name,))
+        return [self._symbol_from_row(row) for row in rows]
 
     def find_references(self, symbol_name: str) -> List[SymbolReference]:
         """Find all references to a symbol.
@@ -240,10 +359,32 @@ class GMLIndex:
         Returns:
             List of SymbolReference objects
         """
-        if not self._is_built:
-            self.build(persist=False)
-
-        return self.references.get(symbol_name, [])
+        rows = (
+            self._ready()
+            .execute("SELECT file, line, col FROM refs WHERE symbol = ? ORDER BY file, line, col", (symbol_name,))
+            .fetchall()
+        )
+        # The line of code beside each reference is read when asked for. Storing it for every
+        # reference in the project made the index several times larger than the code it describes.
+        lines_by_file: Dict[str, List[str]] = {}
+        references = []
+        for file, line, col in rows:
+            if file not in lines_by_file:
+                try:
+                    text: str = (self.project_root / file).read_text(encoding="utf-8", errors="replace")
+                except OSError:
+                    text = ""
+                lines_by_file[file] = text.split("\n")
+            lines = lines_by_file[file]
+            context = lines[line - 1].strip()[:100] if 0 < line <= len(lines) else None
+            references.append(
+                SymbolReference(
+                    symbol_name=symbol_name,
+                    location=SymbolLocation(file_path=Path(file), line=line, column=col),
+                    context=context or None,
+                )
+            )
+        return references
 
     def list_symbols(
         self,
@@ -261,24 +402,19 @@ class GMLIndex:
         Returns:
             List of matching Symbol objects
         """
-        if not self._is_built:
-            self.build(persist=False)
+        connection = self._ready()
+        if kind:
+            rows = connection.execute("SELECT * FROM definitions WHERE kind = ?", (kind.value,))
+        else:
+            rows = connection.execute("SELECT * FROM definitions")
 
         results = []
-
-        for symbol_list in self.definitions.values():
-            for symbol in symbol_list:
-                # Apply filters
-                if kind and symbol.kind != kind:
-                    continue
-                if name_filter and name_filter.lower() not in symbol.name.lower():
-                    continue
-                if file_filter:
-                    file_str = str(symbol.location.file_path).lower()
-                    if file_filter.lower() not in file_str:
-                        continue
-
-                results.append(symbol)
+        for row in rows:
+            if name_filter and name_filter.lower() not in row[0].lower():
+                continue
+            if file_filter and file_filter.lower() not in str(Path(row[2])).lower():
+                continue
+            results.append(self._symbol_from_row(row))
 
         # Sort by name for consistent output
         results.sort(key=lambda s: s.name.lower())
@@ -294,10 +430,7 @@ class GMLIndex:
         Returns:
             List of Symbol objects defined in that file
         """
-        if not self._is_built:
-            self.build(persist=False)
-
-        results = []
+        connection = self._ready()
 
         # Normalize both absolute caller paths and project-relative index paths.
         try:
@@ -308,10 +441,11 @@ class GMLIndex:
         except (OSError, ValueError):
             return []
 
-        for symbol_list in self.definitions.values():
-            for symbol in symbol_list:
-                if symbol.location.file_path.as_posix() == normalized:
-                    results.append(symbol)
+        results = [
+            self._symbol_from_row(row)
+            for row in connection.execute("SELECT * FROM definitions")
+            if Path(row[2]).as_posix() == normalized
+        ]
 
         # Sort by line number
         results.sort(key=lambda s: s.location.line)
@@ -322,169 +456,37 @@ class GMLIndex:
         """Find all GML files in the project."""
         gml_files = []
 
+        def inside_project(candidate: Path) -> bool:
+            try:
+                candidate.resolve(strict=True).relative_to(self.project_root)
+            except (FileNotFoundError, OSError, ValueError):
+                return False
+            return candidate.is_file()
+
         # Standard GameMaker directories that contain GML
         gml_dirs = ["scripts", "objects", "rooms", "extensions"]
 
         for dir_name in gml_dirs:
             dir_path = self.project_root / dir_name
-            if dir_path.exists():
-                for candidate in dir_path.rglob("*.gml"):
-                    try:
-                        candidate.resolve(strict=True).relative_to(self.project_root)
-                    except (FileNotFoundError, OSError, ValueError):
+            if not dir_path.exists():
+                continue
+            if dir_path.is_symlink():
+                gml_files.extend(candidate for candidate in dir_path.rglob("*.gml") if inside_project(candidate))
+                continue
+            # The walk never enters a linked directory, so only a file that is itself a link can
+            # lead outside the project. Resolving every file costs a second per few thousand.
+            for directory, _directory_names, file_names in os.walk(dir_path, followlinks=False):
+                for file_name in file_names:
+                    if not file_name.endswith(".gml"):
                         continue
-                    if candidate.is_file():
+                    candidate = Path(directory) / file_name
+                    if candidate.is_symlink():
+                        if inside_project(candidate):
+                            gml_files.append(candidate)
+                    elif candidate.is_file():
                         gml_files.append(candidate)
 
         # Also check for any .gml files in root (less common)
-        for candidate in self.project_root.glob("*.gml"):
-            try:
-                candidate.resolve(strict=True).relative_to(self.project_root)
-            except (FileNotFoundError, OSError, ValueError):
-                continue
-            if candidate.is_file():
-                gml_files.append(candidate)
+        gml_files.extend(candidate for candidate in self.project_root.glob("*.gml") if inside_project(candidate))
 
         return sorted(set(gml_files))
-
-    def _load_cache(self, cache_path: Path) -> bool:
-        """Load index from cache file.
-
-        Returns True if cache is valid and loaded successfully.
-        """
-        try:
-            with open(cache_path, "r", encoding="utf-8") as f:
-                data = json.load(f)
-
-            # Verify cache version
-            if data.get("version") != self.CACHE_VERSION:
-                return False
-
-            cached_mtimes = data.get("file_mtimes_ns", {}) or {}
-            cached_sizes = data.get("file_sizes", {}) or {}
-            if not isinstance(cached_mtimes, dict) or not isinstance(cached_sizes, dict):
-                return False
-            if not all(self._valid_relative_path(str(path)) for path in {*cached_mtimes, *cached_sizes}):
-                return False
-
-            # Load the cached data (validation happens in build(), which can also do incremental updates).
-            self.file_mtimes_ns = {str(k): int(v) for k, v in cached_mtimes.items()}
-            self.file_sizes = {str(k): int(v) for k, v in cached_sizes.items()}
-
-            # Reconstruct definitions
-            self.definitions.clear()
-            for sym_data in data.get("definitions", []):
-                symbol = self._symbol_from_dict(sym_data)
-                if not self._valid_relative_path(symbol.location.file_path.as_posix()):
-                    return False
-                if symbol.name not in self.definitions:
-                    self.definitions[symbol.name] = []
-                self.definitions[symbol.name].append(symbol)
-
-            # Reconstruct references
-            self.references.clear()
-            for ref_data in data.get("references", []):
-                ref = self._reference_from_dict(ref_data)
-                if not self._valid_relative_path(ref.location.file_path.as_posix()):
-                    return False
-                if ref.symbol_name not in self.references:
-                    self.references[ref.symbol_name] = []
-                self.references[ref.symbol_name].append(ref)
-
-            self._is_built = True
-            return True
-
-        except Exception:
-            return False
-
-    def _remove_file_entries(self, rel_path: str) -> None:
-        """Remove all cached symbol/refs that originate from a specific project-relative file."""
-        normalized = Path(rel_path).as_posix()
-
-        def _same_file(path: Path) -> bool:
-            return path.as_posix() == normalized
-
-        for name in list(self.definitions.keys()):
-            kept = [s for s in self.definitions.get(name, []) if not _same_file(s.location.file_path)]
-            if kept:
-                self.definitions[name] = kept
-            else:
-                self.definitions.pop(name, None)
-
-        for name in list(self.references.keys()):
-            kept = [r for r in self.references.get(name, []) if not _same_file(r.location.file_path)]
-            if kept:
-                self.references[name] = kept
-            else:
-                self.references.pop(name, None)
-
-    def _save_cache(self, cache_path: Path):
-        """Save index to cache file."""
-        try:
-            # Flatten definitions and references for JSON
-            all_definitions = []
-            for symbol_list in self.definitions.values():
-                for symbol in symbol_list:
-                    all_definitions.append(symbol.to_dict())
-
-            all_references = []
-            for ref_list in self.references.values():
-                for ref in ref_list:
-                    all_references.append(ref.to_dict())
-
-            data = {
-                "version": self.CACHE_VERSION,
-                "file_mtimes_ns": self.file_mtimes_ns,
-                "file_sizes": self.file_sizes,
-                "definitions": all_definitions,
-                "references": all_references,
-            }
-
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
-            try:
-                cache_path.parent.chmod(0o700)
-            except OSError:
-                pass
-            with open(cache_path, "w", encoding="utf-8") as f:
-                json.dump(data, f, indent=2)
-            try:
-                cache_path.chmod(0o600)
-            except OSError:
-                pass
-
-        except Exception:
-            # Cache save failure is not critical
-            pass
-
-    def _symbol_from_dict(self, data: dict) -> Symbol:
-        """Reconstruct a Symbol from dict data."""
-        loc_data = data["location"]
-        location = SymbolLocation(
-            file_path=Path(loc_data["file"]),
-            line=loc_data["line"],
-            column=loc_data.get("column", 0),
-            end_line=loc_data.get("end_line"),
-            end_column=loc_data.get("end_column"),
-        )
-        return Symbol(
-            name=data["name"],
-            kind=SymbolKind(data["kind"]),
-            location=location,
-            doc_comment=data.get("doc"),
-            parameters=data.get("parameters", []),
-            parent_enum=data.get("parent_enum"),
-        )
-
-    def _reference_from_dict(self, data: dict) -> SymbolReference:
-        """Reconstruct a SymbolReference from dict data."""
-        loc_data = data["location"]
-        location = SymbolLocation(
-            file_path=Path(loc_data["file"]),
-            line=loc_data["line"],
-            column=loc_data.get("column", 0),
-        )
-        return SymbolReference(
-            symbol_name=data["symbol"],
-            location=location,
-            context=data.get("context"),
-        )

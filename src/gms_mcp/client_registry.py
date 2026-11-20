@@ -9,6 +9,11 @@ from pathlib import Path
 CLIENT_ACTIONS = ("setup", "check", "check-json", "app-setup")
 CLIENT_SCOPES = ("workspace", "global")
 
+# Codex loads project-scoped settings, including MCP servers, from this file once the
+# project is trusted. It never reads `.codex/mcp.toml`, which earlier releases wrote.
+CODEX_WORKSPACE_CONFIG_RELPATH = ".codex/config.toml"
+CODEX_UNREAD_WORKSPACE_RELPATH = ".codex/mcp.toml"
+
 
 @dataclass(frozen=True)
 class ClientSpec:
@@ -81,7 +86,7 @@ CLIENT_SPECS: tuple[ClientSpec, ...] = (
         config_format="toml",
         workspace_supported=True,
         global_supported=True,
-        workspace_relpath=".codex/mcp.toml",
+        workspace_relpath=CODEX_WORKSPACE_CONFIG_RELPATH,
         global_relpath=".codex/config.toml",
         description="Codex MCP TOML config",
     ),

@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from . import snapshot_build
+from . import run_status, snapshot_build
 from .agent_locks import DirectoryLock
 from .mac_runtime import prepare_mac_runtime, project_identity, project_run_lock
 from .bridge_server import BridgeServer
@@ -48,6 +48,8 @@ BRIDGE_PORT_ENVIRONMENT_VARIABLE = "GMS_MCP_BRIDGE_PORT"
 BRIDGE_TOKEN_ENVIRONMENT_VARIABLE = "GMS_MCP_BRIDGE_TOKEN"
 STANDARD_COMMANDS = ("ping", "help", "state", "screenshot", "log_tail", "console")
 BRIDGE_PROTOCOL = 2
+# Protocol 3 keeps the framing of 2 and only adds command words, so both can be driven.
+SUPPORTED_BRIDGE_PROTOCOLS = (BRIDGE_PROTOCOL, 3)
 
 
 class LiveSessionError(snapshot_build.SnapshotError):
@@ -101,10 +103,10 @@ def _require_session(project_root: str | Path) -> LiveSession:
 def endpoint_problem(hello: dict[str, Any] | None) -> str | None:
     """Why a connected endpoint cannot be driven by this server, or None."""
     protocol = (hello or {}).get("protocol")
-    if protocol != BRIDGE_PROTOCOL:
+    if isinstance(protocol, bool) or protocol not in SUPPORTED_BRIDGE_PROTOCOLS:
         return (
             f"The game's bridge endpoint speaks protocol {protocol!r}, but this server needs protocol "
-            f"{BRIDGE_PROTOCOL}. Reinstall the bridge with gm_bridge_install (or update the project's endpoint), "
+            f"{' or '.join(map(str, SUPPORTED_BRIDGE_PROTOCOLS))}. Reinstall the bridge with gm_bridge_install (or update the project's endpoint), "
             "then restart the game."
         )
     return None
@@ -255,6 +257,8 @@ def _start(
         shots = run_dir / "shots"
         if shots.exists():
             shutil.rmtree(shots)
+        run_status.raise_if_stopped()
+        run_status.report_stage("starting the game")
         process, debug_log = _launch_game(
             owned_runtime.runner,
             staging,
@@ -264,6 +268,7 @@ def _start(
         )
         lock.bind_process(process.pid)
         label_lock.bind_process(process.pid)
+        run_status.report_stage("connecting to the game", live_log=str(debug_log))
         deadline = time.monotonic() + connect_timeout_seconds
         while (
             owns_bridge
@@ -272,6 +277,7 @@ def _start(
             and not bridge.is_connected
             and process.poll() is None
         ):
+            run_status.raise_if_stopped()
             time.sleep(0.2)
         # Give the endpoint a moment to send its handshake.
         handshake_deadline = time.monotonic() + 2.0
@@ -371,6 +377,13 @@ def _start(
             f"that reads the {BRIDGE_PORT_ENVIRONMENT_VARIABLE} environment variable and is enabled in this "
             "build (see documentation/BRIDGE.md, 'Runtime bridge protocol 2')."
         )
+        if bridge.missing_credential_seen:
+            public["message"] = (
+                "The game is running and its bridge endpoint connected, but its HELLO carried no session "
+                f"credential, so it was refused. Update the project's endpoint to send `token` read from the "
+                f"{BRIDGE_TOKEN_ENVIRONMENT_VARIABLE} environment variable (see documentation/BRIDGE.md, "
+                "'Runtime bridge protocol 2'). gm_game_log still works."
+            )
     else:
         public["status"] = "RUNNING"
         public["message"] = (
@@ -544,7 +557,8 @@ def stop(project_root: str | Path) -> dict[str, Any]:
             str(snapshot_build._relative(session.project_root, shot))
             for shot in (session.run_dir / "shots").glob("*.png")
         ),
-        "new_screenshots": len(shots),
+        # Screenshots the game saved itself that were only collected now, beyond those listed above.
+        "collected_at_stop": len(shots),
     }
 
 
@@ -688,9 +702,12 @@ def start(project_root: str | Path, **options: Any) -> dict[str, Any]:
     label_lock = snapshot_build.pipeline_lock(project_root, options.get("label", "live"))
     lock = project_run_lock(project_root)
     timeout = float(options.get("lock_timeout_seconds", 3600.0))
-    label_lock.acquire(timeout_seconds=timeout)
+    label_lock.acquire(timeout_seconds=timeout, sleep=run_status.sleep_unless_stopped)
     try:
-        lock.acquire(timeout_seconds=timeout)
+        lock.acquire(
+            timeout_seconds=timeout,
+            sleep=run_status.waiting_sleep("waiting for this project's game to be free"),
+        )
         try:
             # A concurrent launcher may have published a session while we waited.
             # Reconcile it under our lease before replacing its logs or metadata.

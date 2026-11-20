@@ -174,7 +174,7 @@ The same `.gms-mcp.json` carries the project's own conventions for builds, tests
 ```json
 {
   "verification": { "post_mutation": "off" },
-  "build": { "igor_attempts": 30, "max_parallel_builds": 4, "jobs": 4, "runtime_version": "2026.0.0.23" },
+  "build": { "igor_attempts": 30, "max_parallel_builds": 4, "jobs": 4, "runtime_version": "2026.1.0.28" },
   "test": { "timeout_seconds": 120, "prelude_file": null, "script_name": "__agent_test" },
   "conventions": { "allow_root_assets": ["__agent_*"] },
   "live_reload": { "status_file": null }
@@ -198,10 +198,11 @@ Live-reload commands run programs, so a project cannot supply them. They are rea
 | `verification.post_mutation` | server default (`smart`) | `off`, `smart` or `always`: whether a mutation is followed by a compile. `GMS_MCP_POST_MUTATION_VERIFY` overrides it; an unrecognised value there stops the server at startup, and an unrecognised project value verifies as `smart` with a warning. Large or shared projects use `off` and verify with `gm_snapshot_compile` / `gm_test_run`. |
 | `build.igor_attempts` | `10` | Attempts when Igor aborts with `System.AccessViolationException` (snapshot builds). Env: `GMS_MCP_SNAPSHOT_IGOR_ATTEMPTS`. |
 | `build.max_parallel_builds` | `4` | Machine-wide Igor build slots. Env: `GMS_MCP_MAX_PARALLEL_BUILDS`. |
+| `build.call_wait_seconds` | `20` | How long a `gm_snapshot_compile`, `gm_test_run` or `gm_game_start` call waits for its result. A run that is still going returns `STILL_RUNNING` with its stage and carries on; `gm_build_status` follows it. `0` waits until the run ends. Env: `GMS_MCP_BUILD_CALL_WAIT_SECONDS`. |
 | `build.jobs` | `4` | Igor `-j`. |
 | `build.runtime_version` | newest installed | Runtime used by snapshot builds. |
 | `test.timeout_seconds` | `120` | Default wait for a test's result line. |
-| `test.prelude_file` | built in | Project-relative GML file replacing the built-in test API; it must print the same marker lines. |
+| `test.prelude_file` | built in | Project-relative GML file replacing the built-in test API; it must print the same marker lines. Printing `[TEST_FRAME] <frame>` about once a second is optional: it is what `gm_build_status` shows as `test_frame`. |
 | `test.result_marker`, `line_marker`, `started_marker`, `screenshot_prefix`, `runtime_error_patterns` | `[TEST_RESULT]`, `[TEST]`, `[TEST_SAVE_DIR]`, `__agent_shot_`, GameMaker's error banners | How a run log is read. Markers and the prefix are non-empty strings; `runtime_error_patterns` is a list of non-empty literal strings. |
 | `conventions.allow_root_assets` | `[]` | Name patterns `gm_project_check` accepts at the project root. |
 | `live_reload.start`, `stop`, `status` | unset | User config only. Argument lists (never shell strings) for an external live-reload tool. `{project}` becomes the project directory. |
