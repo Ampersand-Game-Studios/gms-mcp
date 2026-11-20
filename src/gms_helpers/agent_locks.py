@@ -101,7 +101,8 @@ def _process_alive(pid: int) -> bool:
         return False
     except PermissionError:
         return True
-    except OSError:
+    except (OSError, OverflowError):
+        # OverflowError: a number no process id can be, from a record this process did not write.
         return False
     return True
 

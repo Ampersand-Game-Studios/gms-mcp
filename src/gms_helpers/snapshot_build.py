@@ -160,11 +160,17 @@ def pipeline_lock(project_root: str | Path, label: str) -> DirectoryLock:
 
 
 @contextlib.contextmanager
-def label_pipeline(project_root: str | Path, label: str, timeout_seconds: float = 7200.0):
-    """Serialize writers to one project's labelled artifact directory."""
+def label_pipeline(project_root: str | Path, label: str, timeout_seconds: float = 7200.0, *, is_run: bool = True):
+    """Serialize writers to one project's labelled artifact directory.
+
+    ``is_run=False`` takes the label for housekeeping inside another run (clearing up an earlier
+    session). The run in progress then does not record a stage, which would claim its own
+    directory before it holds its own label.
+    """
     lock = pipeline_lock(project_root, label)
     lock.acquire(timeout_seconds=timeout_seconds, sleep=run_status.sleep_unless_stopped)
-    run_status.report_stage("starting")
+    if is_run:
+        run_status.report_stage("starting")
     try:
         yield
     finally:
@@ -696,21 +702,55 @@ _ACTIVE_BUILDS_LOCK = threading.Lock()
 
 
 def _end_process_tree(process: subprocess.Popen, *, grace_seconds: float = 3.0) -> None:
-    """Stop Igor and whatever it started. It runs in its own process group where the OS has them."""
+    """Stop Igor and whatever it started: its process group when it leads one, else Igor itself."""
     if process.poll() is not None:
         return
     if os.name == "nt":
         _end_windows_process_tree(process)
     else:
+        leads_its_group = False
         with contextlib.suppress(ProcessLookupError, PermissionError):
-            os.killpg(process.pid, signal.SIGTERM)
+            leads_its_group = os.getpgid(process.pid) == process.pid
+        # Igor shares this process's group, so the group cannot be signalled: that would end this
+        # process too. Its tools are found now, while they can still be told from anything else.
+        tree = [] if leads_its_group else [process.pid, *_descendant_process_ids(process.pid)]
+
+        def send(signal_number: int) -> None:
+            if leads_its_group:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.killpg(process.pid, signal_number)
+                return
+            for process_id in tree:
+                with contextlib.suppress(ProcessLookupError, PermissionError):
+                    os.kill(process_id, signal_number)
+
+        send(signal.SIGTERM)
         try:
             process.wait(timeout=grace_seconds)
         except subprocess.TimeoutExpired:
-            with contextlib.suppress(ProcessLookupError, PermissionError):
-                os.killpg(process.pid, signal.SIGKILL)
+            send(signal.SIGKILL)
     with contextlib.suppress(subprocess.TimeoutExpired):
         process.wait(timeout=5)
+
+
+def _descendant_process_ids(process_id: int) -> list[int]:
+    """The processes started by ``process_id`` and by those, as the system lists them now."""
+    try:
+        listing = subprocess.run(["ps", "-axo", "pid=,ppid="], capture_output=True, text=True, timeout=10).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    children: dict[int, list[int]] = {}
+    for line in listing.splitlines():
+        fields = line.split()
+        if len(fields) == 2 and fields[0].isdigit() and fields[1].isdigit():
+            children.setdefault(int(fields[1]), []).append(int(fields[0]))
+    found: list[int] = []
+    pending = [process_id]
+    while pending:
+        for child in children.get(pending.pop(), []):
+            found.append(child)
+            pending.append(child)
+    return found
 
 
 def _end_windows_process_tree(process: subprocess.Popen) -> None:
@@ -748,8 +788,11 @@ def _default_run_igor(command: list[str], log_path: Path, timeout_seconds: float
             stdout=log,
             stderr=subprocess.STDOUT,
             env={**os.environ, "DOTNET_PROCESSOR_COUNT": os.environ.get("DOTNET_PROCESSOR_COUNT", "1")},
-            # Its own process group, so stopping the build also stops the tools Igor starts.
-            start_new_session=os.name != "nt",
+            # A run this process tracks is stopped by signalling Igor's own group, which also ends the
+            # tools Igor starts. An untracked build is a command someone else started (gm_compile
+            # runs it that way) and stops by ending that command's group: Igor has to stay in it, or
+            # the stop would end the command and leave the compiler running.
+            start_new_session=tracker is not None and os.name != "nt",
         )
         with _ACTIVE_BUILDS_LOCK:
             _ACTIVE_BUILDS[process] = tracker

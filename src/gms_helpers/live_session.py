@@ -283,6 +283,8 @@ def _start(
         handshake_deadline = time.monotonic() + 2.0
         while owns_bridge and bridge.is_connected and bridge.hello is None and time.monotonic() < handshake_deadline:
             time.sleep(0.05)
+        # Last chance to honour a stop: past here the game is handed over as running.
+        run_status.raise_if_stopped()
     except BaseException:
         snapshot_build.stop_process(process)
         bridge.stop()
@@ -587,7 +589,10 @@ def stop_persisted(project_root: str | Path, persisted: Any) -> dict[str, Any]:
     # Acquire in the same label->project order as start. An original live server
     # finishes its watcher first. A dead server's leases are reclaimed normally.
     label = persisted.runtime_label or "run"
-    with snapshot_build.label_pipeline(project_root, label, timeout_seconds=5), contextlib.ExitStack() as cleanup_stack:
+    with (
+        snapshot_build.label_pipeline(project_root, label, timeout_seconds=5, is_run=False),
+        contextlib.ExitStack() as cleanup_stack,
+    ):
         lease = project_run_lock(project_root)
         lease.acquire(timeout_seconds=5)
         cleanup_stack.callback(lease.release)

@@ -846,3 +846,227 @@ def test_stopping_a_windows_build_ends_the_tools_igor_started(monkeypatch):
     monkeypatch.setattr(snapshot_build.subprocess, "run", taskkill_that_is_missing)
     snapshot_build._end_windows_process_tree(igor)
     assert igor.killed is True, "Igor itself is still ended when the tree cannot be"
+
+
+@pytest.mark.skipif(os.name == "nt", reason="process groups are a POSIX notion")
+def test_igor_leaves_the_callers_process_group_only_when_this_process_can_stop_it(tmp_path: Path):
+    report_group = [sys.executable, "-c", "import os; print(os.getpgid(0))"]
+
+    # Run as a command (how gm_compile builds): whoever ends this process's group must end Igor with it.
+    assert snapshot_build._default_run_igor(report_group, tmp_path / "untracked.log", 30) == 0
+    assert int((tmp_path / "untracked.log").read_text().split()[0]) == os.getpgid(0)
+
+    # Tracked here: stopped by signalling a group of its own, tools and all.
+    with run_status.track_run(_run_dir(tmp_path), "compile", "gm_snapshot_compile"):
+        assert snapshot_build._default_run_igor(report_group, tmp_path / "tracked.log", 30) == 0
+    assert int((tmp_path / "tracked.log").read_text().split()[0]) != os.getpgid(0)
+
+
+@pytest.mark.skipif(os.name == "nt", reason="process groups are a POSIX notion")
+def test_a_command_line_build_that_times_out_ends_the_tools_its_compiler_started(tmp_path: Path):
+    from gms_helpers.agent_locks import _process_alive
+
+    tool_pid_file = tmp_path / "tool.pid"
+    # A stand-in Igor that starts a tool of its own and then never finishes.
+    stand_in = (
+        "import subprocess, sys, time\n"
+        "tool = subprocess.Popen([sys.executable, '-c', 'import time; time.sleep(300)'])\n"
+        f"open({str(tool_pid_file)!r}, 'w').write(str(tool.pid))\n"
+        "time.sleep(300)\n"
+    )
+
+    # Long enough for the stand-in to have started its tool on a slow machine.
+    assert snapshot_build._default_run_igor([sys.executable, "-c", stand_in], tmp_path / "build.log", 5.0) == -9
+
+    tool_pid = int(tool_pid_file.read_text())
+    _wait_until(lambda: not _process_alive(tool_pid), seconds=10)
+    assert "without finishing" in (tmp_path / "build.log").read_text()
+
+
+@pytest.mark.skipif(os.name == "nt", reason="process groups are a POSIX notion")
+def test_ending_a_compiler_that_shares_this_process_group_ends_only_the_compiler(tmp_path: Path):
+    import subprocess
+
+    compiler = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(120)"])
+    try:
+        assert os.getpgid(compiler.pid) == os.getpgid(0)
+        snapshot_build._end_process_tree(compiler, grace_seconds=5)
+        assert compiler.poll() is not None
+    finally:
+        compiler.kill()
+
+
+# --- found by review -----------------------------------------------------------------------------
+
+
+def test_an_exiting_server_waits_for_its_runs_to_end_what_they_started(tmp_path: Path):
+    cleaned_up = []
+
+    def test_run() -> dict:
+        run_status.report_stage("running the test")
+        try:
+            while not run_status.stop_requested():
+                time.sleep(0.01)
+            raise run_status.RunStopped("stopped")
+        finally:
+            time.sleep(0.4)  # ending the game, giving back the lease, removing the project copy
+            cleaned_up.append(True)
+
+    directory = _run_dir(tmp_path, "test")
+    asyncio.run(background_runs.run(directory, "test", "gm_test_run", test_run, wait_seconds=0))
+    _wait_until(lambda: background_runs.status(directory).get("stage") == "running the test")
+
+    background_runs.stop_all()
+
+    assert cleaned_up == [True], "the server would have exited with the game still running"
+
+
+def test_the_server_stops_its_builds_when_it_is_told_to_terminate():
+    from gms_mcp import gamemaker_mcp_server
+
+    installed = {}
+    left = threading.Event()
+    with (
+        patch.object(
+            gamemaker_mcp_server.signal, "signal", lambda number, handler: installed.update({number: handler})
+        ),
+        patch.object(gamemaker_mcp_server, "_wait_for_mutations_then_exit", left.set),
+    ):
+        gamemaker_mcp_server._leave_when_told_to_terminate()
+        assert gamemaker_mcp_server.signal.SIGTERM in installed
+        handler_returned_at = time.monotonic()
+        installed[gamemaker_mcp_server.signal.SIGTERM](gamemaker_mcp_server.signal.SIGTERM, None)
+        # The handler hands over and returns: the event loop it interrupted must keep running.
+        assert time.monotonic() - handler_returned_at < 1
+        assert left.wait(5)
+
+
+def test_a_status_file_is_still_written_while_a_follower_has_it_open(tmp_path: Path, monkeypatch):
+    from gms_helpers import agent_locks
+
+    target = tmp_path / "status.json"
+    target.write_text("{}", encoding="utf-8")
+    real_replace = os.replace
+    refusals = [PermissionError("in use"), PermissionError("in use")]
+
+    def replace_like_windows(source, destination):
+        if refusals:
+            raise refusals.pop()
+        return real_replace(source, destination)
+
+    monkeypatch.setattr(agent_locks, "_WINDOWS", True)
+    monkeypatch.setattr(run_status.os, "replace", replace_like_windows)
+    run_status._write_json(target, {"state": "finished"})
+
+    assert json.loads(target.read_text(encoding="utf-8")) == {"state": "finished"}
+    assert refusals == [] and list(tmp_path.iterdir()) == [target]
+
+
+def test_a_stop_that_came_too_late_does_not_claim_to_have_stopped_anything(tmp_path: Path):
+    release = threading.Event()
+
+    def game_start() -> dict:
+        run_status.report_stage("connecting to the game")
+        assert release.wait(20)
+        return {"ok": True, "status": "RUNNING", "running": True}
+
+    directory = _run_dir(tmp_path, "live")
+    asyncio.run(background_runs.run(directory, "live", "gm_game_start", game_start, wait_seconds=0))
+    _wait_until(lambda: background_runs.status(directory).get("stage") == "connecting to the game")
+    threading.Timer(0.2, release.set).start()
+
+    report = background_runs.stop(directory)
+
+    assert (report["stopped"], report["already_finished"], report["status"]) == (False, True, "RUNNING")
+    assert "gm_game_stop" in report["message"]
+
+
+def test_a_status_file_holding_nonsense_is_reported_not_raised(tmp_path: Path):
+    directory = _run_dir(tmp_path)
+    directory.mkdir(parents=True)
+    for nonsense in (
+        {"state": "running", "started_at": "yesterday", "stage_started_at": [], "pid": 10**40, "stage": "compiling"},
+        {"state": "running", "started_at": None, "pid": -5, "stage": 7},
+        {"state": "running", "started_at": True, "pid": "1", "stages_done": "x"},
+        {"state": "running", "started_at": "soon", "pid": os.getpid(), "stage": "compiling", "attempt": "two"},
+    ):
+        (directory / run_status.STATUS_FILE).write_text(json.dumps(nonsense), encoding="utf-8")
+        report = background_runs.status(directory)
+        assert "finished" in report and report["label"] == "compile"
+    assert report["status"] == "RUNNING", "a live process with unreadable times is still a running run"
+
+
+def test_housekeeping_under_another_label_does_not_start_the_current_runs_record(tmp_path: Path):
+    project = tmp_path / "game"
+    project.mkdir()
+    directory = _run_dir(tmp_path, "live")
+    with patch.dict(os.environ, {"GMS_MCP_LOCK_DIR": str(tmp_path / "locks")}):
+        with run_status.track_run(directory, "live", "gm_game_start") as tracker:
+            with snapshot_build.label_pipeline(project, "earlier", timeout_seconds=5, is_run=False):
+                pass
+            assert "stage" not in tracker.snapshot() and not directory.exists()
+            with snapshot_build.label_pipeline(project, "live", timeout_seconds=5):
+                assert tracker.snapshot()["stage"] == "starting"
+
+
+@pytest.mark.parametrize("stop_arrives", ["while taking the label", "as the compile is handed over"])
+def test_a_working_tree_compile_stopped_as_it_starts_ends_at_once(tmp_path: Path, stop_arrives: str):
+    from contextlib import contextmanager as make_context_manager
+
+    from mcp import Client
+
+    from gms_mcp.server.tools import runner as runner_tools
+
+    compiled = []
+    ended = []
+    hand_over = asyncio.run_coroutine_threadsafe
+
+    @make_context_manager
+    def label_taken(_root, _label, *args, **kwargs):
+        if stop_arrives == "while taking the label":
+            run_status.current().request_stop()
+        yield
+
+    def handed_over_as_the_stop_arrives(coroutine, loop):
+        # Too late for the first check, too early for the stop to have found anything to cancel.
+        future = hand_over(coroutine, loop)
+        run_status.current().request_stop()
+        return future
+
+    async def scenario(server) -> None:
+        async def fake_compile(**_options):
+            compiled.append(True)
+            try:
+                await asyncio.Event().wait()
+            finally:
+                ended.append(True)
+
+        patches = [
+            patch("gms_mcp.server.tools.runner._run_with_fallback", fake_compile),
+            patch.object(snapshot_build, "label_pipeline", label_taken),
+        ]
+        if stop_arrives == "as the compile is handed over":
+            patches.append(
+                patch.object(runner_tools.asyncio, "run_coroutine_threadsafe", handed_over_as_the_stop_arrives)
+            )
+        for each in patches:
+            each.start()
+        try:
+            async with Client(server, mode="2026-07-28") as client:
+                # Well inside the time the call waits before handing over: a run that hung would not make it.
+                result = unwrap_call_tool_result(await asyncio.wait_for(client.call_tool("gm_compile", {}), timeout=10))
+                assert (result["finished"], result["status"]) == (True, "STOPPED")
+                # The project is free again: a change is not left waiting behind a compile nobody wants.
+                await asyncio.wait_for(
+                    client.call_tool("gm_safe_delete", {"asset_type": "script", "asset_name": "scr_none"}), timeout=10
+                )
+        finally:
+            for each in reversed(patches):
+                each.stop()
+
+    with _server(tmp_path) as (server, _project):
+        asyncio.run(scenario(server))
+    if stop_arrives == "while taking the label":
+        assert compiled == [], "no compiler was started"
+    # Handed over a moment before the stop, the compile may have begun; whatever began was ended.
+    assert ended == compiled
