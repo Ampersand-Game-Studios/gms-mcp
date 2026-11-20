@@ -2,6 +2,7 @@
 
 import os
 import stat
+import time
 from dataclasses import dataclass
 from pathlib import Path, PureWindowsPath
 from typing import Any
@@ -136,7 +137,9 @@ def find_project_tree_violation(project_root: Path) -> ProjectTreeViolation | No
                 continue
             try:
                 # DirEntry.stat() reports st_nlink as zero on Windows, so ask the filesystem there.
-                link_count = (os.stat(entry.path) if os.name == "nt" else entry.stat(follow_symlinks=False)).st_nlink
+                link_count = (
+                    _windows_link_count(entry.path) if os.name == "nt" else entry.stat(follow_symlinks=False).st_nlink
+                )
             except FileNotFoundError:
                 # Gone since the directory was listed, as a temporary file is once its writer has put
                 # it in place (a run's status file, every second). Nothing is left there to judge.
@@ -145,6 +148,24 @@ def find_project_tree_violation(project_root: Path) -> ProjectTreeViolation | No
                 return violation("multiply_linked", entry.path)
         pending.extend(reversed(subdirectories))
     return None
+
+
+def _windows_link_count(path: str, *, patience_seconds: float = 0.5) -> int:
+    """How many names a file has, waiting out the moment in which it is being replaced.
+
+    Windows refuses to look at a file while another process is replacing or deleting it. That
+    lasts as long as the replacement does, so the question is asked again for a short while; a
+    file that then turns out to be gone raises FileNotFoundError like any other vanished entry,
+    and one that stays out of reach still fails the check.
+    """
+    deadline = time.monotonic() + patience_seconds
+    while True:
+        try:
+            return os.stat(path).st_nlink
+        except PermissionError:
+            if time.monotonic() >= deadline:
+                raise
+            time.sleep(0.01)
 
 
 def assert_project_tree_contained(project_root: Path) -> Path:
