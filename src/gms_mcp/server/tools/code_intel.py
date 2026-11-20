@@ -3,10 +3,8 @@ from __future__ import annotations
 import argparse
 from typing import Any, Dict
 
-from ..dispatch import _run_with_fallback
+from ..dispatch import _run_for_data
 from ..mcp_types import Context
-from ..project import _ensure_cli_on_sys_path, _resolve_project_directory, _resolve_repo_root
-from ..tool_types import OutputMode
 
 
 def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
@@ -20,125 +18,75 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
     async def gm_build_index(
         project_root: str = ".",
         force: bool = False,
-        prefer_cli: bool = False,
-        output_mode: OutputMode = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Build or rebuild the GML symbol index for code intelligence features.
+        Build or refresh the GML symbol index that the symbol lookups read.
+
+        The lookups build it themselves when needed; this is for doing that ahead of time.
 
         Args:
-            force: If True, rebuild from scratch. If False, use cache if valid.
+            force: Rebuild from scratch instead of updating the files that changed.
         """
-        repo_root = _resolve_repo_root(project_root)
-        _ensure_cli_on_sys_path(repo_root)
+        _ = ctx
         from gms_helpers.commands.symbol_commands import handle_build_index
 
-        args = argparse.Namespace(
-            project_root=_resolve_project_directory(project_root),
-            force=force,
-        )
-
-        cli_args = ["symbol", "build"]
-        if force:
-            cli_args.append("--force")
-
-        return await _run_with_fallback(
+        return await _run_for_data(
             direct_handler=handle_build_index,
-            direct_args=args,
-            cli_args=cli_args,
+            direct_args=argparse.Namespace(project_root=project_root, force=force),
             project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
             tool_name="gm-build-index",
-            ctx=ctx,
+            cli_args=["symbol", "build"],
         )
 
     @mcp.tool()
     async def gm_find_definition(
         symbol_name: str,
         project_root: str = ".",
-        prefer_cli: bool = False,
-        output_mode: OutputMode = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Find definition(s) of a GML symbol (function, enum, macro, globalvar).
+        Find where a GML symbol (function, script, enum, enum value, macro, globalvar, constructor) is defined.
 
-        Args:
-            symbol_name: Name of the symbol to find.
+        Each definition gives its kind, `at` (file:line), its parameters and its whole doc comment.
         """
-        repo_root = _resolve_repo_root(project_root)
-        _ensure_cli_on_sys_path(repo_root)
+        _ = ctx
         from gms_helpers.commands.symbol_commands import handle_find_definition
 
-        args = argparse.Namespace(
-            project_root=_resolve_project_directory(project_root),
-            symbol_name=symbol_name,
-        )
-
-        cli_args = ["symbol", "find-definition", "--", symbol_name]
-
-        return await _run_with_fallback(
+        return await _run_for_data(
             direct_handler=handle_find_definition,
-            direct_args=args,
-            cli_args=cli_args,
+            direct_args=argparse.Namespace(project_root=project_root, symbol_name=symbol_name),
             project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
             tool_name="gm-find-definition",
-            ctx=ctx,
+            cli_args=["symbol", "find-definition"],
         )
 
     @mcp.tool()
     async def gm_find_references(
         symbol_name: str,
         project_root: str = ".",
-        max_results: int = 50,
-        prefer_cli: bool = False,
-        output_mode: OutputMode = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
+        max_results: int | None = None,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Find all references to a GML symbol.
+        Find every reference to a GML symbol.
+
+        `references` maps each file to its lines that name the symbol, as "<line> <code>";
+        `defined_at` names the definition lines among them, and `count` is the number of
+        references (a line naming the symbol twice is listed once).
 
         Args:
-            symbol_name: Name of the symbol to find references for.
-            max_results: Maximum number of references to return.
+            max_results: Keep only the first this many references.
         """
-        repo_root = _resolve_repo_root(project_root)
-        _ensure_cli_on_sys_path(repo_root)
+        _ = ctx
         from gms_helpers.commands.symbol_commands import handle_find_references
 
-        args = argparse.Namespace(
-            project_root=_resolve_project_directory(project_root),
-            symbol_name=symbol_name,
-            max_results=max_results,
-        )
-
-        cli_args = ["symbol", "find-references", "--max-results", str(max_results), "--", symbol_name]
-
-        return await _run_with_fallback(
+        return await _run_for_data(
             direct_handler=handle_find_references,
-            direct_args=args,
-            cli_args=cli_args,
+            direct_args=argparse.Namespace(project_root=project_root, symbol_name=symbol_name, max_results=max_results),
             project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
             tool_name="gm-find-references",
-            ctx=ctx,
+            cli_args=["symbol", "find-references"],
         )
 
     @mcp.tool()
@@ -147,52 +95,35 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         kind: str | None = None,
         name_filter: str | None = None,
         file_filter: str | None = None,
-        max_results: int = 100,
-        prefer_cli: bool = False,
-        output_mode: OutputMode = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
+        max_results: int | None = 100,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        List all GML symbols in the project, optionally filtered.
+        List the GML symbols defined in the project, in name order.
+
+        `symbols` maps each kind to its files and each file to "name:line" entries (an enum value
+        is written "Enum.value"). `count` is every match; `truncated` says max_results kept fewer.
 
         Args:
-            kind: Filter by symbol kind (function, enum, macro, globalvar, constructor).
-            name_filter: Filter symbols by name (case-insensitive substring match).
-            file_filter: Filter symbols by file path (case-insensitive substring match).
-            max_results: Maximum number of symbols to return.
+            kind: function, script, enum, enum_value, macro, globalvar or constructor.
+            name_filter: Keep symbols whose name contains this text (case-insensitive).
+            file_filter: Keep symbols whose file path contains this text (case-insensitive).
+            max_results: Keep the first this many (null for every match).
         """
-        repo_root = _resolve_repo_root(project_root)
-        _ensure_cli_on_sys_path(repo_root)
+        _ = ctx
         from gms_helpers.commands.symbol_commands import handle_list_symbols
 
         args = argparse.Namespace(
-            project_root=_resolve_project_directory(project_root),
+            project_root=project_root,
             kind=kind,
             name_filter=name_filter,
             file_filter=file_filter,
             max_results=max_results,
         )
-
-        cli_args = ["symbol", "list"]
-        if kind:
-            cli_args.extend(["--kind", kind])
-        if name_filter:
-            cli_args.extend(["--name-filter", name_filter])
-        if file_filter:
-            cli_args.extend(["--file-filter", file_filter])
-        cli_args.extend(["--max-results", str(max_results)])
-
-        return await _run_with_fallback(
+        return await _run_for_data(
             direct_handler=handle_list_symbols,
             direct_args=args,
-            cli_args=cli_args,
             project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
             tool_name="gm-list-symbols",
-            ctx=ctx,
+            cli_args=["symbol", "list"],
         )

@@ -12,6 +12,29 @@ from ..resolution import ResolutionRuntime
 TextureGroupDeleteResolution = Any
 
 
+def _group_settings(row: Dict[str, Any]) -> Dict[str, Any]:
+    """What a texture-group listing says about one asset, besides which asset it is."""
+    settings: Dict[str, Any] = {"group": row.get("top_level_group")}
+    if row.get("config_groups"):
+        settings["configs"] = row["config_groups"]
+    if row.get("where"):
+        settings["where"] = row["where"]
+    return settings
+
+
+def _dense_texture_groups(groups: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """Texture groups with the settings most of them share stated once, as `defaults`."""
+    from gms_helpers.dense import shared_fields
+
+    # "%Name" is the file format's second copy of the name.
+    records = [
+        {key: value for key, value in group.items() if not (key == "%Name" and value == group.get("name"))}
+        for group in groups
+    ]
+    defaults, rows = shared_fields(records)
+    return {"defaults": defaults, "texture_groups": rows} if defaults else {"texture_groups": rows}
+
+
 def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) -> None:
     globals()["Context"] = ContextType
     from ..resolution import TextureGroupDecision
@@ -39,7 +62,12 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """List texture groups and available configs."""
+        """
+        List texture groups and available configs.
+
+        `defaults` holds the settings most groups share; each group lists its name and only the
+        settings that differ (and, under "unset", any default it lacks).
+        """
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
         from gms_helpers.texture_group.project import get_project_configs, get_texture_groups_list, load_project_yyp
@@ -49,11 +77,10 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         groups = get_texture_groups_list(yyp_data)
         return {
             "ok": True,
-            "project_directory": str(project_directory),
             "yyp": yyp_path.name,
             "configs": configs,
-            "texture_groups": groups,
             "count": len(groups),
+            **_dense_texture_groups(groups),
         }
 
     @mcp.tool()
@@ -92,16 +119,21 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """List members of a texture group (top-level and ConfigValues overrides)."""
+        """
+        List members of a texture group (top-level and ConfigValues overrides).
+
+        `members` lists each combination of top-level `group` and per-config `configs` once, with
+        `assets` mapping a folder to asset names whose files are <folder>/<name>/<name>.yy.
+        """
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
-        from gms_helpers.texture_group.project import load_project_yyp
+        from gms_helpers.dense import assets_by_settings
         from gms_helpers.texture_group.scan import texture_group_members
 
-        yyp_path, _ = load_project_yyp(project_directory)
         result = texture_group_members(project_directory, group_name, asset_types=asset_types, configs=configs)
-        result.setdefault("project_directory", str(project_directory))
-        result.setdefault("yyp", yyp_path.name)
+        result["members"] = assets_by_settings(result.get("members", []), _group_settings)
+        if not result.get("warnings"):
+            result.pop("warnings", None)
         return result
 
     @mcp.tool()
@@ -112,21 +144,33 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Scan a project for texture group health issues (missing groups, mismatches)."""
+        """
+        Scan a project for texture group health issues (missing groups, mismatches).
+
+        Asset lists name each combination of top-level `group`, per-config `configs` (and, for a
+        missing group, `where` it is named) once, with `assets` mapping a folder to asset names
+        whose files are <folder>/<name>/<name>.yy. include_assets adds every asset that way.
+        """
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
-        from gms_helpers.texture_group.project import load_project_yyp
+        from gms_helpers.dense import assets_by_settings
         from gms_helpers.texture_group.scan import texture_group_scan
 
-        yyp_path, _ = load_project_yyp(project_directory)
         result = texture_group_scan(
             project_directory,
             asset_types=asset_types,
             configs=configs,
             include_assets=include_assets,
         )
-        result.setdefault("project_directory", str(project_directory))
-        result.setdefault("yyp", yyp_path.name)
+        result["missing_groups_referenced"] = {
+            group: assets_by_settings(rows, lambda row: {"where": row.get("where")})
+            for group, rows in (result.get("missing_groups_referenced") or {}).items()
+        }
+        result["mismatched_assets"] = assets_by_settings(result.get("mismatched_assets") or [], _group_settings)
+        if include_assets:
+            result["assets"] = assets_by_settings(result.get("assets") or [], _group_settings)
+        else:
+            result.pop("assets", None)
         return result
 
     # -----------------------------
