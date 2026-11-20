@@ -700,7 +700,7 @@ def _end_process_tree(process: subprocess.Popen, *, grace_seconds: float = 3.0) 
     if process.poll() is not None:
         return
     if os.name == "nt":
-        process.kill()
+        _end_windows_process_tree(process)
     else:
         with contextlib.suppress(ProcessLookupError, PermissionError):
             os.killpg(process.pid, signal.SIGTERM)
@@ -711,6 +711,24 @@ def _end_process_tree(process: subprocess.Popen, *, grace_seconds: float = 3.0) 
                 os.killpg(process.pid, signal.SIGKILL)
     with contextlib.suppress(subprocess.TimeoutExpired):
         process.wait(timeout=5)
+
+
+def _end_windows_process_tree(process: subprocess.Popen) -> None:
+    """End Igor and the compiler and packaging tools it started.
+
+    Killing Igor alone leaves those tools running: they would go on writing into packaging
+    output the next build shares, after this build's slot had been given away.
+    """
+    import ntpath
+
+    system_root = os.environ.get("SystemRoot", "C:\\Windows")
+    taskkill = ntpath.join(system_root, "System32", "taskkill.exe")
+    with contextlib.suppress(OSError, subprocess.SubprocessError):
+        subprocess.run([taskkill, "/PID", str(process.pid), "/T", "/F"], capture_output=True, timeout=30)
+    if process.poll() is None:
+        # taskkill could not be run, or left Igor itself behind.
+        with contextlib.suppress(OSError):
+            process.kill()
 
 
 def stop_builds(tracker: run_status.RunTracker | None = None, *, grace_seconds: float = 3.0) -> int:

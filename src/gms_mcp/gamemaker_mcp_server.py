@@ -249,16 +249,23 @@ def _leave_after_client_disconnect(threads_before: set[threading.Thread]) -> Non
             if thread.is_alive() and not thread.daemon and thread is not current and thread not in threads_before
         ]
 
+    # A build runs on a daemon thread, which does not keep the process alive: without this the
+    # server would leave and its compiler, in a process group of its own, would carry on.
+    _stop_builds_nobody_can_follow()
     if lingering():
         _wait_for_mutations_then_exit()
 
 
-def _wait_for_mutations_then_exit() -> None:
+def _stop_builds_nobody_can_follow() -> None:
     # A compiler left running would hold a build slot and a CPU core for a result nobody can read.
     with contextlib.suppress(Exception):
         from .server import background_runs
 
         background_runs.stop_all()
+
+
+def _wait_for_mutations_then_exit() -> None:
+    _stop_builds_nobody_can_follow()
     deadline = time.monotonic() + _MUTATION_DRAIN_SECONDS
     while _mutations_in_flight > 0 and time.monotonic() < deadline:
         time.sleep(0.1)
