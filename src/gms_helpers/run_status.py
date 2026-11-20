@@ -113,6 +113,10 @@ class RunTracker:
         """Record the result. After this the run reads as finished wherever it is looked up."""
         now = time.time()
         with self._lock:
+            if self._owns_directory and not self._still_recorded_here():
+                # The label was given back before this point, and another run has taken it and
+                # begun its own record. Writing now would put this run's result over that one.
+                self._owns_directory = False
             if self._owns_directory:
                 with contextlib.suppress(OSError, TypeError, ValueError):
                     self.directory.mkdir(parents=True, exist_ok=True)
@@ -130,6 +134,13 @@ class RunTracker:
             }
             if self._owns_directory:
                 self._save()
+
+    def _still_recorded_here(self) -> bool:
+        """Whether the status file in the run directory is still this run's own."""
+        saved = _read_json(self.directory / STATUS_FILE)
+        if saved is None:
+            return True
+        return saved.get("pid") == os.getpid() and saved.get("started_at") == self.started_at
 
     def snapshot(self) -> dict[str, Any]:
         """The state as this process knows it, which is ahead of the file while the label is awaited."""
