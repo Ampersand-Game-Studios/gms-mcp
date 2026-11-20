@@ -77,6 +77,31 @@ def test_symlinked_directory_that_leaves_the_project_is_a_violation(tmp_path: Pa
     assert (found.kind, found.relative_path) == ("escaping_link", "datafiles")
 
 
+def test_a_file_that_goes_while_the_project_is_checked_is_not_a_violation(tmp_path: Path, monkeypatch):
+    project = _project(tmp_path)
+    temporary = project / "sprites" / "spr_a" / ".status.json.tmp"
+    temporary.write_text("{}", encoding="utf-8")
+    real_scandir = os.scandir
+
+    class Listing:
+        def __init__(self, path):
+            self._scan = real_scandir(path)
+
+        def __enter__(self):
+            entries = list(self._scan.__enter__())
+            # Its writer moves it into place after the directory was listed and before it is looked at.
+            temporary.unlink(missing_ok=True)
+            return iter(entries)
+
+        def __exit__(self, *exc):
+            return self._scan.__exit__(*exc)
+
+    monkeypatch.setattr(os, "scandir", Listing)
+
+    assert find_project_tree_violation(project) is None
+    assert assert_project_tree_contained(project) == project
+
+
 def test_hard_linked_file_is_a_violation(tmp_path: Path):
     project = _project(tmp_path)
     (tmp_path / "shared.gml").write_text("// shared", encoding="utf-8")

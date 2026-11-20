@@ -134,8 +134,13 @@ def find_project_tree_violation(project_root: Path) -> ProjectTreeViolation | No
                     return violation("escaping_link", entry.path)
                 subdirectories.append(entry.path)
                 continue
-            # DirEntry.stat() reports st_nlink as zero on Windows, so ask the filesystem there.
-            link_count = (os.stat(entry.path) if os.name == "nt" else entry.stat(follow_symlinks=False)).st_nlink
+            try:
+                # DirEntry.stat() reports st_nlink as zero on Windows, so ask the filesystem there.
+                link_count = (os.stat(entry.path) if os.name == "nt" else entry.stat(follow_symlinks=False)).st_nlink
+            except FileNotFoundError:
+                # Gone since the directory was listed, as a temporary file is once its writer has put
+                # it in place (a run's status file, every second). Nothing is left there to judge.
+                continue
             if link_count > 1:
                 return violation("multiply_linked", entry.path)
         pending.extend(reversed(subdirectories))
