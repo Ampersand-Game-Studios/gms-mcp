@@ -102,6 +102,39 @@ def test_a_file_that_goes_while_the_project_is_checked_is_not_a_violation(tmp_pa
     assert assert_project_tree_contained(project) == project
 
 
+def test_a_file_windows_will_not_show_while_it_is_replaced_is_asked_about_again(tmp_path: Path, monkeypatch):
+    from gms_helpers import path_safety
+
+    target = tmp_path / "status.json"
+    target.write_text("{}", encoding="utf-8")
+    real_stat = os.stat
+    refusals = [PermissionError(13, "delete pending"), PermissionError(13, "sharing violation")]
+
+    def stat_like_windows(path, *args, **kwargs):
+        if refusals and os.fspath(path) == os.fspath(target):
+            raise refusals.pop()
+        return real_stat(path, *args, **kwargs)
+
+    monkeypatch.setattr(path_safety.os, "stat", stat_like_windows)
+
+    # Refused twice while the file is swapped, then answered: the call is not turned away.
+    assert path_safety._windows_link_count(os.fspath(target)) == 1
+    assert refusals == []
+
+    # Gone once the swap is over: the caller passes it by, as it does any vanished entry.
+    target.unlink()
+    with pytest.raises(FileNotFoundError):
+        path_safety._windows_link_count(os.fspath(target))
+
+    # Out of reach for good is still a failed check, not a pass.
+    def never_shown(path, *args, **kwargs):
+        raise PermissionError(13, "access denied")
+
+    monkeypatch.setattr(path_safety.os, "stat", never_shown)
+    with pytest.raises(PermissionError):
+        path_safety._windows_link_count(os.fspath(target), patience_seconds=0.05)
+
+
 def test_hard_linked_file_is_a_violation(tmp_path: Path):
     project = _project(tmp_path)
     (tmp_path / "shared.gml").write_text("// shared", encoding="utf-8")

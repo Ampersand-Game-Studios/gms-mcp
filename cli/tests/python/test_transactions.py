@@ -702,7 +702,9 @@ class TestTransactionRecoveryAndCoordination(unittest.TestCase):
     def test_project_lock_wait_times_out_naming_the_holder(self):
         from gms_helpers.agent_locks import LockTimeoutError
 
-        with tempfile.TemporaryDirectory() as temp_dir:
+        # Windows can take a moment to let go of the lock file after its holder is killed; the
+        # folder not being removable just then is not what this test is about.
+        with tempfile.TemporaryDirectory(ignore_cleanup_errors=True) as temp_dir:
             root = Path(temp_dir)
             (root / "game.yyp").write_text("{}")
             holder = subprocess.Popen(
