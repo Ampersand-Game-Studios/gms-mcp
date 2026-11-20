@@ -111,18 +111,79 @@ def _build_package_check() -> DoctorCheck:
     )
 
 
+def _build_project_boundary_failure(project_directory: Path, yyp_name: str | None) -> DoctorCheck | None:
+    """Report the entry that makes the MCP server refuse this project, using the server's own check."""
+    from gms_helpers.path_safety import find_project_tree_violation
+
+    try:
+        found = find_project_tree_violation(project_directory.resolve(strict=True))
+    except OSError as exc:
+        found = None
+        problem = f"the project folder could not be read ({type(exc).__name__})"
+    else:
+        if found is None:
+            return None
+        if found.kind == "multiply_linked":
+            problem = f"`{found.relative_path}` is a hard link shared with another file"
+        else:
+            problem = f"`{found.relative_path}` links outside the project folder"
+    advice = [
+        "Set GM_PROJECT_ROOT to the folder that holds only the GameMaker project (the .yyp and its resource folders).",
+        "Or move tooling such as virtual environments, node_modules and build output out of the project folder.",
+    ]
+    return DoctorCheck(
+        id="project_detection",
+        name="project",
+        scope="project",
+        status="error",
+        severity=_severity_for_status("error", fatal=True),
+        message=(
+            f"GameMaker project detected ({yyp_name or 'unknown'}), but the MCP server will refuse to start: {problem}."
+        ),
+        details=list(advice),
+        recommendation=list(advice),
+        metadata={
+            "project_directory": str(project_directory),
+            "yyp": yyp_name,
+            "boundary_violation": None if found is None else {"kind": found.kind, "relative_path": found.relative_path},
+        },
+    )
+
+
 def _build_project_detection_check(*, project_root: str | None, required: bool) -> tuple[DoctorCheck, Path | None]:
     try:
-        project_directory = resolve_project_directory(project_root)
+        root_notice = None
+        if project_root is None:
+            # Look where the server would: at the GM_PROJECT_ROOT the client passes, not only at
+            # the current folder. A setting the client failed to expand is the usual reason a
+            # server "works in the terminal" and never connects in the client.
+            from .server.project import configured_project_root
+
+            configured, root_notice = configured_project_root()
+            project_directory = resolve_project_directory(configured)
+        else:
+            project_directory = resolve_project_directory(project_root)
         yyp_name = find_yyp_name(project_directory)
+        boundary_check = _build_project_boundary_failure(project_directory, yyp_name)
+        if boundary_check is not None:
+            return boundary_check, project_directory
         return (
             DoctorCheck(
                 id="project_detection",
                 name="project",
                 scope="project",
-                status="ok",
-                severity="info",
+                status="warning" if root_notice else "ok",
+                severity=_severity_for_status("warning" if root_notice else "ok"),
                 message=f"GameMaker project detected: {yyp_name or 'unknown'}",
+                details=(
+                    [
+                        root_notice,
+                        'In a Claude .mcp.json write "${CLAUDE_PROJECT_DIR:-.}/<folder>" so the setting '
+                        "still works where the client does not define that variable.",
+                    ]
+                    if root_notice
+                    else []
+                ),
                 metadata={
                     "project_directory": str(project_directory),
                     "yyp": yyp_name,

@@ -21,16 +21,25 @@ import inspect
 import ipaddress
 import os
 import sys
+import threading
 import time
 from importlib.metadata import version
 from pathlib import Path
 from typing import Any
 
 from .server.http_security import local_bearer_auth, validate_local_bearer_token
-from .server.mcp_v2 import MCP_CACHE_HINTS, MCPV2Runtime, MutationSerializationMiddleware, ProjectWatchMiddleware
-from .server.project import ProjectAccessError, ProjectAccessPolicy
-from .server.register_all import ServerConfigurationError, register_all
+from .server.mcp_v2 import (
+    MCP_CACHE_HINTS,
+    MCPV2Runtime,
+    MutationSerializationMiddleware,
+    ProjectWatchMiddleware,
+    UnknownArgumentMiddleware,
+)
+from .server.progress import long_call_progress
+from .server.project import ProjectAccessError, ProjectAccessPolicy, configured_project_root
+from .server.register_all import ServerConfigurationError, enabled_toolsets, optional_toolsets, register_all
 from .server.results import expose_host_diagnostics_from_environment, mcp_tool_result
+from .server.tools.capabilities import server_instructions
 from .server.validation import invalid_arguments_result, validate_mcp_tool_arguments
 from .server.verification_policy import (
     MutationVerificationDecision,
@@ -205,7 +214,101 @@ def _apply_verification_decision(
     return transaction
 
 
+_MUTATION_COUNT_LOCK = threading.Lock()
+_mutations_in_flight = 0
+# How long a change already under way may take to finish after the client has disconnected.
+_MUTATION_DRAIN_SECONDS = 600.0
+
+
+@contextlib.contextmanager
+def _mutation_in_flight():
+    global _mutations_in_flight
+    with _MUTATION_COUNT_LOCK:
+        _mutations_in_flight += 1
+    try:
+        yield
+    finally:
+        with _MUTATION_COUNT_LOCK:
+            _mutations_in_flight -= 1
+
+
+def _leave_after_client_disconnect(threads_before: set[threading.Thread]) -> None:
+    """Stop work that nobody can receive once the stdio client has gone.
+
+    Worker threads outlive the event loop, so a scan or preview started for a client that then
+    closed its thread kept this process, and a CPU core, busy until it finished. A change to the
+    project that is already under way is allowed to finish first: stopping it part-way is worse
+    than completing it.
+    """
+
+    def lingering() -> list[threading.Thread]:
+        current = threading.current_thread()
+        return [
+            thread
+            for thread in threading.enumerate()
+            if thread.is_alive() and not thread.daemon and thread is not current and thread not in threads_before
+        ]
+
+    if lingering():
+        _wait_for_mutations_then_exit()
+
+
+def _wait_for_mutations_then_exit() -> None:
+    # A compiler left running would hold a build slot and a CPU core for a result nobody can read.
+    with contextlib.suppress(Exception):
+        from .server import background_runs
+
+        background_runs.stop_all()
+    deadline = time.monotonic() + _MUTATION_DRAIN_SECONDS
+    while _mutations_in_flight > 0 and time.monotonic() < deadline:
+        time.sleep(0.1)
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(Exception):
+            stream.flush()
+    os._exit(0)
+
+
+def _watch_for_departed_client() -> None:
+    """Exit once nobody can read this server's output any more.
+
+    A tool running in a worker thread cannot be cancelled, and the event loop waits for it even
+    after the client has closed the connection. When the client process itself is gone, the read
+    end of our stdout closes; that is the one sign that no result can be delivered. A client that
+    only finished sending (a shell pipeline) keeps stdout open and is not affected.
+    """
+    import select
+
+    if not hasattr(select, "poll"):
+        return
+    try:
+        descriptor = sys.stdout.fileno()
+        poller = select.poll()
+        # macOS reports a closed reader only when write readiness is asked for, and a pipe is
+        # almost always writable, so this checks once a second without blocking in poll().
+        poller.register(descriptor, select.POLLOUT)
+    except (OSError, ValueError, AttributeError):
+        return
+    gone = select.POLLERR | select.POLLHUP | select.POLLNVAL
+
+    def watch() -> None:
+        while True:
+            time.sleep(1.0)
+            try:
+                events = poller.poll(0)
+            except OSError:
+                return
+            if any(flags & gone for _descriptor, flags in events):
+                _wait_for_mutations_then_exit()
+
+    threading.Thread(target=watch, name="gms-mcp-client-watch", daemon=True).start()
+
+
 def _run_transactional_sync(tool_name: str, arguments: dict[str, Any], call):
+    with _mutation_in_flight():
+        return _run_transactional_sync_locked(tool_name, arguments, call)
+
+
+def _run_transactional_sync_locked(tool_name: str, arguments: dict[str, Any], call):
     from gms_helpers.transactions import GameMakerProjectTransaction
     from gms_helpers.operation_policy import validate_project_operation
 
@@ -241,6 +344,11 @@ def _run_transactional_sync(tool_name: str, arguments: dict[str, Any], call):
 
 
 async def _run_transactional_async(tool_name: str, arguments: dict[str, Any], call):
+    with _mutation_in_flight():
+        return await _run_transactional_async_locked(tool_name, arguments, call)
+
+
+async def _run_transactional_async_locked(tool_name: str, arguments: dict[str, Any], call):
     from gms_helpers.transactions import GameMakerProjectTransaction
     from gms_helpers.operation_policy import validate_project_operation
 
@@ -294,11 +402,25 @@ def _requires_mutation_lock(tool_name: str, arguments: Any) -> bool:
     return name in _SERIALIZED_RUNTIME_OPERATIONS
 
 
+# A working-tree compile can outlive its request (the call hands over to gm_build_status), so the
+# tool takes the mutation lock itself and holds it until the compiler has finished.
+_SELF_SERIALIZED_OPERATIONS = frozenset({"compile"})
+
+
+def _request_holds_mutation_lock(tool_name: str, arguments: Any) -> bool:
+    """Whether the lock is taken around the request, as opposed to by the tool for longer than it."""
+    return (
+        _requires_mutation_lock(tool_name, arguments)
+        and canonical_operation_name(tool_name) not in _SELF_SERIALIZED_OPERATIONS
+    )
+
+
 # Read tools that inspect locks, sessions or the server itself must answer while a
 # mutation holds the project lock.
 _UNLOCKED_READ_OPERATIONS = frozenset(
     {
         "bridge-status",
+        "build-status",
         "capabilities",
         "check-updates",
         "doc-cache-stats",
@@ -478,13 +600,19 @@ def _wrap_tool_registration(
                     elif policy_error is not None:
                         result = policy_error
                     elif _tool_should_use_transaction(tool_name, arguments):
-                        result = await _run_transactional_async(
-                            tool_name,
-                            arguments,
-                            lambda: func(*call_args, **call_kwargs),
-                        )
+                        async with long_call_progress(
+                            arguments.get("ctx"), tool_name, project_access_policy.project_root
+                        ):
+                            result = await _run_transactional_async(
+                                tool_name,
+                                arguments,
+                                lambda: func(*call_args, **call_kwargs),
+                            )
                     else:
-                        async with _shared_project_read_lock_async(tool_name, arguments):
+                        async with (
+                            long_call_progress(arguments.get("ctx"), tool_name, project_access_policy.project_root),
+                            _shared_project_read_lock_async(tool_name, arguments),
+                        ):
                             result = await func(*call_args, **call_kwargs)
                     duration_ms = int((time.monotonic() - start) * 1000)
                     execution = get_tool_execution_context() or {}
@@ -502,6 +630,7 @@ def _wrap_tool_registration(
                         result,
                         project_root=project_access_policy.project_root,
                         expose_host_diagnostics=expose_host_diagnostics,
+                        total_seconds=duration_ms / 1000,
                     )
                 except Exception as exc:
                     if isinstance(exc, ProjectAccessError):
@@ -685,6 +814,10 @@ def _wrap_tool_registration(
             tool_family = _tool_family_for_function(func)
             wrapped = _instrument_callable(func, tool_name, tool_family)
             registration_kwargs = dict(tool_kwargs)
+            if "description" not in registration_kwargs and func.__doc__:
+                # A docstring that opens on its own line would otherwise reach clients with a blank
+                # first line and its source indentation, which tool lists then show as empty.
+                registration_kwargs["description"] = inspect.cleandoc(func.__doc__)
             if "annotations" not in registration_kwargs:
                 from mcp.types import ToolAnnotations
 
@@ -736,6 +869,11 @@ def build_server(*, http_auth_value: str | None = None, http_auth_issuer_url: st
         "GameMaker MCP",
         title="GameMaker MCP",
         description="Safe, structured GameMaker project tooling.",
+        instructions=server_instructions(
+            enabled=enabled_toolsets(),
+            optional=optional_toolsets(),
+            read_only=read_only_mode_enabled(),
+        ),
         version=version("gms-mcp"),
         cache_hints=MCP_CACHE_HINTS,
         subscriptions=runtime.subscriptions,
@@ -744,10 +882,14 @@ def build_server(*, http_auth_value: str | None = None, http_auth_issuer_url: st
         token_verifier=token_verifier,
         extensions=[dashboard_app],
         middleware=[
+            UnknownArgumentMiddleware(
+                lambda: mcp.list_tools(),
+                lambda failure: mcp_tool_result(failure, project_root=project_access_policy.project_root),
+            ),
             ProjectWatchMiddleware(runtime),
             MutationSerializationMiddleware(
                 runtime,
-                _requires_mutation_lock,
+                _request_holds_mutation_lock,
                 _is_committed_mutation_result,
             ),
         ],
@@ -764,7 +906,45 @@ def build_server(*, http_auth_value: str | None = None, http_auth_issuer_url: st
         project_access_policy=project_access_policy,
         expose_host_diagnostics=expose_host_diagnostics,
         resolution_runtime=runtime.resolution,
+        mutation_scope=runtime.mutation_scope,
     )
+
+    return mcp
+
+
+_NO_PROJECT_REASON = (
+    "No GameMaker project (.yyp) was found from the folder this session was started in, so there is "
+    "nothing for the gm_* tools to work on. In a workspace that has one, set GM_PROJECT_ROOT in this "
+    "server's client config to the project folder (a relative path is resolved from the workspace) "
+    "and start a new session."
+)
+_UNSAFE_PROJECT_REASON = (
+    "The GameMaker project for this session did not pass the server's safety check, so the gm_* "
+    "tools are not offered. Run `gms-mcp doctor` in a terminal from the workspace: it names the "
+    "entry that failed and how to fix it. Then start a new session."
+)
+
+
+def build_unavailable_server(reason: str) -> Any:
+    """A server that connects and says why it has no GameMaker tools to offer.
+
+    A server that exits at startup reaches the agent as nothing but "connection closed", in every
+    session of a client that starts it everywhere, including folders with no game in them.
+    """
+    from mcp.server.mcpserver import MCPServer
+
+    mcp = MCPServer(
+        "GameMaker MCP",
+        title="GameMaker MCP",
+        description="Safe, structured GameMaker project tooling.",
+        instructions=f"The GameMaker tools are not available in this session. {reason}",
+        version=version("gms-mcp"),
+    )
+
+    @mcp.tool()
+    def gm_project_info() -> dict[str, Any]:
+        """Say why the GameMaker tools are not available in this session, and what would make them so."""
+        return {"ok": False, "available": False, "error": reason}
 
     return mcp
 
@@ -839,6 +1019,7 @@ def main(argv: list[str] | None = None) -> int:
     if server_args is None:
         return argument_exit_code
 
+    server_unavailable = False
     try:
         if server_args.transport == "streamable-http":
             http_auth_value = _http_auth_value_from_environment()
@@ -881,16 +1062,38 @@ def main(argv: list[str] | None = None) -> int:
         sys.stderr.write(f"MCP server could not start because its configuration is invalid: {exc}\n")
         return 2
     except Exception as exc:
-        sys.stderr.write(
-            "MCP server could not start because its approved GameMaker project is unavailable or unsafe.\n"
-        )
+        no_project = isinstance(exc, FileNotFoundError)
+        if no_project:
+            sys.stderr.write(
+                "No GameMaker project was found from the folder this MCP server was started in, "
+                "so it has no GameMaker tools to offer.\n"
+            )
+        else:
+            sys.stderr.write(
+                "MCP server has no GameMaker tools to offer because its approved GameMaker project is unsafe.\n"
+                "Run `gms-mcp doctor` from the workspace to see which entry is unsafe and how to fix it.\n"
+            )
         if expose_host_diagnostics_from_environment():
             sys.stderr.write(f"Details: {exc}\n")
-        return 1
+        if server_args.transport != "stdio":
+            return 1
+        # Stay connected with the one tool that explains this, rather than vanish.
+        try:
+            server = build_unavailable_server(_NO_PROJECT_REASON if no_project else _UNSAFE_PROJECT_REASON)
+        except Exception:
+            return 1
+        server_unavailable = True
+
+    root_notice = None if server_unavailable else configured_project_root()[1]
+    if root_notice:
+        sys.stderr.write(f"[gms-mcp] {root_notice}\n")
 
     try:
         if server_args.transport == "stdio":
+            threads_before = set(threading.enumerate())
+            _watch_for_departed_client()
             server.run()
+            _leave_after_client_disconnect(threads_before)
         else:
             server.run(
                 "streamable-http",

@@ -61,6 +61,7 @@ async def _run_with_fallback(
     timeout_seconds: int | None = None,
     tool_name: str | None = None,
     ctx: Any | None = None,
+    extra_environment: Dict[str, str] | None = None,
 ) -> Dict[str, Any]:
     derived_tool_name = tool_name
     if not derived_tool_name:
@@ -143,6 +144,7 @@ async def _run_with_fallback(
                     tool_name=derived_tool_name,
                     ctx=ctx,
                     persist_logs=persist_logs,
+                    extra_environment=extra_environment,
                 )
             ).as_dict(),
             output_mode=output_mode,
@@ -245,6 +247,7 @@ async def _run_with_fallback(
         tool_name=derived_tool_name,
         ctx=ctx,
         persist_logs=persist_logs,
+        extra_environment=extra_environment,
     )
     cli_result.direct_error = direct_result.error or "Direct call failed"
     result = _apply_output_mode(

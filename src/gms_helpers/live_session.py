@@ -36,7 +36,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable
 
-from . import snapshot_build
+from . import run_status, snapshot_build
 from .agent_locks import DirectoryLock
 from .mac_runtime import prepare_mac_runtime, project_identity, project_run_lock
 from .bridge_server import BridgeServer
@@ -257,6 +257,8 @@ def _start(
         shots = run_dir / "shots"
         if shots.exists():
             shutil.rmtree(shots)
+        run_status.raise_if_stopped()
+        run_status.report_stage("starting the game")
         process, debug_log = _launch_game(
             owned_runtime.runner,
             staging,
@@ -266,6 +268,7 @@ def _start(
         )
         lock.bind_process(process.pid)
         label_lock.bind_process(process.pid)
+        run_status.report_stage("connecting to the game", live_log=str(debug_log))
         deadline = time.monotonic() + connect_timeout_seconds
         while (
             owns_bridge
@@ -274,6 +277,7 @@ def _start(
             and not bridge.is_connected
             and process.poll() is None
         ):
+            run_status.raise_if_stopped()
             time.sleep(0.2)
         # Give the endpoint a moment to send its handshake.
         handshake_deadline = time.monotonic() + 2.0
@@ -553,7 +557,8 @@ def stop(project_root: str | Path) -> dict[str, Any]:
             str(snapshot_build._relative(session.project_root, shot))
             for shot in (session.run_dir / "shots").glob("*.png")
         ),
-        "new_screenshots": len(shots),
+        # Screenshots the game saved itself that were only collected now, beyond those listed above.
+        "collected_at_stop": len(shots),
     }
 
 
@@ -697,9 +702,12 @@ def start(project_root: str | Path, **options: Any) -> dict[str, Any]:
     label_lock = snapshot_build.pipeline_lock(project_root, options.get("label", "live"))
     lock = project_run_lock(project_root)
     timeout = float(options.get("lock_timeout_seconds", 3600.0))
-    label_lock.acquire(timeout_seconds=timeout)
+    label_lock.acquire(timeout_seconds=timeout, sleep=run_status.sleep_unless_stopped)
     try:
-        lock.acquire(timeout_seconds=timeout)
+        lock.acquire(
+            timeout_seconds=timeout,
+            sleep=run_status.waiting_sleep("waiting for this project's game to be free"),
+        )
         try:
             # A concurrent launcher may have published a session while we waited.
             # Reconcile it under our lease before replacing its logs or metadata.

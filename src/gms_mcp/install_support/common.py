@@ -786,6 +786,13 @@ def _validate_common_entry(
             gm_project_root = env.get("GM_PROJECT_ROOT")
             if not isinstance(gm_project_root, str) or not gm_project_root.strip():
                 problems.append("`env.GM_PROJECT_ROOT` must be a non-empty string.")
+            elif "${CLAUDE_PROJECT_DIR}" in gm_project_root:
+                # Clients built on the Claude Agent SDK do not all define this variable, and
+                # without a default the server is then pointed at a folder that does not exist.
+                problems.append(
+                    "`env.GM_PROJECT_ROOT` uses `${CLAUDE_PROJECT_DIR}` with no fallback; "
+                    "write `${CLAUDE_PROJECT_DIR:-.}` so it also works where the client leaves it undefined."
+                )
         if env.get("PYTHONUNBUFFERED") != "1":
             problems.append('`env.PYTHONUNBUFFERED` should be "1" for unbuffered logs.')
 

@@ -4,6 +4,7 @@ GameMaker Studio Room Instance Helper
 Provides CLI and library functions for managing object instances in rooms.
 """
 
+import re
 import os
 import json
 import argparse
@@ -90,6 +91,29 @@ def _iter_layers(layers: Any):
 # ------------------------------------------------------------------
 
 
+_INSTANCE_NAME = re.compile(r"inst_[0-9A-Fa-f]+")
+
+
+def _new_instance_name(project_root: Path) -> str:
+    """Name a new instance as the IDE does: ``inst_`` and eight hex digits, unique in the project.
+
+    Instance names are global identifiers in GML, so the name must not repeat in any room.
+    """
+    import secrets
+
+    taken: set[str] = set()
+    for room_file in (project_root / "rooms").glob("*/*.yy"):
+        try:
+            text = room_file.read_text(encoding="utf-8", errors="replace")
+        except OSError:
+            continue
+        taken.update(name.upper() for name in _INSTANCE_NAME.findall(text))
+    while True:
+        name = f"inst_{secrets.randbits(32):08X}"
+        if name.upper() not in taken:
+            return name
+
+
 def add_instance(
     room_name: str,
     object_name: str,
@@ -117,10 +141,7 @@ def add_instance(
     if layer.get("resourceType") != "GMRInstanceLayer":
         raise ValidationError(f"Layer '{layer_name}' is not an instance layer (type: {layer.get('resourceType')})")
 
-    # Generate a unique name/ID for the instance
-    import uuid
-
-    instance_id = f"inst_{uuid.uuid4().hex}"
+    instance_id = _new_instance_name(root)
 
     # Create the instance entry (GameMaker-compatible, with type tag first)
     new_instance = {

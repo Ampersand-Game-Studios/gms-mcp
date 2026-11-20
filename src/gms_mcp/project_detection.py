@@ -26,17 +26,35 @@ def _normalize_candidate(raw: str | Path) -> Path:
     return candidate
 
 
-def _search_upwards_for_yyp(start_dir: Path) -> Path | None:
+def _upward_search_directories(start_dir: Path) -> list[Path]:
+    """The folders an upward search may choose: ``start_dir`` and its parents, below the home folder.
+
+    A home folder, the folders above it and a filesystem root hold everything a person owns. A stray
+    project file there is never the project of a session started somewhere underneath, and choosing
+    one would make the whole account the project.
+    """
     start_dir = Path(start_dir).resolve()
+    try:
+        home = Path.home().resolve()
+    except (OSError, RuntimeError):
+        home = None
+    directories = []
     for candidate in [start_dir, *start_dir.parents]:
+        if candidate.parent == candidate or (home is not None and (candidate == home or candidate in home.parents)):
+            break
+        directories.append(candidate)
+    return directories
+
+
+def _search_upwards_for_yyp(start_dir: Path) -> Path | None:
+    for candidate in _upward_search_directories(start_dir):
         if _list_yyp_files(candidate):
             return candidate
     return None
 
 
 def _search_upwards_for_gamemaker_yyp(start_dir: Path) -> Path | None:
-    start_dir = Path(start_dir).resolve()
-    for candidate in [start_dir, *start_dir.parents]:
+    for candidate in _upward_search_directories(start_dir):
         gamemaker_dir = candidate / "gamemaker"
         if gamemaker_dir.is_dir() and _list_yyp_files(gamemaker_dir):
             return gamemaker_dir

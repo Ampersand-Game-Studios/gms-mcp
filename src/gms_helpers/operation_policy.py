@@ -117,13 +117,13 @@ _OPERATION_SCOPES = {
     # Snapshot builds and live sessions run Igor and the game on throwaway copies; they
     # never edit project resources.
     **dict.fromkeys(
-        "snapshot-compile test-run game-start game-stop game-command game-screenshot live-reload-start live-reload-stop".split(),
+        "snapshot-compile test-run build-stop game-start game-stop game-command game-screenshot live-reload-start live-reload-stop".split(),
         "runtime",
     ),
     # Stages (and optionally commits) in git; the working tree's project files are untouched.
     "vcs-stage": "vcs",
     **dict.fromkeys(
-        "project-check included-file-list config-list audio-group-list lock-status run-log game-status game-log live-reload-status".split(),
+        "project-check included-file-list config-list audio-group-list lock-status run-log build-status game-status game-log live-reload-status".split(),
         "read",
     ),
     **dict.fromkeys(

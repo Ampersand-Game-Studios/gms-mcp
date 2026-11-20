@@ -18,6 +18,8 @@ import traceback
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
+from gms_helpers import run_status
+
 from ..telemetry import SUPPRESS_CLI_TELEMETRY_ENV_VAR
 from .debug import _dbg
 from .log_paths import diagnostic_log_dir, secure_private_file
@@ -432,6 +434,7 @@ async def _run_cli_async(
     tool_name: str | None = None,
     ctx: Any | None = None,
     persist_logs: bool = True,
+    extra_environment: Dict[str, str] | None = None,
 ) -> ToolRunResult:
     """
     Run the CLI in a subprocess with:
@@ -483,6 +486,7 @@ async def _run_cli_async(
     nested_cli_env["PYTHONSAFEPATH"] = "1"
     nested_cli_env["PYTHONPATH"] = str(Path(__file__).resolve().parents[2])
     nested_cli_env["GMS_MCP_APPROVED_PROJECT_ROOT"] = str(project_directory.resolve())
+    nested_cli_env.update(extra_environment or {})
 
     effective_timeout = timeout_seconds
     if effective_timeout is None:
@@ -536,9 +540,11 @@ async def _run_subprocess_async(
     Generic subprocess runner with safe stdout/stderr draining + timeout + cancellation.
 
     IMPORTANT:
-    Do NOT call `ctx.log()` (or emit any MCP notifications) while a subprocess is running.
-    Cursor's MCP transport shares stdio; attempting to stream logs can deadlock the server
-    if the client applies backpressure or stops consuming notifications.
+    Do NOT call `ctx.log()` (or await any MCP notification) from this function while a subprocess
+    is running. Cursor's MCP transport shares stdio; attempting to stream logs can deadlock the
+    server if the client applies backpressure or stops consuming notifications.
+    Progress for long calls is sent by `server.progress.long_call_progress` instead: from its own
+    task, only when the client asked for progress, and with every send bounded by a timeout.
     Persistent logs are optional; stdout/stderr remain available in the result.
     """
     safe_command = _redact_command(cmd)
@@ -561,6 +567,8 @@ async def _run_subprocess_async(
     log_path = _new_log_path(cwd, tool_name) if persist_logs else None
     if log_path is not None:
         _mark_log_active(log_path)
+        # A build that is being followed shows the last lines of this file while it runs.
+        run_status.report_detail(live_log=str(log_path))
     start = time.monotonic()
 
     stdout_capture = _BoundedByteCapture(SUBPROCESS_CAPTURE_MAX_BYTES)

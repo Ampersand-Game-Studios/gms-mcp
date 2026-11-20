@@ -3,14 +3,38 @@
 from __future__ import annotations
 
 import asyncio
+from pathlib import Path
 from typing import Any, Dict, List
 
+from .. import background_runs
 from ..mcp_types import Context
 from ..project import _resolve_project_directory
+from ..results import MAX_INLINE_IMAGE_BYTES, attach_result_image
 
 
 def _failure(tool: str, exc: Exception) -> Dict[str, Any]:
     return {"ok": False, "tool": tool, "error": str(exc), "error_type": type(exc).__name__}
+
+
+def _attach_screenshot(root: Path, result: Dict[str, Any]) -> None:
+    """Return the saved image with the result, so the caller does not need a second read to look."""
+    relative = result.get("screenshot") if result.get("ok") else None
+    if not isinstance(relative, str):
+        return
+    image = root / relative
+    try:
+        if image.is_symlink() or not image.is_file():
+            return
+        size = image.stat().st_size
+        if size > MAX_INLINE_IMAGE_BYTES:
+            result["image_attached"] = False
+            result["message"] = f"The image is {size} bytes, too large to attach. Open the image file to look at it."
+            return
+        attach_result_image(image.read_bytes())
+    except OSError:
+        return
+    result["image_attached"] = True
+    result["message"] = "The image is attached to this result and saved at `screenshot`."
 
 
 def register(mcp: Any, ContextType: Any) -> None:
@@ -25,11 +49,17 @@ def register(mcp: Any, ContextType: Any) -> None:
         ref: str = "HEAD",
         connect_timeout_seconds: int = 60,
         runtime_version: str | None = None,
+        background: bool = False,
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
         Build a throwaway copy of the project, start the game and connect to it over the runtime bridge.
+
+        The build takes minutes. A call that has no result after about 20 seconds returns status
+        STILL_RUNNING with the build's stage, and the start carries on: follow it with
+        gm_build_status(label=...), which returns this result once the game is up.
+        background=true returns at once instead.
 
         After it returns status RUNNING you can drive the game with:
           gm_game_command("ping" | "help" | "state" | "console <console command line>" | "log_tail 50")
@@ -47,19 +77,27 @@ def register(mcp: Any, ContextType: Any) -> None:
         _ = ctx
         from gms_helpers import live_session
 
+        from gms_helpers.snapshot_build import runs_directory, safe_label
+
         root = _resolve_project_directory(project_root)
+        label = safe_label(label)  # the name the run is filed and reported under
+
+        def work() -> Dict[str, Any]:
+            return live_session.start(
+                root,
+                label=label,
+                isolate_paths=isolate_paths,
+                yyp_entries=yyp_entries,
+                base_only=base_only,
+                ref=ref,
+                runtime_version=runtime_version,
+                connect_timeout_seconds=float(connect_timeout_seconds),
+            )
+
         try:
-            return await asyncio.to_thread(
-                lambda: live_session.start(
-                    root,
-                    label=label,
-                    isolate_paths=isolate_paths,
-                    yyp_entries=yyp_entries,
-                    base_only=base_only,
-                    ref=ref,
-                    runtime_version=runtime_version,
-                    connect_timeout_seconds=float(connect_timeout_seconds),
-                )
+            run_dir = runs_directory(root, label)
+            return await background_runs.run(
+                run_dir, label, "gm_game_start", work, wait_seconds=background_runs.call_wait_seconds(root, background)
             )
         except Exception as exc:  # noqa: BLE001
             return _failure("gm_game_start", exc)
@@ -101,15 +139,22 @@ def register(mcp: Any, ContextType: Any) -> None:
     async def gm_game_screenshot(
         name: str = "shot", project_root: str = ".", ctx: Context | None = None
     ) -> Dict[str, Any]:
-        """Take a screenshot of the live game. Returns the image path (inside .gms_mcp/runs/<label>/shots/); open it to look."""
+        """
+        Take a screenshot of the live game and return the image.
+
+        The image is attached to the result and saved inside .gms_mcp/runs/<label>/shots/ (`screenshot`).
+        A very large image is saved only; `image_attached` says which happened.
+        """
         _ = ctx
         from gms_helpers import live_session
 
         root = _resolve_project_directory(project_root)
         try:
-            return await asyncio.to_thread(lambda: live_session.screenshot(root, name))
+            result = await asyncio.to_thread(lambda: live_session.screenshot(root, name))
         except Exception as exc:  # noqa: BLE001
             return _failure("gm_game_screenshot", exc)
+        _attach_screenshot(root, result)
+        return result
 
     @mcp.tool()
     def gm_game_log(

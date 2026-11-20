@@ -72,7 +72,7 @@ gms-mcp-init --client claude-code --scope workspace --action app-setup
 
 These canonical setup commands default to the **read-only `safe` profile**. They write client configuration; they do not grant the assistant project-editing or build tools. Read and complete any client registration instructions printed by the installer, then restart the client's MCP connection.
 
-**Codex:** the explicit `--config-path` writes to `.codex/config.toml`, the project-scoped configuration supported by Codex for **trusted projects**. Without that override, the initializer writes a `.codex/mcp.toml` snippet that needs separate registration. Keep the override on subsequent setup/profile/check commands. Review existing configuration before merging, and only trust projects you recognize. See [OpenAI's MCP configuration guide](https://developers.openai.com/codex/mcp/).
+**Codex:** workspace setup writes `.codex/config.toml`, the project-scoped configuration Codex loads for **trusted projects**; no separate registration is needed. Codex does not read `.codex/mcp.toml`, which earlier releases wrote: `check` reports it, and running setup again writes the supported file. Review existing configuration before merging, and only trust projects you recognize. See [OpenAI's MCP configuration guide](https://developers.openai.com/codex/mcp/).
 
 Other installer targets include `antigravity` (alias `gemini`), `vscode`, `windsurf`, `openclaw`, and `generic`. Some targets generate configuration for you to import rather than activating a native client connection automatically. The `claude-desktop` target uses `--scope global` and generates a plugin bundle. Check the [compatibility matrix](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/documentation/COMPATIBILITY_MATRIX.md) for supported scopes and the [client guide](https://github.com/Ampersand-Game-Studios/gms-mcp/blob/main/documentation/CLIENT_SUPPORT_MATRIX.md) for capability limits.
 
@@ -216,6 +216,7 @@ These are configuration values, not a shell script. Do not enable them in the re
 | Symptom | Check |
 | --- | --- |
 | The client cannot launch `gms-mcp` | Confirm the package is installed and its executables are on the client's PATH. Restart the client after installation. |
+| The client reports the server closed its connection at startup | Upgrade first: current servers start even when the client passes `GM_PROJECT_ROOT` unexpanded (for example `${CLAUDE_PROJECT_DIR}/gamemaker` where the client does not define the variable) and report it in `gm_project_info`. Then run `gms-mcp doctor` from the workspace. The server refuses a project folder containing a link that leaves it (for example a virtual environment or `node_modules/.bin`); doctor names the entry. Point `GM_PROJECT_ROOT` at the folder that holds only the GameMaker project, or move the tooling out. |
 | Config exists, but no tools appear | Complete the client's registration/import step, restart its MCP connection, and call `gm_capabilities`. Installer readiness is a config check, not proof of a live connection. |
 | Editing or build tools are missing | Check the active profile. `safe` intentionally omits them; select `standard`/`full` and restart. |
 | The wrong project is detected | Run setup from the game workspace and specify `--gm-project-root path/to/game` when needed. Restart the server after changing the target. |

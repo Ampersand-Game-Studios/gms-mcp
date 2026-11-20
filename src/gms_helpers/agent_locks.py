@@ -48,6 +48,11 @@ REPOSITORY_LOCK = "repo.lock"
 LEGACY_GAME_RUN_LOCK = "gamerun.lock"
 MOBILE_BUILD_LOCK = "ios_build.lock"
 BUILD_SLOT_PREFIX = "build_slot_"
+GAME_LEASE_PREFIX = "game_"
+# How old a lock must be before it is taken over when its owner cannot be inspected (another host, or no record).
+DEFAULT_STALE_SECONDS = 900.0
+BUILD_SLOT_STALE_SECONDS = 1200.0
+GAME_LEASE_STALE_SECONDS = 4 * 3600.0
 
 
 class LockTimeoutError(TimeoutError):
@@ -155,7 +160,7 @@ class DirectoryLock:
         name: str,
         *,
         directory: Path | None = None,
-        stale_seconds: float = 900.0,
+        stale_seconds: float = DEFAULT_STALE_SECONDS,
         purpose: str = "",
     ):
         self.name = name
@@ -206,6 +211,21 @@ class DirectoryLock:
         except OSError:
             return None
 
+    def heartbeat(self) -> None:
+        """Show that the holder is still at work, for a contender that can only judge this lock by its age.
+
+        The owner record is stamped with the same time as the lock: a record older than its lock
+        reads as an earlier holder's, and the holder could then never release the lock.
+        """
+        if not self.held:
+            return
+        now = time.time_ns()
+        for path in (self.owner_path, self.path):
+            try:
+                os.utime(path, ns=(now, now))
+            except OSError:
+                pass
+
     def describe(self) -> dict:
         age = self.age_seconds()
         return {
@@ -213,6 +233,8 @@ class DirectoryLock:
             "held": age is not None,
             "age_seconds": None if age is None else round(age, 1),
             "owner": self.owner() if age is not None else None,
+            # What the next process to want this lock would decide: its holder is gone, so it is taken over.
+            "left_behind": self._is_stale(),
         }
 
     def _is_stale(self) -> bool:
@@ -383,7 +405,12 @@ class BuildSlot:
     """A counting semaphore made of ``build_slot_<n>`` directory locks."""
 
     def __init__(
-        self, slots: int = 4, *, directory: Path | None = None, purpose: str = "", stale_seconds: float = 1200.0
+        self,
+        slots: int = 4,
+        *,
+        directory: Path | None = None,
+        purpose: str = "",
+        stale_seconds: float = BUILD_SLOT_STALE_SECONDS,
     ):
         self.slots = max(1, int(slots))
         self.directory = directory
@@ -427,6 +454,15 @@ class BuildSlot:
         self.release()
 
 
+def _stale_seconds_for(name: str) -> float:
+    """How old a lock with no inspectable owner must be before it is taken over, by the kind its name gives."""
+    if name.startswith(GAME_LEASE_PREFIX):
+        return GAME_LEASE_STALE_SECONDS
+    if name.startswith(BUILD_SLOT_PREFIX):
+        return BUILD_SLOT_STALE_SECONDS
+    return DEFAULT_STALE_SECONDS
+
+
 def lock_status(slots: int = 4, *, directory: Path | None = None) -> dict:
     """Describe every shared lock so an agent can see why it is waiting."""
     base = Path(directory) if directory is not None else lock_directory()
@@ -439,5 +475,7 @@ def lock_status(slots: int = 4, *, directory: Path | None = None) -> dict:
     names.extend(sorted(path.name for path in base.glob("*.lock") if path.name not in names))
     return {
         "lock_directory": str(base),
-        "locks": [DirectoryLock(name, directory=base).describe() for name in names],
+        "locks": [
+            DirectoryLock(name, directory=base, stale_seconds=_stale_seconds_for(name)).describe() for name in names
+        ],
     }
