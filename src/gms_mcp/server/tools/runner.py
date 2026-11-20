@@ -122,9 +122,11 @@ def register(
         root = _resolve_project_directory(project_root)
         loop = asyncio.get_running_loop()
         pending: list[concurrent.futures.Future] = []
+        began = threading.Event()
         unwound = threading.Event()
 
         async def compile_holding_the_project() -> Dict[str, Any]:
+            began.set()
             try:
                 return await compile_serialized()
             finally:
@@ -190,17 +192,21 @@ def register(
 
         def work() -> Dict[str, Any]:
             with label_pipeline(root, WORKING_TREE_LABEL):
+                # Stopped while this run was still taking its label: nothing has been started.
+                run_status.raise_if_stopped()
                 future = asyncio.run_coroutine_threadsafe(compile_holding_the_project(), loop)
                 pending.append(future)
                 if run_status.stop_requested():
-                    # The stop arrived while this run was still taking its label, before there was
-                    # anything for it to cancel.
+                    # The stop came after that check and before there was anything for it to cancel.
                     future.cancel()
                 try:
                     return future.result()
                 except concurrent.futures.CancelledError:
-                    # The future reads as cancelled at once; the compiler is gone only when the task has unwound.
-                    unwound.wait(timeout=30)
+                    # The future reads as cancelled at once; the compiler is gone only when the task
+                    # has unwound. A task cancelled before it ran a line has nothing to unwind, and
+                    # would never say that it had.
+                    if began.is_set():
+                        unwound.wait(timeout=30)
                     raise run_status.RunStopped("The compile was stopped on request.") from None
 
         def cancel() -> None:

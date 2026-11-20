@@ -988,35 +988,57 @@ def test_housekeeping_under_another_label_does_not_start_the_current_runs_record
                 assert tracker.snapshot()["stage"] == "starting"
 
 
-def test_a_working_tree_compile_stopped_while_taking_its_label_never_compiles(tmp_path: Path):
+@pytest.mark.parametrize("stop_arrives", ["while taking the label", "as the compile is handed over"])
+def test_a_working_tree_compile_stopped_before_it_starts_never_compiles(tmp_path: Path, stop_arrives: str):
     from contextlib import contextmanager as make_context_manager
 
     from mcp import Client
 
+    from gms_mcp.server.tools import runner as runner_tools
+
     compiled = []
+    hand_over = asyncio.run_coroutine_threadsafe
 
     @make_context_manager
-    def label_taken_as_the_stop_arrives(_root, _label, *args, **kwargs):
-        # Too early for the stop to find anything to cancel: the compile has not been handed over yet.
-        run_status.current().request_stop()
+    def label_taken(_root, _label, *args, **kwargs):
+        if stop_arrives == "while taking the label":
+            run_status.current().request_stop()
         yield
+
+    def handed_over_as_the_stop_arrives(coroutine, loop):
+        # Too late for the first check, too early for the stop to have found anything to cancel.
+        future = hand_over(coroutine, loop)
+        run_status.current().request_stop()
+        return future
 
     async def scenario(server) -> None:
         async def fake_compile(**_options):
             compiled.append(True)
             await asyncio.Event().wait()
 
-        with (
+        patches = [
             patch("gms_mcp.server.tools.runner._run_with_fallback", fake_compile),
-            patch.object(snapshot_build, "label_pipeline", label_taken_as_the_stop_arrives),
-        ):
+            patch.object(snapshot_build, "label_pipeline", label_taken),
+        ]
+        if stop_arrives == "as the compile is handed over":
+            patches.append(
+                patch.object(runner_tools.asyncio, "run_coroutine_threadsafe", handed_over_as_the_stop_arrives)
+            )
+        for each in patches:
+            each.start()
+        try:
             async with Client(server, mode="2026-07-28") as client:
-                result = unwrap_call_tool_result(await asyncio.wait_for(client.call_tool("gm_compile", {}), timeout=20))
+                # Well inside the time the call waits before handing over: a run that hung would not make it.
+                result = unwrap_call_tool_result(await asyncio.wait_for(client.call_tool("gm_compile", {}), timeout=10))
                 assert (result["finished"], result["status"]) == (True, "STOPPED")
                 # The project is free again: a change is not left waiting behind a compile nobody wants.
                 await asyncio.wait_for(
-                    client.call_tool("gm_safe_delete", {"asset_type": "script", "asset_name": "scr_none"}), timeout=20
+                    client.call_tool("gm_safe_delete", {"asset_type": "script", "asset_name": "scr_none"}), timeout=10
                 )
+        finally:
+            for each in reversed(patches):
+                each.stop()
 
     with _server(tmp_path) as (server, _project):
         asyncio.run(scenario(server))
+    assert compiled == [], "no compiler was started"
