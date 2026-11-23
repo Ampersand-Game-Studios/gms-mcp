@@ -76,6 +76,46 @@ def _compact_handler_result(value: Any) -> Any:
     return compact
 
 
+def _within_new_folders(paths: list) -> list:
+    """Name a folder that was created (or deleted) whole once, as "folder/", instead of every path in it.
+
+    Everything under a folder the change created is new by definition, so listing the folder says
+    exactly what the full list said.
+    """
+    entries = sorted({str(path) for path in paths})
+    listed = set(entries)
+
+    def ancestors(path: str) -> list:
+        parts = path.split("/")
+        return ["/".join(parts[:index]) for index in range(1, len(parts))]
+
+    folders = {ancestor for path in entries for ancestor in ancestors(path) if ancestor in listed}
+    return [
+        path + "/" if path in folders else path
+        for path in entries
+        if not any(ancestor in folders for ancestor in ancestors(path))
+    ]
+
+
+# Lines every command prints on the way in; they say only that the project was found.
+_BOILERPLATE_LINE = re.compile(r"^\[OK\] (Found GameMaker project|GameMaker project validated): .*$")
+_CREATED_LINE = re.compile(r"^Created (\S.*?)( \(dummy image\))?$")
+
+
+def _without_repeated_lines(stdout: str, transaction: Any) -> str:
+    """Printed output without what the result says elsewhere: boilerplate, and "Created <file>"
+    lines when the transaction lists what was created."""
+    if not stdout:
+        return stdout
+    listed = isinstance(transaction, dict) and bool((transaction.get("changes") or {}).get("created"))
+    kept = [
+        line
+        for line in stdout.splitlines()
+        if not _BOILERPLATE_LINE.match(line) and not (listed and _CREATED_LINE.match(line))
+    ]
+    return "\n".join(kept) + ("\n" if kept and stdout.endswith("\n") else "")
+
+
 def _compact_transaction(value: Any) -> Any:
     """Reduce a committed transaction to what changed and anything that needs attention.
 
@@ -94,9 +134,11 @@ def _compact_transaction(value: Any) -> Any:
         return value
     changes = value.get("changes")
     if isinstance(changes, dict):
-        listed = {key: changes[key] for key in ("created", "modified", "deleted") if changes.get(key)}
-        if changes.get("truncated"):
-            listed.update({key: changes[key] for key in changes if key.endswith("_count")}, truncated=True)
+        listed = {
+            key: _within_new_folders(changes[key]) if key in ("created", "deleted") else changes[key]
+            for key in ("created", "modified", "deleted")
+            if changes.get(key)
+        }
         if compact["committed"]:
             compact["changes"] = listed
             if not listed:
@@ -112,10 +154,8 @@ def _compact_transaction(value: Any) -> Any:
             compact.setdefault("validation", {})["success"] = False
         preexisting = validation.get("preexisting_error_count")
         if preexisting:
-            compact["preexisting_issues"] = (
-                f"{preexisting} validation issue(s) were already in the project before this change; "
-                "gm_project_check lists them under asset_reference_issues."
-            )
+            # How many problems the project already had; the server instructions say where they are listed.
+            compact["preexisting_issues"] = preexisting
     for key in ("compile_verification", "gamemaker_ide"):
         if value.get(key) is not None:
             compact[key] = value[key]
@@ -162,6 +202,13 @@ def _without_run_plumbing(value: Any) -> Any:
         compact["elapsed_seconds"] = round(compact["elapsed_seconds"], 2)
     if "result" in compact:
         compact["result"] = _compact_handler_result(compact["result"])
+    stdout = compact.get("stdout")
+    if isinstance(stdout, str):
+        stdout = _without_repeated_lines(stdout, compact.get("transaction"))
+        if stdout:
+            compact["stdout"] = stdout
+        else:
+            del compact["stdout"]
     if "transaction" in compact:
         compact["transaction"] = _compact_transaction(compact["transaction"])
     return compact

@@ -363,7 +363,9 @@ def texture_group_rename(
         "message": f"Renamed texture group '{old_name}' -> '{new_name}'",
         "warnings": warnings,
         "changed_files": sorted(set(changed_files)),
-        "details": {"assets_changed": assets_changed, "assets_skipped": assets_skipped},
+        # Every other asset that can carry a texture group was left alone; their names were a
+        # list of most of the project, so the count says it.
+        "details": {"assets_changed": assets_changed, "assets_unchanged": len(assets_skipped)},
     }
 
 

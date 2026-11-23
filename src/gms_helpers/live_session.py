@@ -555,10 +555,7 @@ def stop(project_root: str | Path) -> dict[str, Any]:
         "exited_before_stop": exit_code is not None,
         "exit_code": exit_code,
         "run_log": snapshot_build._relative(session.project_root, run_log),
-        "screenshots": sorted(
-            str(snapshot_build._relative(session.project_root, shot))
-            for shot in (session.run_dir / "shots").glob("*.png")
-        ),
+        **snapshot_build.screenshot_listing(session.project_root, session.run_dir / "shots"),
         # Screenshots the game saved itself that were only collected now, beyond those listed above.
         "collected_at_stop": len(shots),
     }

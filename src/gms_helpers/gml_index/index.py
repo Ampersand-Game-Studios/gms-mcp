@@ -376,7 +376,7 @@ class GMLIndex:
                     text = ""
                 lines_by_file[file] = text.split("\n")
             lines = lines_by_file[file]
-            context = lines[line - 1].strip()[:100] if 0 < line <= len(lines) else None
+            context = lines[line - 1].strip() if 0 < line <= len(lines) else None
             references.append(
                 SymbolReference(
                     symbol_name=symbol_name,

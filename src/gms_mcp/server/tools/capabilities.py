@@ -93,7 +93,9 @@ def tool_guide(*, enabled: tuple[str, ...], read_only: bool) -> Dict[str, str]:
     guide["change"] = (
         "Use gm_workflow_rename, gm_workflow_duplicate, gm_safe_delete and gm_sprite_* rather than editing "
         ".yy or .yyp files; write GML in the .gml files directly. Changes are transactional and may be "
-        "followed by a verifying compile."
+        "followed by a verifying compile. A change's result lists what it changed (a folder it created "
+        'whole as "folder/") and counts as preexisting_issues the problems the project already had, '
+        "which gm_project_check lists."
     )
     if "assets" in enabled_set:
         guide["change"] += " gm_create_* make new assets (gm_create_script takes the code)."
