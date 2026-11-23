@@ -113,7 +113,7 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         which: "run" = the game's own log (every show_debug_message line), "build" = Igor's
         compile log, "runner" = the runner's stderr. pattern is an optional regular expression
         that keeps only matching lines (for example "\\[TEST\\]" or "ERROR"). Returns the last
-        `lines` lines and the run's screenshot paths.
+        `lines` lines and the run's screenshots (`screenshot_files` and `screenshots`, as gm_test_run gives them).
         """
         _ = ctx
         from gms_helpers.snapshot_build import read_run_artifact
@@ -240,12 +240,17 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         End Step may clear current input fields: inspect the project's previous-frame sample.
         Position collision fixtures using actual sprite origins and mask bounds.
         Helpers available to the test:
-          test_log(value)             adds a "[TEST] ..." line to the result
-          test_check(condition, text) "[TEST] PASS/FAIL text"; any failed check fails the run
-          test_shot(name)             saves a screenshot, returned in `screenshots`
+          test_log(value)             adds a line to `test_lines`
+          test_check(condition, text) "PASS/FAIL text"; any failed check fails the run
+          test_shot(name)             saves a screenshot, listed in `screenshots`
           test_end()                  prints the result and quits the game; ALWAYS call it,
                                       including on a frame-count timeout inside the test
         The test script exists only in the snapshot; it is never written into the project.
+
+        Every test line comes back in order without its "[TEST]" marker; a line repeated back to
+        back is written once ending " [×N]". `screenshot_files` is a path pattern and each entry of
+        `screenshots` is what one file puts in place of its *; a numbered run is written as a
+        brace range ("f{0001..0240}" is f0001 to f0240, every number with four digits).
 
         status is one of TEST_PASSED, TEST_FAILED, TEST_TIMEOUT, BUILD_FAILED. A GameMaker
         runtime error in the log always fails the run. The completion signal is the result line

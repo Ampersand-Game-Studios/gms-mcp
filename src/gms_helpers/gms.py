@@ -1141,13 +1141,15 @@ def setup_symbol_commands(subparsers):
     # Find references command
     ref_parser = symbol_subparsers.add_parser("find-references", help="Find all references to a symbol")
     ref_parser.add_argument("symbol_name", help="Name of symbol to find references for")
-    ref_parser.add_argument("--max-results", type=int, default=50, help="Maximum number of results (default: 50)")
+    ref_parser.add_argument("--max-results", type=int, default=None, help="Keep only the first N references")
     ref_parser.set_defaults(func=handle_find_references)
 
     # List symbols command
     list_parser = symbol_subparsers.add_parser("list", help="List all symbols in the project")
     list_parser.add_argument(
-        "--kind", choices=["function", "enum", "macro", "globalvar", "constructor"], help="Filter by symbol kind"
+        "--kind",
+        choices=["function", "script", "enum", "enum_value", "macro", "globalvar", "constructor"],
+        help="Filter by symbol kind",
     )
     list_parser.add_argument("--name-filter", help="Filter symbols by name (case-insensitive substring)")
     list_parser.add_argument("--file-filter", help="Filter symbols by file path (case-insensitive substring)")

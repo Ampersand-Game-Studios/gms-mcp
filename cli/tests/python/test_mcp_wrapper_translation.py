@@ -194,18 +194,12 @@ class TestMaintenanceWrappers(MCPToolTestCase):
                     {"fix": False, "verbose": False, "project_root": "/tmp/project"},
                     ["maintenance", "auto", "--no-verbose"],
                 ),
-                ("gm_maintenance_lint", {"fix": False, "project_root": "/tmp/project"}, ["maintenance", "lint"]),
                 ("gm_maintenance_validate_json", {"project_root": "/tmp/project"}, ["maintenance", "validate-json"]),
                 ("gm_maintenance_list_orphans", {"project_root": "/tmp/project"}, ["maintenance", "list-orphans"]),
                 (
                     "gm_maintenance_prune_missing",
                     {"dry_run": True, "project_root": "/tmp/project"},
                     ["maintenance", "prune-missing", "--dry-run"],
-                ),
-                (
-                    "gm_maintenance_validate_paths",
-                    {"strict_disk_check": True, "include_parent_folders": True, "project_root": "/tmp/project"},
-                    ["maintenance", "validate-paths", "--strict-disk-check", "--include-parent-folders"],
                 ),
                 (
                     "gm_maintenance_dedupe_resources",
@@ -216,11 +210,6 @@ class TestMaintenanceWrappers(MCPToolTestCase):
                     "gm_maintenance_sync_events",
                     {"fix": False, "object": "o_player", "project_root": "/tmp/project"},
                     ["maintenance", "sync-events", "--object", "o_player"],
-                ),
-                (
-                    "gm_maintenance_normalize_names",
-                    {"fix": True, "asset_type": "room", "project_root": "/tmp/project"},
-                    ["maintenance", "normalize-names", "--fix", "--asset-type", "room"],
                 ),
                 (
                     "gm_maintenance_clean_old_files",
@@ -239,10 +228,33 @@ class TestMaintenanceWrappers(MCPToolTestCase):
                 self.assertTrue(result["ok"])
                 self.assertEqual(mock_fallback.await_args_list[-1].kwargs["cli_args"], expected_cli)
 
+        # These return the data their handler returned, not what it printed.
+        with patch(
+            "gms_mcp.server.tools.maintenance._run_for_data",
+            new=AsyncMock(return_value={"ok": True}),
+        ) as mock_data:
+            data_cases = [
+                ("gm_maintenance_lint", {"project_root": "/tmp/project"}, {"project_root": "/tmp/project"}),
+                (
+                    "gm_maintenance_validate_paths",
+                    {"strict_disk_check": True, "include_parent_folders": True, "project_root": "/tmp/project"},
+                    {"strict_disk_check": True, "include_parent_folders": True, "project_root": "/tmp/project"},
+                ),
+                (
+                    "gm_maintenance_normalize_names",
+                    {"fix": True, "asset_type": "room", "project_root": "/tmp/project"},
+                    {"fix": True, "asset_type": "room", "project_root": "/tmp/project"},
+                ),
+            ]
+            for tool_name, kwargs, expected_args in data_cases:
+                result = self.call_tool(tool_name, **kwargs)
+                self.assertTrue(result["ok"])
+                self.assertEqual(vars(mock_data.await_args_list[-1].kwargs["direct_args"]), expected_args)
+                self.assertTrue(callable(mock_data.await_args_list[-1].kwargs["shape"]))
+
         with patch("gms_mcp.server.tools.maintenance._requires_dry_run_for_tool", return_value=True):
             blocked_cases = [
                 ("gm_maintenance_auto", {"fix": True, "project_root": "/tmp/project"}),
-                ("gm_maintenance_lint", {"fix": True, "project_root": "/tmp/project"}),
                 ("gm_maintenance_prune_missing", {"dry_run": False, "project_root": "/tmp/project"}),
                 ("gm_maintenance_dedupe_resources", {"auto": False, "dry_run": False, "project_root": "/tmp/project"}),
                 ("gm_maintenance_sync_events", {"fix": True, "object": "", "project_root": "/tmp/project"}),
@@ -467,6 +479,9 @@ class TestTextureGroupWrappers(MCPToolTestCase):
             ):
                 result = self.call_tool(tool_name, **kwargs)
             self.assertTrue(result["ok"])
+            if tool_name in ("gm_texture_group_members", "gm_texture_group_scan"):
+                # Read-only listings name the assets; the project they read is the one the server serves.
+                continue
             self.assertEqual(result["project_directory"].replace("\\", "/"), "/tmp/project")
             self.assertEqual(result["yyp"], "TestGame.yyp")
 

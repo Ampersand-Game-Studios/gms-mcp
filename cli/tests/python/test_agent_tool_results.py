@@ -178,15 +178,21 @@ def test_project_info_identifies_the_checkout_without_a_host_path(tmp_path: Path
 # --- listing ----------------------------------------------------------------------------------
 
 
-def test_unfiltered_listing_of_a_large_project_returns_counts_and_how_to_narrow(tmp_path: Path):
+def test_unfiltered_listing_of_a_large_project_returns_every_asset_by_folder(tmp_path: Path):
     project = _make_project(tmp_path, scripts=250)
     with _server(project) as server:
-        summary = _call(server, "gm_list_assets")
+        everything = _call(server, "gm_list_assets")
         page = _call(server, "gm_list_assets", limit=100, offset=200)
 
-    assert summary["count"] == 254 and summary["by_type"]["script"] == 250
-    assert summary["assets"] == {} and summary["truncated"] is True
-    assert "asset_type" in summary["message"]
+    assert everything["count"] == 254 and everything["by_type"]["script"] == 250
+    # Each name once under its folder; a numbered run as one range; no paging needed.
+    assert everything["assets"] == {
+        "objects": ["o_player"],
+        "rooms": ["r_start"],
+        "scripts": ["scr_helper_{0..249}"],
+        "sprites": ["spr_player"],
+    }
+    assert "truncated" not in everything
     assert page["returned"] == 54 and page["truncated"] is False and page["next_offset"] is None
 
 
@@ -197,11 +203,36 @@ def test_filtered_listing_pages_and_does_not_repeat_the_type_on_every_entry(tmp_
         folders = _call(server, "gm_list_assets", asset_type="folder", name_contains="enem")
 
     assert first["count"] == 5 and first["returned"] == 2 and first["next_offset"] == 2
-    assert first["assets"]["script"][0] == {
-        "name": "scr_helper_0",
-        "path": "scripts/scr_helper_0/scr_helper_0.yy",
+    # The folder says the type and the path: scripts/scr_helper_0/scr_helper_0.yy.
+    assert first["assets"] == {"scripts": ["scr_helper_0", "scr_helper_1"]}
+    assert folders["folders"] == {"folders/Objects": ["Enemies.yy"]}
+
+
+def test_path_validation_returns_asset_and_orphan_issues_through_the_server(tmp_path: Path):
+    project = _make_project(tmp_path, scripts=0)
+    with _server(project, toolsets="all") as server:
+        result = _call(server, "gm_maintenance_validate_paths", strict_disk_check=True)
+
+    assert result["ok"] is False
+    assert result["issue_count"] == 4
+    issues = {issue["type"]: issue for issue in result["issues"]}
+    missing_definitions = issues["missing_folder_definition"]
+    assert missing_definitions["severity"] == "error"
+    assert {item["asset"]: item["folder"] for item in missing_definitions["items"]} == {
+        "rooms/r_start/r_start.yy": "folders/Rooms.yy",
+        "sprites/spr_player/spr_player.yy": "folders/Sprites.yy",
     }
-    assert folders["assets"]["folder"] == [{"name": "Enemies", "path": "folders/Objects/Enemies.yy"}]
+    assert issues["folder_file_missing_on_disk"] == {
+        "type": "folder_file_missing_on_disk",
+        "severity": "warning",
+        "items": [{"asset": "objects/o_player/o_player.yy", "folder": "folders/Objects.yy"}],
+    }
+    assert issues["orphaned_folder"] == {
+        "type": "orphaned_folder",
+        "severity": "info",
+        "folders": {"folders/Objects": ["Enemies.yy"]},
+    }
+    assert "stdout" not in result
 
 
 # --- reading one asset ------------------------------------------------------------------------
@@ -569,9 +600,7 @@ def test_committed_change_reports_what_changed_and_not_the_bookkeeping():
     assert clean["transaction"] == {
         "committed": True,
         "changes": {"created": ["scripts/a/a.gml"], "modified": ["game.yyp"]},
-        "preexisting_issues": (
-            "20 validation issue(s) were already in the project before this change; gm_project_check lists them under asset_reference_issues."
-        ),
+        "preexisting_issues": 20,
     }
     assert clean["total_seconds"] == 6.8 and "total_seconds" not in quick
     assert "old problem" not in json.dumps(clean)
@@ -807,9 +836,7 @@ def test_object_can_be_read_with_all_its_code_and_listed_with_its_folder(tmp_pat
         listed = _call(server, "gm_list_assets", asset_type="object", include_folder=True)
 
     assert [event["code"] for event in read["events"]] == ["hp = 3;\nscr_helper_0();\n", "x += 1;\n", "draw_self();\n"]
-    assert listed["assets"]["object"] == [
-        {"name": "o_player", "path": "objects/o_player/o_player.yy", "folder": "folders/Objects.yy"}
-    ]
+    assert listed["by_folder"] == [{"folder": "folders/Objects.yy", "assets": {"objects": ["o_player"]}}]
 
 
 def test_delete_preview_of_a_placed_object_is_a_result_that_names_the_instances(tmp_path: Path):

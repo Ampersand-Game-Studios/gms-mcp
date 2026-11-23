@@ -65,6 +65,13 @@ def normalize_path(path: str, project_root: str | Path | None = None) -> str:
     return normalized
 
 
+# Never project files: version control, editor and tool caches, and this server's own run output
+# (logs, screenshots and indexes under .gms_mcp), which would otherwise be reported as orphans.
+_SKIPPED_DIRECTORIES = frozenset(
+    {".git", "__pycache__", "node_modules", ".vscode", ".gms_mcp", ".gms-mcp", ".gml_index_cache"}
+)
+
+
 def build_filesystem_map(root_dir: str) -> Dict[str, str]:
     """
     Build a mapping of normalized paths to actual filesystem paths.
@@ -74,8 +81,7 @@ def build_filesystem_map(root_dir: str) -> Dict[str, str]:
 
     for root, dirs, files in os.walk(root_dir):
         # Skip certain directories
-        skip_dirs = {".git", "__pycache__", "node_modules", ".vscode"}
-        dirs[:] = [d for d in dirs if d not in skip_dirs]
+        dirs[:] = [d for d in dirs if d not in _SKIPPED_DIRECTORIES]
 
         for file in files:
             actual_path = os.path.join(root, file)
@@ -109,16 +115,7 @@ def get_gamemaker_files(root_dir: str) -> Set[str]:
     gm_extensions = {".yy", ".yyp", ".gml", ".png", ".jpg", ".jpeg", ".wav", ".mp3", ".ogg", ".fnt", ".ttf"}
 
     # Directories to skip
-    skip_dirs = {
-        "tools",
-        "docs",
-        "__pycache__",
-        ".git",
-        "node_modules",
-        ".vscode",
-        "maintenance_keep.txt",
-        "maintenance_report.json",
-    }
+    skip_dirs = _SKIPPED_DIRECTORIES | {"tools", "docs", "maintenance_keep.txt", "maintenance_report.json"}
 
     for root, dirs, files in os.walk(root_dir):
         # Skip certain directories

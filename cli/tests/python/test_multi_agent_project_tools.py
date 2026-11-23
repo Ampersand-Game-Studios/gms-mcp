@@ -1005,14 +1005,17 @@ def test_run_log_verdicts():
         "[TEST_SAVE_DIR] x\n[TEST] PASS a\n[TEST] shot s.png\n[TEST_RESULT] PASS failures=0\n",
         runtime_error_patterns=patterns,
     )
-    assert passed["status"] == "TEST_PASSED" and passed["passed"] and len(passed["test_lines"]) == 3
+    # Test lines without their marker; the result line once, by itself.
+    assert passed["status"] == "TEST_PASSED" and passed["passed"] and passed["test_lines"] == ["PASS a", "shot s.png"]
+    assert passed["result_line"] == "PASS failures=0"
     failed = snapshot_build.parse_run_log("[TEST_SAVE_DIR] x\n[TEST] FAIL b\n[TEST_RESULT] FAIL failures=1\n")
-    assert failed["status"] == "TEST_FAILED" and failed["failed_checks"] == ["[TEST] FAIL b"]
+    assert failed["status"] == "TEST_FAILED" and failed["failed_checks"] == ["b"]
     errored = snapshot_build.parse_run_log(
         "[TEST_SAVE_DIR] x\nERROR in action number 1\nof Step Event\n[TEST_RESULT] PASS failures=0\n",
         runtime_error_patterns=patterns,
     )
     assert errored["status"] == "TEST_FAILED" and errored["runtime_errors"] and "runtime error" in errored["note"]
+    assert errored["runtime_errors"] == ["ERROR in action number 1\nof Step Event"]
     timeout = snapshot_build.parse_run_log("[TEST_SAVE_DIR] x\n", timed_out=True)
     assert timeout["status"] == "TEST_TIMEOUT" and "test_end()" in timeout["note"]
     never = snapshot_build.parse_run_log("boot\n")
@@ -1051,12 +1054,15 @@ def test_run_test_pipeline_reports_pass_fail_and_build_failure(repo: Path, tmp_p
     )
     assert result["status"] == "TEST_PASSED" and result["ok"] and result["igor_crash_retries"] == 1
     assert result["label"] == "unit_test" and seen == {"snapshot_has_test": True, "timeout": 33.0}
-    assert result["screenshots"] == [".gms_mcp/runs/unit_test/shots/__agent_shot_a.png"]
+    assert result["screenshot_files"] == ".gms_mcp/runs/unit_test/shots/*"
+    assert result["screenshots"] == ["__agent_shot_a.png"]
+    # Nothing that only says "as usual": no errors, no wait, the game started, `ok` already says passed.
+    assert not {"errors", "waited_for_game_lock_seconds", "started", "passed"} & set(result), set(result)
     assert result["run_log"] == ".gms_mcp/runs/unit_test/run.log" and result["build_log"].endswith("build.log")
     assert not (repo / "scripts" / "__agent_test").exists() and not list((tmp_path / "work").glob("*"))
 
     log = snapshot_build.read_run_artifact(repo, "unit test!", "run", 10, r"\[TEST\]")
-    assert log["lines"] == ["[TEST] PASS ok"] and log["screenshots"]
+    assert log["lines"] == ["[TEST] PASS ok"] and log["screenshots"] == ["__agent_shot_a.png"]
     with pytest.raises(snapshot_build.SnapshotError, match="Labels with saved runs: unit_test"):
         snapshot_build.read_run_artifact(repo, "other")
     with pytest.raises(snapshot_build.SnapshotError):
@@ -1484,7 +1490,8 @@ def test_live_session_start_command_screenshot_and_stop(repo: Path, tmp_path: Pa
         stop_endpoint.set()
         stopped = live_session.stop(repo)
     assert stopped["stopped"] and stopped["run_log"] == ".gms_mcp/runs/live/run.log"
-    assert stopped["screenshots"] == [".gms_mcp/runs/live/shots/menu_view.png"]
+    assert stopped["screenshot_files"] == ".gms_mcp/runs/live/shots/*"
+    assert stopped["screenshots"] == ["menu_view.png"]
     assert process.returncode == -15 and not (lock_dir / "gamerun.lock").exists() and not staging.exists()
     assert live_session.status(repo)["running"] is False
 
