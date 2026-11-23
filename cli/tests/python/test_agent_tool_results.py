@@ -208,6 +208,33 @@ def test_filtered_listing_pages_and_does_not_repeat_the_type_on_every_entry(tmp_
     assert folders["folders"] == {"folders/Objects": ["Enemies.yy"]}
 
 
+def test_path_validation_returns_asset_and_orphan_issues_through_the_server(tmp_path: Path):
+    project = _make_project(tmp_path, scripts=0)
+    with _server(project, toolsets="all") as server:
+        result = _call(server, "gm_maintenance_validate_paths", strict_disk_check=True)
+
+    assert result["ok"] is False
+    assert result["issue_count"] == 4
+    issues = {issue["type"]: issue for issue in result["issues"]}
+    missing_definitions = issues["missing_folder_definition"]
+    assert missing_definitions["severity"] == "error"
+    assert {item["asset"]: item["folder"] for item in missing_definitions["items"]} == {
+        "rooms/r_start/r_start.yy": "folders/Rooms.yy",
+        "sprites/spr_player/spr_player.yy": "folders/Sprites.yy",
+    }
+    assert issues["folder_file_missing_on_disk"] == {
+        "type": "folder_file_missing_on_disk",
+        "severity": "warning",
+        "items": [{"asset": "objects/o_player/o_player.yy", "folder": "folders/Objects.yy"}],
+    }
+    assert issues["orphaned_folder"] == {
+        "type": "orphaned_folder",
+        "severity": "info",
+        "folders": {"folders/Objects": ["Enemies.yy"]},
+    }
+    assert "stdout" not in result
+
+
 # --- reading one asset ------------------------------------------------------------------------
 
 
