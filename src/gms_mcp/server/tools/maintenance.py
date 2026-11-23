@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 from typing import Any, Dict, List
 
-from ..dispatch import _run_with_fallback
+from ..dispatch import _run_for_data, _run_with_fallback
 from ..dry_run_policy import _dry_run_policy_blocked_result, _requires_dry_run_for_tool
 from ..mcp_types import Context
 from ..project import _ensure_cli_on_sys_path, _resolve_repo_root
@@ -61,39 +61,27 @@ def register(mcp: Any, ContextType: Any) -> None:
 
     @mcp.tool()
     async def gm_maintenance_lint(
-        fix: bool = False,
         project_root: str = ".",
-        prefer_cli: bool = False,
-        output_mode: OutputMode = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Run maintenance lint (optionally with fixes)."""
-        repo_root = _resolve_repo_root(project_root)
-        _ensure_cli_on_sys_path(repo_root)
+        """
+        Lint the project (JSON and naming) and return every issue found, info level included.
+
+        The issues are grouped as gm_diagnostics groups them: each message once ({name} is the
+        affected file's own name), `assets` mapping a folder to asset names whose files are
+        <folder>/<name>/<name>.yy, and `files` mapping a folder to any other file names.
+        """
+        _ = ctx
+        from gms_helpers.commands.diagnostics_commands import dense_diagnostics
         from gms_helpers.commands.maintenance_commands import handle_maintenance_lint
 
-        args = argparse.Namespace(fix=fix, project_root=project_root)
-        cli_args = ["maintenance", "lint"]
-        if fix:
-            cli_args.append("--fix")
-        if fix and _requires_dry_run_for_tool("gm_maintenance_lint"):
-            return _dry_run_policy_blocked_result(
-                "gm_maintenance_lint",
-                "Use fix=false, add gm_maintenance_lint to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
-            )
-
-        return await _run_with_fallback(
+        return await _run_for_data(
             direct_handler=handle_maintenance_lint,
-            direct_args=args,
-            cli_args=cli_args,
+            direct_args=argparse.Namespace(project_root=project_root),
             project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
+            tool_name="maintenance-lint",
+            cli_args=["maintenance", "lint"],
+            shape=dense_diagnostics,
         )
 
     @mcp.tool()
@@ -196,38 +184,29 @@ def register(mcp: Any, ContextType: Any) -> None:
         strict_disk_check: bool = False,
         include_parent_folders: bool = False,
         project_root: str = ".",
-        prefer_cli: bool = False,
-        output_mode: OutputMode = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Validate folder paths referenced in assets."""
-        repo_root = _resolve_repo_root(project_root)
-        _ensure_cli_on_sys_path(repo_root)
-        from gms_helpers.commands.maintenance_commands import handle_maintenance_validate_paths
+        """
+        Check that every asset-browser folder an asset names exists, and find folders nothing uses.
+
+        `issues` groups the problems by severity and type; an orphaned folder is listed by its
+        folder path alone.
+        """
+        _ = ctx
+        from gms_helpers.commands.maintenance_commands import dense_path_issues, handle_maintenance_validate_paths
 
         args = argparse.Namespace(
             strict_disk_check=strict_disk_check,
             include_parent_folders=include_parent_folders,
             project_root=project_root,
         )
-        cli_args = ["maintenance", "validate-paths"]
-        if strict_disk_check:
-            cli_args.append("--strict-disk-check")
-        if include_parent_folders:
-            cli_args.append("--include-parent-folders")
-
-        return await _run_with_fallback(
+        return await _run_for_data(
             direct_handler=handle_maintenance_validate_paths,
             direct_args=args,
-            cli_args=cli_args,
             project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
+            tool_name="maintenance-validate-paths",
+            cli_args=["maintenance", "validate-paths"],
+            shape=dense_path_issues,
         )
 
     @mcp.tool()
@@ -315,43 +294,30 @@ def register(mcp: Any, ContextType: Any) -> None:
         fix: bool = False,
         asset_type: str = "",
         project_root: str = ".",
-        prefer_cli: bool = False,
-        output_mode: OutputMode = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Plan or apply naming-convention asset renames."""
-        repo_root = _resolve_repo_root(project_root)
-        _ensure_cli_on_sys_path(repo_root)
-        from gms_helpers.commands.maintenance_commands import handle_maintenance_normalize_names
+        """
+        Plan (fix=false) or apply naming-convention asset renames.
 
-        args = argparse.Namespace(
-            fix=fix,
-            asset_type=asset_type if asset_type else None,
-            project_root=project_root,
-        )
-        cli_args = ["maintenance", "normalize-names"]
-        if fix:
-            cli_args.append("--fix")
-        if asset_type:
-            cli_args.extend(["--asset-type", asset_type])
+        Renames are grouped by the asset's folder as "old -> new"; the asset's file is
+        <folder>/<old>/<old>.yy.
+        """
+        _ = ctx
+        from gms_helpers.commands.maintenance_commands import dense_renames, handle_maintenance_normalize_names
+
         if fix and _requires_dry_run_for_tool("gm_maintenance_normalize_names"):
             return _dry_run_policy_blocked_result(
                 "gm_maintenance_normalize_names",
                 "Use fix=false, add gm_maintenance_normalize_names to GMS_MCP_REQUIRE_DRY_RUN_ALLOWLIST, or unset GMS_MCP_REQUIRE_DRY_RUN for this session.",
             )
-
-        return await _run_with_fallback(
+        args = argparse.Namespace(fix=fix, asset_type=asset_type or None, project_root=project_root)
+        return await _run_for_data(
             direct_handler=handle_maintenance_normalize_names,
             direct_args=args,
-            cli_args=cli_args,
             project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
+            tool_name="maintenance-normalize-names",
+            cli_args=["maintenance", "normalize-names"],
+            shape=dense_renames,
         )
 
     @mcp.tool()

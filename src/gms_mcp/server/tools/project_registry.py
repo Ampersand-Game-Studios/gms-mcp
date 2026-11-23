@@ -91,12 +91,19 @@ def register(mcp: Any, ContextType: Any) -> None:
 
     @mcp.tool()
     def gm_included_file_list(prefix: str = "", project_root: str = ".", ctx: Context | None = None) -> Dict[str, Any]:
-        """List registered included files (datafiles), optionally only those under `prefix` (e.g. datafiles/data)."""
+        """
+        List registered included files (datafiles), optionally only those under `prefix` (e.g. datafiles/data).
+
+        `included_files` maps each folder to the names of its files.
+        """
         _ = ctx
+        from gms_helpers.dense import by_folder
         from gms_helpers.yyp_registry import list_included_files
 
         try:
-            return list_included_files(_resolve_project_directory(project_root), prefix)
+            listed = list_included_files(_resolve_project_directory(project_root), prefix)
+            listed["included_files"] = by_folder(listed["included_files"])
+            return listed
         except Exception as exc:  # noqa: BLE001
             return _failure("gm_included_file_list", exc)
 

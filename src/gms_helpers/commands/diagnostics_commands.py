@@ -1,8 +1,7 @@
 """Diagnostics command implementations."""
 
-from typing import List, Dict, Any, Optional
-from pathlib import Path
-import argparse
+from typing import List, Dict, Any
+from pathlib import Path, PurePosixPath
 
 from ..diagnostics import Diagnostic
 from ..maintenance.lint import ProjectLinter
@@ -85,3 +84,67 @@ def handle_diagnostics(args) -> Dict[str, Any]:
         "depth": depth,
         "project_root": str(project_root),
     }
+
+
+def _template(text: str | None, name: str) -> str | None:
+    """Write the asset's own name in a message as {name}, so one message describes many assets."""
+    if not text or len(name) < 3:
+        return text
+    return text.replace(name, "{name}")
+
+
+def dense_diagnostics(report: Dict[str, Any]) -> Dict[str, Any]:
+    """Group a diagnostics report by problem: each message once, with every file it applies to.
+
+    In a message, ``{name}`` stands for the file's own name. ``assets`` maps a folder to asset
+    names whose files are ``<folder>/<name>/<name>.yy``; ``files`` maps a folder to the names of any
+    other files in it, with ``:line`` when the problem has a line.
+    """
+    from ..dense import asset_folders, by_folder
+
+    project_root = Path(str(report.get("project_root") or "."))
+    groups: Dict[tuple, Dict[str, Any]] = {}
+    for item in report.get("diagnostics", []):
+        shown = _shown_path(str(item.get("file_path") or ""), project_root)
+        name = PurePosixPath(shown).stem
+        message = _template(item.get("message"), name)
+        fix = _template(item.get("suggested_fix"), name)
+        located = bool(item.get("line"))
+        key = (
+            item.get("severity"),
+            item.get("code"),
+            item.get("category"),
+            item.get("source"),
+            bool(item.get("can_auto_fix")),
+            message,
+            fix,
+        )
+        group = groups.get(key)
+        if group is None:
+            group = {"severity": item.get("severity"), "code": item.get("code"), "category": item.get("category")}
+            if item.get("source") not in (None, "lint"):
+                group["source"] = item.get("source")
+            group["message"] = message
+            if fix:
+                group["fix"] = fix
+            if item.get("can_auto_fix"):
+                group["can_auto_fix"] = True
+            group["_paths"] = []
+            groups[key] = group
+        location = shown
+        if located:
+            location = f"{shown}:{item['line']}"
+            if item.get("column"):
+                location += f":{item['column']}"
+        group["_paths"].append(location)
+    issues = []
+    for group in groups.values():
+        paths = group.pop("_paths")
+        assets, files = asset_folders(paths)
+        if assets:
+            group["assets"] = assets
+        if files:
+            group["files"] = by_folder(files)
+        issues.append({key: value for key, value in group.items() if value is not None})
+    summary = {severity: count for severity, count in (report.get("summary") or {}).items() if count}
+    return {"ok": report.get("ok", True), "depth": report.get("depth"), "summary": summary, "issues": issues}
