@@ -1,7 +1,9 @@
 from __future__ import annotations
+
 # pyright: reportAttributeAccessIssue=false
 
 import os
+import sys
 import platform
 from pathlib import Path
 from typing import Optional
@@ -61,7 +63,8 @@ class RunnerDiscoveryMixin:
 
         runtime_info = self._runtime_manager.select(self.runtime_version)
         for message in self._runtime_manager.discovery_diagnostics:
-            print(f"[WARN] {message}")
+            # stderr: inside the MCP server, stdout carries the protocol and a stray line breaks it.
+            print(f"[WARN] {message}", file=sys.stderr)
         if runtime_info and runtime_info.is_valid:
             self.igor_path = Path(runtime_info.igor_path)
             self.runtime_path = Path(runtime_info.path)

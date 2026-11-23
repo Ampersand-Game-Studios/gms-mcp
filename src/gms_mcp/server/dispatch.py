@@ -265,3 +265,42 @@ async def _run_with_fallback(
         error=result.get("error") or result.get("direct_error"),
     )
     return result
+
+
+async def _run_for_data(
+    *,
+    direct_handler: Callable[[argparse.Namespace], Any],
+    direct_args: argparse.Namespace,
+    project_root: str | None,
+    tool_name: str,
+    cli_args: List[str],
+    shape: Callable[[Dict[str, Any]], Dict[str, Any]] | None = None,
+    timeout_seconds: int | None = None,
+) -> Dict[str, Any]:
+    """Run a typed handler in the isolated worker and return the data it returned.
+
+    What a handler prints is its rendering for a person at the command line, and on the way to an
+    agent it was the only part that arrived (often cut short) while the data was thrown away. The
+    data says the same and more, so it is returned, shaped by ``shape``. A handler that raised or
+    timed out returned no data: then the run's own report, with what was printed, is returned.
+    """
+    policy = policy_manager.get_policy(tool_name)
+    timeout = timeout_seconds if timeout_seconds is not None else policy.timeout_seconds
+    if timeout is None:
+        timeout = _default_timeout_seconds_for_cli_args(cli_args)
+    direct_result = await _run_direct_thread_shielded(
+        _run_direct, direct_handler, direct_args, project_root, timeout, False
+    )
+    value = direct_result.result
+    completed = isinstance(value, dict) and not direct_result.timed_out
+    result: Dict[str, Any] = (shape(value) if shape else dict(value)) if completed else direct_result.as_dict()
+    if completed and direct_result.stderr.strip():
+        result["stderr"] = direct_result.stderr
+    note_tool_execution(
+        tool_name=tool_name,
+        execution_mode="direct",
+        ok=bool(result.get("ok", completed)),
+        timed_out=bool(direct_result.timed_out),
+        error=None if completed else direct_result.error,
+    )
+    return result

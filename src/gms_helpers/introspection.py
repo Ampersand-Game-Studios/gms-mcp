@@ -591,11 +591,21 @@ def search_references(
                 "file": path.relative_to(project_root.resolve()).as_posix(),
                 "line": number,
                 "match": matched,
-                "context": line.strip()[:200],
+                "context": _context_around(line.strip(), matched),
             }
         )
 
     return results
+
+
+def _context_around(line: str, matched: str, width: int = 200) -> str:
+    """The line, or for a very long one (minified data) the part around the match, marked with …."""
+    if len(line) <= width:
+        return line
+    at = max(0, line.find(matched)) if matched else 0
+    start = max(0, min(at - width // 4, len(line) - width))
+    window = line[start : start + width]
+    return ("…" if start else "") + window + ("…" if start + width < len(line) else "")
 
 
 # =============================================================================

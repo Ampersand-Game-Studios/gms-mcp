@@ -38,6 +38,7 @@ from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Iterable
 
 from . import run_status, yyp_registry
+from .dense import name_ranges, natural_key, repeat_counts
 from .bounded_regex import search_many
 from .agent_locks import MOBILE_BUILD_LOCK, BuildSlot, DirectoryLock, _process_alive
 from .mac_runtime import prepare_mac_runtime, project_run_lock
@@ -1057,8 +1058,12 @@ def compile_snapshot(
 # ----------------------------------------------------------------------
 # Run
 # ----------------------------------------------------------------------
-def tail_lines(path: Path, count: int) -> list[str]:
-    """Last lines of a log without .NET stack frames, which bury the line that matters."""
+def tail_lines(path: Path, count: int, *, skip: Callable[[str], bool] | None = None) -> list[str]:
+    """Last lines of a log without .NET stack frames, which bury the line that matters.
+
+    ``skip`` leaves out lines the caller reports elsewhere, so the tail holds only new ones. A
+    line repeated back to back counts once and is written once with its count.
+    """
     if not path.is_file():
         return []
     lines = [
@@ -1067,8 +1072,71 @@ def tail_lines(path: Path, count: int) -> list[str]:
         if not line.lstrip().startswith("at System.")
         and not line.lstrip().startswith("at Microsoft.")
         and TEST_FRAME_MARKER not in line
+        and not (skip is not None and skip(line))
     ]
-    return lines[-max(0, count) :]
+    return repeat_counts(lines)[-max(0, count) :]
+
+
+_SEPARATOR_LINE = re.compile(r"\s*[#_=-]{10,}\s*")
+
+
+def _after_marker(line: str, marker: str) -> str:
+    return line.split(marker, 1)[1].strip() if marker in line else line.strip()
+
+
+def _dense_test_lines(lines: list[str]) -> list[str]:
+    """Test lines with consecutive screenshot lines joined into brace ranges, then repeats counted."""
+    out: list[str] = []
+    index = 0
+    while index < len(lines):
+        end = index
+        while end < len(lines) and lines[end].startswith("shot ") and " " not in lines[end][5:]:
+            end += 1
+        if end == index:
+            out.append(lines[index])
+            index += 1
+            continue
+        names = [line[5:] for line in lines[index:end]]
+        # Only a run already in order, with no name twice, can be written as ranges without losing anything.
+        if len(set(names)) == len(names) and names == sorted(names, key=natural_key):
+            out.extend(f"shot {name}" for name in name_ranges(names))
+        else:
+            out.extend(lines[index:end])
+        index = end
+    return repeat_counts(out)
+
+
+def _runtime_error_blocks(lines: list[str], patterns: list[str], markers: tuple[str, ...]) -> tuple[list[str], int]:
+    """Each runtime error once, with how many times it was logged, and the total number logged.
+
+    A block is the matching line with two lines before it and fifteen after, without the rows of
+    #### or ____ that GameMaker frames it with and without test lines (``markers``), which the result
+    reports already. The same block logged again (an error raised every frame) is counted, not repeated.
+    """
+    blocks: dict[str, int] = {}
+    consumed = -1
+
+    def starts_error(row: str) -> bool:
+        return any(pattern in row for pattern in patterns) and not _SEPARATOR_LINE.fullmatch(row)
+
+    for index, line in enumerate(lines):
+        if index <= consumed or not any(pattern in line for pattern in patterns):
+            continue
+        # A block ends where the next error begins, so an error logged again is counted, not merged.
+        end = next(
+            (later for later in range(index + 1, min(index + 15, len(lines))) if starts_error(lines[later])), index + 15
+        )
+        window = lines[max(0, index - 2) : end]
+        consumed = end - 1
+        text = "\n".join(
+            row
+            for row in window
+            if row.strip() and not _SEPARATOR_LINE.fullmatch(row) and not any(marker in row for marker in markers)
+        )
+        blocks[text] = blocks.get(text, 0) + 1
+    total = sum(blocks.values())
+    rendered = [text if count == 1 else f"{text}\n[logged {count} times]" for text, count in blocks.items()]
+    return rendered, total
 
 
 def parse_run_log(
@@ -1080,21 +1148,24 @@ def parse_run_log(
     runtime_error_patterns: Iterable[str] = (),
     timed_out: bool = False,
 ) -> dict[str, Any]:
-    """Turn a runner log into a verdict. The log is the only source of truth for a run."""
+    """Turn a runner log into a verdict. The log is the only source of truth for a run.
+
+    Every test line is returned, without its marker; the result line is returned once, as
+    ``result_line``, and the failed checks once more by their text alone, as ``failed_checks``.
+    """
     lines = text.splitlines()
-    test_lines = [line.strip() for line in lines if line_marker in line or result_marker in line]
-    result_line = next((line.strip() for line in lines if result_marker in line), None)
+    result_line = next((_after_marker(line, result_marker) for line in lines if result_marker in line), None)
+    test_lines = [
+        _after_marker(line, line_marker) for line in lines if line_marker in line and result_marker not in line
+    ]
     patterns = [pattern for pattern in runtime_error_patterns if pattern]
-    error_blocks: list[str] = []
-    for index, line in enumerate(lines):
-        if any(pattern in line for pattern in patterns) and not any(line in block for block in error_blocks):
-            block = "\n".join(lines[max(0, index - 2) : index + 15])
-            if len(error_blocks) < 5:
-                error_blocks.append(block)
-    failed_checks = [line for line in test_lines if f"{line_marker} FAIL" in line]
+    error_blocks, error_count = _runtime_error_blocks(
+        lines, patterns, (line_marker, result_marker, started_marker, TEST_FRAME_MARKER)
+    )
+    failed_checks = [line[5:] for line in test_lines if line.startswith("FAIL ")]
     started = started_marker in text
     note = ""
-    if result_line and "PASS" in result_line.split(result_marker, 1)[1]:
+    if result_line and "PASS" in result_line:
         status = "TEST_PASSED"
     elif result_line:
         status = "TEST_FAILED"
@@ -1115,15 +1186,42 @@ def parse_run_log(
     if error_blocks and status == "TEST_PASSED":
         status = "TEST_FAILED"
         note = "The test reported PASS but the game logged a runtime error, which always fails a run."
-    return {
+    verdict: dict[str, Any] = {
         "status": status,
         "passed": status == "TEST_PASSED",
         "result_line": result_line,
-        "test_lines": test_lines[:400],
-        "failed_checks": failed_checks[:100],
+        "test_lines": _dense_test_lines(test_lines),
+        "failed_checks": repeat_counts(failed_checks),
         "runtime_errors": error_blocks,
         "started": started,
         "note": note,
+    }
+    if error_count > len(error_blocks):
+        verdict["runtime_errors_logged"] = error_count
+    return verdict
+
+
+def screenshot_listing(project_root: Path, shots_dir: Path, shots: Iterable[Path] | None = None) -> dict[str, Any]:
+    """Name a run's screenshots once: a path pattern, then what each file puts in place of its ``*``.
+
+    ``{"screenshot_files": ".gms_mcp/runs/t/shots/__agent_shot_*.png", "screenshots": ["menu",
+    "f{0001..0240}"]}`` stands for .gms_mcp/runs/t/shots/__agent_shot_menu.png and the 240 numbered
+    files f0001 to f0240 (see dense.name_ranges).
+    """
+    names = sorted(shot.name for shot in (list(shots) if shots is not None else shots_dir.glob("*.png")))
+    if not names:
+        return {"screenshots": []}
+    prefix = suffix = ""
+    if len(names) > 1:
+        # Never split a number between the shared text and the names, or the ranges would read oddly.
+        prefix = os.path.commonprefix(names).rstrip("0123456789")
+        suffix = os.path.commonprefix([name[::-1] for name in names])[::-1].lstrip("0123456789")
+        shortest = min(len(name) for name in names)
+        if len(prefix) + len(suffix) > shortest:
+            suffix = suffix[len(prefix) + len(suffix) - shortest :]
+    return {
+        "screenshot_files": f"{_relative(project_root, shots_dir)}/{prefix}*{suffix}",
+        "screenshots": name_ranges(name[len(prefix) : len(name) - len(suffix)] for name in names),
     }
 
 
@@ -1452,7 +1550,7 @@ def snapshot_compile(
         "status": build.status,
         "message": build.message,
         "label": label,
-        "snapshot": snapshot_info,
+        "snapshot": {key: value for key, value in snapshot_info.items() if value not in (None, [], "")},
         "runtime_version": tools.runtime_version,
         "platform": igor_platform(platform),
         "attempts": build.attempts,
@@ -1465,8 +1563,19 @@ def snapshot_compile(
         "build_seconds": build.build_seconds,
         "waited_for_build_slot_seconds": round(build.waited_for_slot_seconds, 1),
     }
+    # Leave out what says only "nothing unusual": no errors, one attempt, no wait for a build slot.
+    for key, usual in (
+        ("errors", []),
+        ("warnings", []),
+        ("packaging_errors", []),
+        ("attempts", 1),
+        ("igor_crash_retries", 0),
+        ("waited_for_build_slot_seconds", 0.0),
+    ):
+        if public[key] == usual:
+            del public[key]
     if build.other_target_warnings:
-        # Otherwise `warnings` reads as "none" beside a log that is full of the word.
+        # Otherwise a missing `warnings` reads as "none" beside a log that is full of the word.
         public["other_target_warnings_omitted"] = build.other_target_warnings
     if not build.ok and not build.errors:
         public["log_tail"] = tail_lines(run_dir / "build.log", 25)
@@ -1533,7 +1642,6 @@ def _run_test_pipeline(
     try:
         if not build.ok or build.game_archive is None:
             public["status"] = "BUILD_FAILED"
-            public["passed"] = False
             return public
         run_dir = runs_directory(root, label)
         outcome = (run_game or run_game_archive)(
@@ -1557,20 +1665,41 @@ def _run_test_pipeline(
             runtime_error_patterns=error_patterns,
             timed_out=bool(outcome.get("timed_out")),
         )
+        note = verdict.pop("note")
+        passed = verdict.pop("passed")  # `ok` and `status` already say it
         public.update(verdict)
-        public["ok"] = verdict["passed"]
-        public["message"] = verdict["note"] or (
-            "All checks passed." if verdict["passed"] else "One or more checks failed; see failed_checks."
+        public["ok"] = passed
+        public["message"] = note or (
+            "All checks passed." if passed else "One or more checks failed; see failed_checks."
         )
+        for key in ("test_lines", "failed_checks", "runtime_errors"):
+            if not public[key]:
+                del public[key]
+        if public["started"]:
+            del public["started"]  # only its absence is news: the game never reached the first frame
+        if public["result_line"] is None:
+            del public["result_line"]
         public["run_log"] = _relative(root, run_log)
-        public["screenshots"] = [_relative(root, shot) for shot in outcome.get("screenshots", [])]
+        public.update(screenshot_listing(root, run_dir / "shots", outcome.get("screenshots", [])))
         public["waited_seconds"] = outcome.get("waited_seconds")
         if isinstance(outcome.get("test_frame"), int):
             # Reported about once a second, so the last frame before a timeout or crash is close to this.
             public["test_frame"] = outcome["test_frame"]
-        public["waited_for_game_lock_seconds"] = outcome.get("waited_for_lock_seconds")
-        if not verdict["passed"]:
-            public["log_tail"] = tail_lines(run_log, 40)
+        if outcome.get("waited_for_lock_seconds"):
+            public["waited_for_game_lock_seconds"] = outcome["waited_for_lock_seconds"]
+        if not passed:
+            # The lines above already carry the test's own output and the errors; the tail adds the rest.
+            reported = {line for block in verdict.get("runtime_errors", []) for line in block.splitlines()}
+            public["log_tail"] = tail_lines(
+                run_log,
+                40,
+                skip=lambda line: (
+                    not line.strip()
+                    or _SEPARATOR_LINE.fullmatch(line) is not None
+                    or any(marker in line for marker in (line_marker, result_marker, started_marker))
+                    or line.strip() in reported
+                ),
+            )
         return public
     finally:
         shutil.rmtree(work, ignore_errors=True)
@@ -1610,7 +1739,7 @@ def read_run_artifact(
         "log": _relative(root, path),
         "total_lines": len(content),
         "lines": selected,
-        "screenshots": sorted(str(_relative(root, p)) for p in (run_dir / "shots").glob("*.png")),
+        **screenshot_listing(root, run_dir / "shots"),
     }
 
 

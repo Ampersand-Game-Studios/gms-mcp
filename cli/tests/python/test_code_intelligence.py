@@ -131,9 +131,10 @@ function game_start() {
             result = handle_find_definition(args)
 
         self.assertIsInstance(result, dict)
-        self.assertTrue(result.get("found", False))
-        self.assertEqual(len(result.get("definitions", [])), 1)
-        self.assertEqual(result["definitions"][0]["name"], "player_init")
+        self.assertEqual(result["symbol"], "player_init")
+        self.assertEqual(len(result["definitions"]), 1)
+        self.assertEqual(result["definitions"][0]["kind"], "function")
+        self.assertRegex(result["definitions"][0]["at"], r"\.gml:\d+$")
 
     def test_handle_find_definition_not_found(self):
         """handle_find_definition should handle missing symbols gracefully."""
@@ -152,8 +153,8 @@ function game_start() {
             result = handle_find_definition(args)
 
         self.assertIsInstance(result, dict)
-        self.assertFalse(result.get("found", True))
-        self.assertEqual(len(result.get("definitions", [])), 0)
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["definitions"], [])
 
     def test_handle_find_references(self):
         """handle_find_references should find symbol usages."""
@@ -173,9 +174,11 @@ function game_start() {
             result = handle_find_references(args)
 
         self.assertIsInstance(result, dict)
-        # player_init is called in game.gml
-        self.assertTrue(result.get("found", False))
-        self.assertGreater(len(result.get("references", [])), 0)
+        # player_init is called in game.gml; references are grouped by file as "<line> <code>"
+        self.assertGreater(result["count"], 0)
+        lines = [entry for entries in result["references"].values() for entry in entries]
+        self.assertTrue(lines and all(entry.split(" ", 1)[0].isdigit() for entry in lines))
+        self.assertTrue(any("player_init" in entry for entry in lines))
 
     def test_handle_list_symbols(self):
         """handle_list_symbols should list all symbols."""
@@ -197,11 +200,15 @@ function game_start() {
             result = handle_list_symbols(args)
 
         self.assertIsInstance(result, dict)
-        symbols = result.get("symbols", [])
-        self.assertGreater(len(symbols), 0)
+        self.assertGreater(result["count"], 0)
 
-        # Should contain various symbol types
-        symbol_names = {s["name"] for s in symbols}
+        # Should contain various symbol types: {kind: {file: ["name:line", ...]}}
+        symbol_names = {
+            entry.rsplit(":", 1)[0].split(".")[-1]
+            for files in result["symbols"].values()
+            for entries in files.values()
+            for entry in entries
+        }
         self.assertIn("player_init", symbol_names)
         self.assertIn("GAME_VERSION", symbol_names)
         self.assertIn("GameState", symbol_names)
@@ -225,10 +232,8 @@ function game_start() {
         with redirect_stdout(stdout_capture):
             result = handle_list_symbols(args)
 
-        symbols = result.get("symbols", [])
         # All returned symbols should be functions
-        for s in symbols:
-            self.assertEqual(s["kind"], "function")
+        self.assertEqual(set(result["symbols"]), {"function"})
 
     def test_handle_list_symbols_filtered_by_name(self):
         """handle_list_symbols should filter by name substring."""
@@ -249,10 +254,11 @@ function game_start() {
         with redirect_stdout(stdout_capture):
             result = handle_list_symbols(args)
 
-        symbols = result.get("symbols", [])
+        names = [entry for files in result["symbols"].values() for entries in files.values() for entry in entries]
         # All returned symbols should contain "player" in the name
-        for s in symbols:
-            self.assertIn("player", s["name"].lower())
+        self.assertTrue(names)
+        for name in names:
+            self.assertIn("player", name.lower())
 
 
 class TestCommandHandlerEdgeCases(unittest.TestCase):
@@ -331,9 +337,9 @@ class TestCommandHandlerEdgeCases(unittest.TestCase):
         with redirect_stdout(stdout_capture):
             result = handle_list_symbols(args)
 
-        # Should return empty list, not error
-        self.assertEqual(result.get("symbols", []), [])
-        self.assertEqual(result.get("count", -1), 0)
+        # Should return nothing, not an error
+        self.assertEqual(result["symbols"], {})
+        self.assertEqual(result["count"], 0)
 
 
 if __name__ == "__main__":
