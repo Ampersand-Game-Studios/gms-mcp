@@ -8,18 +8,15 @@ from typing import Annotated, Any, Dict
 from pydantic import Field
 
 from ...update_status import get_update_status
-from ..dispatch import _run_with_fallback
+from ..dispatch import _run_for_data
 from ..mcp_types import Context
 from ...project_detection import safe_git_command
 from ..project import (
     _SERVER_START_DIRECTORY,
-    _ensure_cli_on_sys_path,
     _find_yyp_file,
     _resolve_project_directory_no_deps,
-    _resolve_repo_root,
     configured_project_root,
 )
-from ..tool_types import OutputMode
 
 
 ProjectRootHeader = Annotated[
@@ -145,43 +142,32 @@ def register(mcp: Any, ContextType: Any) -> None:
         depth: str = "quick",
         include_info: bool = False,
         project_root: str = ".",
-        prefer_cli: bool = False,
-        output_mode: OutputMode = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Run project diagnostics and return structured issues.
+        Check the project for problems and return every one found.
+
+        `issues` groups them: each problem's message once, with everything it applies to. In a
+        message, {name} is the affected file's own name. `assets` maps a folder to asset names
+        whose files are <folder>/<name>/<name>.yy; `files` maps a folder to other file names in it
+        (name:line when the problem has a line). `summary` counts them by severity.
 
         Args:
             depth: "quick" runs fast lint checks only; "deep" adds reference
                    analysis, orphan detection, and GML string search.
             include_info: Whether to include info-level diagnostics.
         """
-        repo_root = _resolve_repo_root(project_root)
-        _ensure_cli_on_sys_path(repo_root)
-        from gms_helpers.commands.diagnostics_commands import handle_diagnostics
+        _ = ctx
+        from gms_helpers.commands.diagnostics_commands import dense_diagnostics, handle_diagnostics
 
-        args = argparse.Namespace(
-            depth=depth,
-            include_info=include_info,
-            project_root=project_root,
-        )
-        cli_args = ["diagnostics", "--depth", depth]
-        if include_info:
-            cli_args.append("--include-info")
-
-        return await _run_with_fallback(
+        args = argparse.Namespace(depth=depth, include_info=include_info, project_root=project_root)
+        return await _run_for_data(
             direct_handler=handle_diagnostics,
             direct_args=args,
-            cli_args=cli_args,
             project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
+            tool_name="diagnostics",
+            cli_args=["diagnostics", "--depth", depth],
+            shape=dense_diagnostics,
         )
 
     @mcp.tool()

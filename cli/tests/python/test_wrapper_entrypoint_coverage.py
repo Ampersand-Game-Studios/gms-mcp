@@ -392,11 +392,9 @@ class TestCommandWrappers(unittest.TestCase):
         run_auto.assert_called_once_with(project_root="/tmp/project", fix_issues=True, verbose=False)
 
         passthroughs = {
-            "maint_lint_command": "handle_maintenance_lint",
             "maint_validate_json_command": "handle_maintenance_validate_json",
             "maint_list_orphans_command": "handle_maintenance_list_orphans",
             "maint_prune_missing_command": "handle_maintenance_prune_missing",
-            "maint_validate_paths_command": "handle_maintenance_validate_paths",
             "maint_dedupe_resources_command": "handle_maintenance_dedupe_resources",
             "maint_sync_events_command": "handle_maintenance_sync_events",
             "maint_clean_old_files_command": "handle_maintenance_clean_old_files",
@@ -407,6 +405,20 @@ class TestCommandWrappers(unittest.TestCase):
             with self.subTest(name=name), patch.object(maintenance_commands, name, return_value=True) as handler:
                 self.assertTrue(getattr(maintenance_commands, wrapper)(SimpleNamespace()))
                 handler.assert_called_once()
+
+        # Lint and path validation return every issue as data as well as printing them.
+        with (
+            patch("gms_helpers.maintenance.lint.lint_project", return_value=[]),
+            patch("gms_helpers.maintenance.lint.print_lint_report"),
+        ):
+            linted = maintenance_commands.handle_maintenance_lint(SimpleNamespace(project_root="/tmp/project"))
+        self.assertEqual((linted["ok"], linted["diagnostics"], linted["depth"]), (True, [], "lint"))
+        with (
+            patch("gms_helpers.maintenance.validate_paths.validate_folder_paths", return_value=[]),
+            patch("gms_helpers.maintenance.validate_paths.print_path_validation_report"),
+        ):
+            paths = maintenance_commands.handle_maintenance_validate_paths(SimpleNamespace(project_root="/tmp/project"))
+        self.assertEqual(paths, {"ok": True, "issues": []})
 
         with patch.object(
             maintenance_commands,
@@ -831,14 +843,22 @@ class TestIntrospectionTools(MCPToolTestCase):
     def test_introspection_wrappers(self):
         with (
             patch("gms_mcp.server.tools.introspection._resolve_project_directory", return_value=Path("/tmp/project")),
-            patch("gms_helpers.introspection.list_assets_by_type", return_value={"script": [{"name": "scr_test"}]}),
+            patch(
+                "gms_helpers.introspection.list_assets_by_type",
+                return_value={
+                    "script": [{"name": "scr_test", "path": "scripts/scr_test/scr_test.yy", "type": "script"}]
+                },
+            ),
             patch(
                 "gms_helpers.introspection.describe_asset",
                 side_effect=[{"name": "scr_test", "asset_type": "script"}, None],
             ),
             patch("gms_helpers.introspection.closest_asset_names", return_value=["scr_tests"]),
             patch("gms_helpers.introspection.read_asset_yy", return_value={"name": "scr_test"}),
-            patch("gms_helpers.introspection.search_references", return_value=[{"path": "scripts/scr.gml"}]),
+            patch(
+                "gms_helpers.introspection.search_references",
+                return_value=[{"file": "scripts/scr.gml", "line": 3, "match": "player", "context": "player = 1;"}],
+            ),
             patch(
                 "gms_helpers.introspection.build_asset_graph",
                 return_value={"nodes": [], "edges": [], "node_count": 0, "edge_count": 0, "deep_scan": True},
@@ -853,12 +873,13 @@ class TestIntrospectionTools(MCPToolTestCase):
             stats = self.call_tool("gm_get_project_stats", project_root="/tmp/project")
 
         self.assertEqual(listed["count"], 1)
+        self.assertEqual(listed["assets"], {"scripts": ["scr_test"]})
         self.assertTrue(found["ok"])
         self.assertEqual(found["asset_type"], "script")
         self.assertEqual(found["asset_data"], {"name": "scr_test"})
         self.assertEqual(missing["did_you_mean"], ["scr_tests"])
         self.assertFalse(missing["ok"])
-        self.assertEqual(refs["count"], 1)
+        self.assertEqual((refs["count"], refs["results"]), (1, {"scripts/scr.gml": ["3 player = 1;"]}))
         self.assertEqual(graph["nodes"], [])
         self.assertEqual(stats["objects"], 1)
 
@@ -922,27 +943,22 @@ class TestEventTools(MCPToolTestCase):
 class TestCodeIntelTools(MCPToolTestCase):
     module = code_intel
 
-    def test_code_intel_wrappers_build_expected_cli_args(self):
-        with (
-            patch(
-                "gms_mcp.server.tools.code_intel._run_with_fallback",
-                new=AsyncMock(return_value={"ok": True}),
-            ) as fallback,
-            patch("gms_mcp.server.tools.code_intel._resolve_repo_root", return_value=Path("/tmp/project")),
-            patch("gms_mcp.server.tools.code_intel._resolve_project_directory", return_value=Path("/tmp/project")),
-            patch("gms_mcp.server.tools.code_intel._ensure_cli_on_sys_path"),
-        ):
+    def test_code_intel_wrappers_return_the_handlers_data(self):
+        with patch(
+            "gms_mcp.server.tools.code_intel._run_for_data",
+            new=AsyncMock(return_value={"ok": True}),
+        ) as run_for_data:
             cases = [
-                ("gm_build_index", {"project_root": "/tmp/project", "force": True}, ["symbol", "build", "--force"]),
+                ("gm_build_index", {"project_root": "/tmp/project", "force": True}, {"force": True}),
                 (
                     "gm_find_definition",
                     {"project_root": "/tmp/project", "symbol_name": "player_move"},
-                    ["symbol", "find-definition", "--", "player_move"],
+                    {"symbol_name": "player_move"},
                 ),
                 (
                     "gm_find_references",
                     {"project_root": "/tmp/project", "symbol_name": "player_move", "max_results": 25},
-                    ["symbol", "find-references", "--max-results", "25", "--", "player_move"],
+                    {"symbol_name": "player_move", "max_results": 25},
                 ),
                 (
                     "gm_list_symbols",
@@ -953,25 +969,15 @@ class TestCodeIntelTools(MCPToolTestCase):
                         "file_filter": "scripts",
                         "max_results": 10,
                     },
-                    [
-                        "symbol",
-                        "list",
-                        "--kind",
-                        "function",
-                        "--name-filter",
-                        "player",
-                        "--file-filter",
-                        "scripts",
-                        "--max-results",
-                        "10",
-                    ],
+                    {"kind": "function", "name_filter": "player", "file_filter": "scripts", "max_results": 10},
                 ),
             ]
-            for tool_name, kwargs, cli_args in cases:
+            for tool_name, kwargs, expected in cases:
                 with self.subTest(tool_name=tool_name):
                     result = self.call_tool(tool_name, **kwargs)
                     self.assertTrue(result["ok"])
-                    self.assertEqual(fallback.await_args_list[-1].kwargs["cli_args"], cli_args)
+                    sent = vars(run_for_data.await_args_list[-1].kwargs["direct_args"])
+                    self.assertEqual(sent, {"project_root": "/tmp/project", **expected})
 
 
 class TestProjectHealthTools(MCPToolTestCase):
@@ -1010,17 +1016,16 @@ class TestProjectHealthTools(MCPToolTestCase):
         self.assertTrue(health["ok"])
         self.assertIn("data", health)
 
-        with (
-            patch(
-                "gms_mcp.server.tools.project_health._run_with_fallback",
-                new=AsyncMock(return_value={"ok": True}),
-            ) as fallback,
-            patch("gms_mcp.server.tools.project_health._resolve_repo_root", return_value=Path("/tmp/project")),
-            patch("gms_mcp.server.tools.project_health._ensure_cli_on_sys_path"),
-        ):
+        with patch(
+            "gms_mcp.server.tools.project_health._run_for_data",
+            new=AsyncMock(return_value={"ok": True}),
+        ) as run_for_data:
             diagnostics = self.call_tool("gm_diagnostics", depth="deep", include_info=True, project_root="/tmp/project")
         self.assertTrue(diagnostics["ok"])
-        self.assertEqual(fallback.await_args.kwargs["cli_args"], ["diagnostics", "--depth", "deep", "--include-info"])
+        self.assertEqual(
+            vars(run_for_data.await_args.kwargs["direct_args"]),
+            {"depth": "deep", "include_info": True, "project_root": "/tmp/project"},
+        )
 
         with patch(
             "gms_mcp.server.tools.project_health.get_update_status",

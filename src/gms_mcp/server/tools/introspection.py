@@ -15,6 +15,36 @@ _AUTO_YY_CHARS = 12_000
 _INCLUDED_CODE_CHARS = 40_000
 
 
+def _dense_listing(rows: list, *, include_folder: bool = False) -> Dict[str, Any]:
+    """Asset rows written by folder and name: the path is implied, never repeated per asset."""
+    from gms_helpers.dense import asset_folders, assets_by_settings, by_folder, name_ranges
+
+    out: Dict[str, Any] = {}
+    included = [row for row in rows if row.get("type") == "includedfile"]
+    folders = [row for row in rows if row.get("type") == "folder"]
+    assets = [row for row in rows if row.get("type") not in ("includedfile", "folder")]
+    if assets:
+        if include_folder:
+            out["by_folder"] = assets_by_settings(assets, lambda row: {"folder": row.get("folder")})
+        else:
+            grouped, other = asset_folders(str(row["path"]) for row in assets)
+            out["assets"] = {folder: name_ranges(names) for folder, names in grouped.items()}
+            if other:
+                out["files"] = other
+    if folders:
+        out["folders"] = by_folder(str(row["path"]) for row in folders)
+    if included:
+        out["included_files"] = by_folder(str(row["path"]) for row in included)
+        unusual = {
+            str(row["path"]): {"copy_to_mask": row.get("copy_to_mask")}
+            for row in included
+            if row.get("copy_to_mask", -1) != -1
+        }
+        if unusual:
+            out["included_file_settings"] = unusual
+    return out
+
+
 def register(mcp: Any, ContextType: Any) -> None:
     globals()["Context"] = ContextType
 
@@ -55,19 +85,22 @@ def register(mcp: Any, ContextType: Any) -> None:
         ] = False,
         limit: Annotated[
             Optional[int],
-            Field(description="Most assets to return in one call (default 200).", ge=1, le=2000),
+            Field(description="Return only this many matches (default: every match).", ge=1),
         ] = None,
         offset: Annotated[int, Field(description="Skip this many matching assets, to page through.", ge=0)] = 0,
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        List assets by type, name or folder, a page at a time.
+        List the project's assets, optionally only those of one type, name or folder.
 
-        With no filter and no `limit` on a large project it returns only the counts per type; add
-        `asset_type`, `name_contains` or `folder_prefix`, or pass `limit` to page through everything.
-        `count` and `by_type` always describe every match; `truncated` and `next_offset` say whether
-        more remain.
+        Every match is returned, by name. `assets` maps a folder to asset names whose files are
+        <folder>/<name>/<name>.yy (objects/o_player/o_player.yy); `included_files` maps a folder
+        under datafiles to its file names; `folders` lists asset-browser folders the same way;
+        `files` holds any path named otherwise. A numbered run of names is written as a brace range
+        (Keyboard_{0..9} is Keyboard_0 to Keyboard_9). `count` and `by_type` count every match; with `limit` or `offset`,
+        `truncated` and `next_offset` say whether more remain. include_folder groups the assets by
+        their asset-browser folder instead.
         """
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
@@ -99,59 +132,28 @@ def register(mcp: Any, ContextType: Any) -> None:
             )
         by_type = {kind: len(items) for kind, items in matches.items()}
         count = sum(by_type.values())
-        filters = {"asset_type": asset_type, "name_contains": name_contains, "folder_prefix": folder_prefix}
-        result: Dict[str, Any] = {
-            "ok": True,
-            "project_directory": str(project_directory),
-            "count": count,
-            "by_type": by_type,
-            "types_found": list(matches.keys()),
-            "filters": filters,
-        }
-        summary_only = limit is None and offset == 0 and not any(filters.values())
-        limit = limit or 200
-        if summary_only and count > limit:
-            result.update(
-                assets={},
-                returned=0,
-                truncated=True,
-                next_offset=0,
-                message=(
-                    f"{count} assets. Pass asset_type, name_contains or folder_prefix to list the ones "
-                    "you need, or limit (with offset) to page through everything."
-                ),
-            )
-            return result
+        result: Dict[str, Any] = {"ok": True, "count": count, "by_type": by_type}
 
-        page: Dict[str, list] = {}
-        skipped = returned = 0
-        for kind, items in matches.items():
-            for item in items:
-                if skipped < offset:
-                    skipped += 1
-                    continue
-                if returned >= limit:
-                    break
-                # The group already says the type; repeating it on every entry only costs tokens.
-                page.setdefault(kind, []).append({key: value for key, value in item.items() if key != "type"})
-                returned += 1
+        rows = [item for items in matches.values() for item in items][offset:]
+        if limit is not None:
+            rows = rows[:limit]
         if include_folder:
             from gms_helpers.introspection import read_asset_yy
 
-            for kind, items in page.items():
-                for item in items:
-                    if kind == "folder" or not str(item.get("path", "")).endswith(".yy"):
-                        continue
-                    data = read_asset_yy(project_directory, item["path"]) or {}
-                    parent = data.get("parent")
-                    item["folder"] = parent.get("path") if isinstance(parent, dict) else None
-        truncated = offset + returned < count
-        result.update(
-            assets=page,
-            returned=returned,
-            truncated=truncated,
-            next_offset=offset + returned if truncated else None,
-        )
+            for item in rows:
+                if item.get("type") in ("folder", "includedfile") or not str(item.get("path", "")).endswith(".yy"):
+                    continue
+                data = read_asset_yy(project_directory, item["path"]) or {}
+                parent = data.get("parent")
+                item["folder"] = parent.get("path") if isinstance(parent, dict) else None
+        result.update(_dense_listing(rows, include_folder=include_folder))
+        if offset or len(rows) < count - offset:
+            truncated = offset + len(rows) < count
+            result.update(
+                returned=len(rows),
+                truncated=truncated,
+                next_offset=offset + len(rows) if truncated else None,
+            )
         return result
 
     @mcp.tool()
@@ -251,6 +253,8 @@ def register(mcp: Any, ContextType: Any) -> None:
         Search for a pattern in project files.
 
         Scopes: 'all', 'gml', 'yy', 'scripts', 'objects', 'extensions', 'datafiles'.
+        `results` maps each file to its matching lines as "<line> <text>" (a line longer than
+        200 characters is shown around the match, marked with …).
         """
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
@@ -266,7 +270,13 @@ def register(mcp: Any, ContextType: Any) -> None:
         )
         if results and "error" in results[0]:
             return {"ok": False, "error": results[0]["error"]}
-        return {"pattern": pattern, "scope": scope, "results": results, "count": len(results)}
+        by_file: Dict[str, list] = {}
+        for hit in results:
+            by_file.setdefault(hit["file"], []).append(f"{hit['line']} {hit['context']}")
+        found: Dict[str, Any] = {"count": len(results), "results": by_file}
+        if len(results) >= max_results > 0:
+            found["limited"] = f"Stopped at max_results={max_results}; there may be more."
+        return found
 
     @mcp.tool()
     def gm_get_asset_graph(

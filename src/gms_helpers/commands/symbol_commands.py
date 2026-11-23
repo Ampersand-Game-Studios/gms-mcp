@@ -1,13 +1,15 @@
-"""Symbol/Code Intelligence command implementations.
+"""Symbol/Code Intelligence commands.
 
-These handlers use print() for output, which is captured by _capture_output
-when called via MCP tools.
+Each query is a report function that returns the whole answer as data; the MCP tools return
+that data, and the ``handle_*`` command handlers print it for a person and return it as well.
+Reports group by file and name each location once, so a long answer stays readable and cheap
+for an agent without leaving anything out.
 """
 
 from pathlib import Path
 from typing import Any, Optional
 
-from ..results import OperationResult, structured_error
+from ..results import structured_error
 
 
 def _ok_payload(payload: dict[str, Any]) -> dict[str, Any]:
@@ -29,265 +31,268 @@ def _error_payload(message: str, *, code: str, operation: str, **payload: Any) -
     return payload
 
 
-def handle_build_index(args) -> OperationResult:
-    """Build or rebuild the GML symbol index."""
-    from ..gml_index import GMLIndex
-
-    try:
-        project_root = _get_project_root(args)
-        force = getattr(args, "force", False)
-
-        print(f"[INDEX] Building symbol index for: {project_root}")
-
-        index = GMLIndex(project_root)
-        stats = index.build(force=force)
-
-        status = stats.get("status", "unknown")
-        if status == "cached":
-            print("[OK] Using cached index (files unchanged)")
-        else:
-            print("[OK] Index built successfully")
-
-        print(f"  Files scanned: {stats.get('files', 0)}")
-        print(f"  Symbols found: {stats.get('symbols', 0)}")
-        print(f"  References found: {stats.get('references', 0)}")
-
-        return OperationResult.ok("Symbol index built", data=stats)
-
-    except Exception as e:
-        print(f"[ERROR] Failed to build index: {e}")
-        return OperationResult.fail(
-            f"Failed to build index: {e}",
-            code="build_index_failed",
-            error_type=type(e).__name__,
-            details={"operation": "build_index"},
-        )
-
-
-def _note_unsaved_index(build_report: dict) -> None:
-    """Tell the caller why a lookup was slow and the one call that makes later ones fast."""
+def _index_note(build_report: dict) -> Optional[str]:
+    """Why a lookup was slow, and whether the next one will be fast."""
     from ..operation_policy import read_only_mode_enabled
 
     if build_report.get("status") != "built" or read_only_mode_enabled():
-        return
+        return None
     if build_report.get("saved"):
-        print(
-            "[INFO] First symbol lookup in this checkout: every code file was scanned and the index "
-            "saved, so later lookups are fast."
+        return (
+            "First symbol lookup in this checkout: every code file was scanned and the index saved, "
+            "so later lookups are fast."
         )
-    else:
-        print(
-            "[INFO] Every code file was scanned for this lookup: the saved index was not available "
-            "(another lookup may be writing it now). Lookups made one at a time reuse it."
+    return (
+        "Every code file was scanned for this lookup: the saved index was not available (another "
+        "lookup may be writing it now). Lookups made one at a time reuse it."
+    )
+
+
+def _with_note(payload: dict[str, Any], note: Optional[str]) -> dict[str, Any]:
+    if note:
+        payload["note"] = note
+    return payload
+
+
+# ----------------------------------------------------------------------
+# Reports (data only)
+# ----------------------------------------------------------------------
+def build_index_report(project_root: Path, *, force: bool = False) -> dict[str, Any]:
+    """Build or refresh the symbol index; report what it holds."""
+    from ..gml_index import GMLIndex
+
+    stats = GMLIndex(Path(project_root)).build(force=force)
+    return _ok_payload(dict(stats))
+
+
+def definitions_report(project_root: Path, symbol_name: str) -> dict[str, Any]:
+    """Every definition of ``symbol_name``: kind, ``at`` (file:line), parameters and doc comment."""
+    from ..gml_index import GMLIndex
+
+    if not symbol_name:
+        return _error_payload(
+            "Symbol name required", code="symbol_name_required", operation="find_definition", definitions=[]
         )
+    root = Path(project_root)
+    index = GMLIndex(root)
+    note = _index_note(index.build())
+    definitions = []
+    for definition in index.find_definition(symbol_name):
+        entry: dict[str, Any] = {
+            "kind": definition.kind.value,
+            "at": f"{_make_relative(definition.location.file_path, root)}:{definition.location.line}",
+        }
+        if definition.parameters:
+            entry["params"] = definition.parameters
+        if definition.parent_enum:
+            entry["enum"] = definition.parent_enum
+        if definition.doc_comment:
+            entry["doc"] = definition.doc_comment
+        definitions.append(entry)
+    return _with_note(_ok_payload({"symbol": symbol_name, "definitions": definitions}), note)
+
+
+def references_report(project_root: Path, symbol_name: str, *, max_results: Optional[int] = None) -> dict[str, Any]:
+    """Every reference to ``symbol_name``, grouped by file: ``"<line> <the line of code>"``.
+
+    A line that names the symbol twice is listed once. ``defined_at`` names the definition lines,
+    which also name the symbol. ``max_results`` keeps the first that many references.
+    """
+    from ..gml_index import GMLIndex
+
+    if not symbol_name:
+        return _error_payload(
+            "Symbol name required", code="symbol_name_required", operation="find_references", references={}
+        )
+    root = Path(project_root)
+    index = GMLIndex(root)
+    note = _index_note(index.build())
+    references = index.find_references(symbol_name)
+    total = len(references)
+    if max_results is not None and max_results >= 0:
+        references = references[:max_results]
+    by_file: dict[str, list[str]] = {}
+    seen: set[tuple[str, int]] = set()
+    for reference in references:
+        file = _make_relative(reference.location.file_path, root)
+        key = (file, reference.location.line)
+        if key in seen:
+            continue
+        seen.add(key)
+        by_file.setdefault(file, []).append(f"{reference.location.line} {reference.context or ''}".rstrip())
+    payload: dict[str, Any] = {"symbol": symbol_name, "count": total}
+    defined_at = [
+        f"{_make_relative(definition.location.file_path, root)}:{definition.location.line}"
+        for definition in index.find_definition(symbol_name)
+    ]
+    if defined_at:
+        payload["defined_at"] = defined_at
+    payload["references"] = by_file
+    if len(references) < total:
+        payload["returned"] = len(references)
+        payload["truncated"] = True
+    return _with_note(_ok_payload(payload), note)
+
+
+def symbols_report(
+    project_root: Path,
+    *,
+    kind: Optional[str] = None,
+    name_filter: Optional[str] = None,
+    file_filter: Optional[str] = None,
+    max_results: Optional[int] = None,
+) -> dict[str, Any]:
+    """Symbols by kind, then file: ``{"function": {"scripts/a/a.gml": ["name:line", ...]}}``.
+
+    Symbols are taken in name order; ``max_results`` keeps the first that many.
+    """
+    from ..gml_index import GMLIndex, SymbolKind
+
+    root = Path(project_root)
+    kind_enum = None
+    if kind:
+        try:
+            kind_enum = SymbolKind(kind.lower())
+        except ValueError:
+            return {
+                "ok": False,
+                "success": False,
+                "error": f"Unknown symbol kind '{kind}'.",
+                "message": f"Unknown symbol kind '{kind}'.",
+                "valid_kinds": [item.value for item in SymbolKind],
+            }
+    index = GMLIndex(root)
+    note = _index_note(index.build())
+    symbols = index.list_symbols(kind=kind_enum, name_filter=name_filter, file_filter=file_filter)
+    total = len(symbols)
+    if max_results is not None and max_results >= 0:
+        symbols = symbols[:max_results]
+    grouped: dict[str, dict[str, list[str]]] = {}
+    for symbol in symbols:
+        file = _make_relative(symbol.location.file_path, root)
+        name = f"{symbol.parent_enum}.{symbol.name}" if symbol.parent_enum else symbol.name
+        grouped.setdefault(symbol.kind.value, {}).setdefault(file, []).append(f"{name}:{symbol.location.line}")
+    payload: dict[str, Any] = {"count": total, "symbols": grouped}
+    if len(symbols) < total:
+        payload["returned"] = len(symbols)
+        payload["truncated"] = True
+    return _with_note(_ok_payload(payload), note)
+
+
+# ----------------------------------------------------------------------
+# Command handlers (print for a person, return the report)
+# ----------------------------------------------------------------------
+def _print_note(report: dict[str, Any]) -> None:
+    if report.get("note"):
+        print(f"[INFO] {report['note']}")
+
+
+def handle_build_index(args) -> dict:
+    """Build or rebuild the GML symbol index."""
+    try:
+        project_root = _get_project_root(args)
+        print(f"[INDEX] Building symbol index for: {project_root}")
+        stats = build_index_report(project_root, force=getattr(args, "force", False))
+        print("[OK] Using cached index (files unchanged)" if stats.get("status") == "cached" else "[OK] Index built")
+        print(f"  Files scanned: {stats.get('files', 0)}")
+        print(f"  Symbols found: {stats.get('symbols', 0)}")
+        print(f"  References found: {stats.get('references', 0)}")
+        return stats
+    except Exception as e:
+        print(f"[ERROR] Failed to build index: {e}")
+        return _error_payload(f"Failed to build index: {e}", code="build_index_failed", operation="build_index")
 
 
 def handle_find_definition(args) -> dict:
     """Find definition(s) of a symbol."""
-    from ..gml_index import GMLIndex
-
+    symbol_name = getattr(args, "symbol_name", None)
     try:
-        project_root = _get_project_root(args)
-        symbol_name = getattr(args, "symbol_name", None)
-
-        if not symbol_name:
-            print("[ERROR] Symbol name required")
-            return _error_payload(
-                "Symbol name required",
-                code="symbol_name_required",
-                operation="find_definition",
-                definitions=[],
-            )
-
-        print(f"[SEARCH] Finding definition of '{symbol_name}'...")
-
-        index = GMLIndex(project_root)
-        _note_unsaved_index(index.build())
-
-        definitions = index.find_definition(symbol_name)
-
-        if not definitions:
-            print(f"[INFO] No definition found for '{symbol_name}'")
-            return _ok_payload({"symbol": symbol_name, "definitions": [], "found": False})
-
-        print(f"[OK] Found {len(definitions)} definition(s):")
-
-        result_defs = []
-        for defn in definitions:
-            loc = defn.location
-            rel_path = _make_relative(loc.file_path, project_root)
-            print(f"  {defn.kind.value}: {defn.name}")
-            print(f"    File: {rel_path}:{loc.line}")
-            if defn.parameters:
-                print(f"    Params: ({', '.join(defn.parameters)})")
-            if defn.doc_comment:
-                doc_preview = defn.doc_comment[:80].replace("\n", " ")
-                print(f"    Doc: {doc_preview}...")
-
-            result_defs.append(defn.to_dict())
-
-        return _ok_payload(
-            {
-                "symbol": symbol_name,
-                "definitions": result_defs,
-                "found": True,
-                "count": len(definitions),
-            }
-        )
-
+        report = definitions_report(_get_project_root(args), symbol_name or "")
     except Exception as e:
         print(f"[ERROR] Error finding definition: {e}")
-        return _error_payload(
-            str(e),
-            code="find_definition_failed",
-            operation="find_definition",
-            definitions=[],
-        )
+        return _error_payload(str(e), code="find_definition_failed", operation="find_definition", definitions=[])
+    if not report["ok"]:
+        print(f"[ERROR] {report['message']}")
+        return report
+    _print_note(report)
+    definitions = report["definitions"]
+    if not definitions:
+        print(f"[INFO] No definition found for '{symbol_name}'")
+    else:
+        print(f"[OK] Found {len(definitions)} definition(s) of '{symbol_name}':")
+    for definition in definitions:
+        params = f"({', '.join(definition['params'])})" if "params" in definition else ""
+        print(f"  {definition['kind']} {symbol_name}{params}  {definition['at']}")
+        if definition.get("doc"):
+            for line in str(definition["doc"]).splitlines():
+                print(f"    {line}")
+    return report
 
 
 def handle_find_references(args) -> dict:
     """Find all references to a symbol."""
-    from ..gml_index import GMLIndex
-
+    symbol_name = getattr(args, "symbol_name", None)
     try:
-        project_root = _get_project_root(args)
-        symbol_name = getattr(args, "symbol_name", None)
-        max_results = getattr(args, "max_results", 50)
-
-        if not symbol_name:
-            print("[ERROR] Symbol name required")
-            return _error_payload(
-                "Symbol name required",
-                code="symbol_name_required",
-                operation="find_references",
-                references=[],
-            )
-
-        print(f"[SEARCH] Finding references to '{symbol_name}'...")
-
-        index = GMLIndex(project_root)
-        _note_unsaved_index(index.build())
-
-        references = index.find_references(symbol_name)
-
-        if not references:
-            print(f"[INFO] No references found for '{symbol_name}'")
-            return _ok_payload({"symbol": symbol_name, "references": [], "found": False})
-
-        total_count = len(references)
-        truncated = total_count > max_results
-        display_refs = references[:max_results]
-
-        print(f"[OK] Found {total_count} reference(s)" + (f" (showing first {max_results})" if truncated else "") + ":")
-
-        # The line that defines the symbol also names it; say so, so it is not read as a use.
-        defined_at = {
-            (definition.location.file_path.as_posix(), definition.location.line)
-            for definition in index.find_definition(symbol_name)
-        }
-        result_refs = []
-        for ref in display_refs:
-            loc = ref.location
-            rel_path = _make_relative(loc.file_path, project_root)
-            context_preview = (
-                (ref.context[:60] + "...") if ref.context and len(ref.context) > 60 else (ref.context or "")
-            )
-            is_definition = (loc.file_path.as_posix(), loc.line) in defined_at
-            print(f"  {rel_path}:{loc.line} - {context_preview}{'  [definition]' if is_definition else ''}")
-            result_refs.append({**ref.to_dict(), **({"definition": True} if is_definition else {})})
-
-        return _ok_payload(
-            {
-                "symbol": symbol_name,
-                "references": result_refs,
-                "found": True,
-                "count": total_count,
-                "truncated": truncated,
-            }
+        report = references_report(
+            _get_project_root(args), symbol_name or "", max_results=getattr(args, "max_results", None)
         )
-
     except Exception as e:
         print(f"[ERROR] Error finding references: {e}")
-        return _error_payload(
-            str(e),
-            code="find_references_failed",
-            operation="find_references",
-            references=[],
-        )
+        return _error_payload(str(e), code="find_references_failed", operation="find_references", references={})
+    if not report["ok"]:
+        print(f"[ERROR] {report['message']}")
+        return report
+    _print_note(report)
+    if not report["count"]:
+        print(f"[INFO] No references found for '{symbol_name}'")
+        return report
+    shown = report.get("returned", report["count"])
+    print(
+        f"[OK] Found {report['count']} reference(s) to '{symbol_name}'"
+        + (f" (showing first {shown})" if report.get("truncated") else "")
+        + ":"
+    )
+    definitions = set(report.get("defined_at", []))
+    for file, lines in report["references"].items():
+        for entry in lines:
+            line_number, _, code = entry.partition(" ")
+            marker = "  [definition]" if f"{file}:{line_number}" in definitions else ""
+            print(f"  {file}:{line_number} - {code}{marker}")
+    return report
 
 
 def handle_list_symbols(args) -> dict:
     """List all symbols, optionally filtered."""
-    from ..gml_index import GMLIndex, SymbolKind
-
     try:
-        project_root = _get_project_root(args)
-        kind_filter = getattr(args, "kind", None)
-        name_filter = getattr(args, "name_filter", None)
-        file_filter = getattr(args, "file_filter", None)
-        max_results = getattr(args, "max_results", 100)
-
-        print("[SEARCH] Listing symbols...")
-
-        # Convert kind string to enum if provided
-        kind_enum = None
-        if kind_filter:
-            try:
-                kind_enum = SymbolKind(kind_filter.lower())
-            except ValueError:
-                print(f"[WARN] Unknown symbol kind '{kind_filter}', ignoring filter")
-
-        index = GMLIndex(project_root)
-        _note_unsaved_index(index.build())
-
-        symbols = index.list_symbols(
-            kind=kind_enum,
-            name_filter=name_filter,
-            file_filter=file_filter,
+        report = symbols_report(
+            _get_project_root(args),
+            kind=getattr(args, "kind", None),
+            name_filter=getattr(args, "name_filter", None),
+            file_filter=getattr(args, "file_filter", None),
+            max_results=getattr(args, "max_results", None),
         )
-
-        if not symbols:
-            print("[INFO] No symbols found matching criteria")
-            return _ok_payload({"symbols": [], "count": 0})
-
-        total_count = len(symbols)
-        truncated = total_count > max_results
-        display_symbols = symbols[:max_results]
-
-        filters_desc = []
-        if kind_filter:
-            filters_desc.append(f"kind={kind_filter}")
-        if name_filter:
-            filters_desc.append(f"name contains '{name_filter}'")
-        if file_filter:
-            filters_desc.append(f"file contains '{file_filter}'")
-
-        filter_str = f" (filters: {', '.join(filters_desc)})" if filters_desc else ""
-
-        print(
-            f"[OK] Found {total_count} symbol(s){filter_str}"
-            + (f" (showing first {max_results})" if truncated else "")
-            + ":"
-        )
-
-        result_symbols = []
-        for symbol in display_symbols:
-            loc = symbol.location
-            rel_path = _make_relative(loc.file_path, project_root)
-            print(f"  [{symbol.kind.value}] {symbol.name} - {rel_path}:{loc.line}")
-            result_symbols.append(symbol.to_dict())
-
-        return _ok_payload(
-            {
-                "symbols": result_symbols,
-                "count": total_count,
-                "truncated": truncated,
-            }
-        )
-
     except Exception as e:
         print(f"[ERROR] Error listing symbols: {e}")
-        return _error_payload(str(e), code="list_symbols_failed", operation="list_symbols", symbols=[])
+        return _error_payload(str(e), code="list_symbols_failed", operation="list_symbols", symbols={})
+    if not report["ok"]:
+        print(f"[ERROR] {report['message']}")
+        return report
+    _print_note(report)
+    if not report["count"]:
+        print("[INFO] No symbols found matching criteria")
+        return report
+    shown = report.get("returned", report["count"])
+    print(
+        f"[OK] Found {report['count']} symbol(s)"
+        + (f" (showing first {shown})" if report.get("truncated") else "")
+        + ":"
+    )
+    for kind, files in report["symbols"].items():
+        for file, entries in files.items():
+            for entry in entries:
+                name, line = entry.rsplit(":", 1)
+                print(f"  [{kind}] {name} - {file}:{line}")
+    return report
 
 
 def _get_project_root(args) -> Path:

@@ -161,8 +161,8 @@ class TestMCPIntegrationTools(unittest.TestCase):
         )
         assets_result = unwrap_call_tool_result(out)
         self.assertGreaterEqual(int(assets_result.get("count", 0)), 1)
-        scripts = (assets_result.get("assets") or {}).get("script") or []
-        self.assertTrue(any(a.get("name") == "scr_utils" for a in scripts), msg=str(scripts))
+        scripts = (assets_result.get("assets") or {}).get("scripts") or []
+        self.assertIn("scr_utils", scripts)
         self.assertIn("transaction", result)
         self.assertTrue(result["transaction"]["committed"])
 

@@ -1166,10 +1166,9 @@ def _summarize_changes(before: Dict[str, str], after: Dict[str, str]) -> Dict[st
         "modified_count": len(modified),
         "deleted_count": len(deleted),
         "changed_count": len(created) + len(modified) + len(deleted),
-        "created": created[:50],
-        "modified": modified[:50],
-        "deleted": deleted[:50],
-        "truncated": len(created) > 50 or len(modified) > 50 or len(deleted) > 50,
+        "created": created,
+        "modified": modified,
+        "deleted": deleted,
     }
 
 
