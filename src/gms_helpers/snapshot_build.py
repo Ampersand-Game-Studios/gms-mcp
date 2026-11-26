@@ -587,6 +587,9 @@ def igor_command(
     command.append(f"-j={max(1, int(jobs))}")
     if platform == "HTML5":
         command.append(f"/tf={output_file.parent.with_name('html5')}")
+    elif platform == "Windows" and action == "PackageZip":
+        # Windows Igor writes the package to --tf; without it the final move gets an empty destination.
+        command.append(f"--tf={output_file}")
     command.extend(["--", platform, action])
     return command
 

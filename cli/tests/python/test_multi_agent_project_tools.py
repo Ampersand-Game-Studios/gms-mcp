@@ -900,6 +900,26 @@ def test_html5_snapshot_requires_real_web_output(repo: Path, tmp_path: Path, loc
     assert not stale.ok and "HTML5 export" in stale.errors[0]
 
 
+def test_windows_snapshot_names_the_package_file(repo: Path, tmp_path: Path, lock_dir: Path):
+    work = tmp_path / "windows-build"
+    calls = []
+
+    def igor(command, log, timeout):
+        calls.append(command)
+        log.write_text("Final Compile finished.\nIgor complete.\n")
+        # Windows Igor zips into --tf and has no package without it.
+        target = next((arg.removeprefix("--tf=") for arg in command if arg.startswith("--tf=")), "")
+        if target:
+            with zipfile.ZipFile(target, "w") as archive:
+                archive.writestr("data.win", "data")
+        return 0
+
+    result = snapshot_build.compile_snapshot(repo, work, _toolchain(tmp_path), platform="Windows", run_igor=igor)
+    assert result.ok and calls[0][-3:] == ["--", "Windows", "PackageZip"]
+    assert f"--tf={work / 'out' / 'build.zip'}" in calls[0]
+    assert result.game_archive == work / "out" / "build.zip"
+
+
 def test_snapshot_builds_keep_their_own_log_and_serialise_mobile_targets(repo: Path, tmp_path: Path, lock_dir: Path):
     seen: dict[str, object] = {}
     inner = _fake_igor(["ok"])
