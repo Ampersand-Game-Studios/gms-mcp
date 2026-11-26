@@ -5,7 +5,7 @@ from typing import Annotated, Any, Dict
 
 from pydantic import Field
 
-from ..dispatch import _run_with_fallback
+from ..dispatch import _run_for_data, _run_with_fallback
 from ..mcp_types import Context
 from ..project import _ensure_cli_on_sys_path, _resolve_repo_root
 from ..tool_types import OutputMode
@@ -150,60 +150,42 @@ def register(mcp: Any, ContextType: Any) -> None:
     async def gm_event_list(
         object: str,
         project_root: str = ".",
-        prefer_cli: bool = False,
-        output_mode: OutputMode = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """List all events for an object."""
+        """List an object's event files in order; `collision_objects` names each collision event's other object."""
+        _ = ctx
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
-        from gms_helpers.commands.event_commands import handle_event_list
+        from gms_helpers.commands.event_commands import dense_event_list, handle_event_list
 
-        args = argparse.Namespace(object=object, project_root=project_root)
-        cli_args = ["event", "list", "--", object]
-
-        return await _run_with_fallback(
+        return await _run_for_data(
             direct_handler=handle_event_list,
-            direct_args=args,
-            cli_args=cli_args,
+            direct_args=argparse.Namespace(object=object, project_root=project_root),
             project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
+            tool_name="event-list",
+            cli_args=["event", "list", "--", object],
+            shape=dense_event_list,
         )
 
     @mcp.tool()
     async def gm_event_validate(
         object: str,
         project_root: str = ".",
-        prefer_cli: bool = False,
-        output_mode: OutputMode = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Check that an object's event files and its .yy event list agree, and report any mismatch."""
+        """Check that an object's event files and its .yy event list agree; returns orphaned_found and missing_found."""
+        _ = ctx
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
-        from gms_helpers.commands.event_commands import handle_event_validate
+        from gms_helpers.commands.event_commands import dense_event_validate, handle_event_validate
 
-        args = argparse.Namespace(object=object, project_root=project_root)
-        cli_args = ["event", "validate", "--", object]
-
-        return await _run_with_fallback(
+        return await _run_for_data(
             direct_handler=handle_event_validate,
-            direct_args=args,
-            cli_args=cli_args,
+            direct_args=argparse.Namespace(object=object, project_root=project_root),
             project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
+            tool_name="event-validate",
+            cli_args=["event", "validate", "--", object],
+            shape=dense_event_validate,
         )
 
     @mcp.tool()

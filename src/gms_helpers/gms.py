@@ -1142,6 +1142,7 @@ def setup_symbol_commands(subparsers):
     ref_parser = symbol_subparsers.add_parser("find-references", help="Find all references to a symbol")
     ref_parser.add_argument("symbol_name", help="Name of symbol to find references for")
     ref_parser.add_argument("--max-results", type=int, default=None, help="Keep only the first N references")
+    ref_parser.add_argument("--offset", type=int, default=0, help="Skip this many references, to page through")
     ref_parser.set_defaults(func=handle_find_references)
 
     # List symbols command
@@ -1154,6 +1155,7 @@ def setup_symbol_commands(subparsers):
     list_parser.add_argument("--name-filter", help="Filter symbols by name (case-insensitive substring)")
     list_parser.add_argument("--file-filter", help="Filter symbols by file path (case-insensitive substring)")
     list_parser.add_argument("--max-results", type=int, default=100, help="Maximum number of results (default: 100)")
+    list_parser.add_argument("--offset", type=int, default=0, help="Skip this many symbols, to page through")
     list_parser.set_defaults(func=handle_list_symbols)
 
 

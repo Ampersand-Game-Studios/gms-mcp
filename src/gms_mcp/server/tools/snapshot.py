@@ -29,16 +29,13 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         include_free: bool = False, project_root: str = ".", ctx: Context | None = None
     ) -> Dict[str, Any]:
         """
-        Show who is building on this computer right now, when a build or test run seems stuck.
+        Show who is building on this computer, when a build or test run seems stuck.
 
-        Lists the locks that are held (the repository lock, per-project runtime leases, the mobile
-        build lock and the Igor build slots) with what each is for and how long it has been held,
-        plus the machine's build turn. A build slot's purpose names the project, the run label and
-        the attempt; a lock this session holds has this_session=true and `this_session_runs` lists
-        the runs this session still has going (empty: none). Locks left behind by a process that
-        has ended hold nobody up (the next run to need one takes it over), so they are only
-        counted, in `left_behind`. `include_free=true` lists every lock, with left_behind=true on
-        those, and the per-run label locks that are otherwise only counted.
+        Lists held locks (repository, per-project runtime leases, mobile build, Igor build slots)
+        with each one's purpose and age, and the machine's build turn. this_session=true marks
+        this session's locks; `this_session_runs` lists its runs still going. Locks left by an
+        ended process block nobody and are only counted in `left_behind`; include_free=true lists
+        every lock, those and the per-run label locks included.
         """
         _ = ctx
         import os
@@ -108,12 +105,12 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Read the log of an earlier gm_test_run / gm_snapshot_compile.
+        Read the log of an earlier gm_test_run or gm_snapshot_compile.
 
-        which: "run" = the game's own log (every show_debug_message line), "build" = Igor's
-        compile log, "runner" = the runner's stderr. pattern is an optional regular expression
-        that keeps only matching lines (for example "\\[TEST\\]" or "ERROR"). Returns the last
-        `lines` lines and the run's screenshots (`screenshot_files` and `screenshots`, as gm_test_run gives them).
+        which: "run" (the game's show_debug_message lines), "build" (Igor's compile log) or
+        "runner" (the runner's stderr). pattern, a regular expression, keeps matching lines
+        (e.g. "\\[TEST\\]" or "ERROR"). Returns the last `lines` lines and the run's screenshots
+        as gm_test_run gives them.
         """
         _ = ctx
         from gms_helpers.snapshot_build import read_run_artifact
@@ -139,30 +136,21 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Compile a throwaway copy of the project and report compiler errors. Nothing is written to the project.
+        Compile a throwaway copy of the project and report compiler errors; the project is not touched.
 
-        A compile takes one to several minutes. A call that has no result after about 20 seconds
-        returns status STILL_RUNNING with the build's stage, and the build carries on: follow it
-        with gm_build_status(label=...), which returns this result when it ends. background=true
-        returns at once instead.
+        By default the copy is the working tree as it is now, everyone's uncommitted edits
+        included. When files that are not yours break the build, pass isolate_paths (relative to
+        the .yyp's folder, e.g. ["scripts/my_script", "objects/o_thing", "datafiles/data/items"]):
+        the copy is git `ref` plus those paths, with the .yyp registrations they need (inferred,
+        or named in yyp_entries: asset .yy paths, "folders/....yy", "included:datafiles/dir/file").
+        base_only=true builds `ref` alone.
 
-        Default: the copy is the working tree exactly as it is now (including everyone's
-        uncommitted edits).
-
-        Isolated build: pass isolate_paths (paths relative to the folder containing the .yyp,
-        e.g. ["scripts/my_script", "objects/o_thing", "datafiles/data/items"]). The copy is then
-        git revision `ref` plus only those paths, and its .yyp is that revision plus only the
-        registrations those paths need (worked out automatically; pass yyp_entries to name them
-        yourself: asset .yy paths, "folders/....yy" folder paths, "included:datafiles/dir/file").
-        Use this when the working tree does not compile because of files that are not yours.
-        base_only=true builds revision `ref` with nothing added.
-
-        Igor's random System.AccessViolationException crash is retried automatically
-        (`attempts`, default from .gms-mcp.json build.igor_attempts). A build that fails with
-        compiler errors is never retried: fix the errors listed in `errors`.
-
-        platform: default is this computer's OS. Android and iOS package the game with the
-        SDK/Xcode settings saved in the GameMaker IDE; they produce no runnable result here.
+        Igor's random AccessViolationException crash is retried (`attempts`, default
+        build.igor_attempts in .gms-mcp.json); compiler errors are not: fix those in `errors`.
+        platform defaults to this OS; Android and iOS package with the IDE's saved SDK/Xcode
+        settings and give nothing runnable here.
+        Takes minutes: after about 20 s it returns STILL_RUNNING and carries on; follow it with
+        gm_build_status(label=...). background=true returns at once.
         """
         _ = ctx
         from gms_helpers.snapshot_build import label_pipeline, runs_directory, safe_label, snapshot_compile
@@ -224,43 +212,30 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Compile a throwaway copy of the project with a test script injected, run the game, and return PASS/FAIL.
+        Build a throwaway copy of the project with a GML test injected, run the game, and return PASS/FAIL.
 
-        The build and the run take minutes. A call that has no result after about 20 seconds
-        returns status STILL_RUNNING with the run's stage, and the run carries on: follow it with
-        gm_build_status(label=...), which returns this result when it ends. background=true
-        returns at once instead.
+        test_code (or a file in test_file) must define `function agent_test_step(_frame) { ... }`,
+        called once per frame from frame 1, after Begin Step and before Step: it is NOT a
+        post-Step callback, so check a movement on the next call against state saved on the one
+        before. Simulated input must span real frames to reach Step; End Step may clear current
+        input fields (read the project's previous-frame sample); project transform systems may
+        need an explicit update before isolated physics checks; place collision fixtures by real
+        sprite origins and mask bounds. The test exists only in the copy, never in the project.
+        Helpers: test_log(value) adds to `test_lines`; test_check(condition, text) logs PASS/FAIL
+        and any FAIL fails the run; test_shot(name) saves a screenshot; test_end() ends the run:
+        ALWAYS call it, also on a frame-count timeout inside the test.
 
-        The test is GML passed as test_code (or a path in test_file). It must define
-        `function agent_test_step(_frame) { ... }`, called once per frame from frame 1 by a
-        global time source after Begin Step and before Step. This is NOT a post-Step callback:
-        compare completed movement on the next callback against target state saved on the
-        preceding callback. Simulated input must span real frames to reach Step; project
-        transform systems may require their explicit update before isolated physics checks.
-        End Step may clear current input fields: inspect the project's previous-frame sample.
-        Position collision fixtures using actual sprite origins and mask bounds.
-        Helpers available to the test:
-          test_log(value)             adds a line to `test_lines`
-          test_check(condition, text) "PASS/FAIL text"; any failed check fails the run
-          test_shot(name)             saves a screenshot, listed in `screenshots`
-          test_end()                  prints the result and quits the game; ALWAYS call it,
-                                      including on a frame-count timeout inside the test
-        The test script exists only in the snapshot; it is never written into the project.
-
-        Every test line comes back in order without its "[TEST]" marker; a line repeated back to
-        back is written once ending " [×N]". `screenshot_files` is a path pattern and each entry of
-        `screenshots` is what one file puts in place of its *; a numbered run is written as a
-        brace range ("f{0001..0240}" is f0001 to f0240, every number with four digits).
-
-        status is one of TEST_PASSED, TEST_FAILED, TEST_TIMEOUT, BUILD_FAILED. A GameMaker
-        runtime error in the log always fails the run. The completion signal is the result line
-        in the game log, so a test that never calls test_end() ends as TEST_TIMEOUT after
-        timeout_seconds (default from .gms-mcp.json test.timeout_seconds).
-
-        isolate_paths / yyp_entries / base_only / ref work as in gm_snapshot_compile.
-        Different macOS projects run concurrently; waiting for a project lease is reported
-        separately and does not count towards the timeout. Read more of the log afterwards
-        with gm_run_log(label=...). Running the game needs a macOS host and runtime="VM".
+        status: TEST_PASSED, TEST_FAILED, BUILD_FAILED, or TEST_TIMEOUT when test_end() is not
+        reached within timeout_seconds (default test.timeout_seconds in .gms-mcp.json; waiting for
+        this project's game lease does not count). A runtime error in the log always fails the run.
+        Test lines come back in order without "[TEST]"; a line repeated back to back ends " [×N]".
+        `screenshot_files` is a path pattern and each `screenshots` entry fills its *;
+        "f{0001..0240}" is every number from f0001 to f0240.
+        A failed run's `log_tail` leaves out the runner's own start-up lines; the whole log:
+        gm_run_log(label=...). isolate_paths, yyp_entries, base_only and ref work as in
+        gm_snapshot_compile. Needs a macOS host and runtime="VM".
+        Takes minutes: after about 20 s it returns STILL_RUNNING and carries on; follow it with
+        gm_build_status(label=...). background=true returns at once.
         """
         _ = ctx
         from gms_helpers.snapshot_build import run_test, runs_directory, safe_label
@@ -308,37 +283,24 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Follow a build, test run or game start: where it has got to, or its result once it has ended.
+        Follow a build, test run or game start: its stage while it runs, its result once it ends.
 
-        With no label it follows the run this session started most recently (if it has started
-        none, the project's most recent); the report names the label. Pass label to follow a
-        particular run: one started with background=true, one another call is still waiting on,
-        or one started by another session on this project. A gm_compile run has the label
-        "working_tree". Waits up to wait_seconds (at most
-        300) for the run to end, so one call usually returns the result; pass 0 to look once.
-        until names something sooner to return at: a stage ("compiling" returns as soon as the
-        run is compiling, at once if it already is), or "change" for the next change of stage or
-        attempt after this call began.
+        label names the run (gm_compile's is "working_tree"); without it, the run this session
+        started last, else the project's latest. Waits up to wait_seconds (at most 300) for the
+        end, so one call usually returns the result; 0 looks once. until returns sooner: at a
+        named stage (at once if already there), or "change" at the next change of stage or attempt.
 
-        While the run is going: finished=false with `stage`, stage_seconds and run_seconds,
-        `stages_done` (the seconds each earlier stage took, including any that passed between
-        two calls), the
-        attempt number (of max_attempts: a compiler crash is retried, and previous_attempt says
-        so), and `log_tail`, the last log_lines lines of the compiler or game log, with
-        log_quiet_seconds since the last line was written. Call again. Stages, in order:
-        "starting", "copying the project", "waiting for a build slot" (only when all slots are
-        taken), "compiling", "reading the build result"; then for a test "waiting for this
-        project's game to be free" (only when it is busy), "starting the game", "running the
-        test" (stage_timeout_seconds is its limit, on the stage_seconds clock; test_frame is the
-        frame the test has reached, updated about once a second), "collecting the test result";
-        for a game start "starting the game", "connecting to the game". A gm_compile run goes
-        "starting", "waiting for a change to the project to finish" (only when one is under
-        way), "compiling".
-        When it has ended: finished=true with the result the tool that started it returns (ok,
-        status, errors, error_locations, and so on), `stages`, the seconds spent in each stage,
-        and two times: build_seconds for the build alone and run_seconds for the whole run,
-        waits and a test's game included. A run that failed or was stopped is still a successful
-        status call: read its `ok` and `status`.
+        Running: finished=false, `stage`, stage_seconds, run_seconds, `stages_done` (seconds per
+        earlier stage), the attempt of max_attempts (a compiler crash is retried; previous_attempt
+        says so), `log_tail` (last log_lines lines) and log_quiet_seconds. Call again. Stages:
+        starting, copying the project, waiting for a build slot, compiling, reading the build
+        result; a test then has waiting for this project's game to be free, starting the game,
+        running the test (limited by stage_timeout_seconds; test_frame is the frame reached),
+        collecting the test result; a game start has starting the game, connecting to the game;
+        gm_compile has starting, waiting for a change to the project to finish, compiling.
+        Ended: finished=true with the starting tool's own result (ok, status, errors, ...),
+        `stages` (seconds each), build_seconds and run_seconds (waits and a test's game
+        included). A failed or stopped run is still a successful call: read its ok and status.
         """
         _ = ctx
         from gms_helpers.snapshot_build import runs_directory
@@ -421,19 +383,16 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Stage exactly the given paths in git, plus a project file that contains only your registrations.
+        Stage exactly the given paths in git, plus a project file that holds only their registrations.
 
-        When several people have uncommitted assets in one working tree, `git add` of the .yyp
-        would commit all of their registrations too. This stages the .yyp as "HEAD plus only the
-        registrations belonging to `paths`" (worked out automatically; pass yyp_entries to name
-        them: asset .yy paths, "folders/....yy", "included:datafiles/dir/file", "texturegroup:<name>",
-        "audiogroup:<name>", "config:<name>"). Room order follows staged rooms, and a composed .yyp
-        that would be inconsistent is refused. The .yyp in the working tree is not modified.
-
-        paths are relative to the folder containing the .yyp; a path outside it can be given
-        relative to the repository root with a leading "/" (e.g. "/docs/systems/FOO.md"). Deleted
-        paths are staged as deletions. Pass commit_message to commit what was staged; nothing is
-        ever pushed. Runs under the project mutation lock and the shared repository lock.
+        `git add` of the .yyp would also commit other people's uncommitted registrations. This
+        stages the .yyp as HEAD plus only the registrations `paths` need (inferred, or named in
+        yyp_entries: asset .yy paths, "folders/....yy", "included:datafiles/dir/file",
+        "texturegroup:<name>", "audiogroup:<name>", "config:<name>"); room order follows staged
+        rooms, an inconsistent result is refused, and the working-tree .yyp is left alone.
+        paths are relative to the .yyp's folder, or to the repository root with a leading "/"
+        ("/docs/FOO.md"); deleted paths are staged as deletions. commit_message commits what was
+        staged; nothing is pushed.
         """
         _ = ctx
         from gms_helpers.vcs_stage import stage_paths

@@ -148,3 +148,76 @@ def handle_room_instance_list(args):
         data_key="instances",
         data={"room_name": args.room_name, "layer": getattr(args, "layer", None)},
     )
+
+
+# Dense shapes for the MCP listing tools: the handlers' data, each shared part written once.
+def _listing_data(value):
+    """The handler's data, or None when it failed (its report is then returned as it is)."""
+    if not isinstance(value, dict) or not value.get("success", value.get("ok", True)):
+        return None
+    data = value.get("data")
+    return data if isinstance(data, dict) else {}
+
+
+def _number(value):
+    """A coordinate as GameMaker wrote it, without a float's trailing ".0"."""
+    return int(value) if isinstance(value, float) and value.is_integer() else value
+
+
+def dense_room_list(value, verbose=False):
+    """``rooms`` maps each room to "<width>x<height>, <n> layers"; with verbose, ``layers`` lists
+    each distinct layer stack once with the rooms that have it."""
+    data = _listing_data(value)
+    if data is None:
+        return value
+    from ..dense import name_ranges
+
+    rooms = {}
+    stacks = {}
+    for room in data.get("rooms", []):
+        name = str(room.get("name"))
+        if room.get("error"):
+            rooms[name] = f"error: {room['error']}"
+            continue
+        count = room.get("layer_count")
+        rooms[name] = f"{room.get('width')}x{room.get('height')}, {count} layer{'' if count == 1 else 's'}"
+        if verbose:
+            stacks.setdefault(tuple(room.get("layers") or ()), []).append(name)
+    result = {"ok": True, "count": len(rooms), "rooms": rooms}
+    if verbose:
+        result["layers"] = [{"rooms": name_ranges(names), "layers": list(stack)} for stack, names in stacks.items()]
+    return result
+
+
+def dense_layer_list(value):
+    """``layers`` in the room's order, each "<name> <type> <depth>", ending " hidden" when it is."""
+    data = _listing_data(value)
+    if data is None:
+        return value
+    layers = [
+        f"{layer.get('name')} {layer.get('type')} {layer.get('depth')}"
+        + ("" if layer.get("visible", True) else " hidden")
+        for layer in data.get("layers", [])
+    ]
+    return {"ok": True, "room": data.get("room_name"), "layers": layers}
+
+
+def dense_instance_list(value):
+    """``instances`` maps layer to object to "<name> <x>,<y>" entries, with " scale <x>,<y>" and
+    " rotation <r>" only where they are not 1,1 and 0."""
+    data = _listing_data(value)
+    if data is None:
+        return value
+    layers = {}
+    count = 0
+    for item in data.get("instances", []):
+        entry = f"{item.get('name')} {_number(item.get('x'))},{_number(item.get('y'))}"
+        scale = tuple(_number(1.0 if item.get(key) is None else item[key]) for key in ("scale_x", "scale_y"))
+        if scale != (1, 1):
+            entry += f" scale {scale[0]},{scale[1]}"
+        rotation = _number(item.get("rotation") or 0)
+        if rotation != 0:
+            entry += f" rotation {rotation}"
+        layers.setdefault(str(item.get("layer")), {}).setdefault(str(item.get("object")), []).append(entry)
+        count += 1
+    return {"ok": True, "room": data.get("room_name"), "count": count, "instances": layers}

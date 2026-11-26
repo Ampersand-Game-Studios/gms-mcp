@@ -253,6 +253,9 @@ def test_object_is_described_by_named_events_and_their_code_files(tmp_path: Path
         {"event": "Draw GUI", "file": "objects/o_player/Draw_64.gml", "lines": 1},
     ]
     assert described["asset_data"]["name"] == "o_player"
+    # Format tags, empty fields and summary-duplicated keys are left out unless yy="full".
+    assert "resourceType" not in described["asset_data"] and "%Name" not in described["asset_data"]
+    assert "eventList" not in described["asset_data"] and "parent" not in described["asset_data"]
     assert code == {
         "ok": True,
         "path": "objects/o_player/Create_0.gml",
@@ -317,9 +320,10 @@ def test_asset_graph_answers_who_uses_an_asset_and_summarises_by_default(tmp_pat
         missing = _call(server, "gm_get_asset_graph", asset="o_playr")
         full = _call(server, "gm_get_asset_graph", full=True)
 
-    assert {"asset": "spr_player", "type": "sprite", "relation": "sprite"} in player["uses"]
-    assert {"asset": "r_start", "type": "room", "relation": "contains"} in player["used_by"]
-    assert "nodes" not in summary and summary["node_count"] == len(full["nodes"])
+    assert player["uses"]["sprite"] == {"sprite": ["spr_player"]}
+    assert player["used_by"]["contains"] == {"room": ["r_start"]}
+    assert "assets" not in summary and summary["node_count"] == full["node_count"]
+    assert full["assets"]["object"] == {"objects": ["o_player"]} and "nodes" not in full
     assert summary["most_used"][0]["used_by"] >= 1
     assert missing["ok"] is False and missing["did_you_mean"][0] == "o_player"
 
@@ -811,9 +815,9 @@ def test_asset_graph_lists_what_an_assets_code_uses(tmp_path: Path):
         player = _call(server, "gm_get_asset_graph", asset="o_player")
         helper = _call(server, "gm_get_asset_graph", asset="scr_helper_0")
 
-    assert {"asset": "scr_helper_0", "type": "script", "relation": "code_reference"} in player["uses"]
-    assert {"asset": "spr_player", "type": "sprite", "relation": "sprite"} in player["uses"]
-    assert {"asset": "o_player", "type": "object", "relation": "code_reference"} in helper["used_by"]
+    assert "scr_helper_0" in player["uses"]["code_reference"]["script"]
+    assert player["uses"]["sprite"] == {"sprite": ["spr_player"]}
+    assert "o_player" in helper["used_by"]["code_reference"]["object"]
 
 
 def test_room_is_described_with_its_instances_and_creation_order(tmp_path: Path):
@@ -825,7 +829,7 @@ def test_room_is_described_with_its_instances_and_creation_order(tmp_path: Path)
     with _server(project) as server:
         described = _call(server, "gm_read_asset", asset_identifier="r_start")
 
-    assert described["instances_by_layer"] == {"Instances": [{"instance": "inst_1", "object": "o_player"}]}
+    assert described["instances_by_layer"] == {"Instances": {"o_player": ["inst_1"]}}
     assert described["creation_order"] == ["inst_1"]
 
 
@@ -844,12 +848,37 @@ def test_delete_preview_of_a_placed_object_is_a_result_that_names_the_instances(
     with _server(project) as server:
         preview = _call(server, "gm_safe_delete", asset_type="object", asset_name="o_player", dry_run=True)
 
-    data = preview["data"]
-    assert preview["ok"] is True and data["would_be_blocked"] is True and data["deleted"] is False
-    room = next(item for item in data["dependencies"] if item["asset_name"] == "r_start")
-    assert room["instances"] == ["inst_1"] and "gm_room_instance_remove" in room["remove_with"]
-    assert "force=true" in data["next"]
-    assert "preflight" not in data
+    assert preview["ok"] is True and preview["would_be_blocked"] is True and preview["deleted"] is False
+    assert preview["dependencies"]["contains"] == {"room": ["r_start"]}
+    assert preview["room_instances"] == {"r_start": ["inst_1"]}
+    assert "gm_room_instance_remove" in preview["remove_with"] and "force=true" in preview["next"]
+    assert "preflight" not in preview and "data" not in preview and "warnings" not in preview
+
+
+def test_safe_delete_preview_and_automatic_apply_scan_the_project_once(tmp_path: Path):
+    from unittest.mock import patch
+    from gms_helpers import workflow as workflow_helpers
+
+    project = _make_project(tmp_path)
+    calls = 0
+    real_preflight = workflow_helpers.safe_delete_preflight
+
+    def counting_preflight(*args, **kwargs):
+        nonlocal calls
+        calls += 1
+        return real_preflight(*args, **kwargs)
+
+    with (
+        _server(project) as server,
+        patch("gms_helpers.workflow.safe_delete_preflight", side_effect=counting_preflight),
+    ):
+        preview = _call(server, "gm_safe_delete", asset_type="script", asset_name="scr_helper_1", dry_run=True)
+        assert preview["ok"] is True and preview["deleted"] is False
+        assert calls == 1
+
+        deleted = _call(server, "gm_safe_delete", asset_type="script", asset_name="scr_helper_1", dry_run=False)
+        assert deleted["ok"] is True and deleted["deleted"] is True
+        assert calls == 2
 
 
 def test_reference_listing_marks_the_definition_and_reports_whether_the_index_was_saved(

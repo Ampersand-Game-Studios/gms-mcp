@@ -345,30 +345,35 @@ def _native_resolved_root(project_root: str | Path | None) -> Path | None:
         return None
 
 
-def _project_relative_string(value: str, project_root: str | Path | None) -> str | None:
+def _project_relative_string(
+    value: str,
+    project_root: str | Path | None,
+    *,
+    native_root: Path | None = None,
+    pure_roots: tuple[PurePosixPath, PureWindowsPath] | None = None,
+) -> str | None:
     if project_root is None:
         return None
 
-    native_root = _native_resolved_root(project_root)
-    if native_root is not None:
+    resolved_root = native_root if native_root is not None else _native_resolved_root(project_root)
+    if resolved_root is not None:
         try:
             candidate = Path(value)
             if candidate.is_absolute():
-                relative = candidate.resolve(strict=False).relative_to(native_root)
+                relative = candidate.resolve(strict=False).relative_to(resolved_root)
                 return relative.as_posix() or "."
         except (OSError, ValueError):
             pass
 
-    root_text = str(project_root)
+    if pure_roots is not None:
+        posix_root, win_root = pure_roots
+    else:
+        root_text = str(project_root)
+        posix_root = PurePosixPath(root_text.replace("\\", "/"))
+        win_root = PureWindowsPath(root_text.replace("/", "\\"))
     pure_path_pairs = (
-        (
-            PurePosixPath(value.replace("\\", "/")),
-            PurePosixPath(root_text.replace("\\", "/")),
-        ),
-        (
-            PureWindowsPath(value.replace("/", "\\")),
-            PureWindowsPath(root_text.replace("/", "\\")),
-        ),
+        (PurePosixPath(value.replace("\\", "/")), posix_root),
+        (PureWindowsPath(value.replace("/", "\\")), win_root),
     )
     for candidate, root in pure_path_pairs:
         if not candidate.is_absolute() or not root.is_absolute():
@@ -400,31 +405,65 @@ _HOST_PATH_PATTERNS = (
 )
 
 
-def _redact_host_text(value: str, project_root: str | Path | None) -> str:
-    if "Traceback (most recent call last)" in value:
-        return "Internal tool error; host details were withheld."
+class _HostTextRedactor:
+    """Precomputed host-path redactor reused across every string in one MCP result."""
 
-    exact_relative = _project_relative_string(value, project_root)
-    if exact_relative is not None:
-        return exact_relative
+    def __init__(self, project_root: str | Path | None) -> None:
+        self.project_root = project_root
+        self.native_root = _native_resolved_root(project_root) if project_root is not None else None
+        self.pure_roots: tuple[PurePosixPath, PureWindowsPath] | None = None
+        self.root_patterns: tuple[re.Pattern[str], ...] = ()
+        self.can_skip_plain_strings = True
+        if project_root is not None:
+            root_text = str(project_root)
+            self.pure_roots = (
+                PurePosixPath(root_text.replace("\\", "/")),
+                PureWindowsPath(root_text.replace("/", "\\")),
+            )
+            root_variants = {root_text, root_text.replace("\\", "/")}
+            if self.native_root is not None:
+                root_variants.update({str(self.native_root), self.native_root.as_posix()})
+            ordered = sorted((item for item in root_variants if item), key=len, reverse=True)
+            self.root_patterns = tuple(re.compile(re.escape(item), flags=re.IGNORECASE) for item in ordered)
+            # Plain strings without path separators can only match a relative non-dot project_root.
+            self.can_skip_plain_strings = all("/" in item or "\\" in item or item == "." for item in ordered)
 
-    if any(pattern.fullmatch(value) for pattern in _HOST_PATH_PATTERNS):
-        return "<host-path>"
+    def redact(self, value: str) -> str:
+        if (
+            self.can_skip_plain_strings
+            and "/" not in value
+            and "\\" not in value
+            and "Traceback (most recent call last)" not in value
+        ):
+            return value
+        if "Traceback (most recent call last)" in value:
+            return "Internal tool error; host details were withheld."
 
-    redacted = value
-    if project_root is not None:
-        root_variants = {str(project_root), str(project_root).replace("\\", "/")}
-        native_root = _native_resolved_root(project_root)
-        if native_root is not None:
-            root_variants.update({str(native_root), native_root.as_posix()})
-        for root_value in sorted((item for item in root_variants if item), key=len, reverse=True):
-            redacted, substitutions = re.subn(re.escape(root_value), ".", redacted, flags=re.IGNORECASE)
+        exact_relative = _project_relative_string(
+            value,
+            self.project_root,
+            native_root=self.native_root,
+            pure_roots=self.pure_roots,
+        )
+        if exact_relative is not None:
+            return exact_relative
+
+        if any(pattern.fullmatch(value) for pattern in _HOST_PATH_PATTERNS):
+            return "<host-path>"
+
+        redacted = value
+        for root_pattern in self.root_patterns:
+            redacted, substitutions = root_pattern.subn(".", redacted)
             if substitutions:
                 redacted = redacted.replace("\\", "/")
 
-    for pattern in _HOST_PATH_PATTERNS:
-        redacted = pattern.sub("<host-path>", redacted)
-    return redacted
+        for pattern in _HOST_PATH_PATTERNS:
+            redacted = pattern.sub("<host-path>", redacted)
+        return redacted
+
+
+def _redact_host_text(value: str, project_root: str | Path | None) -> str:
+    return _HostTextRedactor(project_root).redact(value)
 
 
 def public_mcp_result(
@@ -438,7 +477,7 @@ def public_mcp_result(
     if expose_host_diagnostics:
         return jsonable
 
-    redaction_root = project_root if project_root not in (None, "") else None
+    redactor = _HostTextRedactor(project_root if project_root not in (None, "") else None)
 
     def _sanitize(item: Any) -> Any:
         if isinstance(item, dict):
@@ -450,13 +489,13 @@ def public_mcp_result(
                 if key in _PROJECT_ROOT_RESULT_KEYS:
                     sanitized[key] = "."
                     continue
-                public_key = _redact_host_text(key, redaction_root)
+                public_key = redactor.redact(key)
                 sanitized[public_key] = _sanitize(nested)
             return sanitized
         if isinstance(item, list):
             return [_sanitize(nested) for nested in item]
         if isinstance(item, str):
-            return _redact_host_text(item, redaction_root)
+            return redactor.redact(item)
         return item
 
     return _sanitize(jsonable)
