@@ -12,6 +12,7 @@ import json
 import re
 from collections.abc import Callable, Iterable
 from itertools import groupby
+from typing import Any
 
 _NUMBERED = re.compile(r"^(.*?)(\d+)(\D*)$")
 
@@ -161,3 +162,34 @@ def shared_fields(records: list[dict], *, keep: tuple[str, ...] = ("name",)) -> 
             row["unset"] = missing
         rows.append(row)
     return shared, rows
+
+
+def links_by_relation(records: Iterable[dict], *, name: str, kind: str, relation: str = "relation") -> dict:
+    """Group link records as ``{relation: {type: [names]}}``, numbered runs written as ranges."""
+    grouped: dict[str, dict[str, list[str]]] = {}
+    for record in records:
+        grouped.setdefault(str(record.get(relation)), {}).setdefault(str(record.get(kind)), []).append(
+            str(record.get(name))
+        )
+    return {rel: {typ: name_ranges(names) for typ, names in types.items()} for rel, types in grouped.items()}
+
+
+_YY_FORMAT_KEYS = frozenset({"%Name", "resourceType", "resourceVersion"})
+
+
+def yy_content(value: Any) -> Any:
+    """A .yy's data without its format bookkeeping: ``$GM...`` tags, ``%Name``, ``resourceType``,
+    ``resourceVersion``, and fields that are null or empty (absent means null or empty)."""
+    if isinstance(value, dict):
+        kept = {}
+        for key, item in value.items():
+            if key.startswith("$") or key in _YY_FORMAT_KEYS:
+                continue
+            item = yy_content(item)
+            if item is None or item == [] or item == {} or item == "":
+                continue
+            kept[key] = item
+        return kept
+    if isinstance(value, list):
+        return [yy_content(item) for item in value]
+    return value

@@ -401,19 +401,25 @@ def read_project_text_file(project_root: Path, relative_path: str) -> Optional[D
     }
 
 
-def describe_asset(project_root: Path, asset_identifier: str) -> Optional[Dict[str, Any]]:
+def describe_asset(
+    project_root: Path,
+    asset_identifier: str,
+    *,
+    yy_data: Optional[Dict[str, Any]] = None,
+    yy_path: Optional[Path] = None,
+) -> Optional[Dict[str, Any]]:
     """Summarise an asset from its .yy: type, folder, and the code files that hold its behaviour."""
-    yy_path = get_asset_yy_path(project_root, asset_identifier)
-    if yy_path is None:
+    resolved_path = yy_path if yy_path is not None else get_asset_yy_path(project_root, asset_identifier)
+    if resolved_path is None:
         return None
-    data = read_asset_yy(project_root, asset_identifier)
+    data = yy_data if yy_data is not None else (load_json_loose(resolved_path) if resolved_path.exists() else None)
     if not isinstance(data, dict):
         return None
-    directory = yy_path.parent
+    directory = resolved_path.parent
     summary: Dict[str, Any] = {
-        "name": data.get("name") or yy_path.stem,
-        "asset_type": _infer_asset_type(_relative_to_project(project_root, yy_path) or ""),
-        "path": _relative_to_project(project_root, yy_path),
+        "name": data.get("name") or resolved_path.stem,
+        "asset_type": _infer_asset_type(_relative_to_project(project_root, resolved_path) or ""),
+        "path": _relative_to_project(project_root, resolved_path),
         "folder": data.get("parent", {}).get("path") if isinstance(data.get("parent"), dict) else None,
     }
 
@@ -454,10 +460,11 @@ def describe_asset(project_root: Path, asset_identifier: str) -> Optional[Dict[s
             if not instances:
                 continue
             if summary["instances"] <= _MAX_LISTED_ROOM_INSTANCES:
-                placed[str(layer.get("name"))] = [
-                    {"instance": item.get("name"), "object": _reference_name(item.get("objectId"))}
-                    for item in instances
-                ]
+                by_object: Dict[str, List[str]] = {}
+                for item in instances:
+                    obj_name = _reference_name(item.get("objectId")) or "unknown"
+                    by_object.setdefault(obj_name, []).append(str(item.get("name")))
+                placed[str(layer.get("name"))] = by_object
             else:
                 counts: Dict[str, int] = {}
                 for item in instances:
@@ -757,6 +764,57 @@ def build_asset_graph(project_root: Path, *, deep: bool = False, include_code_re
         _scan_gml_references(project_root, asset_names, add_edge)
 
     return {"nodes": nodes, "edges": edges, "node_count": len(nodes), "edge_count": len(edges), "deep_scan": use_deep}
+
+
+def dense_asset_graph(graph: Dict[str, Any]) -> Dict[str, Any]:
+    """Every node and edge of ``build_asset_graph``'s result, each shared part written once.
+
+    - ``assets``: ``{type: {folder: [name]}}``, one node per name whose path is
+      ``<folder>/<name>/<name>.yy``;
+    - ``included_files``: ``{folder: [name]}``, one includedfile node per name, path ``<folder>/<name>``;
+    - ``other_nodes``: any node named otherwise, as built;
+    - ``edges``: ``{relation: {from: [to]}}``.
+
+    Name lists are sorted and write numbered runs as brace ranges (see dense.name_ranges), so
+    the nodes and edges come back as sets: every one is there, in name order.
+    """
+    from .dense import name_ranges
+
+    assets: Dict[str, Dict[str, List[str]]] = {}
+    included: Dict[str, List[str]] = {}
+    other: List[Dict[str, Any]] = []
+    for node in graph["nodes"]:
+        name, kind, path = str(node["id"]), str(node["type"]), str(node["path"])
+        folder, _, leaf = path.rpartition("/")
+        if kind == "includedfile" and leaf == name and folder:
+            included.setdefault(folder, []).append(name)
+            continue
+        parent, _, own = folder.rpartition("/")
+        if leaf == f"{name}.yy" and own == name and parent:
+            assets.setdefault(kind, {}).setdefault(parent, []).append(name)
+            continue
+        other.append(node)
+    edges: Dict[str, Dict[str, List[str]]] = {}
+    for edge in graph["edges"]:
+        edges.setdefault(str(edge["relation"]), {}).setdefault(str(edge["from"]), []).append(str(edge["to"]))
+    result: Dict[str, Any] = {
+        "node_count": graph["node_count"],
+        "edge_count": graph["edge_count"],
+        "deep_scan": graph["deep_scan"],
+        "assets": {
+            kind: {folder: name_ranges(names) for folder, names in sorted(folders.items())}
+            for kind, folders in sorted(assets.items())
+        },
+    }
+    if included:
+        result["included_files"] = {folder: name_ranges(names) for folder, names in sorted(included.items())}
+    if other:
+        result["other_nodes"] = other
+    result["edges"] = {
+        relation: {source: name_ranges(targets) for source, targets in sorted(sources.items())}
+        for relation, sources in sorted(edges.items())
+    }
+    return result
 
 
 def _extract_yy_references(asset: Dict, yy_data: Dict, add_edge):

@@ -15,20 +15,8 @@ def register(mcp: Any, ContextType: Any) -> None:
         function_name: str,
         force_refresh: bool = False,
     ) -> Dict[str, Any]:
-        """
-        Look up documentation for a specific GML function.
-
-        Fetches documentation from manual.gamemaker.io and caches it locally.
-
-        Args:
-            function_name: The name of the GML function (e.g., "draw_sprite").
-            force_refresh: If True, bypass cache and fetch fresh documentation.
-
-        Returns:
-            Dictionary with function documentation including description, syntax,
-            parameters, return value, and examples. Returns suggestions if the
-            function is not found.
-        """
+        """Look up manual.gamemaker.io docs for a GML function (cached; force_refresh bypasses cache).
+        Returns description, syntax, parameters, return value and examples, or suggestions if missing."""
         from gms_helpers.gml_docs import lookup
 
         return lookup(function_name, force_refresh=force_refresh)
@@ -39,19 +27,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         category: Optional[str] = None,
         limit: int = 20,
     ) -> Dict[str, Any]:
-        """
-        Search for GML functions matching a query.
-
-        Searches function names using fuzzy matching and filters.
-
-        Args:
-            query: Search query (matches function names).
-            category: Optional category filter (e.g., "Drawing", "Strings").
-            limit: Maximum number of results (default: 20).
-
-        Returns:
-            Dictionary with matching functions sorted by relevance.
-        """
+        """Fuzzy-search GML function names, optionally within category (e.g. "Drawing"); up to limit results."""
         from gms_helpers.gml_docs import search
 
         return search(query, category=category, limit=limit)
@@ -62,56 +38,28 @@ def register(mcp: Any, ContextType: Any) -> None:
         pattern: Optional[str] = None,
         limit: int = 100,
     ) -> Dict[str, Any]:
-        """
-        List GML functions, optionally filtered by category or pattern.
-
-        Args:
-            category: Filter by category name (partial match, e.g., "Drawing").
-            pattern: Filter by regex pattern on function name (e.g., "^draw_").
-            limit: Maximum number of results (default: 100).
-
-        Returns:
-            Dictionary with list of functions matching the filters.
-        """
+        """List GML functions, optionally filtered by partial category or name regex pattern (e.g. "^draw_")."""
         from gms_helpers.gml_docs import list_functions
 
         return list_functions(category=category, pattern=pattern, limit=limit)
 
     @mcp.tool()
     def gm_doc_categories() -> Dict[str, Any]:
-        """
-        List all GML documentation categories.
-
-        Returns:
-            Dictionary with all available categories and their function counts.
-        """
+        """List all GML documentation categories and their function counts."""
         from gms_helpers.gml_docs import list_categories
 
         return list_categories()
 
     @mcp.tool()
     def gm_doc_cache_stats() -> Dict[str, Any]:
-        """
-        Get statistics about the GML documentation cache.
-
-        Returns:
-            Dictionary with cache size, age, and function counts.
-        """
+        """Return GML documentation cache size, age and function counts."""
         from gms_helpers.gml_docs import get_cache_stats
 
         return get_cache_stats()
 
     @mcp.tool()
     def gm_doc_cache_clear(functions_only: bool = False) -> Dict[str, Any]:
-        """
-        Clear the GML documentation cache.
-
-        Args:
-            functions_only: If True, only clear cached functions, keep the index.
-
-        Returns:
-            Dictionary with statistics about what was cleared.
-        """
+        """Clear the GML documentation cache (functions_only=true keeps the index)."""
         from gms_helpers.gml_docs import clear_cache
 
         return clear_cache(functions_only=functions_only)

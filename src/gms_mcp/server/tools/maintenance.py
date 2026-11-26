@@ -87,59 +87,47 @@ def register(mcp: Any, ContextType: Any) -> None:
     @mcp.tool()
     async def gm_maintenance_validate_json(
         project_root: str = ".",
-        prefer_cli: bool = False,
-        output_mode: OutputMode = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Validate JSON files in the project."""
+        """Validate JSON syntax in project .yy and .yyp files; returns files_checked and any invalid_files."""
+        _ = ctx
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
-        from gms_helpers.commands.maintenance_commands import handle_maintenance_validate_json
+        from gms_helpers.commands.maintenance_commands import (
+            dense_json_validation,
+            handle_maintenance_validate_json,
+        )
 
-        args = argparse.Namespace(project_root=project_root)
-        cli_args = ["maintenance", "validate-json"]
-
-        return await _run_with_fallback(
+        return await _run_for_data(
             direct_handler=handle_maintenance_validate_json,
-            direct_args=args,
-            cli_args=cli_args,
+            direct_args=argparse.Namespace(project_root=project_root),
             project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
+            tool_name="maintenance-validate-json",
+            cli_args=["maintenance", "validate-json"],
+            shape=dense_json_validation,
         )
 
     @mcp.tool()
     async def gm_maintenance_list_orphans(
         project_root: str = ".",
-        prefer_cli: bool = False,
-        output_mode: OutputMode = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Find orphaned and missing assets."""
+        """Find orphaned (on disk, not in .yyp) and missing (in .yyp, not on disk) assets, grouped by folder."""
+        _ = ctx
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
-        from gms_helpers.commands.maintenance_commands import handle_maintenance_list_orphans
+        from gms_helpers.commands.maintenance_commands import (
+            dense_orphan_list,
+            handle_maintenance_list_orphans,
+        )
 
-        args = argparse.Namespace(project_root=project_root)
-        cli_args = ["maintenance", "list-orphans"]
-
-        return await _run_with_fallback(
+        return await _run_for_data(
             direct_handler=handle_maintenance_list_orphans,
-            direct_args=args,
-            cli_args=cli_args,
+            direct_args=argparse.Namespace(project_root=project_root),
             project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
+            tool_name="maintenance-list-orphans",
+            cli_args=["maintenance", "list-orphans"],
+            shape=dense_orphan_list,
         )
 
     @mcp.tool()

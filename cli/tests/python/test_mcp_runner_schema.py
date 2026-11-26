@@ -38,18 +38,15 @@ class MCPRunnerSchemaTests(unittest.TestCase):
             properties = tools[tool_name].input_schema["properties"]
             self.assertEqual(collect_enum_values(properties["output_mode"]), output_mode_values)
 
-        tools_with_output_mode = 0
-        for tool in tools.values():
-            properties = tool.input_schema.get("properties", {})
-            if "output_mode" not in properties:
-                continue
-            tools_with_output_mode += 1
-            self.assertEqual(
-                collect_enum_values(properties["output_mode"]),
-                output_mode_values,
-                tool.name,
-            )
-        self.assertGreater(tools_with_output_mode, 50)
+        # Only runner tools expose output_mode / tail_lines in their listed schemas; other tools
+        # hide those and legacy maintenance flags while still accepting them if passed.
+        tools_with_output_mode = {
+            tool.name for tool in tools.values() if "output_mode" in tool.input_schema.get("properties", {})
+        }
+        self.assertEqual(tools_with_output_mode, {"gm_compile", "gm_run", "gm_run_stop", "gm_run_status"})
+        create_props = tools["gm_create_script"].input_schema["properties"]
+        for hidden in ("output_mode", "tail_lines", "skip_maintenance", "no_auto_fix", "maintenance_verbose"):
+            self.assertNotIn(hidden, create_props)
 
 
 if __name__ == "__main__":

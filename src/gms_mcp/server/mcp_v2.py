@@ -20,6 +20,7 @@ from pydantic import ValidationError
 
 from .project import ProjectAccessPolicy
 from .resolution import ResolutionRuntime
+from .tool_schema import HIDDEN_ARGUMENTS
 
 
 PROJECT_INDEX_URI = "gms://project/index"
@@ -332,9 +333,9 @@ class UnknownArgumentMiddleware:
         known = await self._known_arguments(tool_name)
         if known is None:
             return await call_next(ctx)
-        # Nearly every tool takes `project_root`, so callers pass it uniformly; the few tools
-        # that have no use for it ignore it as before.
-        unknown = sorted(str(name) for name in arguments if name not in known and name != "project_root")
+        # Arguments the listing hides (project_root and the like) stay accepted; the few tools
+        # that have no use for them ignore them as before.
+        unknown = sorted(str(name) for name in arguments if name not in known and name not in HIDDEN_ARGUMENTS)
         if not unknown:
             return await call_next(ctx)
         import difflib

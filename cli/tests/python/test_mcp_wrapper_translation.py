@@ -194,8 +194,6 @@ class TestMaintenanceWrappers(MCPToolTestCase):
                     {"fix": False, "verbose": False, "project_root": "/tmp/project"},
                     ["maintenance", "auto", "--no-verbose"],
                 ),
-                ("gm_maintenance_validate_json", {"project_root": "/tmp/project"}, ["maintenance", "validate-json"]),
-                ("gm_maintenance_list_orphans", {"project_root": "/tmp/project"}, ["maintenance", "list-orphans"]),
                 (
                     "gm_maintenance_prune_missing",
                     {"dry_run": True, "project_root": "/tmp/project"},
@@ -235,6 +233,8 @@ class TestMaintenanceWrappers(MCPToolTestCase):
         ) as mock_data:
             data_cases = [
                 ("gm_maintenance_lint", {"project_root": "/tmp/project"}, {"project_root": "/tmp/project"}),
+                ("gm_maintenance_validate_json", {"project_root": "/tmp/project"}, {"project_root": "/tmp/project"}),
+                ("gm_maintenance_list_orphans", {"project_root": "/tmp/project"}, {"project_root": "/tmp/project"}),
                 (
                     "gm_maintenance_validate_paths",
                     {"strict_disk_check": True, "include_parent_folders": True, "project_root": "/tmp/project"},
@@ -294,11 +294,6 @@ class TestRoomWrappers(MCPToolTestCase):
                     ["room", "ops", "delete", "--dry-run", "--", "r_old"],
                 ),
                 (
-                    "gm_room_ops_list",
-                    {"verbose": True, "project_root": "/tmp/project"},
-                    ["room", "ops", "list", "--verbose"],
-                ),
-                (
                     "gm_room_layer_add",
                     {
                         "room_name": "r_main",
@@ -313,11 +308,6 @@ class TestRoomWrappers(MCPToolTestCase):
                     "gm_room_layer_remove",
                     {"room_name": "r_main", "layer_name": "Actors", "project_root": "/tmp/project"},
                     ["room", "layer", "remove", "--", "r_main", "Actors"],
-                ),
-                (
-                    "gm_room_layer_list",
-                    {"room_name": "r_main", "project_root": "/tmp/project"},
-                    ["room", "layer", "list", "--", "r_main"],
                 ),
                 (
                     "gm_room_instance_add",
@@ -336,17 +326,29 @@ class TestRoomWrappers(MCPToolTestCase):
                     {"room_name": "r_main", "instance_id": "inst_1", "project_root": "/tmp/project"},
                     ["room", "instance", "remove", "--", "r_main", "inst_1"],
                 ),
-                (
-                    "gm_room_instance_list",
-                    {"room_name": "r_main", "project_root": "/tmp/project"},
-                    ["room", "instance", "list", "--", "r_main"],
-                ),
             ]
 
             for tool_name, kwargs, expected_cli in cases:
                 result = self.call_tool(tool_name, **kwargs)
                 self.assertTrue(result["ok"])
                 self.assertEqual(mock_fallback.await_args_list[-1].kwargs["cli_args"], expected_cli)
+
+        # The listings return their handler's data, shaped densely.
+        with patch(
+            "gms_mcp.server.tools.rooms._run_for_data",
+            new=AsyncMock(return_value={"ok": True}),
+        ) as run_for_data:
+            listings = [
+                ("gm_room_ops_list", {"verbose": True}, ["room", "ops", "list", "--verbose"]),
+                ("gm_room_layer_list", {"room_name": "r_main"}, ["room", "layer", "list", "--", "r_main"]),
+                ("gm_room_instance_list", {"room_name": "r_main"}, ["room", "instance", "list", "--", "r_main"]),
+            ]
+            for tool_name, kwargs, expected_cli in listings:
+                result = self.call_tool(tool_name, project_root="/tmp/project", **kwargs)
+                self.assertTrue(result["ok"])
+                call = run_for_data.await_args_list[-1].kwargs
+                self.assertEqual(call["cli_args"], expected_cli)
+                self.assertTrue(callable(call["shape"]))
 
         with patch("gms_mcp.server.tools.rooms._requires_dry_run_for_tool", return_value=True):
             blocked = self.call_tool(
@@ -601,17 +603,26 @@ class TestWorkflowWrappers(MCPToolTestCase):
                         "strip.png",
                     ],
                 ),
-                (
-                    "gm_sprite_frame_count",
-                    {"sprite_path": "sprites/spr_test/spr_test.yy", "project_root": "/tmp/project"},
-                    ["sprite-frames", "count", "--", "sprites/spr_test/spr_test.yy"],
-                ),
             ]
 
             for tool_name, kwargs, expected_cli in cases:
                 result = self.call_tool(tool_name, **kwargs)
                 self.assertTrue(result["ok"])
                 self.assertEqual(mock_fallback.await_args_list[-1].kwargs["cli_args"], expected_cli)
+
+        with patch(
+            "gms_mcp.server.tools.workflow._run_for_data",
+            new=AsyncMock(return_value={"ok": True}),
+        ) as mock_data:
+            result = self.call_tool(
+                "gm_sprite_frame_count",
+                sprite_path="sprites/spr_test/spr_test.yy",
+                project_root="/tmp/project",
+            )
+            self.assertTrue(result["ok"])
+            call = mock_data.await_args_list[-1].kwargs
+            self.assertEqual(call["cli_args"], ["sprite-frames", "count", "--", "sprites/spr_test/spr_test.yy"])
+            self.assertTrue(callable(call["shape"]))
 
     def test_safe_delete_uses_policy_and_helper_result(self):
         with patch("gms_mcp.server.tools.workflow._requires_dry_run_for_tool", return_value=True):
@@ -640,7 +651,7 @@ class TestWorkflowWrappers(MCPToolTestCase):
                 project_root="/tmp/project",
             )
         self.assertTrue(result["ok"])
-        self.assertTrue(result["data"]["dry_run"])
+        self.assertTrue(result["dry_run"])
 
 
 class TestRunnerWrappers(MCPToolTestCase):

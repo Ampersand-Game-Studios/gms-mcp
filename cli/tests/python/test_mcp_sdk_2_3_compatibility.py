@@ -78,6 +78,26 @@ class MCPSDKCompatibilityTests(unittest.IsolatedAsyncioTestCase):
             self.assertEqual(len(names), len(set(names)), tool.name)
         self.assertIn(("gm_project_info", "project-root"), headers)
 
+    async def test_listed_schemas_carry_no_generated_noise_and_hidden_arguments_still_work(self):
+        async with Client(build_server(), mode="2026-07-28") as client:
+            listed = await client.list_tools()
+            text = json.dumps([tool.input_schema for tool in listed.tools])
+            schemas = {tool.name: tool.input_schema for tool in listed.tools}
+            # project_root, prefer_cli and quiet are accepted but not listed; null still means "unset".
+            raw = await client.call_tool(
+                "gm_list_symbols", {"project_root": ".", "kind": None, "max_results": 5, "offset": 0}
+            )
+        self.assertNotIn('"title"', text)
+        self.assertNotIn("project_root", schemas["gm_list_symbols"]["properties"])
+        self.assertNotIn("prefer_cli", schemas["gm_room_ops_list"].get("properties", {}))
+        self.assertEqual(schemas["gm_list_symbols"]["properties"]["kind"], {"type": "string"})
+        # Where null means something other than "not given" (here: every match), it stays listed.
+        self.assertIn({"type": "null"}, schemas["gm_list_symbols"]["properties"]["max_results"]["anyOf"])
+        # The one argument HTTP clients route as a header stays listed.
+        self.assertEqual(schemas["gm_project_info"]["properties"]["project_root"]["x-mcp-header"], "project-root")
+        result = unwrap_call_tool_result(raw)
+        self.assertTrue(result["ok"], result)
+
     async def test_legacy_empty_params_and_metadata_do_not_break_gms_middleware(self):
         observed = []
 
