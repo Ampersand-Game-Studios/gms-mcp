@@ -42,7 +42,28 @@ _DASHBOARD_HTML = r"""<!doctype html>
       const counts = document.getElementById("counts");
       const initializeId = "gms-dashboard-initialize";
 
+      let reportedSize = null;
+
       function send(message) { window.parent.postMessage(message, "*"); }
+      function reportSize() {
+        const html = document.documentElement;
+        const previousHeight = html.style.height;
+        html.style.height = "max-content";
+        const height = Math.ceil(html.getBoundingClientRect().height);
+        html.style.height = previousHeight;
+        const width = Math.ceil(window.innerWidth);
+        if (reportedSize && reportedSize.width === width && reportedSize.height === height) return;
+        reportedSize = { width, height };
+        send({ jsonrpc: "2.0", method: "ui/notifications/size-changed", params: { width, height } });
+      }
+      function watchSize() {
+        if (typeof ResizeObserver === "function") {
+          const observer = new ResizeObserver(() => requestAnimationFrame(reportSize));
+          observer.observe(document.documentElement);
+          observer.observe(document.body);
+        }
+        reportSize();
+      }
       function applyHostContext(context) {
         if (context && context.theme) document.documentElement.style.colorScheme = context.theme;
       }
@@ -83,8 +104,10 @@ _DASHBOARD_HTML = r"""<!doctype html>
           applyHostContext(message.result.hostContext);
           send({ jsonrpc: "2.0", method: "ui/notifications/initialized", params: {} });
           status.textContent = "Waiting for data…";
+          watchSize();
         } else if (message.method === "ui/notifications/tool-result") {
           render(message.params);
+          reportSize();
         } else if (message.method === "ui/notifications/host-context-changed") {
           applyHostContext(message.params);
         } else if (message.method === "ui/resource-teardown" && message.id !== undefined) {

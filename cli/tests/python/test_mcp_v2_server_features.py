@@ -81,6 +81,7 @@ class GMSMCPV2FeatureTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn("TestGame contains", _text_content(dashboard.content[0]))
         self.assertEqual(ui.contents[0].mime_type, APP_MIME_TYPE)
         self.assertIn("ui/initialize", _text_resource_content(ui.contents[0]).text)
+        self.assertIn("ui/notifications/size-changed", _text_resource_content(ui.contents[0]).text)
         self.assertIn(
             "gms://project/assets/{asset_type}/{asset_name}",
             [t.uri_template for t in template_result.resource_templates],
