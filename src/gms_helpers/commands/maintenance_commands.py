@@ -257,3 +257,57 @@ def dense_renames(report: dict) -> dict:
     if data.get("error"):
         out["error"] = data["error"]
     return out
+
+
+def dense_json_validation(report: dict) -> dict:
+    """Return ``ok``, ``files_checked``, and (only when invalid) ``invalid_files`` mapping path to error."""
+    if not isinstance(report, dict):
+        return report
+    data = report.get("data")
+    if not isinstance(data, dict):
+        return report
+    invalid = {
+        str(item["file"]): str(item.get("error", "Invalid JSON"))
+        for item in data.get("invalid_files", [])
+        if isinstance(item, dict) and item.get("file")
+    }
+    out: dict = {
+        "ok": bool(report.get("success", report.get("ok", not invalid))),
+        "files_checked": int(data.get("files_checked", 0)),
+    }
+    if invalid:
+        out["invalid_files"] = invalid
+    return out
+
+
+def dense_orphan_list(report: dict) -> dict:
+    """Group orphaned and missing asset paths densely by folder (numbered runs as ranges)."""
+    if not isinstance(report, dict) or not report.get("success", report.get("ok", True)):
+        return report
+    data = report.get("data")
+    if not isinstance(data, dict):
+        return report
+    from ..dense import asset_folders, name_ranges
+
+    def _pack(items: list) -> dict:
+        paths = [str(item["path"]) if isinstance(item, dict) else str(item) for item in items]
+        grouped, other = asset_folders(paths)
+        packed: dict = {}
+        if grouped:
+            packed["assets"] = {folder: name_ranges(names) for folder, names in sorted(grouped.items())}
+        if other:
+            packed["files"] = sorted(other)
+        return packed
+
+    orphaned = data.get("orphaned") or []
+    missing = data.get("missing") or []
+    out: dict = {
+        "ok": True,
+        "orphaned_count": len(orphaned),
+        "missing_count": len(missing),
+    }
+    if orphaned:
+        out["orphaned"] = _pack(orphaned)
+    if missing:
+        out["missing"] = _pack(missing)
+    return out

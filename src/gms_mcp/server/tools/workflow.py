@@ -5,7 +5,7 @@ from typing import Annotated, Any, Dict
 
 from mcp.server.mcpserver import Resolve
 
-from ..dispatch import _run_with_fallback
+from ..dispatch import _run_for_data, _run_with_fallback
 from ..dry_run_policy import _dry_run_policy_blocked_result, _requires_dry_run_for_tool
 from ..mcp_types import Context
 from ..project import ProjectAccessError, _ensure_cli_on_sys_path, _resolve_project_directory, _resolve_repo_root
@@ -17,18 +17,24 @@ WorkflowDuplicateNameResolution = Any
 WorkflowRenameNameResolution = Any
 
 
-def _name_room_instances(project_directory: Any, object_name: str, dependencies: Any) -> None:
-    """Add to each room dependency the instances to remove, so the next call needs no lookup."""
+def _room_instances(project_directory: Any, object_name: str, dependencies: Any) -> Dict[str, list[str]]:
+    """The instances of the object placed in each room that refers to it, so the next call needs no lookup."""
     from gms_helpers.introspection import _iter_room_layers, read_asset_yy
 
+    placed: Dict[str, list[str]] = {}
+    seen: set[str] = set()
     for dependency in dependencies if isinstance(dependencies, list) else []:
         if not isinstance(dependency, dict) or dependency.get("asset_type") != "room":
             continue
-        room = read_asset_yy(project_directory, str(dependency.get("asset_path") or dependency.get("asset_name")))
+        room_name = str(dependency.get("asset_name"))
+        if room_name in seen:
+            continue
+        seen.add(room_name)
+        room = read_asset_yy(project_directory, str(dependency.get("asset_path") or room_name))
         if not isinstance(room, dict):
             continue
         instances = [
-            item.get("name")
+            str(item.get("name"))
             for layer in _iter_room_layers(room.get("layers", []))
             if isinstance(layer, dict)
             for item in layer.get("instances") or []
@@ -37,10 +43,41 @@ def _name_room_instances(project_directory: Any, object_name: str, dependencies:
             and item["objectId"].get("name") == object_name
         ]
         if instances:
-            dependency["instances"] = instances
-            dependency["remove_with"] = (
-                f'gm_room_instance_remove(room_name="{dependency.get("asset_name")}", instance_id=<each instance>)'
-            )
+            placed[room_name] = instances
+    return placed
+
+
+def _public_safe_delete(result: Dict[str, Any], *, dry_run: bool) -> Dict[str, Any]:
+    """The safe-delete result once: dependencies grouped, without the preflight copies of it."""
+    from gms_helpers.dense import links_by_relation
+
+    public = {
+        key: value
+        for key, value in result.items()
+        # asset_type and asset_name are the call's own arguments; preflight and revalidation repeat the rest.
+        if key not in {"preflight", "revalidation", "asset_type", "asset_name"}
+        and not (key in {"force", "blocked"} and value is False)
+        and not (key == "warnings" and not value)
+    }
+    dependencies = result.get("dependencies")
+    if isinstance(dependencies, list):
+        public["dependencies"] = links_by_relation(dependencies, name="asset_name", kind="asset_type")
+    if result.get("blocked"):
+        advice = (
+            "Remove what refers to it first (a room placement: gm_room_instance_remove; code: edit it), "
+            "or pass force=true, which deletes the asset and leaves those references pointing at nothing."
+        )
+        # `next` says what the blocked-deletion warning said.
+        public["warnings"] = [w for w in public.get("warnings", []) if not str(w).startswith("Deletion blocked")]
+        if not public["warnings"]:
+            del public["warnings"]
+        if dry_run:
+            # A preview that finds dependencies has done its job; it is not a failed call.
+            public.update(ok=True, would_be_blocked=True, next=advice)
+            public.pop("blocked", None)
+        else:
+            public.update(ok=False, error="Safe delete blocked by dependencies", next=advice)
+    return public
 
 
 def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) -> None:
@@ -95,8 +132,9 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     ) -> Dict[str, Any]:
         """Delete an asset after checking what still refers to it. Extensions are not supported.
 
-        The default (`dry_run=true`) only previews: it lists every asset whose data or code names
-        this one. `dry_run=false` deletes it and its registration when nothing refers to it, and is
+        The default (`dry_run=true`) only previews: `dependencies` maps relation to type to every
+        asset whose data or code names this one, and `room_instances` each room's placements of an
+        object. `dry_run=false` deletes it and its registration when nothing refers to it, and is
         refused while something does. Remove those references first (a room placement with
         gm_room_instance_remove), or pass `force=true` to delete anyway: that rewrites nothing, so
         the remaining references are left pointing at an asset that no longer exists.
@@ -104,7 +142,6 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         _ = ctx
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
-        from gms_helpers.results import normalize_result
         from gms_helpers.workflow import safe_delete_asset
 
         if not dry_run and _requires_dry_run_for_tool("gm_safe_delete"):
@@ -116,28 +153,31 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         project_directory = _resolve_project_directory(project_root)
         if resolution.action == "cancel":
             return {"ok": False, "cancelled": True, "message": "Safe delete cancelled; no changes were made."}
-        result = safe_delete_asset(
-            project_root=project_directory,
-            asset_type=asset_type,
-            asset_name=asset_name,
-            force=resolution.action == "force",
-            dry_run=dry_run,
+        effective_force = resolution.action == "force"
+        cached_preflight = resolution_runtime.consume_safe_delete_preflight(
+            project_directory,
+            asset_type,
+            asset_name,
+            force=effective_force,
         )
-        if result.get("blocked"):
-            advice = (
-                "Remove what refers to it first (a room placement: gm_room_instance_remove; code: edit it), "
-                "or pass force=true, which deletes the asset and leaves those references pointing at nothing."
-            )
-            if dry_run:
-                # A preview that finds dependencies has done its job; it is not a failed call.
-                result = {**result, "ok": True, "would_be_blocked": True, "next": advice}
-            else:
-                result = {**result, "ok": False, "error": "Safe delete blocked by dependencies", "next": advice}
-        # The preflight repeats the same asset and dependency fields one level down.
-        result = {key: value for key, value in result.items() if key != "preflight"}
-        if asset_type == "object":
-            _name_room_instances(project_directory, asset_name, result.get("dependencies"))
-        return normalize_result(result, operation="Safe delete").to_dict()
+        safe_delete_kwargs: Dict[str, Any] = {
+            "project_root": project_directory,
+            "asset_type": asset_type,
+            "asset_name": asset_name,
+            "force": effective_force,
+            "dry_run": dry_run,
+        }
+        if cached_preflight is not None:
+            safe_delete_kwargs["preflight"] = cached_preflight
+        result = safe_delete_asset(**safe_delete_kwargs)
+        public = _public_safe_delete(result, dry_run=dry_run)
+        placed = (
+            _room_instances(project_directory, asset_name, result.get("dependencies")) if asset_type == "object" else {}
+        )
+        if placed:
+            public["room_instances"] = placed
+            public["remove_with"] = "gm_room_instance_remove(room_name=<room>, instance_id=<each instance>)"
+        return public
 
     @mcp.tool()
     async def gm_workflow_duplicate(
@@ -410,16 +450,10 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
         quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Import a sprite strip or spritesheet as a new GameMaker sprite.
+        """Import a PNG strip or sheet (source, project-relative) as a new sprite called name.
 
-        Args:
-            name: Sprite name to create
-            source: Project-relative path to PNG strip/sheet (absolute paths are rejected)
-            parent_path: Existing parent folder path; omit to reuse or create the default Sprites folder
-            layout: Strip layout - "horizontal", "vertical", or "grid"
-            frame_width: Frame width in pixels (0 = auto-detect)
-            frame_height: Frame height in pixels (0 = auto-detect)
-            columns: Number of columns for grid layout (0 = auto-detect)
+        layout: "horizontal", "vertical" or "grid". frame_width, frame_height and columns (grid
+        only) are detected when 0. parent_path: an existing folder; default the Sprites folder.
         """
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
@@ -460,32 +494,19 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     async def gm_sprite_frame_count(
         sprite_path: str,
         project_root: str = ".",
-        prefer_cli: bool = False,
-        output_mode: OutputMode = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """Get the frame count for a sprite.
-
-        Args:
-            sprite_path: Sprite .yy path relative to project root
-        """
+        """Return the frame count for a sprite (`sprite_path` is its project-relative .yy path)."""
+        _ = ctx
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
-        from gms_helpers.commands.sprite_commands import handle_sprite_frame_count
+        from gms_helpers.commands.sprite_commands import dense_sprite_frame_count, handle_sprite_frame_count
 
-        args = argparse.Namespace(sprite_path=sprite_path, project_root=project_root)
-        cli_args = ["sprite-frames", "count", "--", sprite_path]
-
-        return await _run_with_fallback(
+        return await _run_for_data(
             direct_handler=handle_sprite_frame_count,
-            direct_args=args,
-            cli_args=cli_args,
+            direct_args=argparse.Namespace(sprite_path=sprite_path, project_root=project_root),
             project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
+            tool_name="sprite-frames-count",
+            cli_args=["sprite-frames", "count", "--", sprite_path],
+            shape=dense_sprite_frame_count,
         )

@@ -8,6 +8,7 @@ project resources, even though GameMaker uses the same name/path wire format.
 from __future__ import annotations
 
 import json
+import os
 import re
 from collections import Counter
 from dataclasses import asdict, dataclass, field
@@ -184,7 +185,7 @@ def errors_introduced_by_mutation(before: list[str], after: list[str]) -> tuple[
     return introduced, preexisting
 
 
-def safe_project_path(root: Path, value: Any) -> Path | None:
+def safe_project_path(root: Path, value: Any, *, resolved_root: Path | None = None) -> Path | None:
     """Reject ambiguous and escaping paths before any filesystem read."""
     if not isinstance(value, str) or not value or "\0" in value:
         return None
@@ -199,7 +200,8 @@ def safe_project_path(root: Path, value: Any) -> Path | None:
         return None
     target = root.joinpath(*parts)
     try:
-        if not target.resolve().is_relative_to(root.resolve()):
+        base = resolved_root if resolved_root is not None else root.resolve()
+        if not target.resolve().is_relative_to(base):
             return None
     except (OSError, ValueError):
         return None
@@ -285,9 +287,20 @@ def resolve_parent_reference(project_root: str | Path, parent_path: str) -> dict
 class _ProjectGraph:
     def __init__(self, root: Path, project: dict[str, Any], result: ProjectValidationResult):
         self.root, self.project, self.result = root, project, result
+        self._resolved_root = root.resolve()
         self.assets: dict[str, dict[str, Any]] = {}
         self.folders: dict[str, str] = {}
         self.groups: dict[str, tuple[str, str]] = {}
+        self._embedded: dict[tuple[str, str], set[str]] = {}
+        self._safe: dict[str, Path | None] = {}
+
+    def safe_path(self, value: Any) -> Path | None:
+        """safe_project_path, resolved once per path for this validation run."""
+        if not isinstance(value, str):
+            return safe_project_path(self.root, value, resolved_root=self._resolved_root)
+        if value not in self._safe:
+            self._safe[value] = safe_project_path(self.root, value, resolved_root=self._resolved_root)
+        return self._safe[value]
 
     def error(self, location: str, message: str) -> None:
         self.result.errors.append(f"{location}: {message}")
@@ -307,7 +320,7 @@ class _ProjectGraph:
             path, name = folder.get("folderPath"), folder.get("name")
             if (
                 not isinstance(path, str)
-                or safe_project_path(self.root, path) is None
+                or self.safe_path(path) is None
                 or not path.replace("\\", "/").startswith("folders/")
                 or not path.endswith(".yy")
                 or not isinstance(name, str)
@@ -337,7 +350,7 @@ class _ProjectGraph:
                     continue
                 path = f"{prefix}/{name}"
                 if (
-                    safe_project_path(self.root, path) is None
+                    self.safe_path(path) is None
                     or group.get("resourceType", resource_type) != resource_type
                     or group.get("%Name", name) != name
                 ):
@@ -357,7 +370,7 @@ class _ProjectGraph:
                 self.error("resources", "malformed resource entry")
                 continue
             path, name = ref.get("path"), ref.get("name")
-            target = safe_project_path(self.root, path)
+            target = self.safe_path(path)
             if (
                 target is None
                 or not isinstance(path, str)
@@ -393,7 +406,7 @@ class _ProjectGraph:
             not isinstance(value, dict)
             or not isinstance(value.get("name"), str)
             or not value.get("name")
-            or safe_project_path(self.root, value.get("path")) is None
+            or self.safe_path(value.get("path")) is None
         ):
             self.error(location, "malformed or unsafe reference")
             return
@@ -416,7 +429,7 @@ class _ProjectGraph:
                 return
             # Embedded references name an item inside the resource identified by path.
             if key in {"frameId", "inheritedItemId", "propertyId", "instanceId"}:
-                embedded = self.embedded_names(target, key)
+                embedded = self.embedded_in(path, key)
                 if name in embedded:
                     if key == "inheritedItemId" and path not in self.ancestors(owner, "parentRoom"):
                         self.error(location, "inherited item does not belong to an ancestor room")
@@ -429,6 +442,13 @@ class _ProjectGraph:
             self.error(location, f"reference name '{name}' does not match target '{target_name}'")
         if expected and target_type != expected:
             self.error(location, f"wrong target type {target_type}; expected {expected}")
+
+    def embedded_in(self, path: str, key: str) -> set[str]:
+        """Names embedded in a registered asset, walked once per asset and key."""
+        cached = self._embedded.get((path, key))
+        if cached is None:
+            cached = self._embedded[path, key] = self.embedded_names(self.assets.get(path, {}), key)
+        return cached
 
     @staticmethod
     def embedded_names(data: dict[str, Any], key: str) -> set[str]:
@@ -558,7 +578,7 @@ class _ProjectGraph:
                 self.error(path, f"event identity does not match '{filename}'")
             if not check_files:
                 continue
-            event_file = safe_project_path(self.root, str(PurePosixPath(path).parent / filename))
+            event_file = self.safe_path(str(PurePosixPath(path).parent / filename))
             if event_file is None or not event_file.is_file():
                 if event.get("name") or event.get("%Name") or event.get("eventType") == 4:
                     self.error(path, f"event file is missing: {filename}")
@@ -615,7 +635,7 @@ class _ProjectGraph:
                 self.error(location, "expected an asset-relative file basename")
                 return None
             normalized = str(PurePosixPath(owner).parent / normalized)
-        target = safe_project_path(self.root, normalized)
+        target = self.safe_path(normalized)
         if target is None or "${" in normalized:
             self.error(location, "unsafe file reference")
             return None
@@ -762,7 +782,7 @@ class _ProjectGraph:
                 self.error(location, "invalid included-file identity or directory")
                 continue
             relative = directory.replace("\\", "/") + "/" + name
-            target = safe_project_path(self.root, relative)
+            target = self.safe_path(relative)
             if target is None or relative.split("/")[0] != "datafiles":
                 self.error(location, "unsafe included-file path")
                 continue
@@ -776,6 +796,23 @@ class _ProjectGraph:
         layers_seen: set[str] = set()
         instances: set[str] = set()
         items_seen: set[str] = set()
+        room_parent = str(PurePosixPath(path).parent)
+        creation_code_files: set[str] | None = None
+        if check_files:
+            room_dir = self.safe_path(room_parent)
+            if room_dir is not None and room_dir.is_dir():
+                try:
+                    with os.scandir(room_dir) as entries:
+                        creation_code_files = {
+                            entry.name.casefold()
+                            for entry in entries
+                            if entry.name.casefold().startswith("instancecreationcode_")
+                            and entry.name.casefold().endswith(".gml")
+                        }
+                except OSError:
+                    creation_code_files = None
+            else:
+                creation_code_files = set()
 
         def layers(value: Any, location: str) -> None:
             for layer in self.array(value, location):
@@ -809,7 +846,13 @@ class _ProjectGraph:
                     if item.get("objectId") is None and item.get("inheritedItemId") is None:
                         self.error(location, f"instance '{name}' has no object reference")
                     if check_files:
-                        self.instance_creation_code(item, location, path)
+                        self.instance_creation_code(
+                            item,
+                            location,
+                            path,
+                            room_parent=room_parent,
+                            creation_code_files=creation_code_files,
+                        )
                 for collection, item_type, reference_key in (
                     ("sprites", "GMRSpriteGraphic", "spriteId"),
                     ("sequences", "GMRSequence", "sequenceId"),
@@ -843,12 +886,13 @@ class _ProjectGraph:
                 break  # Graph-cycle diagnostic is emitted separately.
             visited.add(ancestor_path)
             parent = self.assets[ancestor_path]
-            inherited.update(self.embedded_names(parent, "instanceId"))
+            inherited.update(self.embedded_in(ancestor_path, "instanceId"))
             ancestor = parent.get("parentRoom")
+        valid_instances = instances | inherited
         ordered: set[str] = set()
         for entry in self.array(data.get("instanceCreationOrder", []), path + ".instanceCreationOrder"):
             name = entry if isinstance(entry, str) else entry.get("name") if isinstance(entry, dict) else None
-            if not isinstance(name, str) or name not in instances | inherited:
+            if not isinstance(name, str) or name not in valid_instances:
                 self.error(path, f"creation order references missing instance '{name}'")
                 continue
             if name in ordered:
@@ -858,21 +902,39 @@ class _ProjectGraph:
                 ref_path = entry.get("path")
                 if (
                     not isinstance(ref_path, str)
-                    or safe_project_path(self.root, ref_path) is None
+                    or self.safe_path(ref_path) is None
                     or ref_path.replace("\\", "/") not in visited
-                    or name not in self.embedded_names(self.assets.get(ref_path.replace("\\", "/"), {}), "instanceId")
+                    or name not in self.embedded_in(ref_path.replace("\\", "/"), "instanceId")
                 ):
                     self.error(path, f"creation-order instance '{name}' has wrong room path")
         if instances - ordered:
             self.error(path, f"instances missing from creation order: {sorted(instances - ordered)}")
 
-    def instance_creation_code(self, item: dict[str, Any], location: str, path: str) -> None:
+    def instance_creation_code(
+        self,
+        item: dict[str, Any],
+        location: str,
+        path: str,
+        *,
+        room_parent: str | None = None,
+        creation_code_files: set[str] | None = None,
+    ) -> None:
         """``hasCreationCode`` must match GameMaker's InstanceCreationCode_<instance>.gml file."""
         name = item["name"]
         if item.get("inheritCode") is True and isinstance(item.get("inheritedItemId"), dict):
             return  # The code lives with the ancestor room's instance.
-        code_file = safe_project_path(self.root, str(PurePosixPath(path).parent / f"InstanceCreationCode_{name}.gml"))
-        has_file = code_file is not None and code_file.is_file()
+        filename = f"InstanceCreationCode_{name}.gml"
+        if creation_code_files is not None and "/" not in name and "\\" not in name:
+            if filename.casefold() not in creation_code_files:
+                has_file = False
+            else:
+                parent = room_parent if room_parent is not None else str(PurePosixPath(path).parent)
+                code_file = self.safe_path(f"{parent}/{filename}")
+                has_file = code_file is not None and code_file.is_file()
+        else:
+            parent = room_parent if room_parent is not None else str(PurePosixPath(path).parent)
+            code_file = self.safe_path(f"{parent}/{filename}")
+            has_file = code_file is not None and code_file.is_file()
         has_code = item.get("hasCreationCode") is True
         if has_code and not has_file:
             self.error(location, f"instance '{name}' has creation code but InstanceCreationCode_{name}.gml is missing")

@@ -20,6 +20,24 @@ from gms_helpers import snapshot_build, transactions  # noqa: E402
 from gms_helpers.exceptions import ValidationError  # noqa: E402
 
 
+def test_automated_runner_is_muted_and_preserves_other_environment(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    calls = []
+    monkeypatch.setenv("GMS_MUTE", "0")
+    monkeypatch.setenv("GMS_DISPLAY", "phone_landscape")
+    monkeypatch.setattr(snapshot_build.subprocess, "Popen", lambda *args, **kwargs: calls.append(kwargs))
+    snapshot_build.launch_mac_runner(
+        tmp_path / "runner",
+        tmp_path,
+        tmp_path / "game.ios",
+        tmp_path / "run",
+        {"GMS_MCP_BRIDGE_PORT": "1234", "GMS_MUTE": "0"},
+    )
+    assert calls[0]["env"]["GMS_MUTE"] == "1"
+    assert calls[0]["env"]["GMS_DISPLAY"] == "phone_landscape"
+    assert calls[0]["env"]["GMS_MCP_BRIDGE_PORT"] == "1234"
+    assert os.environ["GMS_MUTE"] == "0"
+
+
 def _git(root: Path, *args: str) -> None:
     subprocess.run(
         ["git", "-C", str(root), "-c", "user.email=t@example.com", "-c", "user.name=t", *args],

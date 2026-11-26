@@ -26,6 +26,9 @@ RESULT_FILE = "result.json"
 LIVE_LOG_HINT_ENV = "GMS_MCP_LIVE_LOG_HINT"
 # Printed about once a second by the test prelude so a followed run can show the frame it has reached.
 TEST_FRAME_MARKER = "[TEST_FRAME]"
+# The compiler prints one of these for every macro of an extension that does not target the platform
+# being built: dozens in a project with store or platform extensions, and nothing to act on.
+OTHER_TARGET_WARNING = "not available for this target"
 _VERSION = 1
 
 

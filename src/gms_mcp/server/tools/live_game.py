@@ -56,23 +56,13 @@ def register(mcp: Any, ContextType: Any) -> None:
         """
         Build a throwaway copy of the project, start the game and connect to it over the runtime bridge.
 
-        The build takes minutes. A call that has no result after about 20 seconds returns status
-        STILL_RUNNING with the build's stage, and the start carries on: follow it with
-        gm_build_status(label=...), which returns this result once the game is up.
-        background=true returns at once instead.
-
-        After it returns status RUNNING you can drive the game with:
-          gm_game_command("ping" | "help" | "state" | "console <console command line>" | "log_tail 50")
-          gm_game_screenshot(name)   save and return a screenshot
-          gm_game_log(lines)         the game's full log (every show_debug_message line)
-          gm_game_stop()             stop this project session when finished
-        Snapshot options (isolate_paths, yyp_entries, base_only, ref) work as in gm_snapshot_compile.
-        Isolated macOS runs require runtime="VM"; YYC needs a separate native application.
-
-        The game connects only if the project has a bridge endpoint enabled for this build that
-        reads the GMS_MCP_BRIDGE_PORT environment variable. status RUNNING_NOT_CONNECTED means
-        the game is up but has no such endpoint; BUILD_FAILED carries compiler errors.
-        Needs a macOS host.
+        At status RUNNING, drive it with gm_game_command ("ping", "help", "state", "console <line>",
+        "log_tail 50"), gm_game_screenshot(name) and gm_game_log(lines), and end it with
+        gm_game_stop(). RUNNING_NOT_CONNECTED: the game is up but has no bridge endpoint reading
+        GMS_MCP_BRIDGE_PORT; BUILD_FAILED carries compiler errors. isolate_paths, yyp_entries,
+        base_only and ref work as in gm_snapshot_compile. Needs a macOS host and the VM runtime.
+        Takes minutes: after about 20 s it returns STILL_RUNNING and carries on; follow it with
+        gm_build_status(label=...) until the game is up. background=true returns at once.
         """
         _ = ctx
         from gms_helpers import live_session
@@ -117,14 +107,10 @@ def register(mcp: Any, ContextType: Any) -> None:
         """
         Send one command line to the live game and return its answer.
 
-        Standard commands every bridge endpoint provides:
-          ping                      -> "pong"
-          help                      -> the commands this game supports
-          state                     -> JSON: room, app/game state, fps, instance count, ...
-          console <command line>    -> run a developer-console command; JSON with its output lines
-          log_tail [count]          -> JSON with the game's most recent log lines
-        A project can register more (call `help`). Structured answers come back parsed in `data`.
-        Use gm_game_screenshot for screenshots: it also collects the image file.
+        Every endpoint has: ping ("pong"), help (this game's commands, including any the project
+        adds), state (room, game state, fps, instance count, ...), console <line> (a
+        developer-console command and its output) and log_tail [count]. JSON answers come back
+        parsed in `data`. Screenshots: gm_game_screenshot, which also collects the file.
         """
         _ = ctx
         from gms_helpers import live_session

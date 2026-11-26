@@ -60,18 +60,13 @@ def register_core(mcp: Any, ContextType: Any) -> None:
         """
         Check the integrity of the project file (.yyp) without changing anything.
 
-        Run this after adding, renaming or deleting assets by hand, before a build, and before a
-        commit. It reports, each with the tool that fixes it:
-        - assets registered but missing on disk, and assets on disk that are not registered
-        - duplicate registrations, name/file mismatches, assets whose folder is not registered
-        - assets left at the project root instead of in an asset-browser folder
-        - included files that are registered but missing, or present under datafiles/ but unregistered
-        - registry ordering (GameMaker 2026's Igor can crash on a mis-ordered .yyp) and file layout
-
-        Returns ok=false when there are problems (things that break the IDE or a build);
-        warnings alone leave ok=true. `asset_reference_issues` lists problems inside asset files
-        (orphaned event files, references to missing assets or folders): the ones a change's result
-        counts as already present. They are reported separately and do not affect `ok`.
+        Run it after adding, renaming or deleting assets by hand, and before a build or commit.
+        Reports, each with the tool that fixes it: assets registered but missing or present but
+        unregistered (included files too), duplicates, name/file mismatches, unregistered
+        folders, assets left at the project root, registry order (GameMaker 2026's Igor can crash
+        on a mis-ordered .yyp) and file layout. ok=false means something breaks the IDE or a
+        build; warnings leave ok=true. `asset_reference_issues` (orphaned event files, references
+        to missing assets or folders) is reported apart and does not affect ok.
         """
         _ = ctx
         from gms_helpers.project_config import project_setting
