@@ -123,6 +123,7 @@ class ResolutionEvidence:
     affected_count: int = 0
     stale: bool = False
     facts: Mapping[str, str | int | bool] = field(default_factory=dict)
+    raw: Any = field(default=None, repr=False, compare=False)
 
 
 class ResolutionEvidenceReader(Protocol):
@@ -227,6 +228,7 @@ def _safe_delete_evidence(project_root: Any, arguments: Mapping[str, Any]) -> Re
             "dependency_count": dependency_count,
             "dependency_set_digest": _opaque_digest(dependencies or []),
         },
+        raw=preflight,
     )
 
 
@@ -378,6 +380,25 @@ class ResolutionRuntime:
         self._telemetry_sink = telemetry_sink
         self._evidence_history_capacity = evidence_history_capacity
         self._previous_evidence: OrderedDict[str, tuple[str, bool, int]] = OrderedDict()
+        self._last_safe_delete_preflight: tuple[tuple[str, str, str, bool], dict[str, Any]] | None = None
+
+    def consume_safe_delete_preflight(
+        self,
+        project_root: Any,
+        asset_type: str,
+        asset_name: str,
+        *,
+        force: bool,
+    ) -> dict[str, Any] | None:
+        """Return and clear the preflight captured by an automatic (non-elicited) safe-delete resolution."""
+        cached = self._last_safe_delete_preflight
+        self._last_safe_delete_preflight = None
+        if cached is None:
+            return None
+        key, preflight = cached
+        if key == (str(project_root), asset_type, asset_name, bool(force)):
+            return preflight
+        return None
 
     def set_evidence_reader(self, policy: ResolutionPolicy, reader: ResolutionEvidenceReader) -> None:
         """Install a policy-specific read seam before tools are registered."""
@@ -532,6 +553,19 @@ class ResolutionRuntime:
             ctx=ctx,
         )
         automatic = self._automatic_decision(policy, evidence, arguments)
+        if policy is ResolutionPolicy.SAFE_DELETE:
+            if automatic is not None and isinstance(evidence.raw, dict):
+                self._last_safe_delete_preflight = (
+                    (
+                        str(authorized_root),
+                        str(arguments.get("asset_type") or ""),
+                        str(arguments.get("asset_name") or ""),
+                        bool(arguments.get("force")),
+                    ),
+                    evidence.raw,
+                )
+            else:
+                self._last_safe_delete_preflight = None
         # Name collisions use None as their no-conflict outcome. All other None
         # outcomes are exceptional and need the client to choose a safe action.
         if automatic is not None or policy is ResolutionPolicy.NAME_COLLISION and evidence.affected_count == 0:

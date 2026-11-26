@@ -1174,13 +1174,15 @@ def safe_delete_asset(
     *,
     force: bool = False,
     dry_run: bool = True,
+    preflight: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Dependency-aware delete workflow.
     Defaults to dry-run and blocks apply when incoming dependencies exist unless force=True.
     """
     project_root = Path(project_root).resolve()
-    preflight = safe_delete_preflight(project_root, asset_type, asset_name, force=force)
+    if preflight is None:
+        preflight = safe_delete_preflight(project_root, asset_type, asset_name, force=force)
     asset_path = preflight.get("asset_path")
     if not asset_path:
         return {
@@ -1226,33 +1228,9 @@ def safe_delete_asset(
             "preflight": preflight,
         }
 
-    # A resolved apply must re-scan immediately before mutation.  This avoids
-    # acting on dependency evidence that became stale after the initial probe.
-    final_preflight = safe_delete_preflight(project_root, asset_type, asset_name, force=force)
-    if not final_preflight.get("asset_path") or final_preflight.get("blocked"):
-        final_dependencies = final_preflight.get("dependencies", [])
-        final_blocked = bool(final_preflight.get("blocked"))
-        return {
-            **final_preflight,
-            "ok": False,
-            "blocked": final_blocked,
-            "dry_run": False,
-            "deleted": False,
-            "warnings": (
-                ["Deletion blocked because dependent assets reference this target. Use force=True to continue."]
-                if final_blocked
-                else []
-            ),
-            "message": (
-                f"[SAFE DELETE] Blocked for {asset_type} '{asset_name}' "
-                f"({len(final_dependencies)} dependent reference(s))."
-                if final_blocked
-                else str(final_preflight.get("error") or "Safe delete preflight is no longer valid.")
-            ),
-            "preflight": preflight,
-            "revalidation": final_preflight,
-        }
-
+    # The preflight above was just gathered (either right here or in the automatic non-elicited
+    # resolver milliseconds ago); elicited calls pass preflight=None and scan freshly above.
+    final_preflight = preflight
     delete_result = delete_asset(project_root, asset_path, dry_run=False, force=force)
     warnings.extend(delete_result.warnings)
 

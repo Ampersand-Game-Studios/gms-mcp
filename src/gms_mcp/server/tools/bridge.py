@@ -20,28 +20,13 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Install the MCP bridge into the GameMaker project.
+        Install the MCP bridge (__mcp_ assets) into the project, for gm_run to use.
 
-        The bridge enables bidirectional communication between Cursor agents
-        and running GameMaker games, providing:
-        - Real-time log capture via __mcp_log(...) (also calls show_debug_message in-game)
-        - Command execution (spawn objects, change rooms, set variables)
-        - Game state querying
-
-        Note: Installing the bridge does not automatically place an instance in any room.
-        The game will only connect if __mcp_bridge is instantiated at runtime
-        (for example, by placing it in the startup room).
-
-        Bridge assets use __mcp_ prefix and can be removed with gm_bridge_uninstall.
-        Once installed, the bridge is automatically used when running with gm_run.
-
-        Args:
-            port: Port for bridge server (default: 6502)
-            project_root: Path to project root
-            force: Replace bridge files that were edited or lack the gms-mcp marker
-
-        Returns:
-            Installation result with ok, message, and details
+        It gives live log capture via __mcp_log(...) (which also calls show_debug_message),
+        commands (spawn, change room, set variables) and state queries. The game connects only
+        when an __mcp_bridge instance exists at runtime: install places none (see
+        gm_bridge_enable_one_shot). force replaces bridge files that were edited or lack the
+        gms-mcp marker. Remove with gm_bridge_uninstall.
         """
         # Bridge installer needs actual project_root, not repo_root
         from gms_helpers.bridge_installer import install_bridge
@@ -59,20 +44,10 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Remove the MCP bridge from the GameMaker project.
+        Remove the MCP bridge: every __mcp_ asset, its .yyp entries and __mcp_bridge room instances.
 
-        Safely removes all __mcp_ prefixed assets and cleans up .yyp references.
-        Attempts to remove __mcp_bridge room instances as part of uninstall.
-        Uses backup/rollback to ensure project integrity.
-
-        Note: If room cleanup cannot be completed, warnings are returned in the result.
-
-        Args:
-            project_root: Path to project root
-            force: Remove bridge files that were edited or lack the gms-mcp marker
-
-        Returns:
-            Uninstallation result with ok, message, and details
+        Rolls back on failure; room cleanup it cannot finish comes back as warnings. force also
+        removes bridge files that were edited or lack the gms-mcp marker.
         """
         # Bridge installer needs actual project_root, not repo_root
         from gms_helpers.bridge_installer import uninstall_bridge
@@ -141,20 +116,10 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        One-shot bridge enable:
-        - Install bridge assets (if missing)
-        - Ensure __mcp_bridge instance exists in the startup room
-        - Ensure the instance is present in instanceCreationOrder[]
+        Install the bridge if missing and place an __mcp_bridge instance in a room, in one step.
 
-        Args:
-            port: Bridge server port (default: 6502)
-            room_name: Optional explicit room name. If empty, uses first RoomOrderNodes entry (startup room)
-            layer: Instance layer name (default: "Instances")
-            x, y: Placement coordinates for the bridge instance (default: 0,0)
-            project_root: Path to project root
-
-        Returns:
-            Dict with ok, room_name, instance_id, and validation details.
+        room_name defaults to the startup room; the instance goes on `layer` at x, y and into the
+        room's creation order. Returns room_name and instance_id.
         """
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
@@ -277,26 +242,10 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Get recent log output from the running game.
+        Return the last `lines` __mcp_log(...) lines from a game started with gm_run(background=true).
 
-        Requires:
-        - Bridge installed (gm_bridge_install)
-        - Game running (gm_run with background=true)
-        - Game connected to bridge
-
-        Args:
-            lines: Number of log lines to return (default: 50)
-            project_root: Path to project root
-
-        Notes:
-        - Only logs sent via __mcp_log(...) are available to this tool.
-
-        Returns:
-            Dict with:
-            - ok: bool
-            - logs: list of log entries
-            - log_count: total buffered logs
-            - connected: whether game is connected
+        Needs the bridge installed and the game connected. Returns logs, log_count (lines
+        buffered) and connected.
         """
         # Bridge needs actual project_root, not repo_root
         from gms_helpers.bridge_server import get_bridge_server
@@ -341,26 +290,10 @@ def register(mcp: Any, ContextType: Any) -> None:
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Send a command to the running game via MCP bridge.
+        Send a command to a game started with gm_run, over the bridge; waits up to timeout seconds.
 
-        Built-in commands:
-        - ping: Test connection (responds with "pong")
-        - goto_room <room_name>: Change to specified room
-        - get_var global.<name>: Get a global variable value
-        - set_var global.<name> <value>: Set a global variable
-        - spawn <object_name> <x> <y>: Create an instance
-        - room_info: Get current room name and size
-        - instance_count [object]: Count instances
-
-        Custom commands can be added by editing __mcp_bridge.
-
-        Args:
-            command: Command string to send
-            timeout: Seconds to wait for response (default: 5.0)
-            project_root: Path to project root
-
-        Returns:
-            Dict with command result (ok, result, or error)
+        Built in: ping, goto_room <room>, get_var global.<name>, set_var global.<name> <value>,
+        spawn <object> <x> <y>, room_info, instance_count [object]. Add more in __mcp_bridge.
         """
         # Bridge needs actual project_root, not repo_root
         from gms_helpers.bridge_server import get_bridge_server

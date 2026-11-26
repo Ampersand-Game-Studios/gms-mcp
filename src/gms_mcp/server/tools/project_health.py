@@ -147,15 +147,11 @@ def register(mcp: Any, ContextType: Any) -> None:
         """
         Check the project for problems and return every one found.
 
-        `issues` groups them: each problem's message once, with everything it applies to. In a
-        message, {name} is the affected file's own name. `assets` maps a folder to asset names
-        whose files are <folder>/<name>/<name>.yy; `files` maps a folder to other file names in it
-        (name:line when the problem has a line). `summary` counts them by severity.
-
-        Args:
-            depth: "quick" runs fast lint checks only; "deep" adds reference
-                   analysis, orphan detection, and GML string search.
-            include_info: Whether to include info-level diagnostics.
+        depth "quick" runs lint checks; "deep" adds reference analysis, orphan detection and GML
+        string search. include_info adds info-level findings. `issues` gives each message once
+        with everything it applies to ({name} in it is each file's own name): `assets` maps a
+        folder to asset names (<folder>/<name>/<name>.yy), `files` a folder to other file names
+        (name:line when there is a line). `summary` counts by severity.
         """
         _ = ctx
         from gms_helpers.commands.diagnostics_commands import dense_diagnostics, handle_diagnostics

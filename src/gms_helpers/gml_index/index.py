@@ -50,7 +50,7 @@ class GMLIndex:
     """
 
     CACHE_FILE = ".gml_index_cache.json"
-    CACHE_VERSION = 4
+    CACHE_VERSION = 5
 
     def __init__(self, project_root: Path):
         self.project_root = project_root.resolve(strict=True)
