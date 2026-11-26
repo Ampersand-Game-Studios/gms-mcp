@@ -216,7 +216,8 @@ class TestMCPIntegrationTools(unittest.TestCase):
             {"object": "o_player", "project_root": str(self.project_root)},
         )
         self.assertTrue(listed.get("ok"), msg=listed)
-        self.assertIn("Collision_o_wall.gml", listed.get("stdout", ""))
+        self.assertIn("Collision_o_wall.gml", listed["events"])
+        self.assertEqual(listed["collision_objects"]["Collision_o_wall.gml"], "o_wall")
 
         numeric = self._call_tool(
             "gm_event_add",
@@ -698,7 +699,7 @@ class TestMCPIntegrationTools(unittest.TestCase):
             },
         )
         self.assertTrue(safe_delete.get("ok"), msg=safe_delete)
-        self.assertTrue(safe_delete.get("data", {}).get("dry_run"))
+        self.assertTrue(safe_delete.get("dry_run"))
 
         rooms = self._call_tool(
             "gm_room_ops_list",
@@ -740,10 +741,12 @@ class TestMCPIntegrationTools(unittest.TestCase):
         )
         # A preview that finds dependents has succeeded; only the delete itself would be refused.
         self.assertTrue(dry_run.get("ok"), msg=dry_run)
-        self.assertTrue(dry_run.get("data", {}).get("blocked"))
-        self.assertTrue(dry_run.get("data", {}).get("would_be_blocked"))
-        self.assertIn("force=true", dry_run.get("data", {}).get("next", ""))
-        self.assertFalse(dry_run.get("data", {}).get("deleted"))
+        self.assertTrue(dry_run.get("would_be_blocked"))
+        self.assertEqual(dry_run.get("dependencies"), {"code_reference": {"script": ["scr_caller"]}})
+        self.assertIn("force=true", dry_run.get("next", ""))
+        self.assertFalse(dry_run.get("deleted"))
+        self.assertNotIn("preflight", dry_run)
+        self.assertNotIn("data", dry_run)
 
         applied = self._call_tool(
             "gm_safe_delete",
@@ -756,7 +759,7 @@ class TestMCPIntegrationTools(unittest.TestCase):
             },
         )
         self.assertTrue(applied.get("ok"), msg=applied)
-        self.assertTrue(applied.get("data", {}).get("deleted"), msg=applied)
+        self.assertTrue(applied.get("deleted"), msg=applied)
         self.assertFalse((self.project_root / "scripts" / "scr_target").exists())
         self.assertIn("scr_target", caller_file.read_text(encoding="utf-8"))
 

@@ -40,6 +40,7 @@ from .server.progress import long_call_progress
 from .server.project import ProjectAccessError, ProjectAccessPolicy, configured_project_root
 from .server.register_all import ServerConfigurationError, enabled_toolsets, optional_toolsets, register_all
 from .server.results import expose_host_diagnostics_from_environment, mcp_tool_result
+from .server.tool_schema import compact_input_schema
 from .server.tools.capabilities import server_instructions
 from .server.validation import invalid_arguments_result, validate_mcp_tool_arguments
 from .server.verification_policy import (
@@ -937,6 +938,11 @@ def build_server(*, http_auth_value: str | None = None, http_auth_issuer_url: st
         resolution_runtime=runtime.resolution,
         mutation_scope=runtime.mutation_scope,
     )
+    # Clients send each listed schema to the model every session; arguments are still checked
+    # against each function's own signature.
+    tool_manager = getattr(mcp, "_tool_manager", None)
+    for tool in tool_manager.list_tools() if tool_manager is not None else ():
+        tool.parameters = compact_input_schema(tool.parameters, tool_name=tool.name)
 
     return mcp
 

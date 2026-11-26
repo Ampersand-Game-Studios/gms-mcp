@@ -5,7 +5,7 @@ from typing import Annotated, Any, Dict
 
 from mcp.server.mcpserver import Resolve
 
-from ..dispatch import _run_with_fallback
+from ..dispatch import _run_for_data, _run_with_fallback
 from ..dry_run_policy import _dry_run_policy_blocked_result, _requires_dry_run_for_tool
 from ..mcp_types import Context
 from ..project import ProjectAccessError, _ensure_cli_on_sys_path, _resolve_repo_root
@@ -184,32 +184,26 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     async def gm_room_ops_list(
         verbose: bool = False,
         project_root: str = ".",
-        prefer_cli: bool = False,
-        output_mode: OutputMode = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """List the project's rooms; verbose=true adds each room's size and layers."""
+        """List the project's rooms: `rooms` maps each to "<width>x<height>, <n> layers".
+
+        verbose=true adds `layers`: each distinct layer stack (top first) once, with the rooms that
+        have it; "r_{1..3}" is r_1 to r_3.
+        """
+        _ = ctx
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
-        from gms_helpers.commands.room_commands import handle_room_list
+        from gms_helpers.commands.room_commands import dense_room_list, handle_room_list
 
-        args = argparse.Namespace(verbose=verbose, project_root=project_root)
-        cli_args = ["room", "ops", "list"]
-        if verbose:
-            cli_args.append("--verbose")
-
-        return await _run_with_fallback(
+        cli_args = ["room", "ops", "list"] + (["--verbose"] if verbose else [])
+        return await _run_for_data(
             direct_handler=handle_room_list,
-            direct_args=args,
-            cli_args=cli_args,
+            direct_args=argparse.Namespace(verbose=verbose, project_root=project_root),
             project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
+            tool_name="room-ops-list",
+            cli_args=cli_args,
+            shape=lambda value: dense_room_list(value, verbose=verbose),
         )
 
     @mcp.tool()
@@ -296,30 +290,21 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     async def gm_room_layer_list(
         room_name: str,
         project_root: str = ".",
-        prefer_cli: bool = False,
-        output_mode: OutputMode = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """List layers in a room."""
+        """List a room's layers in its order: each "<name> <type> <depth>", ending " hidden" when it is."""
+        _ = ctx
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
-        from gms_helpers.commands.room_commands import handle_room_layer_list
+        from gms_helpers.commands.room_commands import dense_layer_list, handle_room_layer_list
 
-        args = argparse.Namespace(room_name=room_name, project_root=project_root)
-        cli_args = ["room", "layer", "list", "--", room_name]
-
-        return await _run_with_fallback(
+        return await _run_for_data(
             direct_handler=handle_room_layer_list,
-            direct_args=args,
-            cli_args=cli_args,
+            direct_args=argparse.Namespace(room_name=room_name, project_root=project_root),
             project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
+            tool_name="room-layer-list",
+            cli_args=["room", "layer", "list", "--", room_name],
+            shape=dense_layer_list,
         )
 
     @mcp.tool()
@@ -401,28 +386,20 @@ def register(mcp: Any, ContextType: Any, resolution_runtime: ResolutionRuntime) 
     async def gm_room_instance_list(
         room_name: str,
         project_root: str = ".",
-        prefer_cli: bool = False,
-        output_mode: OutputMode = "full",
-        tail_lines: int = 120,
-        quiet: bool = False,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
-        """List instances in a room."""
+        """List every instance in a room: `instances` maps layer to object to "<name> <x>,<y>"
+        entries, with " scale <x>,<y>" and " rotation <r>" only where they are not 1,1 and 0."""
+        _ = ctx
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
-        from gms_helpers.commands.room_commands import handle_room_instance_list
+        from gms_helpers.commands.room_commands import dense_instance_list, handle_room_instance_list
 
-        args = argparse.Namespace(room_name=room_name, project_root=project_root)
-        cli_args = ["room", "instance", "list", "--", room_name]
-
-        return await _run_with_fallback(
+        return await _run_for_data(
             direct_handler=handle_room_instance_list,
-            direct_args=args,
-            cli_args=cli_args,
+            direct_args=argparse.Namespace(room_name=room_name, project_root=project_root),
             project_root=project_root,
-            prefer_cli=prefer_cli,
-            output_mode=output_mode,
-            tail_lines=tail_lines,
-            quiet=quiet,
-            ctx=ctx,
+            tool_name="room-instance-list",
+            cli_args=["room", "instance", "list", "--", room_name],
+            shape=dense_instance_list,
         )

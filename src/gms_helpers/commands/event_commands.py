@@ -151,3 +151,36 @@ def handle_event_fix(args):
     return OperationResult.ok(
         "Event fix completed", warnings=warnings, data={"object": object_name, "results": results}
     )
+
+
+def dense_event_list(value):
+    """``events`` lists the object's event files in the object's order; ``collision_objects`` maps a
+    collision event's file to the object it collides with."""
+    if not isinstance(value, dict) or not value.get("success", value.get("ok", True)):
+        return value
+    data = value.get("data")
+    events = data.get("events", []) if isinstance(data, dict) else []
+    data = data if isinstance(data, dict) else {}
+    result = {"ok": True, "object": data.get("object"), "events": [event.get("filename") for event in events]}
+    collisions = {event["filename"]: event["collision_object"] for event in events if event.get("collision_object")}
+    if collisions:
+        result["collision_objects"] = collisions
+    return result
+
+
+def dense_event_validate(value):
+    """Return ``ok``, ``object``, ``orphaned_found`` and ``missing_found`` from event validation."""
+    if not isinstance(value, dict):
+        return value
+    data = value.get("data")
+    if not isinstance(data, dict):
+        return value
+    results = data.get("results")
+    if not isinstance(results, dict):
+        return value
+    return {
+        "ok": bool(value.get("success", value.get("ok", False))),
+        "object": data.get("object"),
+        "orphaned_found": results.get("orphaned_found", 0),
+        "missing_found": results.get("missing_found", 0),
+    }

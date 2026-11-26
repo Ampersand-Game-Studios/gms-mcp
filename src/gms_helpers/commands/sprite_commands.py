@@ -81,4 +81,11 @@ def handle_sprite_frame_count(args):
     count = get_frame_count(project_root, args.sprite_path)
 
     print(f"Frame count: {count}")
-    return {"success": True, "frame_count": count}
+    return {"success": True, "sprite": args.sprite_path, "frame_count": count}
+
+
+def dense_sprite_frame_count(value):
+    """Return only ``ok``, ``sprite`` and ``frame_count`` when the lookup succeeded."""
+    if not isinstance(value, dict) or not value.get("success", value.get("ok", True)):
+        return value
+    return {"ok": True, "sprite": value.get("sprite"), "frame_count": value.get("frame_count")}

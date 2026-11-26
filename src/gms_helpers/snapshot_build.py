@@ -33,12 +33,14 @@ import tempfile
 import threading
 import time
 import zipfile
+from itertools import groupby
 from dataclasses import dataclass, field
 from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 from typing import Any, Callable, Iterable
 
 from . import run_status, yyp_registry
 from .dense import name_ranges, natural_key, repeat_counts
+from .runner_output import is_runner_line
 from .bounded_regex import search_many
 from .agent_locks import MOBILE_BUILD_LOCK, BuildSlot, DirectoryLock, _process_alive
 from .mac_runtime import prepare_mac_runtime, project_run_lock
@@ -52,9 +54,7 @@ ACCESS_VIOLATION_MARKER = "AccessViolationException"
 _COMPILE_FINISHED_MARKER = "Final Compile finished"
 _ERROR_LINE = re.compile(r"Error :|error :|Project Error")
 _WARNING_LINE = re.compile(r"Warning : ")
-# The compiler prints one of these for every macro of an extension that does not target the platform
-# being built: dozens in a project with store or platform extensions, and nothing to act on.
-_OTHER_TARGET_WARNING = "not available for this target"
+_OTHER_TARGET_WARNING = run_status.OTHER_TARGET_WARNING
 TEST_FRAME_MARKER = run_status.TEST_FRAME_MARKER
 _LABEL = re.compile(r"[^A-Za-z0-9_]")
 _SNAPSHOT_IGNORED = {".git", ".gms_mcp", ".gms-mcp", "output", "__pycache__", ".pytest_cache", ".gml_index_cache"}
@@ -620,6 +620,40 @@ def classify_build_log(text: str) -> tuple[list[str], list[str], list[str]]:
     return errors, warnings, packaging
 
 
+_RESCALED = re.compile(r"^Warning : resource (?P<name>.+?) rescaled from (?P<old>\d+,\d+) to (?P<new>\d+,\d+)$")
+_TEXTURE_ENTRY_SUFFIX = re.compile(r"_[0-9a-fA-F]{8}(?:-[0-9a-fA-F]{4}){3}-[0-9a-fA-F]{12}$")
+
+
+def is_rescaled_warning(line: str) -> bool:
+    """Whether ``line`` is GameMaker's texture-page rescaled warning."""
+    return _RESCALED.match(line.strip()) is not None
+
+
+def split_rescaled_warnings(warnings: list[str], project_name: str) -> tuple[list[str], dict[str, str]]:
+    """Separate GameMaker's texture-page "resource ... rescaled" warnings from the rest.
+
+    Each names a texture entry, ``<sprite>_<project>_<frame id>``, too large for its texture page.
+    They come back as {sprite: "WxH -> WxH"}; a sprite whose frames were scaled differently lists each.
+    """
+    other: list[str] = []
+    rescaled: dict[str, list[str]] = {}
+    sanitized_project = project_name.replace(" ", "_") if project_name else ""
+    for line in warnings:
+        match = _RESCALED.match(line)
+        if match is None:
+            other.append(line)
+            continue
+        name = _TEXTURE_ENTRY_SUFFIX.sub("", match["name"])
+        if project_name and name.endswith(f"_{project_name}"):
+            name = name.removesuffix(f"_{project_name}")
+        elif sanitized_project and name.endswith(f"_{sanitized_project}"):
+            name = name.removesuffix(f"_{sanitized_project}")
+        sizes = f"{match['old'].replace(',', 'x')} -> {match['new'].replace(',', 'x')}"
+        if sizes not in rescaled.setdefault(name, []):
+            rescaled[name].append(sizes)
+    return other, {name: "; ".join(sizes) for name, sizes in rescaled.items()}
+
+
 def count_other_target_warnings(text: str) -> int:
     """How many warnings the build log holds that `classify_build_log` leaves out of its warnings."""
     return sum(1 for line in text.splitlines() if _OTHER_TARGET_WARNING in line and _WARNING_LINE.search(line))
@@ -1058,13 +1092,21 @@ def compile_snapshot(
 # ----------------------------------------------------------------------
 # Run
 # ----------------------------------------------------------------------
-def tail_lines(path: Path, count: int, *, skip: Callable[[str], bool] | None = None) -> list[str]:
+def tail_lines(
+    path: Path,
+    count: int,
+    *,
+    skip: Callable[[str], bool] | None = None,
+    omit: Callable[[str], bool] | None = None,
+) -> list[str]:
     """Last lines of a log without .NET stack frames, which bury the line that matters.
 
     ``skip`` leaves out lines the caller reports elsewhere, so the tail holds only new ones. A
-    line repeated back to back counts once and is written once with its count.
+    line repeated back to back counts once and is written once with its count. ``omit`` then
+    removes lines from those last ``count`` without reaching further back for more, so the tail
+    covers the same stretch of the log in fewer lines.
     """
-    if not path.is_file():
+    if count <= 0 or not path.is_file():
         return []
     lines = [
         line[:400]
@@ -1074,7 +1116,10 @@ def tail_lines(path: Path, count: int, *, skip: Callable[[str], bool] | None = N
         and TEST_FRAME_MARKER not in line
         and not (skip is not None and skip(line))
     ]
-    return repeat_counts(lines)[-max(0, count) :]
+    window = [(line, len(list(group))) for line, group in groupby(lines)][-count:]
+    return [
+        line if repeats == 1 else f"{line} [×{repeats}]" for line, repeats in window if omit is None or not omit(line)
+    ]
 
 
 _SEPARATOR_LINE = re.compile(r"\s*[#_=-]{10,}\s*")
@@ -1298,7 +1343,7 @@ def launch_mac_runner(
             cwd=str(staging),
             stdout=stderr_log,
             stderr=subprocess.STDOUT,
-            env={**os.environ, **(environment or {})},
+            env={**os.environ, **(environment or {}), "GMS_MUTE": "1"},
         )
     return process, debug_log
 
@@ -1545,6 +1590,7 @@ def snapshot_compile(
         if stopped or (not keep_work_dir and not (isinstance(exc, SnapshotError) and exc.retain_work_dir)):
             shutil.rmtree(work, ignore_errors=True)
         raise
+    warnings, rescaled = split_rescaled_warnings(build.warnings, find_yyp(root).stem) if build.warnings else ([], {})
     public = {
         "ok": build.ok,
         "status": build.status,
@@ -1556,7 +1602,7 @@ def snapshot_compile(
         "attempts": build.attempts,
         "igor_crash_retries": build.access_violation_retries,
         "errors": build.errors[:80],
-        "warnings": build.warnings[:40],
+        "warnings": warnings[:40],
         "packaging_errors": build.packaging_errors[:20],
         "build_log": _relative(root, build.build_log),
         # The build alone, slot wait and retries included. A followed run adds run_seconds for the whole run.
@@ -1574,6 +1620,8 @@ def snapshot_compile(
     ):
         if public[key] == usual:
             del public[key]
+    if rescaled:
+        public["textures_rescaled"] = rescaled
     if build.other_target_warnings:
         # Otherwise a missing `warnings` reads as "none" beside a log that is full of the word.
         public["other_target_warnings_omitted"] = build.other_target_warnings
@@ -1699,6 +1747,7 @@ def _run_test_pipeline(
                     or any(marker in line for marker in (line_marker, result_marker, started_marker))
                     or line.strip() in reported
                 ),
+                omit=is_runner_line,
             )
         return public
     finally:

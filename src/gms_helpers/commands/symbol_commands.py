@@ -92,11 +92,33 @@ def definitions_report(project_root: Path, symbol_name: str) -> dict[str, Any]:
     return _with_note(_ok_payload({"symbol": symbol_name, "definitions": definitions}), note)
 
 
-def references_report(project_root: Path, symbol_name: str, *, max_results: Optional[int] = None) -> dict[str, Any]:
+def _code_file(path: str) -> str:
+    """A code file named the GameMaker way, ``<folder>/<name>/<name>.gml``, as ``<folder>/<name>``."""
+    parts = path.split("/")
+    return "/".join(parts[:-1]) if len(parts) >= 3 and parts[-1] == f"{parts[-2]}.gml" else path
+
+
+def _code_path(file: str) -> str:
+    """The file a ``_code_file`` name stands for (only .gml files are indexed)."""
+    return file if file.endswith(".gml") else f"{file}/{file.rsplit('/', 1)[-1]}.gml"
+
+
+def _page(items: list, offset: int, max_results: Optional[int]) -> tuple[list, Optional[int]]:
+    """The ``max_results`` items from ``offset`` on, and the offset of the next page (None: no more)."""
+    start = max(0, offset)
+    end = len(items) if max_results is None or max_results < 0 else start + max_results
+    return items[start:end], (end if end < len(items) else None)
+
+
+def references_report(
+    project_root: Path, symbol_name: str, *, max_results: Optional[int] = None, offset: int = 0
+) -> dict[str, Any]:
     """Every reference to ``symbol_name``, grouped by file: ``"<line> <the line of code>"``.
 
     A line that names the symbol twice is listed once. ``defined_at`` names the definition lines,
-    which also name the symbol. ``max_results`` keeps the first that many references.
+    which also name the symbol. A file ``<folder>/<name>/<name>.gml`` is written ``<folder>/<name>``.
+    ``max_results`` keeps that many references from ``offset`` on; ``next_offset`` says where the
+    next page starts.
     """
     from ..gml_index import GMLIndex
 
@@ -109,12 +131,11 @@ def references_report(project_root: Path, symbol_name: str, *, max_results: Opti
     note = _index_note(index.build())
     references = index.find_references(symbol_name)
     total = len(references)
-    if max_results is not None and max_results >= 0:
-        references = references[:max_results]
+    references, next_offset = _page(references, offset, max_results)
     by_file: dict[str, list[str]] = {}
     seen: set[tuple[str, int]] = set()
     for reference in references:
-        file = _make_relative(reference.location.file_path, root)
+        file = _code_file(_make_relative(reference.location.file_path, root))
         key = (file, reference.location.line)
         if key in seen:
             continue
@@ -122,7 +143,7 @@ def references_report(project_root: Path, symbol_name: str, *, max_results: Opti
         by_file.setdefault(file, []).append(f"{reference.location.line} {reference.context or ''}".rstrip())
     payload: dict[str, Any] = {"symbol": symbol_name, "count": total}
     defined_at = [
-        f"{_make_relative(definition.location.file_path, root)}:{definition.location.line}"
+        f"{_code_file(_make_relative(definition.location.file_path, root))}:{definition.location.line}"
         for definition in index.find_definition(symbol_name)
     ]
     if defined_at:
@@ -131,6 +152,8 @@ def references_report(project_root: Path, symbol_name: str, *, max_results: Opti
     if len(references) < total:
         payload["returned"] = len(references)
         payload["truncated"] = True
+        if next_offset is not None:
+            payload["next_offset"] = next_offset
     return _with_note(_ok_payload(payload), note)
 
 
@@ -141,10 +164,13 @@ def symbols_report(
     name_filter: Optional[str] = None,
     file_filter: Optional[str] = None,
     max_results: Optional[int] = None,
+    offset: int = 0,
 ) -> dict[str, Any]:
-    """Symbols by kind, then file: ``{"function": {"scripts/a/a.gml": ["name:line", ...]}}``.
+    """Symbols by kind, then file: ``{"function": {"scripts/a": ["name:line", ...]}}``.
 
-    Symbols are taken in name order; ``max_results`` keeps the first that many.
+    A file ``<folder>/<name>/<name>.gml`` is written ``<folder>/<name>``. Symbols are taken in
+    name order; ``max_results`` keeps that many from ``offset`` on, and ``next_offset`` says where
+    the next page starts.
     """
     from ..gml_index import GMLIndex, SymbolKind
 
@@ -165,17 +191,18 @@ def symbols_report(
     note = _index_note(index.build())
     symbols = index.list_symbols(kind=kind_enum, name_filter=name_filter, file_filter=file_filter)
     total = len(symbols)
-    if max_results is not None and max_results >= 0:
-        symbols = symbols[:max_results]
+    symbols, next_offset = _page(symbols, offset, max_results)
     grouped: dict[str, dict[str, list[str]]] = {}
     for symbol in symbols:
-        file = _make_relative(symbol.location.file_path, root)
+        file = _code_file(_make_relative(symbol.location.file_path, root))
         name = f"{symbol.parent_enum}.{symbol.name}" if symbol.parent_enum else symbol.name
         grouped.setdefault(symbol.kind.value, {}).setdefault(file, []).append(f"{name}:{symbol.location.line}")
     payload: dict[str, Any] = {"count": total, "symbols": grouped}
     if len(symbols) < total:
         payload["returned"] = len(symbols)
         payload["truncated"] = True
+        if next_offset is not None:
+            payload["next_offset"] = next_offset
     return _with_note(_ok_payload(payload), note)
 
 
@@ -234,7 +261,10 @@ def handle_find_references(args) -> dict:
     symbol_name = getattr(args, "symbol_name", None)
     try:
         report = references_report(
-            _get_project_root(args), symbol_name or "", max_results=getattr(args, "max_results", None)
+            _get_project_root(args),
+            symbol_name or "",
+            max_results=getattr(args, "max_results", None),
+            offset=getattr(args, "offset", 0) or 0,
         )
     except Exception as e:
         print(f"[ERROR] Error finding references: {e}")
@@ -249,7 +279,7 @@ def handle_find_references(args) -> dict:
     shown = report.get("returned", report["count"])
     print(
         f"[OK] Found {report['count']} reference(s) to '{symbol_name}'"
-        + (f" (showing first {shown})" if report.get("truncated") else "")
+        + (f" (showing {shown} from {getattr(args, 'offset', 0) or 0})" if report.get("truncated") else "")
         + ":"
     )
     definitions = set(report.get("defined_at", []))
@@ -257,7 +287,7 @@ def handle_find_references(args) -> dict:
         for entry in lines:
             line_number, _, code = entry.partition(" ")
             marker = "  [definition]" if f"{file}:{line_number}" in definitions else ""
-            print(f"  {file}:{line_number} - {code}{marker}")
+            print(f"  {_code_path(file)}:{line_number} - {code}{marker}")
     return report
 
 
@@ -270,6 +300,7 @@ def handle_list_symbols(args) -> dict:
             name_filter=getattr(args, "name_filter", None),
             file_filter=getattr(args, "file_filter", None),
             max_results=getattr(args, "max_results", None),
+            offset=getattr(args, "offset", 0) or 0,
         )
     except Exception as e:
         print(f"[ERROR] Error listing symbols: {e}")
@@ -284,14 +315,14 @@ def handle_list_symbols(args) -> dict:
     shown = report.get("returned", report["count"])
     print(
         f"[OK] Found {report['count']} symbol(s)"
-        + (f" (showing first {shown})" if report.get("truncated") else "")
+        + (f" (showing {shown} from {getattr(args, 'offset', 0) or 0})" if report.get("truncated") else "")
         + ":"
     )
     for kind, files in report["symbols"].items():
         for file, entries in files.items():
             for entry in entries:
                 name, line = entry.rsplit(":", 1)
-                print(f"  [{kind}] {name} - {file}:{line}")
+                print(f"  [{kind}] {name} - {_code_path(file)}:{line}")
     return report
 
 

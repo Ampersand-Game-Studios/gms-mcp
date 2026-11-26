@@ -88,17 +88,13 @@ def register(
     ) -> Dict[str, Any]:
         """Compile the project in its working tree to check that it builds, without running it.
 
-        Returns the compiler output and any errors. Use it after changing code or assets.
-        Builds take turns across every session on this machine, so the compile may wait for
-        another session's build before it starts; gm_lock_status shows who holds the turn. Tools
-        that change the project wait until it ends.
-
-        A compile takes minutes. A call that has no result after about 20 seconds returns status
-        STILL_RUNNING, and the compile carries on: follow it with
-        gm_build_status(label="working_tree"), which returns this result when it ends, or end it
-        with gm_build_stop(label="working_tree"). background=true returns at once instead.
-        gm_snapshot_compile checks the same thing on a copy, shows the compiler's log lines while
-        it runs, and does not hold up changes to the project.
+        Returns the compiler output and any errors. Builds take turns across every session on
+        this machine (gm_lock_status shows whose turn it is), and tools that change the project
+        wait until it ends. gm_snapshot_compile checks the same on a copy, shows its log while
+        it runs, and holds up nothing.
+        Takes minutes: after about 20 s it returns STILL_RUNNING and carries on; follow it with
+        gm_build_status(label="working_tree") or end it with gm_build_stop(label="working_tree").
+        background=true returns at once.
         """
         selected_platform = platform or _default_target_platform()
         repo_root = _resolve_repo_root(project_root)
@@ -242,29 +238,14 @@ def register(
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Run the project using Igor.
+        Build and run the project with Igor in its working tree.
 
-        Args:
-            platform: Target platform (default: host OS)
-            runtime: Runtime type VM or YYC (default: VM). GMS2 VM/YYC aliases are accepted;
-                     GMRT labels are rejected until GameMaker documents Igor CLI support.
-            runtime_version: Specific runtime version to use
-            background: If True, launch game and return immediately without waiting.
-                        The game will run in the background and can be stopped with gm_run_stop.
-                        Returns session info (pid, run_id) for tracking.
-            output_location: 'temp' (IDE-style) or 'project' (classic output folder)
-            project_root: Path to project root
-            prefer_cli: Reserved; game launches use the isolated typed worker for credential isolation.
-            output_mode: Output format (full, tail, none)
-            tail_lines: Number of lines to show in tail mode
-            quiet: Suppress verbose output
-            enable_bridge: If True, start bridge server for log capture and commands.
-                          If None (default), auto-detect based on whether bridge is installed.
-                          If False, explicitly disable bridge even if installed.
-
-        Returns:
-            If background=True: Dict with session info (ok, pid, run_id, message, bridge_enabled)
-            If background=False: Dict with full execution result including stdout
+        platform defaults to this OS. runtime is VM or YYC (GMS2 aliases accepted; GMRT is not
+        supported). output_location: "temp" (IDE-style) or "project" (classic output folder).
+        background=true launches the game and returns its pid and run_id at once; stop it with
+        gm_run_stop. Otherwise the call waits for the game to exit and returns its output
+        (output_mode full, tail of tail_lines, or none). enable_bridge starts the bridge for log
+        capture and commands; by default it does when the bridge is installed.
         """
         selected_platform = platform or _default_target_platform()
         repo_root = _resolve_repo_root(project_root)
@@ -410,14 +391,7 @@ def register(
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Stop the running game (if any).
-
-        Uses persistent session tracking to find and stop the game,
-        even if called from a different process or after MCP server restart.
-        Also stops the bridge server if it was running.
-
-        Returns:
-            Dict with result of stop operation (ok, message)
+        Stop the game gm_run started, and its bridge, even from another session or after a restart.
         """
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)
@@ -482,19 +456,9 @@ def register(
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
-        Check whether the game is running.
+        Check whether the game gm_run started is still running, even from another session or after a restart.
 
-        Uses persistent session tracking to check status,
-        even if called from a different process or after MCP server restart.
-
-        Returns:
-            Dict with session info:
-            - has_session: bool - whether a session file exists
-            - running: bool - whether the game process is still alive
-            - run_id: str - unique session identifier
-            - pid: int - process ID
-            - started_at: str - ISO timestamp when game was launched
-            - message: str - human-readable status message
+        Returns has_session, running, run_id, pid, started_at and message.
         """
         repo_root = _resolve_repo_root(project_root)
         _ensure_cli_on_sys_path(repo_root)

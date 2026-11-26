@@ -37,6 +37,7 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from . import run_status, snapshot_build
+from .runner_output import is_runner_line
 from .agent_locks import DirectoryLock
 from .mac_runtime import prepare_mac_runtime, project_identity, project_run_lock
 from .bridge_server import BridgeServer
@@ -166,6 +167,7 @@ def _launch_game(runner: Path, staging: Path, game_file: Path, run_dir: Path, en
         if key not in (BRIDGE_PORT_ENVIRONMENT_VARIABLE, BRIDGE_TOKEN_ENVIRONMENT_VARIABLE)
     }
     env.update(environment)
+    env["GMS_MUTE"] = "1"
     run_dir.mkdir(parents=True, exist_ok=True)
     with snapshot_build.artifact_writer(run_dir / "runner_stderr.log") as stderr_log:
         process = subprocess.Popen(
@@ -360,7 +362,7 @@ def _start(
             "The game exited during start-up. The log tail shows why (a runtime error in a Create event is "
             "the usual cause)."
         )
-        public["log_tail"] = snapshot_build.tail_lines(session.debug_log, 40)
+        public["log_tail"] = snapshot_build.tail_lines(session.debug_log, 40, omit=is_runner_line)
         stop(root)
     elif not bridge_enabled:
         public["status"] = "RUNNING_WITHOUT_BRIDGE"

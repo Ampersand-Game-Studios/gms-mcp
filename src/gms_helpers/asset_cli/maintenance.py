@@ -37,13 +37,21 @@ def maint_validate_json_command(args):
 
     try:
         from ..maintenance.tidy_json import validate_project_json, print_json_validation_report
+        from ..results import MaintenanceResult
 
         results = validate_project_json(getattr(args, "project_root", "."))
         print_json_validation_report(results)
 
-        # Return success if all files are valid
-        invalid_files = [r for r in results if not r[1]]
-        return len(invalid_files) == 0
+        invalid_files = [
+            {"file": str(r[0]), "error": str(r[2]) if len(r) > 2 else "Invalid JSON"} for r in results if not r[1]
+        ]
+        ok = len(invalid_files) == 0
+        return MaintenanceResult(
+            success=ok,
+            message="JSON validation passed" if ok else f"Found {len(invalid_files)} invalid JSON file(s)",
+            issues_found=len(invalid_files),
+            data={"files_checked": len(results), "invalid_files": invalid_files},
+        )
 
     except Exception as e:
         print(f"[ERROR] Error during JSON validation: {e}")
@@ -55,12 +63,26 @@ def maint_list_orphans_command(args):
     print("[SCAN] Scanning project for orphaned and missing assets...")
 
     try:
+        from ..results import MaintenanceResult
+
         orphaned_assets = find_orphaned_assets(getattr(args, "project_root", "."))
         missing_assets = find_missing_assets(getattr(args, "project_root", "."))
         print_orphan_report(orphaned_assets, missing_assets)
 
+        def _entry(item):
+            if isinstance(item, (tuple, list)) and len(item) >= 2:
+                return {"path": str(item[0]), "type": str(item[1])}
+            return {"path": str(item), "type": "unknown"}
+
+        orphaned = [_entry(item) for item in orphaned_assets]
+        missing = [_entry(item) for item in missing_assets]
         # Return success - this is informational
-        return True
+        return MaintenanceResult(
+            success=True,
+            message="Orphan scan completed",
+            issues_found=len(orphaned) + len(missing),
+            data={"orphaned": orphaned, "missing": missing},
+        )
 
     except Exception as e:
         print(f"[ERROR] Error during asset scan: {e}")

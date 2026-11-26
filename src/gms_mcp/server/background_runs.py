@@ -281,15 +281,30 @@ def _tail(path_text: Any, lines: int) -> list[str]:
         with path.open("rb") as stream:
             stream.seek(0, 2)
             size = stream.tell()
-            stream.seek(max(0, size - 32_768))
+            start = max(0, size - 32_768)
+            stream.seek(start)
             text = stream.read().decode("utf-8", errors="replace")
     except OSError:
         return []
-    # A test's once-a-second frame reports are shown as `test_frame`, not as log lines.
+    if start > 0 and "\n" in text:
+        # Avoid returning a half-line cut in two by the 32 KiB seek offset.
+        text = text.split("\n", 1)[1]
+    from gms_helpers.dense import repeat_counts
+    from gms_helpers.runner_output import is_runner_line
+    from gms_helpers.snapshot_build import is_rescaled_warning
+
+    # A test's once-a-second frame reports are shown as `test_frame`, not as log lines; other-platform
+    # extension warnings, rescaled-texture spam and runner start-up lines are left out as finished results do.
     kept = [
-        line.rstrip()[:400] for line in text.splitlines() if line.strip() and run_status.TEST_FRAME_MARKER not in line
+        line.rstrip()[:400]
+        for line in text.splitlines()
+        if line.strip()
+        and run_status.TEST_FRAME_MARKER not in line
+        and run_status.OTHER_TARGET_WARNING not in line
+        and not is_rescaled_warning(line)
+        and not is_runner_line(line)
     ]
-    return kept[-lines:]
+    return repeat_counts(kept)[-lines:]
 
 
 def _number(value: Any, default: float) -> float:
