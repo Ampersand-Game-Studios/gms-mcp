@@ -66,24 +66,25 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         symbol_name: str,
         project_root: str = ".",
         max_results: int | None = None,
+        offset: int = 0,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
         Find every reference to a GML symbol.
 
-        `references` maps each file to its lines that name the symbol, as "<line> <code>";
-        `defined_at` names the definition lines among them, and `count` is the number of
-        references (a line naming the symbol twice is listed once).
-
-        Args:
-            max_results: Keep only the first this many references.
+        `references` maps each file to its lines that name the symbol, as "<line> <code>"; a file
+        <folder>/<name>/<name>.gml is written <folder>/<name>. `defined_at` names the definition
+        lines among them; `count` is every reference (a line naming it twice is listed once).
+        max_results returns that many from offset on; `next_offset` starts the next page.
         """
         _ = ctx
         from gms_helpers.commands.symbol_commands import handle_find_references
 
         return await _run_for_data(
             direct_handler=handle_find_references,
-            direct_args=argparse.Namespace(project_root=project_root, symbol_name=symbol_name, max_results=max_results),
+            direct_args=argparse.Namespace(
+                project_root=project_root, symbol_name=symbol_name, max_results=max_results, offset=offset
+            ),
             project_root=project_root,
             tool_name="gm-find-references",
             cli_args=["symbol", "find-references"],
@@ -96,19 +97,17 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
         name_filter: str | None = None,
         file_filter: str | None = None,
         max_results: int | None = 100,
+        offset: int = 0,
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
         """
         List the GML symbols defined in the project, in name order.
 
-        `symbols` maps each kind to its files and each file to "name:line" entries (an enum value
-        is written "Enum.value"). `count` is every match; `truncated` says max_results kept fewer.
-
-        Args:
-            kind: function, script, enum, enum_value, macro, globalvar or constructor.
-            name_filter: Keep symbols whose name contains this text (case-insensitive).
-            file_filter: Keep symbols whose file path contains this text (case-insensitive).
-            max_results: Keep the first this many (null for every match).
+        `symbols` maps each kind to its files (<folder>/<name>/<name>.gml written <folder>/<name>)
+        and each file to "name:line" entries ("Enum.value" for an enum value). kind: function,
+        script, enum, enum_value, macro, globalvar or constructor; name_filter and file_filter
+        keep names or paths containing the text. `count` is every match; max_results (null: all)
+        returns that many from offset on, and `next_offset` starts the next page.
         """
         _ = ctx
         from gms_helpers.commands.symbol_commands import handle_list_symbols
@@ -119,6 +118,7 @@ def register(mcp: Any, ContextType: Any, *, read_only: bool = False) -> None:
             name_filter=name_filter,
             file_filter=file_filter,
             max_results=max_results,
+            offset=offset,
         )
         return await _run_for_data(
             direct_handler=handle_list_symbols,

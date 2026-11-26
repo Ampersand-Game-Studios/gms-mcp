@@ -289,6 +289,9 @@ def list_instances(room_name: str, layer_name: Optional[str] = None) -> List[Dic
                         "layer": layer.get("name"),
                         "x": inst.get("x"),
                         "y": inst.get("y"),
+                        "scale_x": inst.get("scaleX"),
+                        "scale_y": inst.get("scaleY"),
+                        "rotation": rot,
                     }
                 )
 

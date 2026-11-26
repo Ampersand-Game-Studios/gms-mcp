@@ -213,6 +213,41 @@ function game_start() {
         self.assertIn("GAME_VERSION", symbol_names)
         self.assertIn("GameState", symbol_names)
 
+    def test_list_symbols_pages_through_every_match_with_short_file_names(self):
+        """Pages of max_results from offset cover every symbol once; script files read <folder>/<name>."""
+        from gms_helpers.commands.symbol_commands import symbols_report
+
+        root = Path(self.temp_dir)
+        everything = symbols_report(root)
+        entries = lambda report: [  # noqa: E731
+            (kind, file, entry)
+            for kind, files in report["symbols"].items()
+            for file, items in files.items()
+            for entry in items
+        ]
+        self.assertIn("scripts/player", everything["symbols"]["function"])
+        paged, offset = [], 0
+        while True:
+            page = symbols_report(root, max_results=2, offset=offset)
+            paged += entries(page)
+            if "next_offset" not in page:
+                break
+            self.assertTrue(page["truncated"])
+            offset = page["next_offset"]
+        self.assertEqual(sorted(paged), sorted(entries(everything)))
+        self.assertEqual(len(paged), everything["count"])
+
+    def test_region_labels_are_not_references(self):
+        """Words in a #region or #endregion label are text, not code naming a symbol."""
+        from gms_helpers.commands.symbol_commands import references_report
+
+        self._write_gml(
+            "scripts/regions/regions.gml",
+            "#region player_init setup\nplayer_init(0, 0);\n    #endregion player_init setup\n",
+        )
+        report = references_report(Path(self.temp_dir), "player_init")
+        self.assertEqual(report["references"]["scripts/regions"], ["2 player_init(0, 0);"])
+
     def test_handle_list_symbols_filtered_by_kind(self):
         """handle_list_symbols should filter by kind."""
         from gms_helpers.commands.symbol_commands import handle_list_symbols

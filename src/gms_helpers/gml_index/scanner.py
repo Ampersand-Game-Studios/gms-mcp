@@ -82,7 +82,7 @@ class GMLScanner:
         Each masked character becomes a space (newlines are kept), so match
         positions and line numbers in the masked text equal those in the source.
         String quotes are kept so literals still read as empty strings.
-        Handles ``//`` and ``/* */`` comments, "..." strings with escapes,
+        Handles ``//`` and ``/* */`` comments, ``#region``/``#endregion`` labels, "..." strings with escapes,
         GML verbatim strings (@"..." / @'...') and multi-line template strings
         ($"...") without interpolation analysis.
         """
@@ -99,6 +99,16 @@ class GMLScanner:
             ch = content[i]
             nxt = content[i + 1] if i + 1 < n else ""
             if ch == "/" and nxt == "/":
+                end = content.find("\n", i)
+                end = n if end == -1 else end
+                blank(i, end)
+                i = end
+            elif (
+                ch == "#"
+                and content.startswith(("#region", "#endregion"), i)
+                and not content[content.rfind("\n", 0, i) + 1 : i].strip()
+            ):
+                # A region's label is free text, like a comment: its words are not references.
                 end = content.find("\n", i)
                 end = n if end == -1 else end
                 blank(i, end)

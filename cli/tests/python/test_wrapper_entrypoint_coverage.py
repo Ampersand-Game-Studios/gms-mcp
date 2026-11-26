@@ -880,7 +880,7 @@ class TestIntrospectionTools(MCPToolTestCase):
         self.assertEqual(missing["did_you_mean"], ["scr_tests"])
         self.assertFalse(missing["ok"])
         self.assertEqual((refs["count"], refs["results"]), (1, {"scripts/scr.gml": ["3 player = 1;"]}))
-        self.assertEqual(graph["nodes"], [])
+        self.assertEqual((graph["assets"], graph["edges"], graph["node_count"]), ({}, {}, 0))
         self.assertEqual(stats["objects"], 1)
 
 
@@ -918,16 +918,6 @@ class TestEventTools(MCPToolTestCase):
                     ["event", "duplicate", "--", "o_player", "create", "create:2"],
                 ),
                 (
-                    "gm_event_list",
-                    {"object": "o_player", "project_root": "/tmp/project"},
-                    ["event", "list", "--", "o_player"],
-                ),
-                (
-                    "gm_event_validate",
-                    {"object": "o_player", "project_root": "/tmp/project"},
-                    ["event", "validate", "--", "o_player"],
-                ),
-                (
                     "gm_event_fix",
                     {"object": "o_player", "safe_mode": False, "project_root": "/tmp/project"},
                     ["event", "fix", "--no-safe-mode", "--", "o_player"],
@@ -938,6 +928,22 @@ class TestEventTools(MCPToolTestCase):
                     result = self.call_tool(tool_name, **kwargs)
                     self.assertTrue(result["ok"])
                     self.assertEqual(fallback.await_args_list[-1].kwargs["cli_args"], cli_args)
+
+        # Event listing and validation return their handler's data, shaped densely.
+        with (
+            patch(
+                "gms_mcp.server.tools.events._run_for_data", new=AsyncMock(return_value={"ok": True})
+            ) as run_for_data,
+            patch("gms_mcp.server.tools.events._resolve_repo_root", return_value=Path("/tmp/project")),
+            patch("gms_mcp.server.tools.events._ensure_cli_on_sys_path"),
+        ):
+            for tool_name, expected_cli in (
+                ("gm_event_list", ["event", "list", "--", "o_player"]),
+                ("gm_event_validate", ["event", "validate", "--", "o_player"]),
+            ):
+                result = self.call_tool(tool_name, object="o_player", project_root="/tmp/project")
+                self.assertTrue(result["ok"])
+                self.assertEqual(run_for_data.await_args_list[-1].kwargs["cli_args"], expected_cli)
 
 
 class TestCodeIntelTools(MCPToolTestCase):
@@ -958,7 +964,7 @@ class TestCodeIntelTools(MCPToolTestCase):
                 (
                     "gm_find_references",
                     {"project_root": "/tmp/project", "symbol_name": "player_move", "max_results": 25},
-                    {"symbol_name": "player_move", "max_results": 25},
+                    {"symbol_name": "player_move", "max_results": 25, "offset": 0},
                 ),
                 (
                     "gm_list_symbols",
@@ -969,7 +975,13 @@ class TestCodeIntelTools(MCPToolTestCase):
                         "file_filter": "scripts",
                         "max_results": 10,
                     },
-                    {"kind": "function", "name_filter": "player", "file_filter": "scripts", "max_results": 10},
+                    {
+                        "kind": "function",
+                        "name_filter": "player",
+                        "file_filter": "scripts",
+                        "max_results": 10,
+                        "offset": 0,
+                    },
                 ),
             ]
             for tool_name, kwargs, expected in cases:

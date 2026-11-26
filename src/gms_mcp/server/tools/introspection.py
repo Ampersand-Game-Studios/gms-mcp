@@ -57,37 +57,21 @@ def register(mcp: Any, ContextType: Any) -> None:
             Optional[str],
             Field(
                 description=(
-                    "One type to list: object, script, sprite, room, sound, shader, font, sequence, "
-                    "animcurve, tileset, timeline, path, note, extension, includedfile, or folder "
-                    "(the asset-browser folders, whose paths are what `parent_path` arguments take)."
+                    "object, script, sprite, room, sound, shader, font, sequence, animcurve, "
+                    "tileset, timeline, path, note, extension, includedfile, or folder."
                 )
             ),
         ] = None,
         name_contains: Annotated[
-            Optional[str],
-            Field(
-                description=(
-                    "Keep assets whose name contains this text (case-insensitive). "
-                    "For asset_type=folder it matches anywhere in the folder path."
-                )
-            ),
+            Optional[str], Field(description="Case-insensitive name substring (path for folder).")
         ] = None,
-        folder_prefix: Annotated[
-            Optional[str],
-            Field(description='Keep assets whose file path starts with or contains this folder, e.g. "objects".'),
-        ] = None,
+        folder_prefix: Annotated[Optional[str], Field(description='File-path folder filter, e.g. "objects".')] = None,
         include_included_files: Annotated[
-            bool, Field(description="Include datafiles (included files) when no type is given.")
+            bool, Field(description="Include datafiles when asset_type is omitted.")
         ] = True,
-        include_folder: Annotated[
-            bool,
-            Field(description="Add each listed asset's asset-browser folder (reads each asset's .yy)."),
-        ] = False,
-        limit: Annotated[
-            Optional[int],
-            Field(description="Return only this many matches (default: every match).", ge=1),
-        ] = None,
-        offset: Annotated[int, Field(description="Skip this many matching assets, to page through.", ge=0)] = 0,
+        include_folder: Annotated[bool, Field(description="Group by asset-browser folder (reads each .yy).")] = False,
+        limit: Annotated[Optional[int], Field(description="Max matches to return (default: all).", ge=1)] = None,
+        offset: Annotated[int, Field(description="Skip this many matches to page.", ge=0)] = 0,
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
@@ -161,25 +145,14 @@ def register(mcp: Any, ContextType: Any) -> None:
         asset_identifier: Annotated[
             str,
             Field(
-                description=(
-                    'An asset name ("o_player"), its .yy path, or the path of one of its code files '
-                    '("objects/o_player/Create_0.gml") to read that code.'
-                )
+                description='Asset name ("o_player"), .yy path, or code file path ("objects/o_player/Create_0.gml").'
             ),
         ],
         yy: Annotated[
             Literal["auto", "full", "none"],
-            Field(
-                description=(
-                    "Whether to include the raw .yy data: auto leaves it out when it is large "
-                    "(rooms, sprites), full always includes it, none never does."
-                )
-            ),
+            Field(description="auto: compact .yy (omitted when large); full: raw .yy as written; none: omit .yy."),
         ] = "auto",
-        include_code: Annotated[
-            bool,
-            Field(description="Also return the source of the asset's code files (each event, or the script)."),
-        ] = False,
+        include_code: Annotated[bool, Field(description="Include source of the asset's code files.")] = False,
         project_root: str = ".",
         ctx: Context | None = None,
     ) -> Dict[str, Any]:
@@ -197,16 +170,24 @@ def register(mcp: Any, ContextType: Any) -> None:
         from gms_helpers.introspection import (
             closest_asset_names,
             describe_asset,
+            get_asset_yy_path,
             read_asset_yy,
             read_project_text_file,
         )
+        from gms_helpers.utils import load_json_loose
 
         if not asset_identifier.endswith(".yy") and "." in asset_identifier.rsplit("/", 1)[-1]:
             code = read_project_text_file(project_directory, asset_identifier)
             if code is not None:
                 return {"ok": True, **code}
 
-        summary = describe_asset(project_directory, asset_identifier)
+        yy_path = get_asset_yy_path(project_directory, asset_identifier)
+        asset_data = load_json_loose(yy_path) if yy_path is not None and yy_path.exists() else None
+        summary = (
+            describe_asset(project_directory, asset_identifier, yy_data=asset_data, yy_path=yy_path)
+            if isinstance(asset_data, dict)
+            else describe_asset(project_directory, asset_identifier)
+        )
         if summary is None:
             failure: Dict[str, Any] = {"ok": False, "error": f"Asset '{asset_identifier}' not found"}
             suggestions = closest_asset_names(project_directory, asset_identifier)
@@ -231,10 +212,23 @@ def register(mcp: Any, ContextType: Any) -> None:
                 entry["code"] = code["code"]
                 remaining -= len(code["code"])
         if yy != "none":
-            asset_data = read_asset_yy(project_directory, asset_identifier)
+            if not isinstance(asset_data, dict):
+                asset_data = read_asset_yy(project_directory, asset_identifier)
             size = len(json.dumps(asset_data, ensure_ascii=False))
-            if yy == "full" or size <= _AUTO_YY_CHARS:
+            if yy == "full":
                 result["asset_data"] = asset_data
+            elif size <= _AUTO_YY_CHARS:
+                from gms_helpers.dense import yy_content
+
+                compact_yy = yy_content(asset_data)
+                if isinstance(compact_yy, dict):
+                    # Omit fields already returned in the summary above; yy="full" returns the raw file.
+                    if summary.get("folder") is not None:
+                        compact_yy.pop("parent", None)
+                    if "events" in summary:
+                        for redundant in ("eventList", "spriteId", "parentObjectId"):
+                            compact_yy.pop(redundant, None)
+                result["asset_data"] = compact_yy
             else:
                 result["asset_data_omitted"] = f'The .yy is {size} characters; pass yy="full" to include it.'
         return result
@@ -290,7 +284,7 @@ def register(mcp: Any, ContextType: Any) -> None:
         ] = False,
         full: Annotated[
             bool,
-            Field(description="Return every node and edge. Large: thousands of entries on a real project."),
+            Field(description="Return every node and edge (grouped as described above)."),
         ] = False,
         project_root: str = ".",
         ctx: Context | None = None,
@@ -300,17 +294,20 @@ def register(mcp: Any, ContextType: Any) -> None:
 
         Pass `asset` to answer "what does this use, and who uses it?": `uses` covers its data links
         and every asset its own code names (scripts called, objects and sprites referred to), and
-        `used_by` lists every asset whose data or code names it (the scan gm_safe_delete relies on).
-        Without `asset` you get a summary (counts by relation and the most-used assets); pass
-        `full=true` for every node and edge.
+        `used_by` every asset whose data or code names it (the scan gm_safe_delete relies on); both
+        map relation to type to names.
+        Without `asset` you get a summary (counts by relation and the most-used assets).
+        full=true returns every node and edge: `assets` maps type to folder to names (path
+        <folder>/<name>/<name>.yy), `included_files` maps folder to file names, `edges` maps
+        relation to source to targets; "x{1..3}" is x1 to x3.
         """
         _ = ctx
         project_directory = _resolve_project_directory(project_root)
-        from gms_helpers.introspection import build_asset_graph, closest_asset_names
+        from gms_helpers.introspection import build_asset_graph, closest_asset_names, dense_asset_graph
 
         graph = build_asset_graph(project_directory, deep=deep)
         if full and asset is None:
-            return graph
+            return {"ok": True, **dense_asset_graph(graph)}
         nodes = {node["id"]: node for node in graph["nodes"]}
         edges = graph["edges"]
         if asset is not None:
@@ -336,16 +333,15 @@ def register(mcp: Any, ContextType: Any) -> None:
                 for entry in asset_code_uses(project_directory, asset, asset_types)
                 if entry["asset"] not in already
             ]
+            from gms_helpers.dense import links_by_relation
+
             return {
                 "ok": True,
                 "asset": nodes[asset],
                 # What this asset's data links to, and every asset its own code names.
-                "uses": uses,
+                "uses": links_by_relation(uses, name="asset", kind="type"),
                 # Every asset whose .yy data or code names this one: the same scan gm_safe_delete uses.
-                "used_by": [
-                    {"asset": user["asset_name"], "type": user["asset_type"], "relation": user["relation"]}
-                    for user in users
-                ],
+                "used_by": links_by_relation(users, name="asset_name", kind="asset_type"),
                 "deep_scan": graph["deep_scan"],
             }
         by_relation: Dict[str, int] = {}
